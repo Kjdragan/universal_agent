@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{REPORT_TITLE}}</title>
+  <style>
+    /* === Reset === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* === Variables === */
+    :root {
+      --font-heading: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      --font-body: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      --font-mono: 'Cascadia Code', 'Fira Code', monospace;
+      --line-height: 1.7;
+      --color-primary: #1a365d;
+      --color-primary-light: #2c5282;
+      --color-accent: #2b6cb0;
+      --color-accent-light: #ebf4ff;
+      --color-success: #276749;
+      --color-success-light: #f0fff4;
+      --color-warning: #975a16;
+      --color-warning-light: #fefcbf;
+      --color-text: #1a202c;
+      --color-text-secondary: #4a5568;
+      --color-border: #e2e8f0;
+      --color-bg: #ffffff;
+      --color-bg-alt: #f7fafc;
+    }
+
+    /* === Base === */
+    body {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 2rem 4rem;
+      font-family: var(--font-body);
+      color: var(--color-text);
+      line-height: var(--line-height);
+      background: var(--color-bg);
+    }
+
+    /* === Hero Header === */
+    .report-hero {
+      position: relative;
+      margin: 0 -2rem 3rem;
+      padding: 5rem 3rem 4rem;
+      background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+      color: white;
+      text-align: center;
+      overflow: hidden;
+    }
+    .report-hero .hero-bg {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      opacity: 0.15;
+    }
+    .report-hero h1 {
+      position: relative;
+      font-size: 2.5rem;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 0.75rem;
+    }
+    .report-hero .subtitle {
+      position: relative;
+      font-size: 1.2rem;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .report-hero .report-date {
+      position: relative;
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+      opacity: 0.7;
+    }
+
+    /* === Table of Contents === */
+    .toc {
+      background: var(--color-bg-alt);
+      border-radius: 12px;
+      padding: 2rem 2.5rem;
+      margin: 2rem 0 3rem;
+    }
+    .toc h2 { font-size: 1.25rem; color: var(--color-primary); margin-bottom: 1rem; border: none; }
+    .toc ol { padding-left: 1.5rem; }
+    .toc li { margin-bottom: 0.5rem; }
+    .toc a { color: var(--color-accent); text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+
+    /* === Sections === */
+    section { margin-bottom: 3rem; }
+    section h2 {
+      font-size: 1.75rem;
+      color: var(--color-primary);
+      border-bottom: 3px solid var(--color-accent);
+      padding-bottom: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    section h3 {
+      font-size: 1.3rem;
+      color: var(--color-primary-light);
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+    }
+    p { margin-bottom: 1rem; }
+    ul, ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+    li { margin-bottom: 0.3rem; }
+
+    /* === Key Finding === */
+    .key-finding {
+      background: var(--color-accent-light);
+      border-left: 4px solid var(--color-accent);
+      padding: 1.25rem 1.5rem;
+      margin: 1.5rem 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .key-finding strong { color: var(--color-primary); }
+
+    /* === Stat Cards === */
+    .stats-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      justify-content: center;
+      margin: 2rem 0;
+    }
+    .stat-card {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      background: white;
+      border: 1px solid var(--color-border);
+      border-radius: 12px;
+      padding: 1.5rem 2rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      min-width: 160px;
+    }
+    .stat-number {
+      font-size: 2.25rem;
+      font-weight: 700;
+      color: var(--color-accent);
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: 0.85rem;
+      color: var(--color-text-secondary);
+      margin-top: 0.5rem;
+      text-align: center;
+    }
+
+    /* === Callout === */
+    .callout {
+      background: var(--color-bg-alt);
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin: 1.5rem 0;
+    }
+    .callout.warning { background: var(--color-warning-light); border-color: var(--color-warning); }
+    .callout.success { background: var(--color-success-light); border-color: var(--color-success); }
+
+    /* === Blockquote === */
+    blockquote {
+      border-left: 4px solid var(--color-accent);
+      margin: 1.5rem 0;
+      padding: 0.75rem 1.25rem;
+      background: var(--color-bg-alt);
+      font-style: italic;
+      color: var(--color-text-secondary);
+    }
+
+    /* === Images === */
+    .report-image {
+      margin: 2rem 0;
+      text-align: center;
+    }
+    .report-image img {
+      max-width: 100%;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .report-image figcaption {
+      font-size: 0.85rem;
+      color: var(--color-text-secondary);
+      margin-top: 0.75rem;
+      font-style: italic;
+    }
+
+    /* === Diagrams === */
+    .diagram-container {
+      margin: 2rem 0;
+      text-align: center;
+      background: white;
+      padding: 1.5rem;
+      border-radius: 8px;
+      border: 1px solid var(--color-border);
+    }
+    .diagram-container img { max-width: 100%; }
+    .diagram-container figcaption {
+      font-size: 0.85rem;
+      color: var(--color-text-secondary);
+      margin-top: 0.75rem;
+    }
+
+    /* === Tables === */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      font-size: 0.95rem;
+    }
+    thead { background: var(--color-primary); color: white; }
+    th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
+    tbody tr:nth-child(even) { background: var(--color-bg-alt); }
+
+    /* === Code === */
+    code {
+      font-family: var(--font-mono);
+      background: var(--color-bg-alt);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: var(--color-bg-alt);
+      padding: 1.25rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 1.5rem 0;
+    }
+    pre code { background: none; padding: 0; }
+
+    /* === Footer === */
+    .report-footer {
+      margin-top: 4rem;
+      padding: 2rem 0;
+      border-top: 2px solid var(--color-border);
+      font-size: 0.85rem;
+      color: var(--color-text-secondary);
+      text-align: center;
+    }
+
+    /* === Print / PDF === */
+    @media print {
+      body { max-width: none; padding: 0 1cm; }
+      .report-hero { break-after: page; margin: 0; }
+      section { break-inside: avoid; }
+      .key-finding, .stat-card, .callout, .report-image, .diagram-container { break-inside: avoid; }
+      a { color: var(--color-text); text-decoration: none; }
+      @page { margin: 1.5cm; size: A4; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero Header -->
+  <header class="report-hero">
+    <!-- {{HERO_IMAGE}} -->
+    <h1>{{REPORT_TITLE}}</h1>
+    <p class="subtitle">{{REPORT_SUBTITLE}}</p>
+    <p class="report-date">{{REPORT_DATE}}</p>
+  </header>
+
+  <!-- Table of Contents -->
+  <nav class="toc">
+    <h2>Table of Contents</h2>
+    <ol>
+      <!-- {{TOC_ENTRIES}} -->
+    </ol>
+  </nav>
+
+  <!-- Executive Summary -->
+  <!-- {{EXECUTIVE_SUMMARY}} -->
+
+  <!-- Report Sections -->
+  <!-- {{REPORT_SECTIONS}} -->
+
+  <!-- Footer -->
+  <footer class="report-footer">
+    <p>Generated on {{REPORT_DATE}} from research corpus analysis.</p>
+    <p>Visual assets generated with Gemini AI. Diagrams rendered with Mermaid.</p>
+  </footer>
+
+</body>
+</html>
