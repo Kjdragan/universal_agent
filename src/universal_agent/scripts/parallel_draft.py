@@ -13,12 +13,12 @@ API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")
 
-async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, order, base_path: Path):
+async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, order, base_path: Path, outline_meta: dict = None):
     """Write a single section using centralized rate limiter."""
     # Prefix with order number for correct assembly order
     output_dir = base_path / "work_products" / "_working" / "sections"
     out_path = output_dir / f"{order:02d}_{section['id']}.md"
-    
+
     if out_path.exists():
         print(f"Skipping {section['id']} (Exists)")
         return
@@ -27,7 +27,7 @@ async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, o
     title = section.get("title", "").strip()
     section_id = section.get("id", "").strip().lower()
     is_executive = section_id == "executive_summary" or "executive summary" in title.lower()
-    
+
     # Ensure directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -37,21 +37,70 @@ async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, o
         return
 
     print(f"Drafting {section['title']}...")
-    
+
+    # Extract adaptive metadata from outline
+    meta = outline_meta or {}
+    tone = meta.get("tone", "analytical")
+    material_type = meta.get("material_type", "analytical")
+    comp = meta.get("component_guidance", {})
+    narrative_role = section.get("narrative_role", "analysis")
+
+    # Build adaptive writing instructions
+    tone_guidance = {
+        "journalistic": "Write in a journalistic voice — factual, attributed, timeline-driven. Lead with the most compelling fact or quote.",
+        "analytical": "Write in an analytical voice — methodical, evidence-based, with clear reasoning. Lead with the key finding or framing question.",
+        "narrative": "Write in a narrative voice — warm, engaging, with human details. Lead with a scene, anecdote, or compelling detail.",
+        "investigative": "Write in an investigative voice — probing, evidence-driven, building toward revelations.",
+        "explanatory": "Write in an explanatory voice — clear, pedagogical, breaking down complexity for an intelligent reader.",
+        "authoritative": "Write in an authoritative voice — confident, precise, data-informed. Establish credibility through specificity.",
+        "conversational": "Write in a conversational voice — approachable but substantive, as if explaining to a smart colleague.",
+    }.get(tone, "Write in a professional, substantive voice.")
+
+    # Component instructions based on outline guidance
+    comp_instructions = []
+    stat_level = comp.get("stat_cards", "moderate")
+    if stat_level in ("heavy", "moderate"):
+        comp_instructions.append(f"Highlight key statistics prominently (data density: {stat_level}).")
+    elif stat_level == "none":
+        comp_instructions.append("This topic is qualitative — do not force statistics where none are meaningful.")
+
+    quote_level = comp.get("pull_quotes", "moderate")
+    if quote_level in ("heavy", "moderate"):
+        comp_instructions.append("Weave in direct quotes from sources when available.")
+    elif quote_level == "none":
+        comp_instructions.append("No attributable quotes expected — focus on analysis and synthesis.")
+
+    comp_text = " ".join(comp_instructions) if comp_instructions else ""
+
     # Construct Prompt
     heading_line = f"## {title}"
     format_rules = "Start with the heading line exactly as shown. Use '###' for subheads as needed."
 
-    prompt = f"""You are a professional report writer.
+    prompt = f"""You are a professional report writer producing university-level content.
+
+    REPORT CONTEXT:
+    - Material type: {material_type}
+    - This section's role: {narrative_role}
+
+    TONE: {tone_guidance}
 
     REQUIRED HEADING (first line):
     {heading_line}
 
     SECTION TITLE: {title}
-    CONTEXT:
+    SECTION DESCRIPTION: {section.get('description', '')}
+
+    SOURCE MATERIAL:
     {corpus_text[:20000]}
 
-    INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
+    WRITING INSTRUCTIONS:
+    Write a detailed, substantive section for this report. University-level quality — clear prose with logical flow and precise language. The reader is intelligent and engaged.
+
+    {comp_text}
+
+    Lead with substance — the most compelling fact, finding, or framing — not "This section discusses..." or "In this section, we will..."
+
+    Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
 
     MAX_RETRIES = 5
     last_error = None
@@ -146,6 +195,13 @@ async def draft_report_async(
         data = json.load(f)
         sections = data.get("sections", [])
 
+    # Extract outline-level metadata for adaptive writing
+    outline_meta = {
+        "tone": data.get("tone", "analytical"),
+        "material_type": data.get("material_type", "analytical"),
+        "component_guidance": data.get("component_guidance", {}),
+    }
+
     if not API_KEY:
         return "Error: ANTHROPIC_AUTH_TOKEN/ZAI_API_KEY not set"
 
@@ -155,7 +211,7 @@ async def draft_report_async(
     limiter = ZAIRateLimiter.get_instance()
 
     # 4. Run Parallel - rate limiter controls concurrency
-    tasks = [write_section(limiter, client, s, corpus_text, i+1, workspace_path) for i, s in enumerate(sections)]
+    tasks = [write_section(limiter, client, s, corpus_text, i+1, workspace_path, outline_meta) for i, s in enumerate(sections)]
     await asyncio.gather(*tasks)
     
     return f"Drafting complete. Check {workspace_path}/work_products/_working/sections/"
