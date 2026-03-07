@@ -391,6 +391,33 @@
     /* === Placeholders (hidden in final) === */
     .image-slot, .diagram-slot { display: none; }
 
+    /* === Sources / Bibliography === */
+    .report-sources {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 2px solid var(--color-border);
+    }
+    .report-sources h2 {
+      font-size: 1.4rem;
+      color: var(--color-primary);
+      margin-bottom: 1.5rem;
+    }
+    .report-sources ol {
+      list-style: decimal;
+      padding-left: 1.5rem;
+      font-size: 0.9rem;
+      line-height: 1.8;
+      color: var(--color-text-secondary);
+    }
+    .report-sources li {
+      margin-bottom: 0.4rem;
+    }
+    .report-sources li a {
+      color: var(--color-accent);
+      text-decoration: none;
+      word-break: break-all;
+    }
+
     /* === Footer === */
     .report-footer {
       margin-top: 4rem;
@@ -522,6 +549,9 @@
 
   <!-- Report Sections -->
   <!-- {{REPORT_SECTIONS}} -->
+
+  <!-- Sources / Bibliography — end-of-report citations -->
+  <!-- {{SOURCES_SECTION}} -->
 
   <!-- Footer -->
   <footer class="report-footer">

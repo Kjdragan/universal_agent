@@ -181,8 +181,8 @@ into `refined_corpus.md`. That distillation is efficient but loses:
 > Source: {filename}
 
 ## Statistics & Data Points
-- $2.1 billion in total funding across 3 rounds (Source: {filename})
-- 47% increase year-over-year, up from 32% in 2024 (Source: {filename})
+- $2.1 billion in total funding across 3 rounds
+- 47% increase year-over-year, up from 32% in 2024
 
 ## Narrative Color
 - Description of a specific scene, event, or anecdote from the article
@@ -193,12 +193,18 @@ into `refined_corpus.md`. That distillation is efficient but loses:
 - Background information that refined_corpus compressed
 - Clarifications or caveats from the original reporting
 - Minority viewpoints or dissenting opinions
+
+## Sources Used (for end-of-report bibliography)
+- {filename} | Title: {article title if known} | URL: {original URL from research_overview.md}
+- {filename} | Title: {article title} | URL: {URL}
 ```
 
 **Extraction rules:**
 - PRESERVE exact wording for quotes — do not paraphrase
 - INCLUDE attribution (who said it, their role)
-- CITE source filenames so the Storyteller can verify
+- Track source filenames in the "Sources Used" section at the bottom of each pack —
+  the Storyteller collects these for the end-of-report bibliography. Do NOT add
+  inline `(Source: ...)` markers to statistics or body text.
 - PRIORITIZE quotes and narrative details over raw data (refined_corpus already has data)
 - Each source pack should be 500-1500 words — rich but not overwhelming
 - If a section has no relevant original sources, write a minimal pack noting this
@@ -243,6 +249,15 @@ For each section (EXCEPT executive summary):
 - **Weave in quotes naturally.** Source packs provide direct quotes — integrate them
   into your prose, don't just block-quote everything. Use block-quotes for
   particularly powerful statements.
+- **NO inline citations.** Do NOT add footnote numbers, superscripts, or "(Source: ...)"
+  markers in the body text. The research comes from credible searches — readers trust
+  the content. All sources are collected in an end-of-report bibliography instead.
+  This keeps the prose clean and magazine-like.
+- **Discuss conflicting perspectives.** When sources present different data, conclusions,
+  or viewpoints, discuss them in the text — don't silently pick one. Present the
+  prevailing view as the main thread and acknowledge dissenting perspectives. Do not
+  ignore prevailing opinion just because an alternative source exists; equally, do not
+  suppress minority viewpoints. The reader benefits from seeing the full landscape.
 - **Data has rhythm.** Don't dump all statistics in one paragraph. Space them out.
   Use stat-cards for the 2-3 most impactful numbers in a section.
 - **Transitions matter.** The last paragraph of each section should hint at what
@@ -339,8 +354,26 @@ Overwrite the original files in `build/sections/`.
    - Find the `diagram-slot` div with matching `data-diagram`
    - Replace with: `<div class="diagram-container"><img src="{rendered}" alt="{description}"><figcaption>{description}</figcaption></div>`
 5. Generate table of contents from `<h2>` headings
-6. Replace template placeholders ({{REPORT_TITLE}}, {{REPORT_SUBTITLE}}, etc.)
-7. Write complete report to `{REPORT_DIR}/report.html`
+6. **Build the Sources section** — collect all sources used in the report:
+   - Read `research_overview.md` (if exists) for original URLs and article titles
+   - Read `refined_corpus.md` header/metadata for source listings
+   - Read source packs in `build/source-packs/` for `Source:` references
+   - Deduplicate and produce an ordered list as an HTML `<section>`:
+   ```html
+   <section class="report-sources">
+     <h2>Sources</h2>
+     <ol>
+       <li><a href="https://example.com/article">Article Title</a> — Publication Name</li>
+       <li>Report or Dataset Title — Organization, Date</li>
+       <!-- ... -->
+     </ol>
+   </section>
+   ```
+   - Replace the `{{SOURCES_SECTION}}` placeholder with this section
+   - If a source has a URL, make it a link. If not, just list the title/description.
+   - Order: roughly by first appearance in the report or alphabetically — either is fine.
+7. Replace template placeholders ({{REPORT_TITLE}}, {{REPORT_SUBTITLE}}, etc.)
+8. Write complete report to `{REPORT_DIR}/report.html`
 
 If image-slot or diagram-slot divs have no matching manifest entry, REMOVE them
 cleanly (don't leave empty placeholders).
@@ -571,7 +604,9 @@ rubrics, producing actionable feedback that drives revision.
 
 Read ALL section HTML fragments from `{REPORT_DIR}/build/sections/`.
 Read the outline at `{REPORT_DIR}/build/outline.json` for intent reference.
-Cross-reference with `{CORPUS_PATH}` for accuracy.
+Cross-reference with `{CORPUS_PATH}` for source fidelity (ensure the report
+faithfully represents what the corpus says — do NOT independently fact-check
+the corpus itself, it comes from credible searches).
 
 Evaluate using the rubric in `references/critique-rubrics.md` (which the Director
 has provided to you). Produce `{REPORT_DIR}/build/critiques/draft-critique.json`:
@@ -580,7 +615,7 @@ has provided to you). Produce `{REPORT_DIR}/build/critiques/draft-critique.json`
   "overall_assessment": "Brief 2-3 sentence verdict on report quality",
   "coherence_score": 1-10,
   "narrative_flow_score": 1-10,
-  "factual_accuracy_score": 1-10,
+  "source_fidelity_score": 1-10,
   "writing_quality_score": 1-10,
   "sections": {
     "{section-id}": {
@@ -616,12 +651,24 @@ has provided to you). Produce `{REPORT_DIR}/build/critiques/draft-critique.json`
 **Critique principles:**
 - Be SPECIFIC. "Writing is weak" is useless. "The opening paragraph of section X
   starts with 'This section discusses...' instead of a hook" is actionable.
-- Distinguish severity: `critical` = must fix (factual error, missing key content),
-  `major` = should fix (poor flow, redundancy), `minor` = nice to fix (word choice)
+- Distinguish severity: `critical` = must fix (fabricated content not in corpus, missing
+  key content), `major` = should fix (poor flow, redundancy), `minor` = nice to fix
+  (word choice)
 - Check for the "robotic enumeration" anti-pattern: sections that read like bullet
   points converted to paragraphs. Flag these as `type: voice, severity: major`.
 - Verify that the narrative_role from the outline is reflected in the writing style.
 - Check transitions between sections — does the reader feel momentum?
+- **Source fidelity, not fact-checking.** The corpus comes from credible searches.
+  Your job is to ensure the report faithfully represents what the corpus says —
+  no fabricated numbers, no hallucinated quotes, no unsupported leaps. Do NOT
+  independently verify corpus claims against your own knowledge.
+- **Inline citations = style violation.** Flag any footnote numbers, superscripts, or
+  `(Source: ...)` markers in body text as `type: style, severity: major`. The report
+  uses end-of-report bibliography exclusively.
+- **Conflicting perspectives.** If sources in the corpus disagree on data or conclusions,
+  the Storyteller should discuss both views — not silently pick one. If a section
+  ignores a notable dissenting perspective from the corpus, flag it as
+  `type: gap, severity: major`.
 - Flag unsupported claims by cross-referencing with the corpus.
 
 **Phase 4b — Visual Critique:**

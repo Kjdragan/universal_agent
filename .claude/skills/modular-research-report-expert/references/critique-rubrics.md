@@ -43,31 +43,45 @@ listed sequentially without narrative connective tissue. This dimension catches 
 - Are cross-references between sections natural (not "as mentioned in Section 2")?
 - Does the executive summary accurately reflect the report's actual content?
 
-### Dimension 3: Factual Accuracy (Weight: CRITICAL)
+### Dimension 3: Source Fidelity (Weight: HIGH)
+
+The research corpus comes from credible searches. The Judge's job is NOT to
+fact-check the corpus — it is to ensure the Storyteller faithfully represents
+what the corpus says without distortion, fabrication, or hallucination.
 
 | Score | Description |
 |-------|-------------|
-| 9-10 | All claims traceable to corpus. Statistics accurate. Attributions correct. |
-| 7-8 | Mostly accurate. Minor imprecisions in non-critical details. |
-| 5-6 | Some unsupported claims or slightly distorted statistics. |
-| 3-4 | Multiple factual errors or fabricated details. |
+| 9-10 | All claims traceable to corpus. Statistics match source material. Quote attributions correct. |
+| 7-8 | Mostly faithful. Minor imprecisions in non-critical details. |
+| 5-6 | Some claims not found in corpus, or statistics slightly distorted. |
+| 3-4 | Multiple fabricated details or hallucinated claims not in the corpus. |
 | 1-2 | Largely disconnected from source material. |
 
-**Verification method:**
-- Cross-reference key statistics with `refined_corpus.md`
-- Verify quote attributions (right person, right organization)
-- Check that conclusions follow from presented evidence
-- Flag any claim not supported by the corpus as `type: accuracy, severity: critical`
+**Check for:**
+- Statistics in the report match what the corpus says (no invented numbers)
+- Quote attributions are correct (right person, right organization)
+- Conclusions follow from presented evidence — no unsupported leaps
+- No hallucinated claims, companies, products, or people not in the corpus
+- Flag fabricated content as `type: accuracy, severity: critical`
+
+**Do NOT:**
+- Second-guess whether the corpus itself is correct
+- Try to independently verify claims against external knowledge
+- Add disclaimers about the credibility of sourced claims
 
 ### Dimension 4: Source Integration (Weight: MEDIUM)
 
 | Score | Description |
 |-------|-------------|
-| 9-10 | Quotes woven naturally into narrative. Attribution feels organic. Multiple voices represented. |
+| 9-10 | Quotes woven naturally into narrative. Attribution feels organic. Multiple voices represented. No inline citations cluttering the prose. |
 | 7-8 | Good use of quotes. Mostly natural integration. |
-| 5-6 | Quotes feel bolted on. Block-quotes used for everything. |
+| 5-6 | Quotes feel bolted on. Block-quotes used for everything. Inline citation markers disrupt reading flow. |
 | 3-4 | No direct quotes, or quotes poorly attributed. |
 | 1-2 | No evidence of source material in the writing. |
+
+**Note:** The report uses end-of-report bibliography style. There should be NO
+inline `(Source: ...)` markers, footnote numbers, or superscript references in
+the body text. Flag any inline citations as `type: style, severity: major`.
 
 ### Dimension 5: Visual Integration Planning (Weight: MEDIUM)
 
@@ -170,7 +184,7 @@ Write set-level notes in `overall_visual_coherence` field.
 
 When the Judge flags issues, prioritize in this order:
 
-1. **Critical accuracy issues** — Fix immediately, verify against corpus
+1. **Critical source fidelity issues** — Fix immediately, align with corpus
 2. **Major voice issues** — Rewrite sections flagged as "robotic enumeration"
 3. **Cross-section redundancy** — Remove duplicate facts, keep in most relevant section
 4. **Major coherence issues** — Strengthen transitions, reorder if needed
@@ -217,3 +231,6 @@ Quick-pass checklist for the assembled `report.html`:
 - [ ] No orphan `<cite>` or `<blockquote>` elements without content
 - [ ] Print CSS won't break pages in awkward places
 - [ ] All stat-card numbers match the corpus values
+- [ ] Sources section present at end of report with bibliography entries
+- [ ] No inline citation markers (footnotes, superscripts, "(Source: ...)") in body text
+- [ ] No `{{SOURCES_SECTION}}` placeholder remaining
