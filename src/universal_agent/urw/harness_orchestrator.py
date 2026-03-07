@@ -572,7 +572,8 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         if any(kw in phase_text for kw in ["report", "html", "summary", "document", "write"]):
             context_hints.append(
                 "💡 **Collaboration Hint**: This phase appears to involve report generation. "
-                "Remember to delegate to the `report-writer` sub-agent for drafting and refined HTML output."
+                "Use the `modular-research-report-expert` skill (Agent Teams pipeline with critique loops and visual design). "
+                "Fall back to `report-writer` sub-agent only if Agent Teams is unavailable."
             )
         
         if any(kw in phase_text for kw in ["research", "investigate", "find", "search", "gather"]):

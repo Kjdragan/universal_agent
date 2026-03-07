@@ -3147,10 +3147,12 @@ async def on_post_task_guidance(
         next_step_hint = (
             "Research phase complete. Consider what comes NEXT based on the original task:\n"
             "- Need analysis/computation? → Delegate to `data-analyst`\n"
-            "- Need a report? → Delegate to `report-writer`\n"
+            "- Need a report? → Use the `modular-research-report-expert` **skill** (Agent Teams pipeline with 6 specialized teammates, "
+            "critique loops, and visual design). Invoke it via `/modular-research-report-expert` or the Skill tool. "
+            "Fall back to `report-writer` sub-agent only if Agent Teams is unavailable.\n"
             "- Need media? → Delegate to `image-expert` or `video-creation-expert`\n"
             "- Need delivery? → Delegate to `action-coordinator` or use Composio tools directly\n"
-            "Do NOT default to report-writer unless a report was specifically requested."
+            "Do NOT default to report generation unless a report was specifically requested."
         )
     elif subagent_type == "report-writer":
         next_step_hint = (
@@ -3163,14 +3165,14 @@ async def on_post_task_guidance(
     elif subagent_type == "data-analyst":
         next_step_hint = (
             "Analysis complete. Results are in work_products/analysis/. Next steps:\n"
-            "- Need a report incorporating these findings? → Delegate to `report-writer`\n"
+            "- Need a report incorporating these findings? → Use the `modular-research-report-expert` skill (Agent Teams). Fall back to `report-writer` only if Teams unavailable.\n"
             "- Need visualizations in a video? → Delegate to `video-creation-expert`\n"
             "- Ready to deliver? → Use Composio tools or delegate to `action-coordinator`."
         )
     elif subagent_type == "image-expert":
         next_step_hint = (
             "Image generation complete. Images are in work_products/media/. Next steps:\n"
-            "- Embed in report? → Delegate to `report-writer` (it reads the image manifest)\n"
+            "- Embed in report? → Use the `modular-research-report-expert` skill (it integrates images via visual blueprint). Fall back to `report-writer` if Teams unavailable.\n"
             "- Deliver directly? → Use Composio email/Slack tools."
         )
     elif subagent_type in {"claude-bowser-agent", "playwright-bowser-agent", "bowser-qa-agent"}:

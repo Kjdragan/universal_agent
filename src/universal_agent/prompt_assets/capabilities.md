@@ -90,8 +90,9 @@ Prefer documentation-based guidance and include references to official Anthropic
   -> Delegate: `Task(subagent_type='mermaid-expert', ...)`
 - **playwright-bowser-agent**: Headless browser automation agent using Playwright CLI. Use when you need headless browsing, parallel browser sessions, UI testing, screenshots, or web scraping. Supports parallel instances. Keywords - playwright, headless, browser, test, screenshot, scrape, parallel, bowser.
   -> Delegate: `Task(subagent_type='playwright-bowser-agent', ...)`
-- **report-writer**: Multi-phase research report generator with image integration support.
-  -> Delegate: `Task(subagent_type='report-writer', ...)`
+- **report-writer**: Legacy single-pass report generator (fallback). Prefer the `modular-research-report-expert` **skill** which uses Agent Teams with 6 specialized teammates, critique loops, and visual design. Invoke via `/modular-research-report-expert` or the Skill tool.
+  -> Preferred: `Skill(skill='modular-research-report-expert', args='...')`
+  -> Fallback: `Task(subagent_type='report-writer', ...)`
 - **system-configuration-agent**: System configuration and runtime operations specialist for Universal Agent.
 
 Use when:
