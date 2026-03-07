@@ -218,6 +218,13 @@ export default function DashboardPage() {
   const [dispatchPending, setDispatchPending] = useState(false);
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
   const [tutorialDispatchingId, setTutorialDispatchingId] = useState<string>("");
+  const [dismissedVpEventIds, setDismissedVpEventIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const stored = localStorage.getItem("ua.dismissed_vp_events.v1");
+      return stored ? new Set(JSON.parse(stored)) : new Set();
+    } catch { return new Set(); }
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -562,9 +569,33 @@ export default function DashboardPage() {
     }
     return events
       .slice()
+      .filter((e) => !dismissedVpEventIds.has(e.event_id || ""))
       .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
       .slice(0, 6);
-  }, [selectedVpId, vpIds, vpMetrics]);
+  }, [selectedVpId, vpIds, vpMetrics, dismissedVpEventIds]);
+
+  const dismissVpEvent = useCallback((eventId: string) => {
+    setDismissedVpEventIds((prev) => {
+      const next = new Set(prev);
+      next.add(eventId);
+      try { localStorage.setItem("ua.dismissed_vp_events.v1", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }, []);
+
+  const clearAllVpEvents = useCallback(() => {
+    const allIds = new Set(dismissedVpEventIds);
+    for (const vpId of vpIds) {
+      const metrics = vpMetrics[vpId];
+      if (metrics?.recent_events?.length) {
+        for (const e of metrics.recent_events) {
+          if (e.event_id) allIds.add(e.event_id);
+        }
+      }
+    }
+    setDismissedVpEventIds(allIds);
+    try { localStorage.setItem("ua.dismissed_vp_events.v1", JSON.stringify([...allIds])); } catch {}
+  }, [dismissedVpEventIds, vpIds, vpMetrics]);
 
   const dispatchMission = useCallback(async () => {
     const objective = dispatchObjective.trim();
@@ -927,7 +958,16 @@ export default function DashboardPage() {
 
         {recentVpEvents.length > 0 && (
           <div className="mt-3 rounded-lg border border-cyan-900/60 bg-cyan-950/10 p-3 text-xs">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-cyan-300">Recent VP Events</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-cyan-300">Recent VP Events</p>
+              <button
+                type="button"
+                onClick={clearAllVpEvents}
+                className="rounded border border-cyan-900/60 bg-cyan-950/30 px-2 py-0.5 text-[10px] text-cyan-400 transition hover:bg-cyan-900/40 hover:text-cyan-200"
+              >
+                Clear All
+              </button>
+            </div>
             <div className="mt-2 space-y-2 text-cyan-100">
               {recentVpEvents.map((event, idx) => {
                 const eventPayload = asRecord(event.payload);
@@ -952,8 +992,18 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={`${event.event_id || event.created_at || "event"}-${idx}`}
-                    className="rounded border border-cyan-900/60 bg-cyan-950/10 px-2 py-1.5"
+                    className="relative rounded border border-cyan-900/60 bg-cyan-950/10 px-2 py-1.5"
                   >
+                    {event.event_id && (
+                      <button
+                        type="button"
+                        onClick={() => dismissVpEvent(event.event_id!)}
+                        className="absolute top-1 right-1.5 rounded px-1 py-0.5 text-[10px] text-cyan-600 transition hover:bg-cyan-900/40 hover:text-cyan-300"
+                        title="Dismiss"
+                      >
+                        ✕
+                      </button>
+                    )}
                     <p>
                       {formatLocalDateTime(event.created_at)} · {event.event_type || "event"}
                     </p>
