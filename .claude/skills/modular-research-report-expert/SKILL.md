@@ -157,6 +157,125 @@ These are bonus materials that enrich the pipeline if they exist.
 
 ---
 
+## Concurrency Governance
+
+Agent Teams run multiple teammates in parallel, but each active teammate consumes
+an LLM inference slot. Unbounded parallelism hits rate limits and degrades quality
+(retries, timeouts, truncated outputs). This skill enforces a **concurrency ceiling**.
+
+### Parameter: `MAX_CONCURRENT_AGENTS`
+
+```
+Default: 4
+Range: 2–8
+```
+
+Set this in the corpus profile or override via environment:
+```bash
+export REPORT_MAX_CONCURRENT_AGENTS=5
+```
+
+The Director reads this value during Phase 0 and records it in `corpus-profile.json`:
+```json
+{
+  "corpus_profile": { ... },
+  "concurrency": {
+    "max_concurrent_agents": 4,
+    "source": "default|env_override|user_specified"
+  }
+}
+```
+
+### How It Works
+
+The Director is the **concurrency scheduler**. Before creating tasks for a new phase,
+count how many teammates currently have `in_progress` tasks (check via `TaskList`).
+Only assign new work if `active_count < MAX_CONCURRENT_AGENTS`.
+
+**Concurrency is managed at phase transitions, not mid-phase.** Within a phase, the
+Director assigns up to `MAX_CONCURRENT_AGENTS` parallel tasks and waits for all to
+complete before moving on. Between phases, the Director reassesses.
+
+### Phase-by-Phase Concurrency Map
+
+This table shows the **maximum active agents** at each phase boundary and how to
+stay within the ceiling. Adjust by serializing phases when the ceiling is low.
+
+| Phase | Active Teammates | Concurrency | Notes |
+|-------|-----------------|-------------|-------|
+| 0 | Director only | 1 | Corpus evaluation — you do this yourself |
+| 1 | Architect | 1 | Sequential — must complete before anything else |
+| 2 | Deep Reader + Visual Director | 2 | Parallel pair — always safe |
+| 3 | Storyteller + Visual Director + Diagram Craftsman | 3 | Core parallel phase |
+| 4 | Editorial Judge | 1 | Judge works alone (reads all outputs) |
+| 4b | Editorial Judge (visuals) | 1 | Can overlap with text critique if ceiling >= 2 |
+| 5 | Storyteller + Visual Director + Diagram Craftsman | 3 | Revision — same as Phase 3 |
+| 6a | Storyteller | 1 | Assembly is sequential |
+| 6b | Editorial Judge | 1 | Final polish |
+| 6c | Director | 1 | PDF export |
+
+**Peak concurrency: Phase 3** — Storyteller + Visual Director + Diagram Craftsman = 3 active.
+This is well within the default ceiling of 4.
+
+### When `MAX_CONCURRENT_AGENTS = 2` (Conservative)
+
+Serialize Phase 3:
+1. Storyteller drafts all sections (alone)
+2. Then Visual Director generates images (alone)
+3. Then Diagram Craftsman creates diagrams (alone)
+
+Serialize Phase 5 similarly. This is slower but avoids rate limit pressure entirely.
+
+### When `MAX_CONCURRENT_AGENTS >= 5` (Aggressive)
+
+Overlap Phase 2 and Phase 3 partially:
+- Deep Reader starts source mining for early sections
+- Storyteller begins drafting sections that don't need source packs
+- Visual Director begins hero image + section-independent visuals
+
+Also overlap Phase 4 text critique with Phase 4b visual critique (Judge runs both).
+
+### When `MAX_CONCURRENT_AGENTS >= 6` (Full Parallel)
+
+All 6 teammates can be active simultaneously during peak phases. The Director can:
+- Run Phase 3 with all three producers + Deep Reader finishing late sections
+- Run Phase 4 text + visual critique simultaneously
+- Start Phase 5 revision for early-critiqued sections while Judge still reviewing others
+
+**Recommendation**: Start with the default of 4. If you observe no rate limit errors
+in the first run, try 5. If you see 429s or timeouts, drop to 3.
+
+### Teammate Lifecycle & Slot Tracking
+
+Teammates are **spawned once** and reused across phases. A teammate is "active" when
+it has an `in_progress` task. Between phases, teammates are idle (not consuming slots).
+
+Track active slots in a mental model:
+```
+Phase 3 start:
+  [ACTIVE] Storyteller: draft-sections
+  [ACTIVE] Visual Director: generate-images
+  [ACTIVE] Diagram Craftsman: generate-diagrams
+  [IDLE]   Narrative Architect (done in Phase 1)
+  [IDLE]   Deep Reader (done in Phase 2)
+  [IDLE]   Editorial Judge (waiting for Phase 4)
+  Active: 3 / MAX: 4 ✓
+
+Phase 3→4 transition:
+  Storyteller completes → [IDLE]
+  Visual Director completes → [IDLE]
+  Diagram Craftsman completes → [IDLE]
+  Judge starts text-critique → [ACTIVE]
+  Active: 1 / MAX: 4 ✓
+```
+
+If a teammate's task is taking too long and you need to start the next phase,
+you can proceed with available slots as long as `active_count < MAX_CONCURRENT_AGENTS`.
+For example, if Visual Director is still generating the last image but Phase 4 text
+critique can start, go ahead — that's 2 active, well within ceiling.
+
+---
+
 ## Workflow: Six Phases
 
 ### Phase 0: Setup & Corpus Evaluation
@@ -422,21 +541,72 @@ Read [references/team-prompts.md](references/team-prompts.md) for full spawn pro
 
 ## Task Creation Plan
 
-Use `TaskCreate` with dependencies. Example task graph:
+Use `TaskCreate` with dependencies. **Respect `MAX_CONCURRENT_AGENTS`** — check
+`TaskList` for active tasks before assigning new ones.
+
+### Task Graph (default ceiling = 4)
 
 ```
-Phase 1: [outline]  ← Architect
-Phase 2: [source-mining, visual-planning]  ← Deep Reader, Visual Director (parallel)
-Phase 3: [draft-sections, generate-images, generate-diagrams]  ← Storyteller, Visual Dir, Diagram (parallel, after Phase 2)
-Phase 4: [text-critique, visual-critique]  ← Judge (after Phase 3)
-Phase 5: [revise-text, revise-visuals, revise-diagrams]  ← Storyteller, Visual Dir, Diagram (after Phase 4)
-Phase 6: [assemble-html, final-polish, export-pdf]  ← Storyteller, Judge, Director (sequential)
+Phase 1: [outline]                                          ← Architect         (active: 1)
+    ↓
+Phase 2: [source-mining, visual-planning]                   ← Reader, Visual    (active: 2)
+    ↓
+Phase 3: [draft-sections, generate-images, generate-diagrams] ← Story, Visual, Diagram (active: 3)
+    ↓
+Phase 4: [text-critique, visual-critique]                   ← Judge             (active: 1-2)
+    ↓
+Phase 5: [revise-text, revise-visuals, revise-diagrams]     ← Story, Visual, Diagram (active: 3)
+    ↓
+Phase 6: [assemble-html] → [final-polish] → [export-pdf]   ← Story → Judge → Director (active: 1)
+```
+
+### Task Graph (conservative ceiling = 2)
+
+```
+Phase 1: [outline]                    ← Architect         (active: 1)
+    ↓
+Phase 2a: [source-mining]            ← Reader             (active: 1)
+Phase 2b: [visual-planning]          ← Visual             (active: 1)
+    ↓
+Phase 3a: [draft-sections]           ← Storyteller        (active: 1)
+Phase 3b: [generate-images]          ← Visual Director    (active: 1)
+Phase 3c: [generate-diagrams]        ← Diagram Craftsman  (active: 1)
+    ↓
+Phase 4: [text-critique]             ← Judge              (active: 1)
+Phase 4b: [visual-critique]          ← Judge              (active: 1)
+    ↓
+Phase 5a: [revise-text]              ← Storyteller        (active: 1)
+Phase 5b: [revise-visuals]           ← Visual Director    (active: 1)
+    ↓
+Phase 6: [assemble] → [polish] → [pdf]                    (active: 1)
+```
+
+### Task Graph (aggressive ceiling = 6)
+
+```
+Phase 1: [outline]                                          ← Architect         (active: 1)
+    ↓
+Phase 2+3 overlap:
+  [source-mining]           ← Reader        ┐
+  [visual-planning]         ← Visual        │
+  [draft-early-sections]    ← Storyteller   ├ (active: 4-5)
+  [generate-hero-image]     ← Visual        │
+  [generate-diagrams]       ← Diagram       ┘
+    ↓
+Phase 4: [text-critique + visual-critique]  ← Judge (active: 1-2)
+    ↓
+Phase 5: [revise-text, revise-visuals, revise-diagrams]     (active: 3)
+    ↓
+Phase 6: sequential                                          (active: 1)
 ```
 
 **IMPORTANT**: Phases are checkpoints. Do NOT create all tasks upfront. Create Phase N+1
 tasks only after Phase N completes and you've reviewed the outputs. This lets you adapt
 the plan based on actual results (e.g., skip source mining if no filtered_corpus exists,
 skip visual revision if all images approved).
+
+**Before each phase transition**: Run `TaskList`, count active tasks, compare to
+`MAX_CONCURRENT_AGENTS`. Only proceed when slots are available.
 
 ---
 
