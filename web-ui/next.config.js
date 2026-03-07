@@ -10,6 +10,11 @@ const nextConfig = {
         source: '/',
         destination: '/dashboard',
         permanent: false,
+        missing: [
+          { type: 'query', key: 'session_id' },
+          { type: 'query', key: 'new_session' },
+          { type: 'query', key: 'attach' },
+        ],
       },
     ];
   },
