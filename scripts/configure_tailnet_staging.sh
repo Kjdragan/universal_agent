@@ -87,7 +87,7 @@ verify_local_health() {
   while true; do
     ui_code="$(curl -s -o /dev/null -w '%{http_code}' "${ui_url}" || true)"
     api_code="$(curl -s -o /dev/null -w '%{http_code}' "${api_url}" || true)"
-    if [[ "${ui_code}" == "200" && "${api_code}" == "200" ]]; then
+    if [[ ("${ui_code}" == "200" || "${ui_code}" == "307" || "${ui_code}" == "308") && "${api_code}" == "200" ]]; then
       log "Local health OK (ui=${ui_code}, api=${api_code})."
       return 0
     fi
