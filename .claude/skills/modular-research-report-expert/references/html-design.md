@@ -1,167 +1,303 @@
-# HTML Design System for Research Reports
+# HTML Design System — Magazine-Quality Reports
 
-CSS design system and component patterns for the report HTML template.
+A modern, responsive design system for research reports. Prioritizes readability,
+visual hierarchy, and professional aesthetics over academic formality.
 
 ---
 
-## Typography
+## Design Philosophy
+
+- **Magazine, not academic paper.** Think long-form journalism (The Atlantic, Ars Technica)
+  not LaTeX. Wide images, pull-quotes, breathing room.
+- **Content-first typography.** The text is the product. Typography choices serve
+  readability above all.
+- **Purposeful visuals.** Every image, diagram, and stat-card earns its space by
+  conveying information the text alone cannot.
+- **Print-aware.** The HTML must export cleanly to PDF via Chrome headless without
+  broken layouts or cut-off elements.
+
+---
+
+## CSS Variables (Design Tokens)
 
 ```css
 :root {
+  /* Typography */
   --font-heading: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-body: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-  --line-height: 1.7;
+  --font-accent: Georgia, 'Times New Roman', serif;  /* For pull-quotes */
+  --line-height: 1.75;
   --line-height-heading: 1.2;
-}
-```
 
-## Color Palette
-
-```css
-:root {
+  /* Color Palette — Deep Blue Professional */
   --color-primary: #1a365d;
   --color-primary-light: #2c5282;
   --color-accent: #2b6cb0;
-  --color-accent-light: #ebf4ff;
+  --color-accent-light: #ebf8ff;
+  --color-accent-vivid: #3182ce;
   --color-success: #276749;
   --color-success-light: #f0fff4;
   --color-warning: #975a16;
-  --color-warning-light: #fefcbf;
+  --color-warning-light: #fffff0;
+  --color-danger: #9b2c2c;
+  --color-danger-light: #fff5f5;
   --color-text: #1a202c;
   --color-text-secondary: #4a5568;
+  --color-text-muted: #718096;
   --color-border: #e2e8f0;
+  --color-border-light: #edf2f7;
   --color-bg: #ffffff;
   --color-bg-alt: #f7fafc;
+  --color-bg-warm: #fffaf0;
   --color-bg-dark: #1a202c;
+
+  /* Spacing Scale */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+  --space-4xl: 6rem;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+  --shadow-inset: inset 0 2px 4px rgba(0,0,0,0.06);
+
+  /* Border Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 }
 ```
+
+---
 
 ## Layout
 
 ```css
 body {
-  max-width: 900px;
+  max-width: 52rem;  /* ~832px — optimal reading width */
   margin: 0 auto;
-  padding: 0 2rem;
+  padding: 0 var(--space-xl) var(--space-4xl);
   font-family: var(--font-body);
   color: var(--color-text);
   line-height: var(--line-height);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
 }
 ```
 
-## Component Classes
+---
 
-### Hero Header
+## Component Library
+
+### 1. Hero Header
+
+Full-bleed header with gradient background and optional background image.
+
 ```css
 .report-hero {
   position: relative;
-  margin: -2rem -2rem 3rem;
-  padding: 4rem 3rem;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  margin: 0 calc(-50vw + 50%) var(--space-3xl);
+  padding: var(--space-4xl) var(--space-2xl);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 50%, var(--color-primary-light) 100%);
   color: white;
   text-align: center;
   overflow: hidden;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
 }
-.report-hero img {
+.report-hero .hero-bg {
   position: absolute;
-  top: 0; left: 0;
+  inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
-  opacity: 0.2;
+  opacity: 0.15;
+  mix-blend-mode: luminosity;
 }
 .report-hero h1 {
   position: relative;
-  font-size: 2.5rem;
-  font-weight: 700;
-  margin-bottom: 0.5rem;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 800;
+  line-height: var(--line-height-heading);
+  margin-bottom: var(--space-md);
+  letter-spacing: -0.02em;
+  max-width: 800px;
 }
 .report-hero .subtitle {
   position: relative;
-  font-size: 1.25rem;
+  font-size: clamp(1rem, 2.5vw, 1.3rem);
   opacity: 0.9;
+  max-width: 640px;
+  line-height: 1.5;
+  font-weight: 400;
 }
 .report-hero .report-date {
   position: relative;
-  margin-top: 1rem;
+  margin-top: var(--space-lg);
   font-size: 0.9rem;
-  opacity: 0.7;
+  opacity: 0.65;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 ```
 
-### Section Headers
+### 2. Table of Contents
+
 ```css
-section { margin-bottom: 3rem; }
+.toc {
+  background: var(--color-bg-alt);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl) var(--space-2xl);
+  margin: var(--space-xl) 0 var(--space-2xl);
+  border: 1px solid var(--color-border-light);
+}
+.toc h2 {
+  font-size: 1.1rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--space-lg);
+  border: none;
+  padding: 0;
+  font-weight: 600;
+}
+.toc ol { padding-left: var(--space-lg); counter-reset: toc-counter; }
+.toc li {
+  margin-bottom: var(--space-sm);
+  line-height: 1.5;
+}
+.toc a {
+  color: var(--color-accent);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+.toc a:hover { color: var(--color-primary); text-decoration: underline; }
+```
+
+### 3. Section Headers
+
+```css
+section {
+  margin-bottom: var(--space-3xl);
+  scroll-margin-top: var(--space-xl);
+}
 section h2 {
   font-size: 1.75rem;
+  font-weight: 700;
   color: var(--color-primary);
   border-bottom: 3px solid var(--color-accent);
-  padding-bottom: 0.5rem;
-  margin-bottom: 1.5rem;
+  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-lg);
+  line-height: var(--line-height-heading);
 }
 section h3 {
   font-size: 1.3rem;
+  font-weight: 600;
   color: var(--color-primary-light);
-  margin-top: 2rem;
+  margin-top: var(--space-2xl);
+  margin-bottom: var(--space-md);
+}
+section h4 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-sm);
 }
 ```
 
-### Key Finding Card
+### 4. Key Finding Card
+
+Highlight box for the single most important takeaway per section.
+
 ```css
 .key-finding {
   background: var(--color-accent-light);
   border-left: 4px solid var(--color-accent);
-  padding: 1.25rem 1.5rem;
-  margin: 1.5rem 0;
-  border-radius: 0 8px 8px 0;
+  padding: var(--space-lg) var(--space-xl);
+  margin: var(--space-xl) 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: 1.02rem;
 }
-.key-finding strong { color: var(--color-primary); }
+.key-finding strong {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+.key-finding p { margin-bottom: var(--space-sm); }
+.key-finding p:last-child { margin-bottom: 0; }
 ```
 
-### Stat Card
+### 5. Stat Cards
+
+Row of highlighted numbers. Maximum 4 per row for readability.
+
 ```css
+.stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  justify-content: center;
+  margin: var(--space-2xl) 0;
+}
 .stat-card {
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
   align-items: center;
   background: white;
   border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 1.5rem 2rem;
-  margin: 0.5rem;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  min-width: 160px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg) var(--space-xl);
+  box-shadow: var(--shadow-sm);
+  min-width: 150px;
+  flex: 1;
+  max-width: 220px;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.stat-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 .stat-number {
   font-size: 2.25rem;
-  font-weight: 700;
-  color: var(--color-accent);
+  font-weight: 800;
+  color: var(--color-accent-vivid);
   line-height: 1;
+  letter-spacing: -0.02em;
 }
 .stat-label {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--color-text-secondary);
-  margin-top: 0.5rem;
+  margin-top: var(--space-sm);
   text-align: center;
-}
-.stats-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  justify-content: center;
-  margin: 2rem 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
 }
 ```
 
-### Callout Box
+### 6. Callout Boxes
+
 ```css
 .callout {
   background: var(--color-bg-alt);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 1.25rem 1.5rem;
-  margin: 1.5rem 0;
+  border-radius: var(--radius-md);
+  padding: var(--space-lg) var(--space-xl);
+  margin: var(--space-lg) 0;
+  font-size: 0.95rem;
 }
+.callout strong { display: block; margin-bottom: var(--space-xs); }
 .callout.warning {
   background: var(--color-warning-light);
   border-color: var(--color-warning);
@@ -170,88 +306,252 @@ section h3 {
   background: var(--color-success-light);
   border-color: var(--color-success);
 }
+.callout.danger {
+  background: var(--color-danger-light);
+  border-color: var(--color-danger);
+}
 ```
 
-### Image & Diagram Containers
+### 7. Blockquotes & Pull Quotes
+
+Standard blockquote for inline quotes. Pull-quote for featured statements.
+
+```css
+blockquote {
+  border-left: 4px solid var(--color-accent);
+  margin: var(--space-lg) 0;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-bg-alt);
+  font-style: italic;
+  color: var(--color-text-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+blockquote cite {
+  display: block;
+  margin-top: var(--space-sm);
+  font-size: 0.85rem;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* Pull Quote — large, centered, magazine-style */
+.pull-quote {
+  margin: var(--space-2xl) var(--space-xl);
+  padding: var(--space-xl) 0;
+  border-top: 2px solid var(--color-accent);
+  border-bottom: 2px solid var(--color-accent);
+  text-align: center;
+}
+.pull-quote p {
+  font-family: var(--font-accent);
+  font-size: 1.4rem;
+  line-height: 1.5;
+  color: var(--color-primary);
+  font-style: italic;
+  margin-bottom: var(--space-sm);
+}
+.pull-quote cite {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-style: normal;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+```
+
+### 8. Images & Figures
+
 ```css
 .report-image {
-  margin: 2rem 0;
+  margin: var(--space-2xl) 0;
   text-align: center;
 }
 .report-image img {
   max-width: 100%;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  height: auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
 }
 .report-image figcaption {
   font-size: 0.85rem;
-  color: var(--color-text-secondary);
-  margin-top: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: var(--space-md);
   font-style: italic;
+  line-height: 1.4;
 }
+
+/* Full-bleed image — breaks out of content column */
+.report-image.full-bleed {
+  margin-left: calc(-50vw + 50%);
+  margin-right: calc(-50vw + 50%);
+  max-width: 100vw;
+}
+.report-image.full-bleed img {
+  width: 100%;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Side-by-side images */
+.image-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+  margin: var(--space-2xl) 0;
+}
+.image-pair .report-image { margin: 0; }
+```
+
+### 9. Diagram Containers
+
+```css
 .diagram-container {
-  margin: 2rem 0;
+  margin: var(--space-2xl) 0;
   text-align: center;
   background: white;
-  padding: 1.5rem;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
+  padding: var(--space-xl);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-light);
+  box-shadow: var(--shadow-sm);
 }
-.diagram-container img { max-width: 100%; }
+.diagram-container img { max-width: 100%; height: auto; }
+.diagram-container figcaption {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-top: var(--space-md);
+}
 ```
 
-### Table of Contents
+### 10. Tables
+
 ```css
-.toc {
-  background: var(--color-bg-alt);
-  border-radius: 8px;
-  padding: 1.5rem 2rem;
-  margin: 2rem 0;
+.table-wrapper {
+  overflow-x: auto;
+  margin: var(--space-lg) 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
 }
-.toc h2 { border-bottom: none; font-size: 1.25rem; margin-bottom: 1rem; }
-.toc ol { padding-left: 1.5rem; }
-.toc li { margin-bottom: 0.4rem; }
-.toc a {
-  color: var(--color-accent);
-  text-decoration: none;
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
 }
-.toc a:hover { text-decoration: underline; }
+thead {
+  background: var(--color-primary);
+  color: white;
+}
+th {
+  padding: var(--space-md) var(--space-lg);
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+td {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border-light);
+}
+tbody tr:nth-child(even) { background: var(--color-bg-alt); }
+tbody tr:hover { background: var(--color-accent-light); }
 ```
 
-### Blockquote
+### 11. Section Divider
+
+Visual separator between major report sections.
+
 ```css
-blockquote {
-  border-left: 4px solid var(--color-accent);
-  margin: 1.5rem 0;
-  padding: 0.75rem 1.25rem;
-  background: var(--color-bg-alt);
-  font-style: italic;
-  color: var(--color-text-secondary);
+.section-divider {
+  margin: var(--space-3xl) auto;
+  width: 60px;
+  height: 3px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: 2px;
 }
 ```
 
-### Footer
+### 12. Footer
+
 ```css
 .report-footer {
-  margin-top: 4rem;
-  padding: 2rem 0;
+  margin-top: var(--space-4xl);
+  padding: var(--space-xl) 0;
   border-top: 2px solid var(--color-border);
   font-size: 0.85rem;
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
   text-align: center;
+  line-height: 1.6;
+}
+.report-footer a { color: var(--color-accent); text-decoration: none; }
+```
+
+### 13. Placeholder Slots (Removed During Assembly)
+
+```css
+.image-slot, .diagram-slot {
+  /* Invisible in final output — only used during drafting */
+  display: none;
 }
 ```
+
+---
 
 ## Print / PDF Styles
 
 ```css
 @media print {
-  body { max-width: none; padding: 0; }
-  .report-hero { break-after: page; }
+  :root {
+    --color-bg: white;
+    --color-bg-alt: #f8f9fa;
+  }
+  body {
+    max-width: none;
+    padding: 0;
+    font-size: 11pt;
+  }
+  .report-hero {
+    break-after: page;
+    margin: 0;
+    min-height: auto;
+    padding: 3rem 2rem;
+  }
+  .report-hero .hero-bg { display: none; }  /* Save ink */
   section { break-inside: avoid; }
-  .key-finding, .stat-card, .callout { break-inside: avoid; }
-  .report-image { break-inside: avoid; }
+  .key-finding, .stat-card, .callout, .report-image, .diagram-container {
+    break-inside: avoid;
+  }
+  .stats-row { break-inside: avoid; }
+  .pull-quote { break-inside: avoid; }
+  .report-image.full-bleed {
+    margin-left: 0;
+    margin-right: 0;
+  }
   a { color: var(--color-text); text-decoration: none; }
-  @page { margin: 1.5cm; }
+  @page {
+    margin: 1.5cm;
+    size: A4;
+  }
+  @page :first {
+    margin-top: 0;
+  }
+}
+```
+
+---
+
+## Responsive Behavior
+
+```css
+@media (max-width: 768px) {
+  body { padding: 0 var(--space-md); }
+  .report-hero {
+    padding: var(--space-2xl) var(--space-md);
+    margin: 0 calc(-1 * var(--space-md)) var(--space-xl);
+  }
+  .stats-row { flex-direction: column; align-items: center; }
+  .stat-card { max-width: 100%; min-width: auto; }
+  .image-pair { grid-template-columns: 1fr; }
+  .pull-quote { margin: var(--space-xl) 0; }
 }
 ```
