@@ -2,24 +2,34 @@
 
 **Last updated:** 2026-03-06
 
-## Canonical Source-of-Truth Documents
+## Architecture (01_Architecture/)
 
-These are the authoritative references for each subsystem. When older documents conflict with these, **the canonical doc wins**.
+Written from source code review — these describe the system as it actually exists.
 
-| # | Subject | Canonical Doc |
-|---|---------|--------------|
-| 07 | WebSocket Architecture | `02_Flows/07_WebSocket_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` |
-| 08 | Auth & Session Security | `02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md` |
-| 82 | Email / AgentMail | `03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md` |
-| 83 | Webhooks | `03_Operations/83_Webhook_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` |
-| 85 | Infisical Secrets | `03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` |
-| 86 | Residential Proxy | `03_Operations/86_Residential_Proxy_Architecture_And_Usage_Policy_Source_Of_Truth_2026-03-06.md` |
-| 87 | Tailscale | `03_Operations/87_Tailscale_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` |
-| 88 | Factory Delegation | `03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md` |
-| 89 | Runtime Bootstrap | `03_Operations/89_Runtime_Bootstrap_Deployment_Profiles_And_Factory_Role_Source_Of_Truth_2026-03-06.md` |
-| 90 | Artifacts & Workspaces | `03_Operations/90_Artifacts_Workspaces_And_Remote_Sync_Source_Of_Truth_2026-03-06.md` |
-| 91 | Telegram | `03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` |
-| 92 | CSI Architecture | `03_Operations/92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` |
+| Doc | Subject |
+|-----|---------|
+| 01 | System Architecture Overview — component map, services, data stores, deployment topology |
+| 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
+| 03 | VP Workers & Delegation — mission lifecycle, cross-machine delegation, factory heartbeat |
+
+## Canonical Source-of-Truth Documents (03_Operations/)
+
+These are the authoritative references for each subsystem. When any other document conflicts, **the canonical doc wins**.
+
+| # | Subject |
+|---|---------|
+| 07 | WebSocket Architecture (`02_Flows/`) |
+| 08 | Auth & Session Security (`02_Flows/`) |
+| 82 | Email / AgentMail |
+| 83 | Webhooks |
+| 85 | Infisical Secrets |
+| 86 | Residential Proxy |
+| 87 | Tailscale |
+| 88 | Factory Delegation, Heartbeat & Registry |
+| 89 | Runtime Bootstrap, Deployment Profiles & Factory Role |
+| 90 | Artifacts, Workspaces & Remote Sync |
+| 91 | Telegram |
+| 92 | CSI Architecture |
 
 ## Review & Decision Documents
 
@@ -29,18 +39,37 @@ These are the authoritative references for each subsystem. When older documents 
 | 94 | Architectural Integration Review |
 | 95 | Integration Architectural Decisions (ADRs) |
 
-## Deleted Documents (2026-03-06 Cleanup)
+## Remaining Operational References
 
-26 outdated documents were deleted as part of the canonical review cleanup. Their content is fully covered by the canonical source-of-truth documents above. Deleted docs included: webhook implementation notes (15, 18, 29, 30, 42, 75), Telegram implementation plan (44), Running The Agent (46), Tailnet DevOps phases (63, 66-73), CSI strategy (74), security hardening (21), and stale guides (Configuration_Guide, AgentMail_Digest_Email_Plan, Advanced_CLI_Harnessing, Skill_Development, Testing_Strategy).
+| Doc | Subject |
+|-----|---------|
+| 01 | Heartbeat Debug Fixes — historical debug reference |
+| 02 | Browser Debugging Lessons — debugging patterns |
+| 11 | Scheduling Runtime V2 Operational Runbook — cron operations |
+| 13 | Skill Dependency Setup Guide — skill installation |
+| 14 | Session Runtime Behavior And Recovery Model |
+| 15 | Execution Lock Concurrency Architecture |
+| 16 | Concurrency Conflict Root Cause — VP general interim path |
+| 19 | VPS App/API/Telegram Deployment Explainer |
+| 20 | VPS Daily Ops Quickstart |
+| 22 | VPS Remote Dev, Deploy And File Transfer Runbook |
+| 23 | Agent Workspace Inspector Skill |
+| 24 | VPS Service Recovery System Runbook |
+| 26 | VPS Host Security Hardening Runbook |
+| 27 | Deployment Runbook |
+| 30 | Memory System Architecture And Health |
+| 31 | VPS Deployment Decision Tree |
+| 32 | VPS FileBrowser Setup And Access |
+| 41 | Todoist Heartbeat And Triage Operational Runbook |
+| 76 | Sandbox Permissioning And Exception Profile |
+| 77 | CSI Todoist Sync Debugging Lessons |
+| 78 | Daily Autonomous Briefing Reliability |
+| 79 | Golden Run Research Report Pipeline Reference |
+| 80 | Google Workspace Integration Retrospective Memo |
 
-## Not Yet Canonicalized
+## Cleanup Summary
 
-These older docs cover topics not yet addressed by canonical docs and remain valid:
-
-- `13_Skill_Dependency_Setup_Guide.md` — skill setup
-- `15_Execution_Lock_Concurrency_Architecture_2026-03-02.md` — concurrency model
-- `24_VPS_Service_Recovery_System_Runbook_2026-02-12.md` — service watchdog
-- `76_Sandbox_Permissioning_And_Exception_Profile_2026-02-23.md` — sandbox config
-- `79_Golden_Run_Research_Report_Pipeline_Reference_2026-02-28.md` — pipeline reference
-- `80_Google_Workspace_Integration_Retrospective_Memo_2026-03-06.md` — GWS integration
-- `81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md` — GWS plan
+**72 outdated documents** were deleted on 2026-03-06:
+- 6 stale architecture docs (01_Architecture/) — replaced by 3 new docs written from source code
+- 46 implementation plans, verifications, assessments, and handoffs for deployed systems
+- 20 superseded operational docs covered by canonical source-of-truth documents
