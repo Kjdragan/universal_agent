@@ -1,0 +1,8 @@
+[Unit]
+Description=CSI runtime database backup + rotation
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/bin/bash /opt/universal_agent/CSI_Ingester/development/scripts/csi_db_backup_rotate.sh

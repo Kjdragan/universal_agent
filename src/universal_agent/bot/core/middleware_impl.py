@@ -3,7 +3,7 @@ import logging
 from typing import Callable, Awaitable
 from .context import BotContext
 from .session import SessionStore
-from ..config import ALLOWED_USER_IDS
+from ..config import get_allowed_user_ids
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,8 @@ async def logging_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[No
 
 async def auth_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
     user_id = ctx.update.effective_user.id if ctx.update.effective_user else 0
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+    allowed_user_ids = set(get_allowed_user_ids())
+    if allowed_user_ids and user_id not in allowed_user_ids:
         logger.warning(f"Unauthorized access attempt from {user_id}")
         if ctx.update.effective_message:
             await ctx.update.effective_message.reply_text("⛔ Unauthorized access.")

@@ -1,6 +1,9 @@
 """
 Universal Agent Web Server
-FastAPI backend with WebSocket for real-time agent interaction.
+Legacy FastAPI backend with WebSocket support for compatibility/testing only.
+
+The primary real-time transport for the current product is the gateway session
+stream in `src/universal_agent/gateway_server.py`, not this standalone server.
 """
 
 import asyncio
@@ -424,7 +427,7 @@ async def get_file(session_id: str, subdir: str, filename: str):
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
-    """WebSocket endpoint for real-time chat with agent."""
+    """Legacy compatibility WebSocket endpoint for simple chat streaming."""
     await manager.connect(websocket)
     
     try:

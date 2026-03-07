@@ -26,6 +26,8 @@ class FactoryRuntimePolicy:
     enable_telegram_poll: bool
     heartbeat_scope: str  # global | local
     delegation_mode: str  # publish_and_listen | listen_only | disabled
+    enable_csi_ingest: bool = True   # CSI signal ingestion (HQ-only)
+    enable_agentmail: bool = True    # AgentMail inbox service (HQ-only)
 
     @property
     def can_publish_delegations(self) -> bool:
@@ -80,6 +82,8 @@ def build_factory_runtime_policy(raw_role: Optional[str] = None) -> FactoryRunti
             enable_telegram_poll=False,
             heartbeat_scope="local",
             delegation_mode="listen_only",
+            enable_csi_ingest=False,
+            enable_agentmail=False,
         )
 
     # STANDALONE_NODE

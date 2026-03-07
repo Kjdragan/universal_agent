@@ -61,6 +61,53 @@ def _resolve_setting(keys: list[str], env_file_values: dict[str, str], default: 
     return default
 
 
+def _parse_source_min_events_spec(raw: str) -> dict[str, int]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    out: dict[str, int] = {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                cleaned = str(key or "").strip()
+                if not cleaned:
+                    continue
+                try:
+                    out[cleaned] = max(0, int(value))
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        pass
+    for token in text.split(","):
+        item = token.strip()
+        if not item or "=" not in item:
+            continue
+        key, value_raw = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        try:
+            out[key] = max(0, int(value_raw.strip()))
+        except Exception:
+            continue
+    return out
+
+
+def _default_source_min_events() -> dict[str, int]:
+    defaults = {
+        "youtube_channel_rss": 1,
+        "reddit_discovery": 1,
+        "threads_owned": 0,
+        "threads_trends_seeded": 0,
+        "threads_trends_broad": 0,
+        "csi_analytics": 0,
+    }
+    defaults.update(_parse_source_min_events_spec(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or "")))
+    return defaults
+
+
 def _parse_timestamp(raw: Any) -> datetime | None:
     value = str(raw or "").strip()
     if not value:
@@ -215,6 +262,20 @@ def _source_metrics(
                 ),
             }
         )
+    if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"} and (under_min_volume or stale):
+        repair_hints.append(
+            {
+                "code": "threads_source_stale_or_low_volume",
+                "source": source_name,
+                "severity": "warning",
+                "title": "Threads source volume below threshold",
+                "action": (
+                    "Verify Threads token freshness, source query packs, and keyword quotas. "
+                    "Confirm THREADS_* credentials are loaded in CSI runtime env."
+                ),
+                "runbook_command": "journalctl -u csi-ingester -n 200 --no-pager | grep -i threads",
+            }
+        )
     if attempts_failed > 0 or high_failed_ratio:
         repair_hints.append(
             {
@@ -225,7 +286,7 @@ def _source_metrics(
                 "action": "Verify ingest auth/endpoint and replay DLQ after repair.",
                 "runbook_command": (
                     "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
-                    "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 100 --max-attempts 3"
+                    "--db-path /var/lib/universal-agent/csi/csi.db --limit 100 --max-attempts 3"
                 ),
             }
         )
@@ -238,7 +299,7 @@ def _source_metrics(
                 "title": "DLQ backlog exceeds threshold",
                 "action": "Inspect newest DLQ errors and replay once root cause is fixed.",
                 "runbook_command": (
-                    "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                    "sqlite3 /var/lib/universal-agent/csi/csi.db "
                     "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 25;\""
                 ),
             }
@@ -328,14 +389,30 @@ def _evaluate_delivery_health(
     max_failed_attempt_ratio: float,
     min_rss_events: int,
     min_reddit_events: int,
-    max_dlq_recent: int,
-    adapter_failures_threshold: int,
+    min_threads_owned_events: int = 0,
+    min_threads_seeded_events: int = 0,
+    min_threads_broad_events: int = 0,
+    max_dlq_recent: int = 0,
+    adapter_failures_threshold: int = 3,
+    source_min_events: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    sources = [
-        ("youtube_channel_rss", int(min_rss_events)),
-        ("reddit_discovery", int(min_reddit_events)),
-        ("csi_analytics", 0),
-    ]
+    expected_min_events = _default_source_min_events()
+    if isinstance(source_min_events, dict):
+        for key, value in source_min_events.items():
+            cleaned = str(key or "").strip()
+            if not cleaned:
+                continue
+            try:
+                expected_min_events[cleaned] = max(0, int(value))
+            except Exception:
+                continue
+    expected_min_events["youtube_channel_rss"] = max(0, int(min_rss_events))
+    expected_min_events["reddit_discovery"] = max(0, int(min_reddit_events))
+    expected_min_events["threads_owned"] = max(0, int(min_threads_owned_events))
+    expected_min_events["threads_trends_seeded"] = max(0, int(min_threads_seeded_events))
+    expected_min_events["threads_trends_broad"] = max(0, int(min_threads_broad_events))
+    expected_min_events.setdefault("csi_analytics", 0)
+    sources = sorted(expected_min_events.items(), key=lambda row: row[0])
     rows = [
         _source_metrics(
             conn,
@@ -343,7 +420,7 @@ def _evaluate_delivery_health(
             window_hours=window_hours,
             stale_threshold_minutes=stale_minutes,
             max_failed_attempt_ratio=max_failed_attempt_ratio,
-            expected_min_events=min_events,
+            expected_min_events=int(min_events),
             max_dlq_recent=max_dlq_recent,
             adapter_failures_threshold=adapter_failures_threshold,
         )
@@ -439,7 +516,7 @@ def _build_canary_event(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Emit CSI delivery-health regression/recovery canary events.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--state-key", default="runtime_canary:delivery_health")
     parser.add_argument("--window-hours", type=int, default=6)
     parser.add_argument("--repeat-minutes", type=int, default=45)
@@ -447,6 +524,14 @@ def main() -> int:
     parser.add_argument("--max-failed-attempt-ratio", type=float, default=0.20)
     parser.add_argument("--min-rss-events", type=int, default=1)
     parser.add_argument("--min-reddit-events", type=int, default=1)
+    parser.add_argument("--min-threads-owned-events", type=int, default=0)
+    parser.add_argument("--min-threads-seeded-events", type=int, default=0)
+    parser.add_argument("--min-threads-broad-events", type=int, default=0)
+    parser.add_argument(
+        "--source-min-events",
+        default="",
+        help="JSON or csv source min events map. Example: '{\"threads_owned\":2}' or 'threads_owned=2'",
+    )
     parser.add_argument("--max-dlq-recent", type=int, default=0)
     parser.add_argument("--adapter-consecutive-failures", type=int, default=3)
     parser.add_argument("--force", action="store_true")
@@ -507,26 +592,6 @@ def main() -> int:
                 ),
             ),
         ),
-        "min_rss_events": max(
-            0,
-            int(
-                _resolve_setting(
-                    ["UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H"],
-                    env_file_values,
-                    str(args.min_rss_events),
-                )
-            ),
-        ),
-        "min_reddit_events": max(
-            0,
-            int(
-                _resolve_setting(
-                    ["UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H"],
-                    env_file_values,
-                    str(args.min_reddit_events),
-                )
-            ),
-        ),
         "max_dlq_recent": max(
             0,
             int(
@@ -548,6 +613,72 @@ def main() -> int:
             ),
         ),
     }
+    source_min_events = _default_source_min_events()
+    source_min_events.update(
+        _parse_source_min_events_spec(
+            _resolve_setting(
+                ["UA_CSI_DELIVERY_SOURCE_MIN_EVENTS"],
+                env_file_values,
+                str(args.source_min_events),
+            )
+        )
+    )
+    source_min_events["youtube_channel_rss"] = max(
+        0,
+        int(
+            _resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H"],
+                env_file_values,
+                str(args.min_rss_events),
+            )
+        ),
+    )
+    source_min_events["reddit_discovery"] = max(
+        0,
+        int(
+            _resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H"],
+                env_file_values,
+                str(args.min_reddit_events),
+            )
+        ),
+    )
+    source_min_events["threads_owned"] = max(
+        0,
+        int(
+            _resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_THREADS_OWNED_EVENTS_24H"],
+                env_file_values,
+                str(args.min_threads_owned_events),
+            )
+        ),
+    )
+    source_min_events["threads_trends_seeded"] = max(
+        0,
+        int(
+            _resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_THREADS_SEEDED_EVENTS_24H"],
+                env_file_values,
+                str(args.min_threads_seeded_events),
+            )
+        ),
+    )
+    source_min_events["threads_trends_broad"] = max(
+        0,
+        int(
+            _resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_THREADS_BROAD_EVENTS_24H"],
+                env_file_values,
+                str(args.min_threads_broad_events),
+            )
+        ),
+    )
+    tuned["source_min_events"] = source_min_events
+    tuned["min_rss_events"] = int(source_min_events.get("youtube_channel_rss") or 0)
+    tuned["min_reddit_events"] = int(source_min_events.get("reddit_discovery") or 0)
+    tuned["min_threads_owned_events"] = int(source_min_events.get("threads_owned") or 0)
+    tuned["min_threads_seeded_events"] = int(source_min_events.get("threads_trends_seeded") or 0)
+    tuned["min_threads_broad_events"] = int(source_min_events.get("threads_trends_broad") or 0)
 
     db_path = Path(args.db_path).expanduser()
     conn = connect(db_path)
@@ -563,8 +694,12 @@ def main() -> int:
         max_failed_attempt_ratio=float(tuned["max_failed_attempt_ratio"]),
         min_rss_events=int(tuned["min_rss_events"]),
         min_reddit_events=int(tuned["min_reddit_events"]),
+        min_threads_owned_events=int(tuned["min_threads_owned_events"]),
+        min_threads_seeded_events=int(tuned["min_threads_seeded_events"]),
+        min_threads_broad_events=int(tuned["min_threads_broad_events"]),
         max_dlq_recent=int(tuned["max_dlq_recent"]),
         adapter_failures_threshold=int(tuned["adapter_consecutive_failures"]),
+        source_min_events=source_min_events,
     )
     previous_state = source_state_store.get_state(conn, str(args.state_key)) or {}
     transition = _canary_transition(
@@ -636,4 +771,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

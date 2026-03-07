@@ -108,11 +108,7 @@ def to_manual_youtube_payload(event: CreatorSignalEvent) -> dict[str, Any] | Non
         video_url = f"https://www.youtube.com/watch?v={video_id}"
     if not video_url:
         return None
-    routing = event.routing if isinstance(event.routing, dict) else {}
-    priority = str(routing.get("priority") or "standard").strip().lower()
-    mode = "explainer_only"
-    if priority in {"urgent", "high"}:
-        mode = "explainer_plus_code"
+    mode = "explainer_plus_code"
     return {
         "video_url": video_url,
         "video_id": video_id,
@@ -187,6 +183,22 @@ def _analytics_message(event: CreatorSignalEvent) -> str:
         top_themes = subject.get("top_themes")
         if isinstance(top_themes, list) and top_themes:
             lines.append(f"top_themes_preview: {_safe_json_preview(top_themes[:6], max_chars=800)}")
+    elif event_type == "threads_trend_report":
+        lines.append(f"report_key: {str(subject.get('report_key') or '')}")
+        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+        lines.append(f"items: {int(subject.get('total_items') or 0)}")
+        top_terms = subject.get("top_terms")
+        if isinstance(top_terms, list) and top_terms:
+            lines.append(f"top_terms_preview: {_safe_json_preview(top_terms[:8], max_chars=800)}")
+    elif event_type == "global_trend_brief_ready":
+        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
+        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+        source_totals = subject.get("source_totals") if isinstance(subject.get("source_totals"), dict) else {}
+        lines.append(f"source_totals: {_safe_json_preview(source_totals, max_chars=300)}")
+    elif event_type == "csi_global_brief_review_due":
+        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
+        lines.append(f"slot: {str(subject.get('slot_display') or subject.get('slot') or '')}")
+        lines.append(f"timezone: {str(subject.get('timezone') or '')}")
     elif event_type.startswith("rss_insight_"):
         lines.append(f"report_key: {str(subject.get('report_key') or '')}")
         lines.append(f"items: {int(subject.get('total_items') or 0)}")
@@ -225,7 +237,7 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         return None
 
     event_type = str(event.event_type or "").strip().lower()
-    route = "trend-specialist"
+    route = "csi-trend-analyst"
     if event_type in {"delivery_health_regression", "delivery_health_recovered"}:
         route = "data-analyst"
     if event_type.startswith("delivery_health_auto_remediation"):
@@ -245,9 +257,10 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
 
     # Keep CSI analytics context concentrated in a small number of durable lanes
     # so dashboard/session lists do not explode into one lane per event type.
-    session_key = f"csi_{route.replace('-', '_')}"
+    route_lane = route.replace("-", "_")
+    session_key = route_lane if route_lane.startswith("csi_") else f"csi_{route_lane}"
     message = _analytics_message(event)
-    if route == "trend-specialist":
+    if route == "csi-trend-analyst":
         message = (
             f"{message}\n\n"
             "specialist_followup_policy:\n"
@@ -266,8 +279,8 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         "metadata": {
             "event_type": event_type,
             "source": source,
-            "follow_up_budget": follow_up_budget if route == "trend-specialist" else 0,
-            "confidence_target": confidence_target if route == "trend-specialist" else None,
+            "follow_up_budget": follow_up_budget if route == "csi-trend-analyst" else 0,
+            "confidence_target": confidence_target if route == "csi-trend-analyst" else None,
         },
     }
 

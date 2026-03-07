@@ -253,7 +253,17 @@ class OpsService:
         memory_mode = self._read_policy_memory_mode(session_path) or "direct_only"
 
         source = self._infer_source(session_id, owner)
-        status = str(runtime.get("lifecycle_state") or ("active" if active_session else "idle"))
+        lifecycle_state = str(runtime.get("lifecycle_state") or "").strip().lower()
+        active_connections = int(runtime.get("active_connections", 0) or 0)
+        active_runs = int(runtime.get("active_runs", 0) or 0)
+        if lifecycle_state == "terminal":
+            status = "terminal"
+        elif active_runs > 0:
+            status = "running"
+        elif active_connections > 0:
+            status = "active"
+        else:
+            status = "idle"
         last_modified_dt = datetime.fromtimestamp(session_path.stat().st_mtime, tz=timezone.utc)
         last_modified = last_modified_dt.isoformat()
         
@@ -282,8 +292,8 @@ class OpsService:
             "description": description,
             "last_modified": last_modified,
             "last_activity": last_activity,
-            "active_connections": int(runtime.get("active_connections", 0) or 0),
-            "active_runs": int(runtime.get("active_runs", 0) or 0),
+            "active_connections": active_connections,
+            "active_runs": active_runs,
             "last_event_seq": int(runtime.get("last_event_seq", 0) or 0),
             "terminal_reason": runtime.get("terminal_reason"),
             "has_run_log": run_log_path.exists(),

@@ -180,7 +180,7 @@ function RefLine({
       {explorerHref && (
         <Link
           href={explorerHref}
-          className="rounded border border-cyan-900/70 bg-cyan-950/40 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-cyan-200 hover:bg-cyan-900/45"
+          className="rounded border border-blue-500/20 bg-blue-500/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-blue-300 hover:bg-blue-500/10"
         >
           Open in Storage
         </Link>
@@ -218,6 +218,13 @@ export default function DashboardPage() {
   const [dispatchPending, setDispatchPending] = useState(false);
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
   const [tutorialDispatchingId, setTutorialDispatchingId] = useState<string>("");
+  const [dismissedVpEventIds, setDismissedVpEventIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const stored = localStorage.getItem("ua.dismissed_vp_events.v1");
+      return stored ? new Set(JSON.parse(stored)) : new Set();
+    } catch { return new Set(); }
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -562,9 +569,33 @@ export default function DashboardPage() {
     }
     return events
       .slice()
+      .filter((e) => !dismissedVpEventIds.has(e.event_id || ""))
       .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
       .slice(0, 6);
-  }, [selectedVpId, vpIds, vpMetrics]);
+  }, [selectedVpId, vpIds, vpMetrics, dismissedVpEventIds]);
+
+  const dismissVpEvent = useCallback((eventId: string) => {
+    setDismissedVpEventIds((prev) => {
+      const next = new Set(prev);
+      next.add(eventId);
+      try { localStorage.setItem("ua.dismissed_vp_events.v1", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }, []);
+
+  const clearAllVpEvents = useCallback(() => {
+    const allIds = new Set(dismissedVpEventIds);
+    for (const vpId of vpIds) {
+      const metrics = vpMetrics[vpId];
+      if (metrics?.recent_events?.length) {
+        for (const e of metrics.recent_events) {
+          if (e.event_id) allIds.add(e.event_id);
+        }
+      }
+    }
+    setDismissedVpEventIds(allIds);
+    try { localStorage.setItem("ua.dismissed_vp_events.v1", JSON.stringify([...allIds])); } catch {}
+  }, [dismissedVpEventIds, vpIds, vpMetrics]);
 
   const dispatchMission = useCallback(async () => {
     const objective = dispatchObjective.trim();
@@ -736,14 +767,14 @@ export default function DashboardPage() {
         {cards.map((card) => (
           <article
             key={card.label}
-            className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 cursor-pointer transition hover:border-cyan-700/50 hover:bg-slate-800/70"
+            className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 cursor-pointer transition hover:border-blue-500/30 hover:bg-white/[0.04]"
             onClick={() => handleCardClick(card.label)}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleCardClick(card.label); }}
           >
             <p className="text-xs uppercase tracking-[0.16em] text-slate-400">{card.label}</p>
-            <p className="mt-2 text-3xl font-semibold text-cyan-200">{card.value}</p>
+            <p className="mt-2 text-3xl font-semibold text-slate-100">{card.value}</p>
           </article>
         ))}
       </section>
@@ -784,7 +815,7 @@ export default function DashboardPage() {
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Active Workers</p>
-            <p className="mt-1 text-xl font-semibold text-cyan-200">{activeWorkerCount}</p>
+            <p className="mt-1 text-xl font-semibold text-slate-100">{activeWorkerCount}</p>
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Queued</p>
@@ -796,7 +827,7 @@ export default function DashboardPage() {
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Completed</p>
-            <p className="mt-1 text-xl font-semibold text-cyan-200">{missionCountByStatus.completed}</p>
+            <p className="mt-1 text-xl font-semibold text-slate-100">{missionCountByStatus.completed}</p>
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Failed</p>
@@ -832,13 +863,13 @@ export default function DashboardPage() {
                 }
               }}
               placeholder="Objective for external primary agent..."
-              className="min-w-[240px] flex-1 rounded border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-700/60"
+              className="min-w-[240px] flex-1 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500/50"
             />
             <button
               type="button"
               onClick={dispatchMission}
               disabled={dispatchPending || !dispatchObjective.trim()}
-              className="rounded border border-cyan-700 bg-cyan-900/25 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/40 disabled:opacity-40"
+              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40"
             >
               {dispatchPending ? "Dispatching..." : "Dispatch"}
             </button>
@@ -926,9 +957,18 @@ export default function DashboardPage() {
         </div>
 
         {recentVpEvents.length > 0 && (
-          <div className="mt-3 rounded-lg border border-cyan-900/60 bg-cyan-950/10 p-3 text-xs">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-cyan-300">Recent VP Events</p>
-            <div className="mt-2 space-y-2 text-cyan-100">
+          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-xs">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">Recent VP Events</p>
+              <button
+                type="button"
+                onClick={clearAllVpEvents}
+                className="rounded border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200"
+              >
+                Clear All
+              </button>
+            </div>
+            <div className="mt-2 space-y-2 text-slate-200">
               {recentVpEvents.map((event, idx) => {
                 const eventPayload = asRecord(event.payload);
                 const missionId = asText(event.mission_id) || asText(eventPayload.mission_id);
@@ -952,12 +992,22 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={`${event.event_id || event.created_at || "event"}-${idx}`}
-                    className="rounded border border-cyan-900/60 bg-cyan-950/10 px-2 py-1.5"
+                    className="relative rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5"
                   >
+                    {event.event_id && (
+                      <button
+                        type="button"
+                        onClick={() => dismissVpEvent(event.event_id!)}
+                        className="absolute top-1 right-1.5 rounded px-1 py-0.5 text-[10px] text-slate-600 transition hover:bg-white/[0.06] hover:text-slate-300"
+                        title="Dismiss"
+                      >
+                        ✕
+                      </button>
+                    )}
                     <p>
                       {formatLocalDateTime(event.created_at)} · {event.event_type || "event"}
                     </p>
-                    <p className="mt-1 text-[10px] text-cyan-200/80">
+                    <p className="mt-1 text-[10px] text-slate-400">
                       {missionId || "--"} · {vpId || "--"} · {missionStatus || "--"}
                     </p>
                     <RefLine label="result_ref" value={resultRef} />
@@ -986,7 +1036,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setSessionFilter("all")}
-                className="flex items-center gap-1 rounded-full border border-cyan-700/60 bg-cyan-900/20 px-2 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-900/40 transition"
+                className="flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-300 hover:bg-white/[0.06] transition"
               >
                 Active only
                 <span className="ml-0.5">×</span>
@@ -1008,7 +1058,7 @@ export default function DashboardPage() {
               className={[
                 "rounded-full px-2.5 py-1 text-[11px] capitalize transition border",
                 sourceFilter === src
-                  ? "border-cyan-600 bg-cyan-900/30 text-cyan-200"
+                  ? "border-blue-500/30 bg-blue-500/10 text-blue-200"
                   : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200",
               ].join(" ")}
             >
@@ -1047,7 +1097,7 @@ export default function DashboardPage() {
                 type="checkbox"
                 checked={filteredSessions.length > 0 && filteredSessions.every((s) => selectedSessions.has(s.session_id))}
                 onChange={toggleAllVisible}
-                className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 accent-cyan-500"
+                className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 accent-blue-500"
               />
               <span className="text-[11px] text-slate-400">Select all visible</span>
             </div>
@@ -1075,14 +1125,14 @@ export default function DashboardPage() {
 
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {filteredSessions.map((session) => (
-            <article key={session.session_id} className={`rounded-lg border p-3 transition ${selectedSessions.has(session.session_id) ? "border-cyan-700/60 bg-cyan-950/20" : "border-slate-800/80 bg-slate-950/50"} ${deletingIds.has(session.session_id) ? "opacity-40" : ""}`}>
+            <article key={session.session_id} className={`rounded-lg border p-3 transition ${selectedSessions.has(session.session_id) ? "border-blue-500/30 bg-blue-500/5" : "border-slate-800/80 bg-slate-950/50"} ${deletingIds.has(session.session_id) ? "opacity-40" : ""}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <input
                     type="checkbox"
                     checked={selectedSessions.has(session.session_id)}
                     onChange={() => toggleSession(session.session_id)}
-                    className="h-3.5 w-3.5 shrink-0 rounded border-slate-600 bg-slate-900 accent-cyan-500"
+                    className="h-3.5 w-3.5 shrink-0 rounded border-slate-600 bg-slate-900 accent-blue-500"
                   />
                   <p className="truncate font-mono text-xs text-slate-200">{session.session_id}</p>
                 </div>
@@ -1127,7 +1177,7 @@ export default function DashboardPage() {
                 {!session.session_id.startsWith("vp_") && (
                   <button
                     type="button"
-                    className="rounded border border-cyan-700 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                    className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
                     onClick={() =>
                       openOrFocusChatWindow({
                         sessionId: session.session_id,
@@ -1171,7 +1221,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setNotificationFilter("all")}
-                className="flex items-center gap-1 rounded-full border border-cyan-700/60 bg-cyan-900/20 px-2 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-900/40 transition"
+                className="flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-300 hover:bg-white/[0.06] transition"
               >
                 Unread only
                 <span className="ml-0.5">×</span>
@@ -1260,7 +1310,7 @@ export default function DashboardPage() {
                     {tutorialHref && (
                       <Link
                         href={tutorialHref}
-                        className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                        className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
                       >
                         View Tutorial Files
                       </Link>

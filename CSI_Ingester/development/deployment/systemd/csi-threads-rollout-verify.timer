@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Threads rollout verification daily after token refresh
+
+[Timer]
+OnCalendar=*-*-* 03:35:00 UTC
+Persistent=true
+Unit=csi-threads-rollout-verify.service
+
+[Install]
+WantedBy=timers.target
+

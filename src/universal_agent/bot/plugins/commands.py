@@ -99,14 +99,10 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
     
     if prompt:
         is_continue = task_manager.is_continuation_enabled(user_id)
-        mode_text = "🔗 Continuing session" if is_continue else "🆕 Fresh session"
 
         try:
             task_id = await task_manager.add_task(user_id, prompt)
-            await msg.reply_text(
-                f"✅ Task Queued: `{task_id}`\n{mode_text}",
-                parse_mode="Markdown"
-            )
+            await msg.reply_text("On it.")
         except ValueError as e:
             text_error = str(e)
             if text_error.startswith("active_task:"):

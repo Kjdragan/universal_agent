@@ -43,8 +43,8 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
     "upload_to_composio": ToolSchema(
         required=("path", "tool_slug", "toolkit_slug"),
         example=(
-            "upload_to_composio({path: '/tmp/report.pdf', tool_slug: 'GMAIL_SEND_EMAIL', "
-            "toolkit_slug: 'gmail'})"
+            "upload_to_composio({path: '/tmp/report.pdf', tool_slug: 'SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL', "
+            "toolkit_slug: 'slack'})"
         ),
     ),
     "read_local_file": ToolSchema(

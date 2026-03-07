@@ -1,0 +1,47 @@
+{
+    "skill_name": "logfire-eval",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "Analyze the latest UA run. Check for errors and give me a quick health report.",
+            "expected_output": "Logfire MCP arbitrary_query is called with a recent-runs discovery query. The main trace is identified. A health check query runs against the run_id. A health verdict (green/yellow/red) is produced with exception count, total spans, duration, and tool call summary.",
+            "files": [],
+            "expectations": [
+                "The arbitrary_query tool (Logfire MCP) is called at least once",
+                "The discovery query uses a time-bounded filter (age parameter set, e.g. 1440 minutes)",
+                "A run_id or trace_id is identified from the discovery query before further analysis",
+                "The health check span summary query is executed (span_name, count, avg_dur_sec, has_exceptions)",
+                "A health verdict (green/yellow/red or similar) is stated",
+                "The report is written to {workspace}/work_products/logfire-eval/logfire_evaluation.md or the agent explains why it cannot resolve a workspace"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "What happened in that heartbeat last night? I want to know what it did and if anything went wrong.",
+            "expected_output": "The heartbeat_significant query runs for the last 48 hours. The most recent heartbeat is selected and drilled into via its trace_id. A summary of what the heartbeat did (tools, wake_reason, duration) is provided.",
+            "files": [],
+            "expectations": [
+                "The arbitrary_query tool is called with the heartbeat_significant query",
+                "The age parameter is at least 2880 (48 hours)",
+                "A specific heartbeat trace_id is selected for deep-dive",
+                "A second query uses the heartbeat trace_id to get the span breakdown",
+                "wake_reason and tools_used are reported",
+                "Exceptions within the heartbeat trace are noted if present"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "The last run got cancelled unexpectedly mid-task. Can you analyze what happened and why it stopped?",
+            "expected_output": "The run is found via discovery query. The lifecycle exception query checks for execution_cancelled, budget_exceeded, and execution_error spans. The exception deep-dive query also runs. The analysis distinguishes whether the stop was user-initiated (execution_cancelled) or budget-hit (budget_exceeded) or a crash (execution_error).",
+            "files": [],
+            "expectations": [
+                "A run discovery query is executed to find the relevant run",
+                "The span-level exception query is executed (is_exception = true)",
+                "A lifecycle span check is performed for budget_exceeded / execution_cancelled / execution_error",
+                "The analysis correctly identifies the stopping condition (cancelled vs budget vs error)",
+                "Tool execution summary is included (what tools were called before the stop)",
+                "The report includes a Recommendations section if the stop was unexpected"
+            ]
+        }
+    ]
+}

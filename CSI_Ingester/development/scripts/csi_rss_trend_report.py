@@ -450,14 +450,14 @@ def _emit_to_ua(event: CreatorSignalEvent, config) -> tuple[bool, int, dict[str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate RSS trend report and emit to UA.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--env-file", default="/opt/universal_agent/.env")
     parser.add_argument(
         "--csi-env-file",
         default="/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env",
     )
     parser.add_argument("--window-hours", type=int, default=24)
-    parser.add_argument("--state-path", default="/opt/universal_agent/CSI_Ingester/development/var/rss_trend_report_state.json")
+    parser.add_argument("--state-path", default="/var/lib/universal-agent/csi/rss_trend_report_state.json")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 

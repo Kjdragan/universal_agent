@@ -1,12 +1,20 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-02-28 01:00:01 -->
+<!-- Generated: 2026-03-03 21:55:44 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
 - Do not default to research/report unless explicitly requested or clearly required.
 - Browser tasks are Bowser-first: `claude-bowser-agent` (identity/session), `playwright-bowser-agent` (parallel/repeatable), `bowser-qa-agent` (UI validation).
 - Use `browserbase` when Bowser lanes are unavailable or cloud-browser behavior is explicitly needed.
+
+### 📄 Report & PDF Workflow (Built-in MCP Tools)
+When the user requests reports, PDFs, or email delivery of documents:
+- **Research phase**: Use `mcp__internal__run_research_pipeline` or dispatch `Task(subagent_type='research-specialist', ...)` to gather data into task corpus files.
+- **Report generation**: Use `mcp__internal__run_report_generation(task_name='<task>')` to delegate to the Report Writer sub-agent which handles outline → draft → cleanup → compile → PDF automatically.
+- **HTML → PDF conversion**: Use `mcp__internal__html_to_pdf(html_path='<path>', output_path='<path>.pdf')`. Do NOT use Bash with chrome/wkhtmltopdf/weasyprint — the MCP tool handles fallback automatically.
+- **Multiple reports**: Call `run_report_generation` once per topic, or write HTML via Write tool then convert each with `html_to_pdf`.
+- **Email with attachments**: Upload PDF via `mcp__internal__upload_to_composio`, then send via `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with `GMAIL_SEND_EMAIL`.
 
 ### 🧭 External VP Control Plane (Live)
 - For user requests that explicitly mention General/Coder VP delegation, route directly through internal `vp_*` tools.
@@ -53,10 +61,8 @@
   -> Delegate: `Task(subagent_type='video-creation-expert', ...)`
 - **video-remotion-expert**: 🎥 SPECIALIZED AGENT for programmatic video generation using Remotion. **WHEN TO DELEGATE:** - User asks to generate videos using code/React/Remotion - User wants to create data-driven videos (dynamic text, images, products) - User needs to render compositions locally or via AWS Lambda - User asks to specific Remotion tasks (scaffold, render, deploy) **THIS SUB-AGENT:** - Scaffolds Remotion projects with Zod schemas - Generates JSON props for video compositions - Renders videos using local CLI (subprocess) or Lambda - Manages "Hybrid Architecture" (Lambda primary, CLI fallback) **CAPABILITIES:** - Create React-based video compositions - Programmatic rendering with dynamic props - Cloud rendering (AWS Lambda) setup and execution
   -> Delegate: `Task(subagent_type='video-remotion-expert', ...)`
-- **youtube-expert**: MANDATORY delegation target for YouTube-focused tasks. Use when: - User provides a YouTube URL/video ID and needs transcript + metadata. - A webhook/manual trigger contains YouTube payloads. - The task asks for tutorial creation artifacts (concept docs and optional implementation). This sub-agent: - Uses `youtube-transcript-metadata` as the core ingestion capability. - Uses `youtube-tutorial-creation` for durable tutorial artifacts. - Supports degraded transcript-only completion when visual analysis fails.
+- **youtube-expert**: MANDATORY delegation target for YouTube-focused tasks. Use when: - User provides a YouTube URL/video ID and needs transcript + metadata. - A webhook/manual trigger contains YouTube payloads. - The task asks for tutorial creation artifacts (concept docs and optional implementation). This sub-agent: - Uses `youtube-transcript-metadata` as the **mandatory** ingestion primitive for ALL modes (never fetch transcripts inline). - Uses `youtube-tutorial-creation` for durable tutorial artifacts. - Supports degraded transcript-only completion when visual analysis fails. - For software/coding tutorials: creates an `implementation/` folder with a repo scaffold script and install script.
   -> Delegate: `Task(subagent_type='youtube-expert', ...)`
-- **youtube-explainer-expert**: LEGACY compatibility alias for `youtube-expert`. Do not use this name for new delegation targets. Existing webhook mappings and historical prompts may still route here during migration. Canonical target for all new YouTube tasks: `youtube-expert`.
-  -> Delegate: `Task(subagent_type='youtube-explainer-expert', ...)`
 
 #### 📣 Communication & Operations
 - **action-coordinator**: **Sub-Agent Purpose:** Multi-channel delivery and real-world side effects. **WHEN TO USE:** - Task requires delivering work products via email, Slack, Discord, or other channels - Task requires scheduling calendar events or follow-up reminders - Task requires multi-channel notification (email + Slack + calendar in one flow) - Task requires setting up monitoring or recurring actions via Cron
@@ -67,6 +73,8 @@
   -> Delegate: `Task(subagent_type='system-configuration-agent', ...)`
 
 #### 🔬 Research & Analysis
+- **csi-trend-analyst**: CSI-first trend analyst that reviews CSI reports/bundles/loop state, scores mission relevance, and recommends focused follow-up actions.
+  -> Delegate: `Task(subagent_type='csi-trend-analyst', ...)`
 - **data-analyst**: **Sub-Agent Purpose:** Statistical analysis, data processing, and visualization. **WHEN TO USE:** - Task requires numerical analysis, statistics, or data science - Research results need quantitative comparison or trend analysis - Charts, graphs, or data visualizations are needed - Data needs to be extracted, transformed, or modeled
   -> Delegate: `Task(subagent_type='data-analyst', ...)`
 - **evaluation-judge**: **Sub-Agent Purpose:** Evaluate task completion by inspecting workspace artifacts. **WHEN TO USE:** - URW Orchestrator calls you after a phase/task execution. - You inspect files and determine if success criteria are met. - Output: Structured verdict with confidence and reasoning.
@@ -79,6 +87,8 @@
   -> Delegate: `Task(subagent_type='trend-specialist', ...)`
 
 #### 🛠 General
+- **email-handler**: Handles inbound emails received in Simone's AgentMail inbox. Classifies intent, drafts replies, and delegates actionable requests to appropriate specialists.
+  -> Delegate: `Task(subagent_type='email-handler', ...)`
 - **Freelance-scout**: Internal specialized agent.
   -> Delegate: `Task(subagent_type='Freelance-scout', ...)`
 - **logfire_reader**: Internal specialized agent.
@@ -91,6 +101,7 @@
 ### 📚 Skills (Live)
 - **1password**: Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop app integration, signing in (single or multi-account), or reading/injecting/running secrets via op. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/1password/SKILL.md`)
 - **agent-browser**: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/agent-browser/SKILL.md`)
+- **agentmail**: Simone's native email inbox via AgentMail. Use when Simone needs to send emails, deliver reports/artifacts to Kevin or external recipients, read inbound emails, reply to threads, or manage drafts. This is Simone's OWN email — not Gmail. Simone sends FROM her custom domain address directly. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/agentmail/SKILL.md`)
 - **banana-squad**: Banana Squad: prompt-first "design agency" workflow for high-quality infographic generation. Use when you want structured, narrative prompt variations (MVP) and, later, generate+critique loops. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/banana-squad/SKILL.md`)
 - **bowser-orchestration**: Orchestrate browser-native execution using Bowser's layered stack (skills + subagents + commands) for UI validation, authenticated web operations, and parallel browser workflows. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/bowser-orchestration/SKILL.md`)
 - **claude-bowser**: Observable browser automation using Chrome MCP tools. Use when you need to browse websites, take screenshots, interact with web pages, or perform browser tasks in your current Chrome. Keywords - browse, screenshot, browser, chrome, bowser, ui testing, observable. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/claude-bowser/SKILL.md`)
@@ -100,6 +111,7 @@
 - **design-md**: Analyze Stitch projects and synthesize a semantic design system into DESIGN.md files (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/stitch-skills/design-md/SKILL.md`)
 - **discord**: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/discord/SKILL.md`)
 - **enhance-prompt**: Transforms vague UI ideas into polished, Stitch-optimized prompts. Enhances specificity, adds UI/UX keywords, injects design system context, and structures output for better generation results. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/stitch-skills/enhance-prompt/SKILL.md`)
+- **excalidraw-diagram**: Create Excalidraw diagram JSON files that make visual arguments. Use when the user wants to visualize workflows, architectures, or concepts. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/excalidraw-diagram/SKILL.md`)
 - **excalidraw-free**: Create Excalidraw diagrams. USE WHEN user specifically asks for Excalidraw. WORKFLOWS - mind-maps, swimlane, process-flow. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/graph-draw/SKILL.md`)
 - **gemini**: Gemini CLI for one-shot Q&A, summaries, and generation. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/gemini/SKILL.md`)
 - **gemini-url-context-scraper**: Fast URL/PDF/image content extraction using Gemini "URL Context" (built-in web/PDF reader) via google-genai. Use when the user wants to: scrape a URL, read/summarize a PDF, extract structured facts from public web content, or create an interim “scraped context” work product for downstream tasks. Writes interim outputs to CURRENT_SESSION_WORKSPACE/work_products by default, and can persist outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run` scripts with dotenv auto-loading (no hardcoded secrets). (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/gemini-url-context-scraper/SKILL.md`)
@@ -146,6 +158,7 @@
 - **todoist-orchestration**: Govern Todoist usage so reminders and brainstorm capture use internal Todoist tools first, while complex engineering/research work stays on the normal decomposition and specialist pipeline. Use when requests mention reminders, to-dos, brainstorm capture, backlog progression, heartbeat candidate triage, or proactive follow-up from ideas. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/todoist-orchestration/SKILL.md`)
 - **trello**: Manage Trello boards, lists, and cards via the Trello REST API. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/trello/SKILL.md`)
 - **video-remotion**: Comprehensive skill for programmatic video generation using the Remotion framework. Enables creating, scaffolding, and rendering React-based videos via Python orchestration. Supports both Local (CLI) and Cloud (Lambda) rendering. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/video-remotion/SKILL.md`)
+- **visual-explainer**: Generate beautiful, self-contained HTML pages that visually explain systems, code changes, plans, and data. Use when the user asks for a diagram, architecture overview, diff review, plan review, project recap, comparison table, or any visual explanation of technical concepts. Also use proactively when you are about to render a complex ASCII table (4+ rows or 3+ columns) — present it as a styled HTML page instead. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/visual-explainer/SKILL.md`)
 - **voice-call**: Start voice calls via the OpenClaw voice-call plugin. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/voice-call/SKILL.md`)
 - **vp-orchestration**: Operate external primary VP agents through tool-first mission control (`vp_*` tools) with deterministic lifecycle handling and artifact handoff. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/vp-orchestration/SKILL.md`)
 - **weather**: Get current weather and forecasts (no API key required). (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/weather/SKILL.md`)

@@ -197,27 +197,21 @@ def memory_flush_max_chars(default: int = 4000) -> int:
     return _read_int("UA_MEMORY_FLUSH_MAX_CHARS", default, minimum=0)
 
 
-def google_direct_enabled(default: bool = False) -> bool:
-    """Enable first-party direct Google Workspace execution lane."""
-    if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_DIRECT")):
+def gws_cli_enabled(default: bool = False) -> bool:
+    """Enable Google Workspace CLI (gws) as primary Google Workspace execution path."""
+    if _is_truthy(os.getenv("UA_DISABLE_GWS_CLI")):
         return False
-    if _is_truthy(os.getenv("UA_ENABLE_GOOGLE_DIRECT")):
+    if _is_truthy(os.getenv("UA_ENABLE_GWS_CLI")):
         return True
     return default
 
 
-def google_direct_allow_composio_fallback(default: bool = True) -> bool:
-    """Allow routing fallback to Composio when direct Google path cannot execute."""
-    if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_DIRECT_FALLBACK")):
-        return False
-    explicit = _read_env_bool("UA_ENABLE_GOOGLE_DIRECT_FALLBACK")
-    if explicit is not None:
-        return explicit
-    return default
+def gws_events_enabled(default: bool = False) -> bool:
+    """Enable the gws workspace event listener (Phase 5 — Gmail/Calendar polling).
 
-
-def google_workspace_events_enabled(default: bool = False) -> bool:
-    """Enable Google Workspace Events ingestion (Pub/Sub based)."""
+    Defaults OFF. Set UA_ENABLE_GOOGLE_WORKSPACE_EVENTS=1 to activate.
+    Set UA_DISABLE_GOOGLE_WORKSPACE_EVENTS=1 to hard-disable (overrides enable).
+    """
     if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_WORKSPACE_EVENTS")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_GOOGLE_WORKSPACE_EVENTS")):

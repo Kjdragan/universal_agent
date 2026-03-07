@@ -307,6 +307,9 @@ class UniversalAgentAdapter(BaseAgentAdapter):
         normalized = tool_name.upper()
         if "GMAIL_SEND_EMAIL" in normalized:
             return "email_sent"
+        low = tool_name.lower()
+        if "gmail" in low and ("send" in low or "draft" in low):
+            return "email_sent"
         if "SLACK_SEND_MESSAGE" in normalized:
             return "slack_message_sent"
         return None
@@ -900,6 +903,9 @@ class GatewayURWAdapter(BaseAgentAdapter):
             return None
         normalized = tool_name.upper()
         if "GMAIL_SEND_EMAIL" in normalized:
+            return "email_sent"
+        low = tool_name.lower()
+        if "gmail" in low and ("send" in low or "draft" in low):
             return "email_sent"
         if "SLACK_SEND_MESSAGE" in normalized:
             return "slack_message_sent"

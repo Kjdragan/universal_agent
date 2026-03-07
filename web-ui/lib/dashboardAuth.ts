@@ -154,7 +154,15 @@ function dashboardSessionSecret(): string {
     || (process.env.UA_OPS_TOKEN || "").trim()
     || dashboardPassword();
   if (secret) return secret;
-  return "ua-dashboard-dev-secret";
+  throw new Error("Dashboard session signing secret is not configured.");
+}
+
+export function dashboardSessionSecretConfigured(): boolean {
+  return Boolean(
+    (process.env.UA_DASHBOARD_SESSION_SECRET || "").trim()
+    || (process.env.UA_OPS_TOKEN || "").trim()
+    || dashboardPassword(),
+  );
 }
 
 function toBase64Url(value: string): string {
@@ -245,6 +253,10 @@ export function decodeDashboardSessionToken(token: string): DashboardSession {
       expiresAt: null,
       roles: ownerRoles(dashboardOwnerDefault()),
     };
+  }
+
+  if (!dashboardSessionSecretConfigured()) {
+    return { authenticated: false, authRequired, ownerId: dashboardOwnerDefault(), expiresAt: null, roles: [] };
   }
 
   const raw = (token || "").trim();

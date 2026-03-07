@@ -315,7 +315,7 @@ def _emit_task_event(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run queued CSI analysis tasks.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--max-tasks", type=int, default=4)
     parser.add_argument(
         "--request-types",

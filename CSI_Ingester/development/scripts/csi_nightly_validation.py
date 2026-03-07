@@ -221,7 +221,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--csi-db",
-        default="/opt/universal_agent/CSI_Ingester/development/var/csi.db",
+        default="/var/lib/universal-agent/csi/csi.db",
         help="Path to CSI sqlite database.",
     )
     parser.add_argument(

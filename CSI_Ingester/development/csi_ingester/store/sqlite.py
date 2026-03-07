@@ -199,6 +199,82 @@ CREATE INDEX IF NOT EXISTS idx_opportunity_bundles_created_at ON opportunity_bun
 CREATE INDEX IF NOT EXISTS idx_opportunity_bundles_window ON opportunity_bundles(window_end_utc DESC);
 """
 
+MIGRATION_0008_CROSS_SOURCE_ANALYSIS = """
+CREATE TABLE IF NOT EXISTS reddit_event_analysis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT UNIQUE NOT NULL,
+    event_db_id INTEGER,
+    source TEXT NOT NULL DEFAULT 'reddit_discovery',
+    post_id TEXT,
+    subreddit TEXT,
+    title TEXT,
+    url TEXT,
+    author TEXT,
+    score INTEGER DEFAULT 0,
+    num_comments INTEGER DEFAULT 0,
+    occurred_at TEXT,
+    category TEXT NOT NULL DEFAULT 'other_interest',
+    summary_text TEXT,
+    model_name TEXT,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    analysis_json TEXT NOT NULL DEFAULT '{}',
+    analyzed_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reddit_event_analysis_analyzed_at ON reddit_event_analysis(analyzed_at);
+CREATE INDEX IF NOT EXISTS idx_reddit_event_analysis_category ON reddit_event_analysis(category);
+CREATE INDEX IF NOT EXISTS idx_reddit_event_analysis_subreddit ON reddit_event_analysis(subreddit);
+
+CREATE TABLE IF NOT EXISTS threads_event_analysis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT UNIQUE NOT NULL,
+    event_db_id INTEGER,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    media_id TEXT,
+    trend_bucket TEXT,
+    query_term TEXT,
+    username TEXT,
+    text TEXT,
+    permalink TEXT,
+    timestamp TEXT,
+    like_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    repost_count INTEGER DEFAULT 0,
+    quote_count INTEGER DEFAULT 0,
+    category TEXT NOT NULL DEFAULT 'other_interest',
+    summary_text TEXT,
+    model_name TEXT,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    analysis_json TEXT NOT NULL DEFAULT '{}',
+    analyzed_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_threads_event_analysis_analyzed_at ON threads_event_analysis(analyzed_at);
+CREATE INDEX IF NOT EXISTS idx_threads_event_analysis_source ON threads_event_analysis(source, analyzed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_event_analysis_bucket ON threads_event_analysis(trend_bucket, analyzed_at DESC);
+
+CREATE TABLE IF NOT EXISTS global_trend_briefs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    brief_key TEXT UNIQUE NOT NULL,
+    window_start_utc TEXT NOT NULL,
+    window_end_utc TEXT NOT NULL,
+    model_name TEXT,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    brief_markdown TEXT NOT NULL,
+    brief_json TEXT NOT NULL,
+    artifact_markdown_path TEXT,
+    artifact_json_path TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_global_trend_briefs_created_at ON global_trend_briefs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_global_trend_briefs_window ON global_trend_briefs(window_end_utc DESC);
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -207,6 +283,7 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0005_analyst", MIGRATION_0005_ANALYST),
     ("0006_delivery_attempts", MIGRATION_0006_DELIVERY_ATTEMPTS),
     ("0007_opportunity_bundles", MIGRATION_0007_OPPORTUNITY_BUNDLES),
+    ("0008_cross_source_analysis", MIGRATION_0008_CROSS_SOURCE_ANALYSIS),
 )
 
 

@@ -128,6 +128,7 @@ rsync -az \
   --exclude ".env" \
   --exclude "AGENT_RUN_WORKSPACES/" \
   --exclude "artifacts/" \
+  --exclude "CSI_Ingester/development/var/" \
   --exclude "tmp/" \
   --exclude "web-ui/.next/" \
   --exclude "web-ui/node_modules/" \
@@ -159,7 +160,16 @@ rsync -az \
   chown -R ua:ua Memory_System AGENT_RUN_WORKSPACES artifacts logs 2>/dev/null || true
   # Process heartbeat directory for watchdog liveness detection.
   mkdir -p /var/lib/universal-agent/heartbeat
+  mkdir -p /var/lib/universal-agent/csi/backups
   chown ua:ua /var/lib/universal-agent/heartbeat 2>/dev/null || true
+  chown -R ua:ua /var/lib/universal-agent/csi 2>/dev/null || true
+
+  # One-time CSI DB migration to durable runtime path.
+  if [ -f /opt/universal_agent/CSI_Ingester/development/var/csi.db ] && [ ! -f /var/lib/universal-agent/csi/csi.db ]; then
+    cp /opt/universal_agent/CSI_Ingester/development/var/csi.db /var/lib/universal-agent/csi/csi.db
+    chown ua:ua /var/lib/universal-agent/csi/csi.db 2>/dev/null || true
+    chmod 640 /var/lib/universal-agent/csi/csi.db 2>/dev/null || true
+  fi
   # Tutorial bootstrap target root (used by dashboard "Create Repo" action).
   mkdir -p '${DEPLOY_TUTORIAL_REPO_ROOT}'
   chown -R ua:ua '${DEPLOY_TUTORIAL_REPO_ROOT}' 2>/dev/null || true

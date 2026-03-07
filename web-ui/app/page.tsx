@@ -1073,9 +1073,13 @@ function ChatInterface() {
     // Pre-fill input from ?message= query param (used by dashboard Quick Command)
     const prefill = (params.get("message") || "").trim();
     const shouldFocusInput = params.get("focus_input") === "1";
+    const shouldAutoSend = params.get("auto_send") === "1";
 
     if (prefill) {
       setInput(prefill);
+      if (shouldAutoSend && nextRole !== "viewer") {
+        setPendingQuery(prefill);
+      }
     }
 
     if ((prefill || shouldFocusInput) && nextRole !== "viewer") {
@@ -1084,11 +1088,12 @@ function ChatInterface() {
       });
     }
 
-    if (prefill || shouldFocusInput) {
+    if (prefill || shouldFocusInput || shouldAutoSend) {
       // Clean up one-shot URL flags so refresh doesn't repeat actions.
       const url = new URL(window.location.href);
       url.searchParams.delete("message");
       url.searchParams.delete("focus_input");
+      url.searchParams.delete("auto_send");
       window.history.replaceState({}, "", url.toString());
     }
   }, [focusInput]);
@@ -1211,10 +1216,20 @@ function ChatInterface() {
           : (isVpObserverSession && vpWorkspaceRel
             ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
             : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
-        const response = await fetch(runLogUrl, { cache: "no-store" });
+        let response = await fetch(runLogUrl, { cache: "no-store" });
+        let didFallback = false;
+        // Fallback: if ops tail returns auth error or non-200, try direct file endpoint
+        if (!response.ok && useOpsTailHydration) {
+          const fallbackUrl = `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`;
+          const fallbackResp = await fetch(fallbackUrl, { cache: "no-store" });
+          if (fallbackResp.ok) {
+            response = fallbackResp;
+            didFallback = true;
+          }
+        }
         if (response.ok) {
           let raw = "";
-          if (useOpsTailHydration) {
+          if (useOpsTailHydration && !didFallback) {
             const payload = await response.json() as { lines?: unknown; content?: unknown };
             if (Array.isArray(payload.lines)) {
               raw = payload.lines.map((line) => String(line)).join("\n");
@@ -1289,8 +1304,19 @@ function ChatInterface() {
             hydratedLogCount > 0 ? `${hydratedLogCount} activity events` : "",
           ].filter(Boolean);
           setHistoryHydrationNotice(`Hydrated ${fragments.join(" + ")} for ${sessionId}`);
+          hydratedSessionIdsRef.current.add(hydrationKey);
         } else if (!cancelled && store.messages.length === 0) {
-          setHistoryHydrationNotice(`No run history found for ${sessionId}`);
+          // Don't permanently cache empty results for active sessions —
+          // run.log may still be accumulating during execution.
+          const connStatus = useAgentStore.getState().connectionStatus;
+          const isActive = connStatus === "processing" || connStatus === "connected";
+          if (!isActive) {
+            setHistoryHydrationNotice(`No run history found for ${sessionId}`);
+            hydratedSessionIdsRef.current.add(hydrationKey);
+          }
+          // For active sessions, allow retry on next render cycle
+        } else {
+          hydratedSessionIdsRef.current.add(hydrationKey);
         }
       } catch (error) {
         console.warn("Failed to rehydrate session history", error);
@@ -1298,7 +1324,7 @@ function ChatInterface() {
           setHydrationError(`Session history rehydration failed: ${(error as Error).message || "unknown error"}. Check gateway connectivity.`);
         }
       } finally {
-        hydratedSessionIdsRef.current.add(hydrationKey);
+        // Moved hydration marking into the conditional blocks above
       }
     })();
 

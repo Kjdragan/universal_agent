@@ -1,39 +1,39 @@
 ---
 name: gmail
-description: Comprehensive guide for using Gmail tools to send emails, manage drafts, and handle attachments. Use when the user asks to send emails, check inbox, search contacts, or manage labels.
+description: Guide for using Gmail via gws MCP tools to send emails, manage drafts, and handle attachments. Use when the user asks to send emails, check inbox, or manage labels.
 ---
 
-# Gmail Skill
+# Gmail Skill (via gws MCP)
 
-This skill provides best practices and workflows for using the Gmail toolkit effectively.
+Gmail operations are handled through **gws MCP tools** (`mcp__gws__*`). These tools use the Google Workspace CLI, which provides native Gmail API access with built-in authentication and attachment support.
 
 ## Core Capabilities
 
-1.  **Sending Emails**: `GMAIL_SEND_EMAIL`
-2.  **Draft Management**: `GMAIL_CREATE_EMAIL_DRAFT`, `GMAIL_SEND_DRAFT`
-3.  **Inbox Management**: `GMAIL_FETCH_EMAILS`, `GMAIL_LIST_THREADS`
-4.  **Label Management**: `GMAIL_CREATE_LABEL`, `GMAIL_ADD_LABEL_TO_EMAIL`
+1.  **Sending Emails**: `mcp__gws__gmail.users.messages.send` or `mcp__gws__gmail.+send` (helper)
+2.  **Inbox Triage**: `mcp__gws__gmail.+triage` (helper — unread summary)
+3.  **Message Listing**: `mcp__gws__gmail.users.messages.list`
+4.  **Message Reading**: `mcp__gws__gmail.users.messages.get`
+5.  **Draft Management**: `mcp__gws__gmail.users.drafts.create`, `mcp__gws__gmail.users.drafts.send`
+6.  **Label Management**: `mcp__gws__gmail.users.labels.create`, `mcp__gws__gmail.users.messages.modify`
 
 ## Critical Usage Guidelines
 
 ### 1. Handling Attachments (IMPORTANT)
 
-The `GMAIL_SEND_EMAIL` tool definition can be ambiguous regarding attachments.
+The gws Gmail tools support **native file attachments** — no upload_to_composio step needed.
 
-*   **Single File**: Use the `attachment` parameter (object with `s3key`, `name`, `mimetype`).
-*   **Multiple Files**:
-    *   **Preferred**: Look for an `attachments` (plural) parameter if available in the tool definition.
-    *   **Fallback**: If `attachments` is not available, you **CANNOT** pass a list to the singular `attachment` field. You must zip the files into a single archive and send that as the single `attachment`.
-    *   **Constraint**: Do NOT send multiple separate emails just to send multiple attachments unless explicitly requested.
+*   Pass local file paths directly in the send parameters.
+*   Multiple files can be attached in a single send call.
+*   No S3 key intermediary required.
 
 ### 2. Sending HTML Emails
 
-*   Always set `is_html=True` if your `body` contains any HTML tags (e.g., `<b>`, `<br>`, `<ul>`).
-*   If `is_html=False` (default), the body will be rendered as plain text, showing the raw HTML tags to the recipient.
+*   Set the appropriate MIME type in the message body when sending HTML content.
+*   The `+send` helper accepts body content directly.
 
 ### 3. Drafts First Policy (Best Practice)
 
-For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_EMAIL_DRAFT`) and asking the user to confirm/send it, rather than sending immediately with `GMAIL_SEND_EMAIL`, unless the user explicitly said "send this email".
+For critical or sensitive emails, prefer creating a draft first and asking the user to confirm/send it, unless the user explicitly said "send this email".
 
 ## Common Workflows
 
@@ -41,37 +41,21 @@ For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_E
 
 1.  **Generate Content**: Create the file (e.g., PDF report).
 2.  **Verify Files**: Ensure the file exists and you have the path.
-3.  **Send**:
-    ```json
-    // 1) Upload the local file to Composio for attachment
-    mcp__internal__upload_to_composio({
-      "path": "/path/to/report.pdf",
-      "tool_slug": "GMAIL_SEND_EMAIL",
-      "toolkit_slug": "gmail"
-    })
+3.  **Send**: Use the gws Gmail send tool with the local file path as attachment — single step, no upload needed.
 
-    // 2) Use the returned s3key in the email attachment
-    GMAIL_SEND_EMAIL(
-      recipient_email="user@example.com",
-      subject="Weekly Report",
-      body="Here is your report.",
-      attachment={
-        "s3key": "<from upload_to_composio>",
-        "name": "report.pdf",
-        "mimetype": "application/pdf"
-      }
-    )
-    ```
-    - Use `mcp__internal__upload_to_composio` for attachment uploads.
+### Inbox Check
+
+1.  **Quick triage**: Use `mcp__gws__gmail.+triage` for an unread inbox summary.
+2.  **Detailed listing**: Use `mcp__gws__gmail.users.messages.list` with query parameters.
 
 ### Responding to a Thread
 
-1.  **Find Thread**: Use `GMAIL_LIST_THREADS` or `GMAIL_FETCH_EMAILS` to find the context.
-2.  **Get ID**: Extract the `thread_id`.
-3.  **Reply**: Use `GMAIL_REPLY_TO_THREAD` with the `thread_id` to ensure the email threads correctly in the recipient's inbox.
+1.  **Find Thread**: Use message list/get tools to find the context.
+2.  **Get ID**: Extract the `threadId`.
+3.  **Reply**: Use the send tool with the `threadId` parameter to ensure correct threading.
 
 ## Troubleshooting
 
-*   **"Attachment Error"**: If sending fails with an attachment error, verify you aren't passing a list to a singular field.
-*   **"Authentication Error"**: Ensure the `user_id` is set to 'me' or the correct email address.
-*   **"Composio SDK Error"**: Do NOT call `from composio import ...` in Bash/Python. Always use the MCP tools.
+*   **"Authentication Error"**: Run `gws auth status` to check credentials. Ensure `UA_ENABLE_GWS_CLI=1` is set.
+*   **"Tool not found"**: Ensure the gws MCP server is registered and the feature flag is enabled.
+*   **SDK Error**: Do NOT call gws directly via Bash. Always use the `mcp__gws__*` MCP tools.

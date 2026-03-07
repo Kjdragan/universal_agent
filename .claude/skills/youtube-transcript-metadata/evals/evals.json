@@ -1,0 +1,45 @@
+{
+    "skill_name": "youtube-transcript-metadata",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "Fetch the transcript and metadata for this YouTube video: https://www.youtube.com/watch?v=dQw4w9WgXcQ — save the JSON output to the workspace and print a summary of: video title, channel, duration, and first 200 characters of the transcript.",
+            "expected_output": "A JSON file with ok=true, containing transcript_text, metadata with title/channel/duration, and a printed summary showing the Rick Astley video details.",
+            "files": [],
+            "expectations": [
+                "The script is invoked using `uv run` and the skill's fetch_youtube_transcript_metadata.py script",
+                "The output JSON has ok=true and status=succeeded",
+                "The metadata contains a non-empty title field",
+                "The metadata contains a non-empty channel field",
+                "The transcript_text field is a non-empty string with at least 100 characters",
+                "The JSON output is saved to a file in the session workspace"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "I need the transcript of this YouTube Shorts video: https://www.youtube.com/shorts/9bZkp7q19f0 — just fetch it and show me the first 300 characters of the transcript text plus the video title.",
+            "expected_output": "The script correctly handles the /shorts/ URL format, returns a JSON with ok=true (or a clear failure class if the video is unavailable), and the agent prints the requested transcript excerpt and title.",
+            "files": [],
+            "expectations": [
+                "The script is invoked using `uv run` and the skill's fetch_youtube_transcript_metadata.py script",
+                "The --url argument receives the full shorts URL",
+                "The result JSON contains a video_id field (11-character string)",
+                "If ok=true, the transcript_text field is non-empty",
+                "If ok=false, the failure_class field is set to one of the documented failure classes"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "Try to fetch the YouTube transcript for this URL: https://www.youtube.com/watch?v=INVALID_ID_XYZ — tell me what happened and what the failure_class is.",
+            "expected_output": "The script returns a JSON result with ok=false and failure_class=invalid_video_target (or request_blocked). The agent reads and reports the failure_class and error fields clearly.",
+            "files": [],
+            "expectations": [
+                "The script is invoked using `uv run` and the skill's fetch_youtube_transcript_metadata.py script",
+                "The result JSON has ok=false",
+                "The result JSON has a failure_class field set to a non-empty string",
+                "The agent reports the failure_class value and explains what it means",
+                "The agent does NOT crash or exit without reading the JSON result"
+            ]
+        }
+    ]
+}

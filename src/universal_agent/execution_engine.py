@@ -53,7 +53,7 @@ def _env_truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-USE_PROCESS_STDIO_REDIRECT = _env_truthy("UA_GATEWAY_PROCESS_STDIO_REDIRECT", default=True)
+USE_PROCESS_STDIO_REDIRECT = _env_truthy("UA_GATEWAY_PROCESS_STDIO_REDIRECT", default=False)
 
 
 class _TeeWriter:

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI global trend brief every 2 hours
+
+[Timer]
+OnCalendar=*-*-* 0/2:05:00
+Persistent=true
+Unit=csi-global-trend-brief.service
+
+[Install]
+WantedBy=timers.target

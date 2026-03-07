@@ -3,6 +3,7 @@ import {
   DASHBOARD_AUTH_COOKIE,
   createDashboardSessionToken,
   dashboardAuthRequired,
+  dashboardSessionSecretConfigured,
   normalizeOwnerId,
   validateDashboardPassword,
 } from "@/lib/dashboardAuth";
@@ -23,6 +24,12 @@ export async function POST(request: NextRequest) {
   const authRequired = dashboardAuthRequired();
   const password = String(payload.password || "");
   const ownerId = normalizeOwnerId(payload.owner_id);
+  if (authRequired && !dashboardSessionSecretConfigured()) {
+    return NextResponse.json(
+      { detail: "Dashboard session signing secret is not configured." },
+      { status: 503 },
+    );
+  }
   if (authRequired && !validateDashboardPassword(password, ownerId)) {
     return NextResponse.json({ detail: "Invalid credentials." }, { status: 401 });
   }

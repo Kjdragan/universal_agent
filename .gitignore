@@ -28,6 +28,7 @@ pip-delete-this-directory.txt
 # === Environments & IDs ===
 .env.local
 .env.*.local
+.env.bridge
 # Explicit local secret snapshot from VPS security sync.
 tmp/vps_security_env_keys_*.env
 identity_registry.json
@@ -120,3 +121,9 @@ scraping/runs/*/
 urls.json
 run_report.json
 latest_export.md
+
+# === User-requested local excludes ===
+src/universal_agent/prompt_assets/capabilities.last_good.md
+.claude/skills/excalidraw-diagram/references/uv.lock
+docs/ag-ui-protocol-streaming.excalidraw
+client_secret_*.json

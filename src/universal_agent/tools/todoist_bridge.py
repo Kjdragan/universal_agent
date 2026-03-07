@@ -86,6 +86,8 @@ async def _todoist_get_task_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         "labels": list,
         "due_string": str,
         "sub_agent": str,
+        "project_key": str,
+        "upsert_key": str,
         "summary": str,
         "reason": str,
         "text": str,
@@ -112,6 +114,22 @@ async def _todoist_task_action_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             labels=list(args.get("labels") or []),
             due_string=(str(args.get("due_string", "") or "").strip() or None),
             sub_agent=(str(args.get("sub_agent", "") or "").strip() or None),
+        )
+        return _ok({"success": True, "action": action, "task": task})
+
+    if action == "create_personal":
+        content = str(args.get("content", "") or "").strip()
+        if not content:
+            return _err("content is required for create_personal")
+        task = svc.create_personal_task(
+            content=content,
+            description=str(args.get("description", "") or ""),
+            priority=str(args.get("priority", "low") or "low"),
+            section=str(args.get("section", "scheduled") or "scheduled"),
+            labels=list(args.get("labels") or []),
+            due_string=(str(args.get("due_string", "") or "").strip() or None),
+            project_key=str(args.get("project_key", "immediate") or "immediate"),
+            upsert_key=(str(args.get("upsert_key", "") or "").strip() or None),
         )
         return _ok({"success": True, "action": action, "task": task})
 

@@ -1391,7 +1391,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
   };
 
   return (
-    <div className={`${isFull ? "h-full p-4 text-sm space-y-4" : "p-3 text-xs space-y-3"}`}>
+    <div className={`${isFull ? "min-h-full p-4 text-sm space-y-4" : "p-3 text-xs space-y-3"}`}>
       <div className={`border rounded bg-background/40 space-y-2 ${isFull ? "p-3" : "p-2"}`}>
         <div className="font-semibold flex items-center justify-between gap-2">
           <span>Calendar</span>

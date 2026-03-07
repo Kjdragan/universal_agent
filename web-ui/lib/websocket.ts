@@ -36,6 +36,7 @@ export class AgentWebSocket {
   private staleAfterMs = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_STALE_AFTER_MS", 90000);
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private statusDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isManualClose = false;
   private lastPongAt = Date.now();
 
@@ -112,13 +113,13 @@ export class AgentWebSocket {
       // Use relative protocol (ws for http, wss for https)
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const hostname = window.location.hostname;
-      const port = window.location.port === "3000" ? "8001" : window.location.port;
+      const port = window.location.port === "3000" ? "8002" : window.location.port;
       const host = port ? `${hostname}:${port}` : hostname;
       this.url = `${protocol}//${host}/ws/agent`;
       return;
     }
 
-    this.url = "ws://localhost:8001/ws/agent";
+    this.url = "ws://localhost:8002/ws/agent";
   }
 
   // ==========================================================================
@@ -197,7 +198,9 @@ export class AgentWebSocket {
         // In Next.js dev mode, `console.error` triggers the full-screen error overlay.
         // A transient WS failure should not block typing in the chat UI.
         console.warn("[AgentWebSocket] WebSocket error:", { url: wsUrl, event });
-        this.updateStatus("disconnected");
+        // Do NOT call updateStatus here — onclose always fires immediately after
+        // onerror and is the single source of truth for state transitions.
+        // Calling updateStatus("disconnected") here causes OFFLINE→CONNECTING flicker.
         this.notifyError(
           new Error(
             `WebSocket connection error (${wsUrl}). If you are using an SSH tunnel to access the Web UI on localhost:3000, also forward port 8001.`
@@ -234,6 +237,11 @@ export class AgentWebSocket {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+
+    if (this.statusDebounceTimer) {
+      clearTimeout(this.statusDebounceTimer);
+      this.statusDebounceTimer = null;
     }
 
     if (this.ws) {
@@ -475,7 +483,23 @@ export class AgentWebSocket {
     }
   }
 
-  private updateStatus(status: ConnectionStatus): void {
+  private updateStatus(status: ConnectionStatus, debounceMs = 0): void {
+    if (debounceMs > 0) {
+      if (this.statusDebounceTimer) clearTimeout(this.statusDebounceTimer);
+      this.statusDebounceTimer = setTimeout(() => {
+        this.statusDebounceTimer = null;
+        this._applyStatus(status);
+      }, debounceMs);
+      return;
+    }
+    if (this.statusDebounceTimer) {
+      clearTimeout(this.statusDebounceTimer);
+      this.statusDebounceTimer = null;
+    }
+    this._applyStatus(status);
+  }
+
+  private _applyStatus(status: ConnectionStatus): void {
     this.currentStatus = status;
     this.statusCallbacks.forEach((callback) => {
       try {

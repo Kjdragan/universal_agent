@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 _CODIE_EXPLICIT_INTENT_PATTERNS = (
-    re.compile(r"\bcod(?:ie|y|i)\b", re.IGNORECASE),
+    re.compile(r"\bcodie\b", re.IGNORECASE),
     re.compile(r"\bcoder[\s\-_]*vp\b", re.IGNORECASE),
     re.compile(r"\bvp[\s\-_]*coder\b", re.IGNORECASE),
     re.compile(r"\bvp[\s\._-]*coder[\s\._-]*primary\b", re.IGNORECASE),

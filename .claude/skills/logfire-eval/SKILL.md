@@ -21,32 +21,50 @@ Analyze Universal Agent session traces to produce comprehensive evaluation repor
 8. **Use catalog files first** — only read `run.log` if all catalog files are unavailable
 9. **If `run_id` filters are sparse/empty, pivot to `trace_id` filters** — some spans may not carry `attributes->>'run_id'`
 10. **Check payload visibility mode before judging observability completeness**:
-   - Default mode logs previews (`input_preview`, `content_preview`, `text_preview`)
-   - Full mode adds redacted/truncated full fields (`input_full`, `content_full`, `text_full`, `result_full`)
-   - Confirm mode from `query_started` attributes (`payload_full_mode_enabled`, redaction flags)
-11. **Track tool completion using `tool_execution_completed` and `source`**:
-   - `post_tool_use_hook`: completion recorded by durable hook
-   - `stream_tool_result`: completion recorded from streamed tool result fallback
-12. **Always run an instrumentation completeness audit** before final conclusions:
-   - Required observability spans: `assistant_message`, `tool_use`, `tool_input`, `tool_result`, `tool_output`, `tool_execution_completed`, `token_usage_update`
-   - If any are missing/near-zero, call out whether it is expected for that run type vs an instrumentation gap
+
+- Default mode logs previews (`input_preview`, `content_preview`, `text_preview`)
+- Full mode adds redacted/truncated full fields (`input_full`, `content_full`, `text_full`, `result_full`)
+- Confirm mode from `query_started` attributes (`payload_full_mode_enabled`, redaction flags)
+
+1. **Track tool completion using `tool_execution_completed` and `source`**:
+
+- `post_tool_use_hook`: completion recorded by durable hook
+- `stream_tool_result`: completion recorded from streamed tool result fallback
+
+1. **Always run an instrumentation completeness audit** before final conclusions:
+
+- Required observability spans: `assistant_message`, `tool_use`, `tool_input`, `tool_result`, `tool_output`, `tool_execution_completed`, `token_usage_update`
+- If any are missing/near-zero, call out whether it is expected for that run type vs an instrumentation gap
+
+1. **New execution/lifecycle spans to watch for** (added after project rework):
+
+- `budget_exceeded` — run aborted due to cost/token ceiling; treat as **critical finding**
+- `execution_cancelled` — user manually stopped the run; expected, not an error
+- `execution_error` — unhandled exception at execution layer; **high severity**
+- `harness_handoff_triggered` — run handed off to a new session; follow the new run_id
+- `harness_completion_promise_met` — harness-mode completed its goal; expected terminal condition
+- `inflight_replay_error` — crash-recovery replay failed; explains missing spans from previous run
 
 ## Output Policy (MANDATORY)
 
 1. **Resolve workspace first** (in this order):
+
 - Explicit workspace path from user request
 - `CURRENT_SESSION_WORKSPACE` environment variable
 - Latest `AGENT_RUN_WORKSPACES/session_*` directory by modified time
 
 If none can be resolved, STOP and ask for the workspace path. Do not write to repo root.
 
-2. **Session work product output** (always write):
+1. **Session work product output** (always write):
+
 - `{workspace}/work_products/logfire-eval/logfire_evaluation.md`
 - Catalog input should come from: `{workspace}/work_products/logfire-eval/trace_catalog.md` (or `.json` fallback)
 
-3. **Persistent artifact output** (always write a durable copy):
+1. **Persistent artifact output** (always write a durable copy):
+
 - Resolve artifacts root with:
-  - `python3 -c "from universal_agent.artifacts import resolve_artifacts_dir; print(resolve_artifacts_dir())"`
+  - `python3 -c "import sys; sys.path.insert(0, 'src'); from universal_agent.artifacts import resolve_artifacts_dir; print(resolve_artifacts_dir())"` (run from repo root)
+  - Or use environment variable `UA_ARTIFACTS_DIR` if set
 - Write to:
   - `UA_ARTIFACTS_DIR/logfire-eval/{YYYY-MM-DD}/{run-id-or-trace-id}__{HHMMSS}/logfire_evaluation.md`
 - Include a small `manifest.json` in the same artifact run directory with `run_id`, `trace_id`, source workspace, and generation timestamp.
@@ -56,6 +74,7 @@ If none can be resolved, STOP and ask for the workspace path. Do not write to re
 ### Phase A — Discovery
 
 **If workspace path is known:**
+
 1. Read `{workspace}/work_products/logfire-eval/trace_catalog.md` first (preferred)
 2. If missing, read `{workspace}/trace_catalog.md`
 3. If missing, read `{workspace}/work_products/logfire-eval/trace_catalog.json`
@@ -64,9 +83,11 @@ If none can be resolved, STOP and ask for the workspace path. Do not write to re
 6. Use `trace_catalog.main_agent.trace_id` as the primary trace
 
 **Logfire MCP call contract (always):**
+
 - Tool: `arbitrary_query`
 - Input keys: `age` (minutes) + `query` (SQL string)
 - Example input:
+
 ```json
 {
   "age": 2880,
@@ -75,6 +96,7 @@ If none can be resolved, STOP and ask for the workspace path. Do not write to re
 ```
 
 **If "latest run" / "last run" requested:**
+
 ```sql
 SELECT DISTINCT attributes->>'run_id' as run_id, trace_id,
        MIN(start_timestamp) as started, MAX(end_timestamp) as ended,
@@ -88,6 +110,7 @@ LIMIT 5
 ```
 
 **If no run_id available, find by span count:**
+
 ```sql
 SELECT trace_id, COUNT(*) as span_count,
        MIN(start_timestamp) as session_start
@@ -101,6 +124,7 @@ LIMIT 1
 ### Phase B — Health Check
 
 Single query to get an overview:
+
 ```sql
 SELECT span_name, COUNT(*) as count,
        ROUND(AVG(duration)::numeric, 3) as avg_dur_sec,
@@ -114,6 +138,7 @@ LIMIT 25
 ```
 
 Payload coverage check:
+
 ```sql
 SELECT span_name,
        COUNT(*) AS total,
@@ -129,6 +154,7 @@ ORDER BY span_name
 ```
 
 Payload mode status check:
+
 ```sql
 SELECT
   attributes->>'payload_full_mode_enabled' AS full_mode,
@@ -144,15 +170,17 @@ LIMIT 1
 ```
 
 If full fields are missing, verify runtime config:
+
 - `UA_LOGFIRE_FULL_PAYLOAD_MODE=true`
 - `UA_LOGFIRE_FULL_PAYLOAD_REDACT=true` (recommended)
 - `UA_LOGFIRE_FULL_PAYLOAD_REDACT_EMAILS=true` (recommended)
 - `UA_LOGFIRE_FULL_PAYLOAD_MAX_CHARS=<limit>`
 
 Assign health verdict:
-- **No exceptions + normal durations** → 
-- **Some exceptions but completed** → 
-- **Critical exceptions or incomplete** → 
+
+- **No exceptions + normal durations** →
+- **Some exceptions but completed** →
+- **Critical exceptions or incomplete** →
 
 ### Phase C — Exception Deep-Dive
 
@@ -165,6 +193,22 @@ LIMIT 20
 ```
 
 Classify each: transient vs systematic, tool error vs infrastructure.
+
+Also check for critical lifecycle exceptions:
+
+```sql
+SELECT span_name, is_exception, exception_type, exception_message, start_timestamp
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN ('budget_exceeded', 'execution_error', 'inflight_replay_error',
+                    'harness_handoff_triggered', 'execution_cancelled')
+ORDER BY start_timestamp
+```
+
+- `budget_exceeded` found → flag as critical (run was aborted)
+- `execution_cancelled` found → normal user-initiated stop
+- `execution_error` found → escalate, investigate exception_message
+- `harness_handoff_triggered` → note new run_id from attributes and mention for follow-up
 
 ### Phase D — Performance Bottleneck Analysis
 
@@ -200,6 +244,7 @@ ORDER BY calls DESC
 ### Phase E2 — Instrumentation Completeness Audit
 
 Run a span coverage matrix and include it in the report:
+
 ```sql
 SELECT span_name, COUNT(*) AS count
 FROM records
@@ -218,6 +263,7 @@ ORDER BY span_name
 ```
 
 Run tool lifecycle parity check:
+
 ```sql
 SELECT
   SUM(CASE WHEN span_name = 'tool_use' THEN 1 ELSE 0 END) AS tool_use_count,
@@ -229,6 +275,7 @@ WHERE attributes->>'run_id' = '{RUN_ID}'
 ```
 
 Interpretation guidance:
+
 - `tool_use > tool_output` can indicate failed/blocked/aborted tools
 - `tool_output > tool_execution_completed` suggests completion-event gap
 - `tool_execution_completed` with mixed `source` is acceptable (`post_tool_use_hook` + `stream_tool_result`)
@@ -260,6 +307,7 @@ ORDER BY start_timestamp
 **Triggered when user asks about heartbeat activity.** Heartbeats are autonomous runs not directed by the user.
 
 **Find significant heartbeats (last 48h):**
+
 ```sql
 SELECT trace_id, attributes->>'session_id' as session_id,
        attributes->>'wake_reason' as wake_reason,
@@ -275,6 +323,7 @@ LIMIT 20
 If multiple found: present list to user, auto-analyze the most recent significant one.
 
 To drill into a specific heartbeat, use its `trace_id` to get the full span tree:
+
 ```sql
 SELECT span_name, message, ROUND(duration::numeric, 2) as dur_sec,
        BOOL_OR(is_exception) as has_error
@@ -287,9 +336,11 @@ ORDER BY start_timestamp
 ### Phase I — Report Generation
 
 Save to session work products at:
+
 - `{workspace}/work_products/logfire-eval/logfire_evaluation.md`
 
 Also copy to persistent artifacts at:
+
 - `UA_ARTIFACTS_DIR/logfire-eval/{YYYY-MM-DD}/{run-id-or-trace-id}__{HHMMSS}/logfire_evaluation.md`
 
 Use this structure:

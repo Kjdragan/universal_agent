@@ -153,6 +153,12 @@ from universal_agent.cli_io import (
 )
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
+from universal_agent.session_ctx import (
+    SessionContext as _SessionContext,
+    get_ctx as _get_ctx,
+    require_ctx as _require_ctx,
+    set_ctx as _set_ctx,
+)
 from universal_agent.trace_utils import write_trace
 from universal_agent.trace_catalog import (
     emit_trace_catalog,
@@ -195,10 +201,9 @@ interrupt_requested = False
 last_sigint_ts = None
 current_step_id = None
 
-# Feature flags (placeholders for future gating; no behavior change yet)
-HEARTBEAT_ENABLED = heartbeat_enabled()
-MEMORY_INDEX_ENABLED = memory_index_enabled()
-MEMORY_ENABLED = memory_enabled()
+# Feature flags — evaluated lazily at call sites so they read env AFTER
+# Infisical runtime bootstrap has injected secrets.  Do NOT snapshot these
+# at import time; use the function calls directly where needed.
 
 
 class BudgetExceeded(RuntimeError):
@@ -352,6 +357,9 @@ def _maybe_trip_tool_loop_circuit_breaker(
 
     This is intentionally conservative: it only trips on strongly repetitive patterns.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        trace = _ctx.trace
     enabled = (os.getenv("UA_CIRCUIT_BREAKER_ENABLED", "1") or "").strip().lower() in {
         "1",
         "true",
@@ -473,6 +481,9 @@ def _normalize_gateway_tool_call_id(raw_id: object) -> str:
 
 
 def _get_gateway_tool_call_id(raw_id: object) -> str:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        gateway_tool_call_map = _ctx.gateway_tool_call_map
     key = str(raw_id or uuid.uuid4())
     if key in gateway_tool_call_map:
         return gateway_tool_call_map[key]
@@ -521,6 +532,9 @@ def safe_clear_history(client: Any) -> bool:
 
 
 def _normalize_gateway_file_path(path_value: Any) -> Any:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     if not isinstance(path_value, str) or not path_value:
         return path_value
     if not OBSERVER_WORKSPACE_DIR:
@@ -542,35 +556,35 @@ def _normalize_gateway_file_path(path_value: Any) -> Any:
 
 
 def _ensure_gateway_step() -> str:
-    global current_step_id
-    if not runtime_db_conn or not run_id:
-        return current_step_id or "unknown"
-    if not current_step_id or current_step_id == "unknown":
-        current_step_id = str(uuid.uuid4())
+    _ctx = _require_ctx()
+    if not _ctx.runtime_db_conn or not _ctx.run_id:
+        return _ctx.current_step_id or "unknown"
+    if not _ctx.current_step_id or _ctx.current_step_id == "unknown":
+        _ctx.current_step_id = str(uuid.uuid4())
     try:
-        row = runtime_db_conn.execute(
+        row = _ctx.runtime_db_conn.execute(
             "SELECT 1 FROM run_steps WHERE step_id = ? LIMIT 1",
-            (current_step_id,),
+            (_ctx.current_step_id,),
         ).fetchone()
     except Exception:
         row = None
     if not row:
         try:
-            step_index = _next_step_index(runtime_db_conn, run_id)
-            start_step(runtime_db_conn, run_id, current_step_id, step_index)
+            step_index = _next_step_index(_ctx.runtime_db_conn, _ctx.run_id)
+            start_step(_ctx.runtime_db_conn, _ctx.run_id, _ctx.current_step_id, step_index)
             logfire.info(
                 "durable_step_started_gateway_hook",
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
                 step_index=step_index,
             )
         except Exception as exc:
             logfire.warning(
                 "runtime_step_insert_failed_gateway_hook",
-                step_id=current_step_id,
+                step_id=_ctx.current_step_id,
                 error=str(exc),
             )
-    return current_step_id
+    return _ctx.current_step_id
 
 
 # Configure Logfire BEFORE importing Claude SDK
@@ -1135,6 +1149,9 @@ def _tool_read_path_from_input(tool_input: Any) -> str | None:
 
 
 def _maybe_abs_path(path_value: str) -> str:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     # Read/Write/Edit tools sometimes pass relative paths.
     # Resolve relative to the active observer workspace when available, otherwise cwd.
     try:
@@ -1189,21 +1206,13 @@ async def on_pre_tool_use_ledger(
     """
     PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
     """
-    global \
-        tool_ledger, \
-        run_id, \
-        current_step_id, \
-        forced_tool_queue, \
-        forced_tool_active_ids, \
-        forced_tool_mode_active, \
-        gateway_mode_active, \
-        runtime_db_conn
-    if tool_ledger is None or run_id is None:
+    _ctx = _require_ctx()
+    if _ctx.tool_ledger is None or _ctx.run_id is None:
         return {}
     # Prefer the ledger's connection for run state checks; this avoids cross-thread
     # SQLite usage issues in tests and keeps the hook self-contained.
-    conn_for_run = getattr(tool_ledger, "conn", None) or runtime_db_conn
-    if conn_for_run and run_id and is_cancel_requested(conn_for_run, run_id):
+    conn_for_run = getattr(_ctx.tool_ledger, "conn", None) or _ctx.runtime_db_conn
+    if conn_for_run and _ctx.run_id and is_cancel_requested(conn_for_run, _ctx.run_id):
         return {
             "systemMessage": (
                 "⚠️ Run cancellation requested. "
@@ -1219,18 +1228,17 @@ async def on_pre_tool_use_ledger(
 
     tool_name = input_data.get("tool_name", "")
     tool_call_id = str(tool_use_id or uuid.uuid4())
-    if gateway_mode_active:
+    if _ctx.gateway_mode_active:
         tool_call_id = _get_gateway_tool_call_id(tool_use_id)
     transcript_path = input_data.get("transcript_path", "")
     session_id = input_data.get("session_id", "")
     if transcript_path:
-        global _primary_transcript_path, _seen_transcript_paths
-        if _primary_transcript_path is None:
-            _primary_transcript_path = transcript_path
-        if transcript_path not in _seen_transcript_paths:
-            _seen_transcript_paths.add(transcript_path)
+        if _ctx.primary_transcript_path is None:
+            _ctx.primary_transcript_path = transcript_path
+        if transcript_path not in _ctx.seen_transcript_paths:
+            _ctx.seen_transcript_paths.add(transcript_path)
             transcript_role = "primary"
-            if _primary_transcript_path and transcript_path != _primary_transcript_path:
+            if _ctx.primary_transcript_path and transcript_path != _ctx.primary_transcript_path:
                 transcript_role = "secondary"
                 print(f"🧭 Hook fired for secondary transcript: {tool_name}")
             logfire.info(
@@ -1316,9 +1324,9 @@ async def on_pre_tool_use_ledger(
         # 2. Secondary transcript path (different from first seen)
         transcript_path = input_data.get("transcript_path", "")
         is_secondary_transcript = (
-            _primary_transcript_path is not None 
+            _ctx.primary_transcript_path is not None 
             and transcript_path 
-            and transcript_path != _primary_transcript_path
+            and transcript_path != _ctx.primary_transcript_path
         )
         # Combined detection: either signal indicates sub-agent context
         is_subagent_context = bool(parent_tool_use_id) or is_secondary_transcript
@@ -1352,12 +1360,12 @@ async def on_pre_tool_use_ledger(
                 missing=missing_params,
                 is_subagent_context=is_subagent_context,
                 parent_tool_use_id=parent_tool_use_id,
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
             )
             workspace_hint = (
                 f"WORKSPACE: {OBSERVER_WORKSPACE_DIR}/work_products/\n"
-                if OBSERVER_WORKSPACE_DIR
+                if _ctx.observer_workspace_dir
                 else ""
             )
             return {
@@ -1383,8 +1391,8 @@ async def on_pre_tool_use_ledger(
 
     if is_malformed_tool_name(tool_name):
         base_name, arg_key, arg_value = parse_malformed_tool_name(tool_name)
-        is_forced_replay = bool(forced_tool_queue or forced_tool_mode_active)
-        expected = forced_tool_queue[0] if forced_tool_queue else None
+        is_forced_replay = bool(_ctx.forced_tool_queue or _ctx.forced_tool_mode_active)
+        expected = _ctx.forced_tool_queue[0] if _ctx.forced_tool_queue else None
         expected_tool = (
             (expected or {}).get("raw_tool_name")
             or (expected or {}).get("tool_name")
@@ -1399,8 +1407,8 @@ async def on_pre_tool_use_ledger(
         logfire.warning(
             "malformed_tool_name_guardrail",
             tool_name=tool_name,
-            run_id=run_id,
-            step_id=current_step_id,
+            run_id=_ctx.run_id,
+            step_id=_ctx.current_step_id,
             forced_replay=is_forced_replay,
         )
         if not is_forced_replay:
@@ -1427,8 +1435,8 @@ async def on_pre_tool_use_ledger(
             },
         }
     if is_invalid_tool_name(tool_name):
-        is_forced_replay = bool(forced_tool_queue or forced_tool_mode_active)
-        expected = forced_tool_queue[0] if forced_tool_queue else None
+        is_forced_replay = bool(_ctx.forced_tool_queue or _ctx.forced_tool_mode_active)
+        expected = _ctx.forced_tool_queue[0] if _ctx.forced_tool_queue else None
         expected_tool = (
             (expected or {}).get("raw_tool_name")
             or (expected or {}).get("tool_name")
@@ -1438,8 +1446,8 @@ async def on_pre_tool_use_ledger(
         logfire.warning(
             "invalid_tool_name_guardrail",
             tool_name=tool_name,
-            run_id=run_id,
-            step_id=current_step_id,
+            run_id=_ctx.run_id,
+            step_id=_ctx.current_step_id,
             forced_replay=is_forced_replay,
         )
         if not is_forced_replay:
@@ -1475,7 +1483,7 @@ async def on_pre_tool_use_ledger(
             updated_tool_input["task_key"] = resume_key
         tool_input = updated_tool_input
 
-    if gateway_mode_active and tool_name in ("Write", "Read", "Edit", "MultiEdit"):
+    if _ctx.gateway_mode_active and tool_name in ("Write", "Read", "Edit", "MultiEdit"):
         if isinstance(tool_input, dict):
             normalized_input = dict(tool_input)
             changed = False
@@ -1523,7 +1531,7 @@ async def on_pre_tool_use_ledger(
     # Keep Bash execution rooted in the active session workspace by default to
     # prevent accidental repo-root artifacts.
     if tool_name == "Bash" and isinstance(tool_input, dict):
-        bash_workspace = OBSERVER_WORKSPACE_DIR or os.getenv("CURRENT_SESSION_WORKSPACE")
+        bash_workspace = _ctx.observer_workspace_dir or os.getenv("CURRENT_SESSION_WORKSPACE")
         if bash_workspace:
             cmd = tool_input.get("command") or tool_input.get("cmd")
             if isinstance(cmd, str):
@@ -1572,8 +1580,8 @@ async def on_pre_tool_use_ledger(
             "identity_recipient_unresolved",
             tool_name=tool_name,
             unresolved_aliases=email_errors,
-            run_id=run_id,
-            step_id=current_step_id,
+            run_id=_ctx.run_id,
+            step_id=_ctx.current_step_id,
         )
         alias_list = ", ".join(email_errors)
         return {
@@ -1598,14 +1606,14 @@ async def on_pre_tool_use_ledger(
                 "identity_recipient_resolved",
                 tool_name=tool_name,
                 replacements=email_replacements,
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
             )
 
     user_query = ""
     try:
-        if isinstance(trace, dict):
-            user_query = str(trace.get("query") or "")
+        if isinstance(_ctx.trace, dict):
+            user_query = str(_ctx.trace.get("query") or "")
     except Exception:
         user_query = ""
 
@@ -1619,8 +1627,8 @@ async def on_pre_tool_use_ledger(
             "identity_recipient_policy_denied",
             tool_name=tool_name,
             recipients=invalid_recipients,
-            run_id=run_id,
-            step_id=current_step_id,
+            run_id=_ctx.run_id,
+            step_id=_ctx.current_step_id,
         )
         recipient_list = ", ".join(sorted(set(invalid_recipients)))
         return {
@@ -1648,16 +1656,16 @@ async def on_pre_tool_use_ledger(
             }
         }
 
-    if gateway_mode_active:
+    if _ctx.gateway_mode_active:
         step_id = _ensure_gateway_step()
     else:
-        step_id = current_step_id or "unknown"
+        step_id = _ctx.current_step_id or "unknown"
 
-    if forced_tool_mode_active and not forced_tool_queue:
-        forced_tool_mode_active = False
-    if gateway_mode_active:
-        forced_tool_queue = []
-        forced_tool_mode_active = False
+    if _ctx.forced_tool_mode_active and not _ctx.forced_tool_queue:
+        _ctx.forced_tool_mode_active = False
+    if _ctx.gateway_mode_active:
+        _ctx.forced_tool_queue = []
+        _ctx.forced_tool_mode_active = False
 
     # Early bypass: Allow Task/Bash in harness mode (not crash recovery)
     # This ensures sub-agent delegation and shell commands work during
@@ -1665,14 +1673,14 @@ async def on_pre_tool_use_ledger(
     if (
         tool_name in ("Task", "Bash")
         and _is_harness_mode()
-        and not forced_tool_mode_active
+        and not _ctx.forced_tool_mode_active
     ):
         # Fall through to normal ledger preparation below
         pass
-    elif forced_tool_queue:
-        expected = forced_tool_queue[0]
+    elif _ctx.forced_tool_queue:
+        expected = _ctx.forced_tool_queue[0]
         if _forced_tool_matches(tool_name, tool_input, expected):
-            forced_tool_active_ids[tool_call_id] = expected
+            _ctx.forced_tool_active_ids[tool_call_id] = expected
             expected["attempts"] = expected.get("attempts", 0) + 1
             try:
                 _assert_prepared_tool_row(
@@ -1681,12 +1689,12 @@ async def on_pre_tool_use_ledger(
                     or expected.get("tool_name")
                     or tool_name,
                 )
-                tool_ledger.mark_running(expected["tool_call_id"])
+                _ctx.tool_ledger.mark_running(expected["tool_call_id"])
                 logfire.info(
                     "replay_mark_running",
                     tool_use_id=tool_call_id,
                     replay_tool_call_id=expected["tool_call_id"],
-                    run_id=run_id,
+                    run_id=_ctx.run_id,
                     step_id=step_id,
                     idempotency_key=expected.get("idempotency_key"),
                 )
@@ -1712,7 +1720,7 @@ async def on_pre_tool_use_ledger(
         if raw_tool_input is not tool_input and _forced_tool_matches(
             tool_name, raw_tool_input, expected
         ):
-            forced_tool_active_ids[tool_call_id] = expected
+            _ctx.forced_tool_active_ids[tool_call_id] = expected
             updated_tool_input = raw_tool_input
             tool_input = raw_tool_input
             expected["attempts"] = expected.get("attempts", 0) + 1
@@ -1723,12 +1731,12 @@ async def on_pre_tool_use_ledger(
                     or expected.get("tool_name")
                     or tool_name,
                 )
-                tool_ledger.mark_running(expected["tool_call_id"])
+                _ctx.tool_ledger.mark_running(expected["tool_call_id"])
                 logfire.info(
                     "replay_mark_running",
                     tool_use_id=tool_call_id,
                     replay_tool_call_id=expected["tool_call_id"],
-                    run_id=run_id,
+                    run_id=_ctx.run_id,
                     step_id=step_id,
                     idempotency_key=expected.get("idempotency_key"),
                 )
@@ -1823,10 +1831,10 @@ async def on_pre_tool_use_ledger(
     schema_input_data["tool_input"] = tool_input
     schema_guardrail = await pre_tool_use_schema_guardrail(
         schema_input_data,
-        run_id=run_id,
-        step_id=current_step_id,
+        run_id=_ctx.run_id,
+        step_id=_ctx.current_step_id,
         logger=logfire,
-        skip_guardrail=forced_tool_mode_active,
+        skip_guardrail=_ctx.forced_tool_mode_active,
         schema_fetcher=_fetch_composio_tool_schema,
     )
     if schema_guardrail:
@@ -1845,9 +1853,9 @@ async def on_pre_tool_use_ledger(
     side_effect_class = "unknown"
     try:
         decision = prepare_tool_call(
-            tool_ledger,
+            _ctx.tool_ledger,
             tool_call_id=tool_call_id,
-            run_id=run_id,
+            run_id=_ctx.run_id,
             step_id=step_id,
             raw_tool_name=tool_name,
             tool_input=tool_input,
@@ -1856,7 +1864,7 @@ async def on_pre_tool_use_ledger(
             "ledger_prepare",
             tool_name=tool_name,
             tool_use_id=tool_call_id,
-            run_id=run_id,
+            run_id=_ctx.run_id,
             step_id=step_id,
             idempotency_key=decision.idempotency_key,
             deduped=decision.deduped,
@@ -1887,12 +1895,12 @@ async def on_pre_tool_use_ledger(
             },
         }
 
-    if gateway_mode_active and tool_ledger.get_tool_call(tool_call_id) is None:
+    if _ctx.gateway_mode_active and _ctx.tool_ledger.get_tool_call(tool_call_id) is None:
         try:
             identity = parse_tool_identity(tool_name)
-            tool_ledger.prepare_tool_call(
+            _ctx.tool_ledger.prepare_tool_call(
                 tool_call_id=tool_call_id,
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
                 tool_name=identity.tool_name,
                 tool_namespace=identity.tool_namespace,
@@ -1906,7 +1914,7 @@ async def on_pre_tool_use_ledger(
                 "ledger_prepare_gateway_recover",
                 tool_name=tool_name,
                 tool_use_id=tool_call_id,
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
             )
         except Exception as exc:
@@ -1918,7 +1926,7 @@ async def on_pre_tool_use_ledger(
             )
 
     if decision.deduped and decision.receipt:
-        prior_entry = tool_ledger.get_tool_call(decision.receipt.tool_call_id)
+        prior_entry = _ctx.tool_ledger.get_tool_call(decision.receipt.tool_call_id)
         replay_policy = (prior_entry or {}).get("replay_policy")
         side_effect_class = _normalize_side_effect_class(
             (prior_entry or {}).get("side_effect_class"),
@@ -1971,9 +1979,9 @@ async def on_pre_tool_use_ledger(
                 )
         try:
             duplicate_decision = prepare_tool_call(
-                tool_ledger,
+                _ctx.tool_ledger,
                 tool_call_id=tool_call_id,
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
                 raw_tool_name=tool_name,
                 tool_input=tool_input,
@@ -1984,7 +1992,7 @@ async def on_pre_tool_use_ledger(
                 "ledger_prepare_duplicate",
                 tool_name=tool_name,
                 tool_use_id=tool_call_id,
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
                 idempotency_key=duplicate_decision.idempotency_key,
                 prior_idempotency_key=decision.idempotency_key,
@@ -2011,13 +2019,13 @@ async def on_pre_tool_use_ledger(
 
     try:
         _assert_prepared_tool_row(tool_call_id, tool_name)
-        tool_ledger.mark_running(tool_call_id)
+        _ctx.tool_ledger.mark_running(tool_call_id)
         # Record tool execution start time for duration tracking
-        tool_execution_start_times[tool_call_id] = (time.time(), tool_name)
+        _ctx.tool_execution_start_times[tool_call_id] = (time.time(), tool_name)
         logfire.info(
             "ledger_mark_running",
             tool_use_id=tool_call_id,
-            run_id=run_id,
+            run_id=_ctx.run_id,
             step_id=step_id,
         )
     except Exception as exc:
@@ -2036,10 +2044,10 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "Prepared ledger row missing.",
             },
         }
-    if not forced_tool_mode_active and not forced_tool_queue:
+    if not _ctx.forced_tool_mode_active and not _ctx.forced_tool_queue:
         if side_effect_class == "read_only":
             _ensure_phase_checkpoint(
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
                 checkpoint_type="pre_read_only",
                 phase="pre_read_only",
@@ -2048,7 +2056,7 @@ async def on_pre_tool_use_ledger(
             )
         else:
             _ensure_phase_checkpoint(
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
                 checkpoint_type="pre_side_effect",
                 phase="pre_side_effect",
@@ -2057,7 +2065,7 @@ async def on_pre_tool_use_ledger(
             )
 
     # [Bash Scaffolding] Audit log all shell commands for visibility
-    bash_workspace = input_data.get("workspace_dir") or OBSERVER_WORKSPACE_DIR
+    bash_workspace = input_data.get("workspace_dir") or _ctx.observer_workspace_dir
     if tool_name.upper() == "BASH" and bash_workspace:
         try:
             cmd = tool_input.get("command") or tool_input.get("cmd") or str(tool_input)
@@ -2078,7 +2086,7 @@ async def on_pre_tool_use_ledger(
                     tool_call_id=tool_call_id,
                     command_preview=cmd[:200],
                     output_path=pdf_output,
-                    run_id=run_id,
+                    run_id=_ctx.run_id,
                 )
         except Exception:
             pass  # Non-critical visibility feature
@@ -2092,23 +2100,17 @@ async def on_post_tool_use_ledger(
     """
     PostToolUse Hook: persist tool response to the ledger.
     """
-    global \
-        tool_ledger, \
-        forced_tool_active_ids, \
-        forced_tool_queue, \
-        runtime_db_conn, \
-        run_id, \
-        gateway_mode_active
-    if tool_ledger is None:
+    _ctx = _require_ctx()
+    if _ctx.tool_ledger is None:
         return {}
 
     tool_call_id = str(tool_use_id or "")
-    if gateway_mode_active:
+    if _ctx.gateway_mode_active:
         tool_call_id = _get_gateway_tool_call_id(tool_use_id)
     if not tool_call_id:
         return {}
 
-    ledger_entry = tool_ledger.get_tool_call(tool_call_id) if tool_ledger else None
+    ledger_entry = _ctx.tool_ledger.get_tool_call(tool_call_id) if _ctx.tool_ledger else None
     raw_tool_name = (
         (ledger_entry or {}).get("raw_tool_name")
         or input_data.get("tool_name", "")
@@ -2128,7 +2130,7 @@ async def on_post_tool_use_ledger(
             error_detail = str(tool_response.get("error"))
 
     if is_malformed_tool_name(raw_tool_name):
-        if not (forced_tool_queue or forced_tool_mode_active):
+        if not (_ctx.forced_tool_queue or _ctx.forced_tool_mode_active):
             _mark_run_waiting_for_human(
                 "malformed_tool_name",
                 tool_name=raw_tool_name,
@@ -2136,12 +2138,12 @@ async def on_post_tool_use_ledger(
             )
 
     expected = None
-    if tool_call_id in forced_tool_active_ids:
-        expected = forced_tool_active_ids.pop(tool_call_id)
-    elif forced_tool_queue and _forced_tool_matches(
-        raw_tool_name, tool_input, forced_tool_queue[0]
+    if tool_call_id in _ctx.forced_tool_active_ids:
+        expected = _ctx.forced_tool_active_ids.pop(tool_call_id)
+    elif _ctx.forced_tool_queue and _forced_tool_matches(
+        raw_tool_name, tool_input, _ctx.forced_tool_queue[0]
     ):
-        expected = forced_tool_queue[0]
+        expected = _ctx.forced_tool_queue[0]
         logfire.info(
             "replay_tool_use_id_missing",
             tool_use_id=tool_call_id,
@@ -2152,10 +2154,10 @@ async def on_post_tool_use_ledger(
     if expected is not None:
         try:
             if is_error:
-                tool_ledger.mark_failed(
+                _ctx.tool_ledger.mark_failed(
                     expected["tool_call_id"], error_detail or "tool error"
                 )
-                tool_ledger.mark_replay_status(expected["tool_call_id"], "failed")
+                _ctx.tool_ledger.mark_replay_status(expected["tool_call_id"], "failed")
                 logfire.warning(
                     "replay_mark_failed",
                     tool_use_id=tool_call_id,
@@ -2163,16 +2165,16 @@ async def on_post_tool_use_ledger(
                     error_detail=error_detail or "tool error",
                 )
                 if expected.get("attempts", 0) >= FORCED_TOOL_MAX_ATTEMPTS:
-                    if runtime_db_conn and run_id:
-                        update_run_status(runtime_db_conn, run_id, "waiting_for_human")
-                    forced_tool_queue = []
+                    if _ctx.runtime_db_conn and _ctx.run_id:
+                        update_run_status(_ctx.runtime_db_conn, _ctx.run_id, "waiting_for_human")
+                    _ctx.forced_tool_queue = []
                     logfire.warning(
                         "replay_exhausted",
-                        run_id=run_id,
+                        run_id=_ctx.run_id,
                         tool_call_id=expected["tool_call_id"],
                     )
                 else:
-                    forced_tool_queue.insert(0, expected)
+                    _ctx.forced_tool_queue.insert(0, expected)
             else:
                 external_id = None
                 if isinstance(tool_response, dict):
@@ -2187,8 +2189,8 @@ async def on_post_tool_use_ledger(
                     stage="after_tool_success_before_receipt",
                     tool_input=expected.get("tool_input") or {},
                 )
-                if tool_ledger:
-                    recorded = tool_ledger.record_receipt_pending(
+                if _ctx.tool_ledger:
+                    recorded = _ctx.tool_ledger.record_receipt_pending(
                         expected["tool_call_id"], tool_response, external_id
                     )
                     if not recorded:
@@ -2202,12 +2204,12 @@ async def on_post_tool_use_ledger(
                     stage="after_tool_success_before_ledger_commit",
                     tool_input=expected.get("tool_input") or {},
                 )
-                tool_ledger.mark_succeeded(
+                _ctx.tool_ledger.mark_succeeded(
                     expected["tool_call_id"], tool_response, external_id
                 )
-                if tool_ledger:
-                    tool_ledger.clear_pending_receipt(expected["tool_call_id"])
-                tool_ledger.mark_replay_status(expected["tool_call_id"], "succeeded")
+                if _ctx.tool_ledger:
+                    _ctx.tool_ledger.clear_pending_receipt(expected["tool_call_id"])
+                _ctx.tool_ledger.mark_replay_status(expected["tool_call_id"], "succeeded")
                 _maybe_crash_after_tool(
                     raw_tool_name=expected.get("raw_tool_name") or "",
                     tool_call_id=expected["tool_call_id"],
@@ -2221,17 +2223,17 @@ async def on_post_tool_use_ledger(
                     idempotency_key=expected.get("idempotency_key"),
                 )
                 if (
-                    forced_tool_queue
-                    and forced_tool_queue[0]["tool_call_id"] == expected["tool_call_id"]
+                    _ctx.forced_tool_queue
+                    and _ctx.forced_tool_queue[0]["tool_call_id"] == expected["tool_call_id"]
                 ):
-                    forced_tool_queue.pop(0)
-                if not forced_tool_queue:
-                    forced_tool_mode_active = False
-                    forced_tool_active_ids = {}
+                    _ctx.forced_tool_queue.pop(0)
+                if not _ctx.forced_tool_queue:
+                    _ctx.forced_tool_mode_active = False
+                    _ctx.forced_tool_active_ids = {}
                     logfire.info(
                         "replay_queue_drained",
-                        run_id=run_id,
-                        step_id=current_step_id,
+                        run_id=_ctx.run_id,
+                        step_id=_ctx.current_step_id,
                         tool_call_id=expected["tool_call_id"],
                     )
         except Exception as exc:
@@ -2242,12 +2244,12 @@ async def on_post_tool_use_ledger(
 
     try:
         if is_error:
-            tool_ledger.mark_failed(tool_call_id, error_detail or "tool error")
+            _ctx.tool_ledger.mark_failed(tool_call_id, error_detail or "tool error")
             logfire.warning(
                 "ledger_mark_failed",
                 tool_use_id=tool_call_id,
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
                 error_detail=error_detail or "tool error",
             )
             if side_effect_class and side_effect_class != "read_only":
@@ -2258,8 +2260,8 @@ async def on_post_tool_use_ledger(
                 )
         else:
             if not raw_tool_name:
-                if tool_ledger:
-                    ledger_entry = tool_ledger.get_tool_call(tool_call_id)
+                if _ctx.tool_ledger:
+                    ledger_entry = _ctx.tool_ledger.get_tool_call(tool_call_id)
                     raw_tool_name = (ledger_entry or {}).get("raw_tool_name") or ""
                 if not raw_tool_name:
                     raw_tool_name = input_data.get("tool_name", "") or ""
@@ -2276,8 +2278,8 @@ async def on_post_tool_use_ledger(
                 stage="after_tool_success_before_receipt",
                 tool_input=tool_input,
             )
-            if tool_ledger:
-                recorded = tool_ledger.record_receipt_pending(
+            if _ctx.tool_ledger:
+                recorded = _ctx.tool_ledger.record_receipt_pending(
                     tool_call_id, tool_response, external_id
                 )
                 if not recorded:
@@ -2291,9 +2293,9 @@ async def on_post_tool_use_ledger(
                 stage="after_tool_success_before_ledger_commit",
                 tool_input=tool_input,
             )
-            tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
-            if tool_ledger:
-                tool_ledger.clear_pending_receipt(tool_call_id)
+            _ctx.tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
+            if _ctx.tool_ledger:
+                _ctx.tool_ledger.clear_pending_receipt(tool_call_id)
             _maybe_crash_after_tool(
                 raw_tool_name=raw_tool_name,
                 tool_call_id=tool_call_id,
@@ -2303,15 +2305,15 @@ async def on_post_tool_use_ledger(
             logfire.info(
                 "ledger_mark_succeeded",
                 tool_use_id=tool_call_id,
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
                 external_correlation_id=external_id,
             )
             # Log tool execution span with duration
-            start_info = tool_execution_start_times.pop(tool_call_id, None)
+            start_info = _ctx.tool_execution_start_times.pop(tool_call_id, None)
             if not start_info:
-                start_info = tool_execution_stream_start_times.pop(tool_call_id, None)
-            if start_info and tool_call_id not in tool_execution_emitted_ids:
+                start_info = _ctx.tool_execution_stream_start_times.pop(tool_call_id, None)
+            if start_info and tool_call_id not in _ctx.tool_execution_emitted_ids:
                 start_time, tool_name_recorded = start_info
                 duration_seconds = time.time() - start_time
                 logfire.info(
@@ -2319,12 +2321,12 @@ async def on_post_tool_use_ledger(
                     tool_name=tool_name_recorded,
                     tool_use_id=tool_call_id,
                     duration_seconds=round(duration_seconds, 3),
-                    run_id=run_id,
-                    step_id=current_step_id,
+                    run_id=_ctx.run_id,
+                    step_id=_ctx.current_step_id,
                     status="succeeded",
                     source="post_tool_use_hook",
                 )
-                tool_execution_emitted_ids.add(tool_call_id)
+                _ctx.tool_execution_emitted_ids.add(tool_call_id)
                 
             # [PDF Rendering Instrumentation] Log PDF render completion with output size
             if raw_tool_name and raw_tool_name.upper() == "BASH":
@@ -2338,7 +2340,7 @@ async def on_post_tool_use_ledger(
                             pdf_output = pdf_match.group(1).strip('"\'')
                             # Try to get file size if path is accessible
                             pdf_size = None
-                            workspace = OBSERVER_WORKSPACE_DIR or ""
+                            workspace = _ctx.observer_workspace_dir or ""
                             if workspace and not os.path.isabs(pdf_output):
                                 pdf_path = os.path.join(workspace, pdf_output)
                             else:
@@ -2351,7 +2353,7 @@ async def on_post_tool_use_ledger(
                                 output_path=pdf_output,
                                 output_size_bytes=pdf_size,
                                 duration_seconds=round(duration_seconds, 3) if start_info else None,
-                                run_id=run_id,
+                                run_id=_ctx.run_id,
                             )
                     except Exception:
                         pass  # Non-critical
@@ -2360,10 +2362,10 @@ async def on_post_tool_use_ledger(
             "ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc)
         )
         # Log failed tool execution with duration if we have start time
-        start_info = tool_execution_start_times.pop(tool_call_id, None)
+        start_info = _ctx.tool_execution_start_times.pop(tool_call_id, None)
         if not start_info:
-            start_info = tool_execution_stream_start_times.pop(tool_call_id, None)
-        if start_info and tool_call_id not in tool_execution_emitted_ids:
+            start_info = _ctx.tool_execution_stream_start_times.pop(tool_call_id, None)
+        if start_info and tool_call_id not in _ctx.tool_execution_emitted_ids:
             start_time, tool_name_recorded = start_info
             duration_seconds = time.time() - start_time
             logfire.info(
@@ -2371,19 +2373,19 @@ async def on_post_tool_use_ledger(
                 tool_name=tool_name_recorded,
                 tool_use_id=tool_call_id,
                 duration_seconds=round(duration_seconds, 3),
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
                 status="failed",
                 error=str(exc),
                 source="post_tool_use_hook",
             )
-            tool_execution_emitted_ids.add(tool_call_id)
+            _ctx.tool_execution_emitted_ids.add(tool_call_id)
     finally:
-        if gateway_mode_active:
-            gateway_tool_call_map.pop(str(tool_use_id or ""), None)
+        if _ctx.gateway_mode_active:
+            _ctx.gateway_tool_call_map.pop(str(tool_use_id or ""), None)
         # Cleanup any orphaned start times
-        tool_execution_start_times.pop(tool_call_id, None)
-        tool_execution_stream_start_times.pop(tool_call_id, None)
+        _ctx.tool_execution_start_times.pop(tool_call_id, None)
+        _ctx.tool_execution_stream_start_times.pop(tool_call_id, None)
 
     return {}
 
@@ -2394,6 +2396,10 @@ async def on_post_tool_use_validation(
     """
     PostToolUse Hook: nudge the model when schema validation fails.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     return await post_tool_use_schema_nudge(
         input_data,
         run_id=run_id,
@@ -2417,8 +2423,8 @@ async def on_post_research_finalized_cache(
     - Citation-preserving (sources, dates, URLs)
     - LLM-ready (extracted facts, quotes, statistics)
     """
-    global run_id, current_step_id, runtime_db_conn
     
+    _ctx = _require_ctx()
     # Only process finalize_research tool results
     tool_name = context.get("tool_name", "") or input_data.get("tool_name", "")
     if "finalize_research" not in tool_name:
@@ -2470,11 +2476,11 @@ async def on_post_research_finalized_cache(
     
     # Save to checkpoint database - this is THE canonical research checkpoint
     try:
-        if runtime_db_conn and run_id and current_step_id:
+        if _ctx.runtime_db_conn and _ctx.run_id and _ctx.current_step_id:
             save_checkpoint(
-                runtime_db_conn,
-                run_id=run_id,
-                step_id=current_step_id,
+                _ctx.runtime_db_conn,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
                 checkpoint_type="refined_corpus_cache",
                 state_snapshot={
                     "source": "refined_corpus.md",
@@ -2486,7 +2492,7 @@ async def on_post_research_finalized_cache(
             )
             logfire.info(
                 "refined_corpus_cached",
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 corpus_chars=len(corpus_text),
                 path=refined_corpus_path,
             )
@@ -2501,6 +2507,9 @@ async def on_post_email_send_artifact(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
     """PostToolUse Hook: persist Gmail send evidence to workspace artifacts."""
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     tool_name = context.get("tool_name", "") or input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {}) or {}
     tool_response = input_data.get("tool_response") or input_data.get("tool_result")
@@ -2526,6 +2535,9 @@ async def on_post_email_send_artifact(
         return None
 
     def _write_artifact(records):
+        _ctx = _get_ctx()
+        if _ctx is not None:
+            OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
         if not records:
             return
         base_dir = os.path.join(
@@ -2581,6 +2593,23 @@ async def on_post_email_send_artifact(
                     "subject": tool_input.get("subject"),
                     "body_preview": (tool_input.get("body") or "")[:2000],
                     "attachment": tool_input.get("attachment"),
+                    "response": response,
+                }
+            )
+    elif "gmail" in tool_name.lower() and ("send" in tool_name.lower() or "draft" in tool_name.lower()):
+        # gws MCP Gmail send/draft tool (e.g. gmail.users.messages.send, gmail.+send)
+        payload = _load_json_payload(tool_response)
+        response = None
+        if isinstance(payload, dict):
+            response = payload.get("data") or payload
+        if isinstance(tool_input, dict):
+            records.append(
+                {
+                    "tool": tool_name,
+                    "recipient_email": tool_input.get("to") or tool_input.get("recipient_email"),
+                    "subject": tool_input.get("subject"),
+                    "body_preview": (tool_input.get("body") or tool_input.get("message") or "")[:2000],
+                    "attachment": tool_input.get("attachment") or tool_input.get("attachments"),
                     "response": response,
                 }
             )
@@ -2734,8 +2763,8 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
-                "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
-                "- For file upload: `mcp__internal__upload_to_composio`\n"
+                "- For Gmail/Calendar/Drive/Sheets: Use `mcp__gws__*` tools (gws MCP server)\n"
+                "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                 "- For web/news search: Use `COMPOSIO_SEARCH_WEB` / `COMPOSIO_SEARCH_NEWS`.\n"
                 "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"
                 "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
@@ -2993,7 +3022,7 @@ SUBAGENT_EXPECTED_SKILLS = {
     "video-remotion-expert": ["video-remotion"],
     "system-configuration-agent": [],
     "data-analyst": [],  # Uses Composio CodeInterpreter + local Python
-    "action-coordinator": ["gmail"],  # Uses Composio delivery tools
+    "action-coordinator": ["gmail"],  # Uses gws MCP + Composio delivery tools
     "banana-squad-expert": ["banana-squad", "image-generation"],
     "youtube-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],
     "youtube-explainer-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],  # legacy alias
@@ -3009,6 +3038,9 @@ async def on_pre_task_skill_awareness(
     Also injects CURRENT_SESSION_WORKSPACE so the sub-agent writes to the
     correct session directory (not the repo root).
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     tool_input = input_data.get("tool_input", {})
     subagent_type = tool_input.get("subagent_type", "unknown")
 
@@ -3157,9 +3189,9 @@ async def on_post_task_guidance(
     elif subagent_type == "report-writer":
         next_step_hint = (
             "Report generation complete. Consider delivery:\n"
-            "- Email the report? → Use `upload_to_composio` then `GMAIL_SEND_EMAIL`\n"
+            "- Email the report? → Use gws Gmail send with local file attachment\n"
             "- Post summary to Slack? → Use `SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`\n"
-            "- Schedule follow-up? → Use `GOOGLECALENDAR_CREATE_EVENT`\n"
+            "- Schedule follow-up? → Use gws Calendar tools\n"
             "- Or delegate all delivery to `action-coordinator`."
         )
     elif subagent_type == "data-analyst":
@@ -3179,7 +3211,7 @@ async def on_post_task_guidance(
         next_step_hint = (
             "Browser execution complete. Next steps:\n"
             "- Need structured findings? → Delegate to `data-analyst` for evidence synthesis\n"
-            "- Need stakeholder delivery? → Use `action-coordinator` or Composio Gmail/Slack tools\n"
+            "- Need stakeholder delivery? → Use `action-coordinator` or gws Gmail / Composio Slack tools\n"
             "- Need follow-up validation? → Launch additional Bowser lane tasks in parallel as needed\n"
             "- Do NOT default to report-writer unless a report was explicitly requested."
         )
@@ -3384,10 +3416,13 @@ async def on_subagent_stop(
     Hook: Fires when a sub-agent completes its work.
     Verifies artifacts were created and injects guidance for next steps.
     """
+    global OBSERVER_WORKSPACE_DIR
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     logfire.info("subagent_stop_hook_fired", input_preview=str(input_data)[:500])
 
     # Check if report was created in work_products/
-    global OBSERVER_WORKSPACE_DIR
     if OBSERVER_WORKSPACE_DIR:
         work_products = os.path.join(OBSERVER_WORKSPACE_DIR, "work_products")
         search_results = os.path.join(OBSERVER_WORKSPACE_DIR, "search_results")
@@ -3419,7 +3454,7 @@ async def on_subagent_stop(
                     "NEXT STEPS (REQUIRED):\n"
                     "1. Update TodoWrite to mark 'Delegate report creation' as completed\n"
                     f"2. Upload report using workbench_upload('{work_products}/{report_file}', '/home/user/{report_file}')\n"
-                    "3. Send email using GMAIL_SEND_EMAIL with the remote file path\n"
+                    "3. Send email using gws Gmail send tool with the report as attachment\n"
                     "4. Mark all tasks complete in TodoWrite"
                 )
             }
@@ -3539,9 +3574,10 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
     """
     _emit_composio_schema_metrics()
 
-    # Resolve dependencies (Args > Globals)
-    use_run_id = run_id or globals().get("run_id")
-    use_db = db_conn or globals().get("runtime_db_conn")
+    # Resolve dependencies (Args > ContextVar > legacy module global)
+    _fallback_ctx = _get_ctx()
+    use_run_id = run_id or (_fallback_ctx.run_id if _fallback_ctx else globals().get("run_id"))
+    use_db = db_conn or (_fallback_ctx.runtime_db_conn if _fallback_ctx else globals().get("runtime_db_conn"))
 
     if not use_run_id or not use_db:
         return {}
@@ -3862,6 +3898,12 @@ _seen_transcript_paths: set[str] = set()
 def _mark_run_waiting_for_human(
     reason: str, *, tool_name: str = "", tool_call_id: str = ""
 ) -> None:
+    run_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if runtime_db_conn and run_id:
         update_run_status(runtime_db_conn, run_id, "waiting_for_human")
     logfire.warning(
@@ -3874,6 +3916,12 @@ def _mark_run_waiting_for_human(
 
 
 def _maybe_mark_run_succeeded() -> None:
+    run_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id:
         return
     status = get_run_status(runtime_db_conn, run_id)
@@ -3932,6 +3980,9 @@ def build_job_prompt(run_spec: dict) -> Optional[str]:
 
 
 def _next_step_index(conn: sqlite3.Connection, run_id: str) -> int:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     row = conn.execute(
         "SELECT MAX(step_index) AS max_step FROM run_steps WHERE run_id = ?",
         (run_id,),
@@ -3957,6 +4008,10 @@ def infer_run_mode(
 def _handle_cancel_request(
     conn: Optional[sqlite3.Connection], run_id: Optional[str], workspace_dir: str
 ) -> bool:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        trace = _ctx.trace
     global run_cancelled_by_operator
     if not conn or not run_id:
         return False
@@ -4293,6 +4348,14 @@ def _should_inject_provider_idempotency(
 def _maybe_update_provider_session(
     session_id: Optional[str], forked_from: Optional[str] = None
 ) -> None:
+    run_id = None
+    runtime_db_conn = None
+    trace = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
+        trace = _ctx.trace
     if not session_id:
         return
     if runtime_db_conn and run_id:
@@ -4324,6 +4387,14 @@ def _disable_provider_resume() -> None:
 
 
 def _invalidate_provider_session(error_msg: str) -> None:
+    run_id = None
+    runtime_db_conn = None
+    trace = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
+        trace = _ctx.trace
     if runtime_db_conn and run_id:
         update_run_provider_session(runtime_db_conn, run_id, None)
     if trace is not None:
@@ -4398,6 +4469,12 @@ def _tool_input_slug_matches(
 
 
 def _get_current_step_phase() -> Optional[str]:
+    current_step_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not current_step_id:
         return None
     try:
@@ -4419,6 +4496,9 @@ def _should_trigger_test_crash(
     stage: str,
     tool_input: Optional[dict] = None,
 ) -> tuple[bool, dict[str, Optional[str]]]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
     crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
     crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
     crash_stage = os.getenv("UA_TEST_CRASH_AFTER_STAGE")
@@ -4480,6 +4560,9 @@ def _maybe_crash_after_tool(
     stage: str,
     tool_input: Optional[dict] = None,
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
     should_crash, crash_context = _should_trigger_test_crash(
         raw_tool_name=raw_tool_name,
         tool_call_id=tool_call_id,
@@ -4520,6 +4603,9 @@ def _maybe_crash_after_tool(
 
 
 def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        tool_ledger = _ctx.tool_ledger
     if tool_ledger is None:
         return
     row = tool_ledger.get_tool_call(tool_call_id)
@@ -4548,6 +4634,11 @@ def _ensure_phase_checkpoint(
     tool_name: Optional[str] = None,
     note: Optional[str] = None,
 ) -> None:
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id or not step_id or step_id == "unknown":
         return
     try:
@@ -4593,6 +4684,12 @@ def _ensure_phase_checkpoint(
 
 
 def _is_job_run() -> bool:
+    run_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id:
         return False
     try:
@@ -4608,6 +4705,13 @@ def _is_harness_mode() -> bool:
     Returns True if max_iterations is set in the run config.
     This is distinct from crash recovery (forced_tool_mode_active).
     """
+    run_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        forced_tool_mode_active = _ctx.forced_tool_mode_active
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id:
         return False
     try:
@@ -4930,6 +5034,9 @@ _invalid_side_effect_warnings: set[tuple[str, str, str]] = set()
 
 
 def _normalize_side_effect_class(value: Optional[str], tool_name: str) -> str:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     if value in VALID_SIDE_EFFECT_CLASSES:
         return value
     normalized = (value or "").strip() or "unknown"
@@ -5021,6 +5128,10 @@ def _persist_subagent_output(
     output: Any,
     output_str: str,
 ) -> Optional[dict[str, str]]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     if not workspace_dir:
         return None
     _, task_key = _ensure_task_key(tool_input)
@@ -5163,6 +5274,9 @@ def _forced_tool_matches(
 
 
 def _forced_task_active() -> bool:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        forced_tool_active_ids = _ctx.forced_tool_active_ids
     return any(
         item.get("tool_name") == "task" and item.get("tool_namespace") == "claude_code"
         for item in forced_tool_active_ids.values()
@@ -5172,6 +5286,9 @@ def _forced_task_active() -> bool:
 def _load_inflight_tool_calls(
     conn: sqlite3.Connection, run_id: str
 ) -> list[dict[str, Any]]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     rows = conn.execute(
         """
         SELECT tool_call_id, tool_name, tool_namespace, raw_tool_name, step_id,
@@ -5244,8 +5361,8 @@ def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
 def _relaunch_inflight_task(
     inflight: dict[str, Any], run_id: str, step_id: str
 ) -> Optional[dict[str, Any]]:
-    global tool_ledger
-    if tool_ledger is None:
+    _ctx = _require_ctx()
+    if _ctx.tool_ledger is None:
         return None
     tool_input = inflight.get("tool_input")
     if not isinstance(tool_input, dict):
@@ -5260,9 +5377,9 @@ def _relaunch_inflight_task(
         relaunch_namespace = "claude_code"
         relaunch_raw_name = "Task"
     try:
-        receipt, idempotency_key = tool_ledger.prepare_tool_call(
+        receipt, idempotency_key = _ctx.tool_ledger.prepare_tool_call(
             tool_call_id=tool_call_id,
-            run_id=run_id,
+            run_id=_ctx.run_id,
             step_id=step_id,
             tool_name=relaunch_tool_name,
             tool_namespace=relaunch_namespace,
@@ -5312,24 +5429,20 @@ async def reconcile_inflight_tools(
     workspace_dir: str,
     max_turns: int = 3,
 ) -> bool:
-    global \
-        forced_tool_queue, \
-        forced_tool_active_ids, \
-        forced_tool_mode_active, \
-        runtime_db_conn
-    if not runtime_db_conn:
+    _ctx = _require_ctx()
+    if not _ctx.runtime_db_conn:
         return True
-    inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
+    inflight = _load_inflight_tool_calls(_ctx.runtime_db_conn, _ctx.run_id)
     if not inflight:
         return True
     replay_step_id = inflight[0].get("step_id")
     inflight, skipped = _partition_inflight_for_relaunch(inflight)
     for item in skipped:
-        if tool_ledger:
-            tool_ledger.mark_abandoned_on_resume(
+        if _ctx.tool_ledger:
+            _ctx.tool_ledger.mark_abandoned_on_resume(
                 item["tool_call_id"], "relaunch_parent_task"
             )
-            tool_ledger.mark_replay_status(
+            _ctx.tool_ledger.mark_replay_status(
                 item["tool_call_id"], "skipped_relaunch_parent"
             )
         logfire.info(
@@ -5339,10 +5452,10 @@ async def reconcile_inflight_tools(
         )
     if not inflight:
         return True
-    forced_tool_queue = []
+    _ctx.forced_tool_queue = []
     for item in inflight:
-        if tool_ledger and tool_ledger.promote_pending_receipt(item["tool_call_id"]):
-            tool_ledger.mark_replay_status(item["tool_call_id"], "succeeded_pending")
+        if _ctx.tool_ledger and _ctx.tool_ledger.promote_pending_receipt(item["tool_call_id"]):
+            _ctx.tool_ledger.mark_replay_status(item["tool_call_id"], "succeeded_pending")
             logfire.info(
                 "pending_receipt_promoted",
                 tool_call_id=item["tool_call_id"],
@@ -5350,8 +5463,8 @@ async def reconcile_inflight_tools(
             )
             continue
         if item.get("replay_policy") == "RELAUNCH":
-            relaunch_step_id = item.get("step_id") or current_step_id or "unknown"
-            if tool_ledger and workspace_dir:
+            relaunch_step_id = item.get("step_id") or _ctx.current_step_id or "unknown"
+            if _ctx.tool_ledger and workspace_dir:
                 tool_input = (
                     item.get("tool_input")
                     if isinstance(item.get("tool_input"), dict)
@@ -5360,7 +5473,7 @@ async def reconcile_inflight_tools(
                 _, task_key = _ensure_task_key(tool_input)
                 output_paths = _extract_task_output_paths(tool_input)
                 if output_paths:
-                    tool_ledger.mark_succeeded(
+                    _ctx.tool_ledger.mark_succeeded(
                         item["tool_call_id"],
                         {
                             "status": "subagent_output_reused",
@@ -5368,7 +5481,7 @@ async def reconcile_inflight_tools(
                             "output_paths": output_paths,
                         },
                     )
-                    tool_ledger.mark_replay_status(
+                    _ctx.tool_ledger.mark_replay_status(
                         item["tool_call_id"], "skipped_output_present"
                     )
                     logfire.info(
@@ -5380,7 +5493,7 @@ async def reconcile_inflight_tools(
                     continue
                 if task_key and _subagent_output_available(workspace_dir, task_key):
                     output_paths = _subagent_output_paths(workspace_dir, task_key)
-                    tool_ledger.mark_succeeded(
+                    _ctx.tool_ledger.mark_succeeded(
                         item["tool_call_id"],
                         {
                             "status": "subagent_output_reused",
@@ -5388,7 +5501,7 @@ async def reconcile_inflight_tools(
                             "output_path": output_paths["json"],
                         },
                     )
-                    tool_ledger.mark_replay_status(
+                    _ctx.tool_ledger.mark_replay_status(
                         item["tool_call_id"], "skipped_output_present"
                     )
                     logfire.info(
@@ -5398,29 +5511,29 @@ async def reconcile_inflight_tools(
                         output_path=output_paths["json"],
                     )
                     continue
-            relaunched = _relaunch_inflight_task(item, run_id, relaunch_step_id)
-            if tool_ledger:
+            relaunched = _relaunch_inflight_task(item, _ctx.run_id, relaunch_step_id)
+            if _ctx.tool_ledger:
                 abandon_detail = (
                     "relaunch_enqueued" if relaunched else "relaunch_needs_human"
                 )
-                tool_ledger.mark_abandoned_on_resume(
+                _ctx.tool_ledger.mark_abandoned_on_resume(
                     item["tool_call_id"], abandon_detail
                 )
             if relaunched:
-                forced_tool_queue.append(relaunched)
+                _ctx.forced_tool_queue.append(relaunched)
             continue
-        forced_tool_queue.append(item)
-    forced_tool_active_ids = {}
-    forced_tool_mode_active = True
+        _ctx.forced_tool_queue.append(item)
+    _ctx.forced_tool_active_ids = {}
+    _ctx.forced_tool_mode_active = True
     print("🔁 Replaying in-flight tool calls before resume...")
     fallback_client: Optional[ClaudeSDKClient] = None
     fallback_client_active = False
     active_client = client
     try:
         for _ in range(max_turns):
-            if not forced_tool_queue:
+            if not _ctx.forced_tool_queue:
                 break
-            prompt = _build_forced_tool_prompt(forced_tool_queue)
+            prompt = _build_forced_tool_prompt(_ctx.forced_tool_queue)
             try:
                 await process_turn(
                     active_client, prompt, workspace_dir, force_complex=True
@@ -5438,28 +5551,28 @@ async def reconcile_inflight_tools(
                     active_client = fallback_client
                     continue
                 print(f"⚠️ In-flight replay error: {exc}")
-                logfire.warning("inflight_replay_error", run_id=run_id, error=str(exc))
+                logfire.warning("inflight_replay_error", run_id=_ctx.run_id, error=str(exc))
                 break
-            if forced_tool_queue:
+            if _ctx.forced_tool_queue:
                 print("⚠️ In-flight replay incomplete; retrying...")
     finally:
         if fallback_client is not None and fallback_client_active:
             await fallback_client.__aexit__(None, None, None)
-        forced_tool_mode_active = False
-    if forced_tool_queue:
-        if runtime_db_conn and run_id:
-            update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+        _ctx.forced_tool_mode_active = False
+    if _ctx.forced_tool_queue:
+        if _ctx.runtime_db_conn and _ctx.run_id:
+            update_run_status(_ctx.runtime_db_conn, _ctx.run_id, "waiting_for_human")
         logfire.warning(
             "inflight_replay_incomplete",
-            run_id=run_id,
-            remaining=len(forced_tool_queue),
+            run_id=_ctx.run_id,
+            remaining=len(_ctx.forced_tool_queue),
         )
-        forced_tool_queue = []
-        forced_tool_active_ids = {}
+        _ctx.forced_tool_queue = []
+        _ctx.forced_tool_active_ids = {}
         return False
-    forced_tool_active_ids = {}
+    _ctx.forced_tool_active_ids = {}
     _ensure_phase_checkpoint(
-        run_id=run_id,
+        run_id=_ctx.run_id,
         step_id=replay_step_id,
         checkpoint_type="post_replay",
         phase="post_replay",
@@ -5474,6 +5587,10 @@ def build_resume_packet(
     workspace_dir: str,
     last_n: int = 5,
 ) -> tuple[dict[str, Any], str]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     run_row = get_run(conn, run_id)
     checkpoint = load_last_checkpoint(conn, run_id)
     checkpoint_id = checkpoint["checkpoint_id"] if checkpoint else None
@@ -5602,6 +5719,9 @@ def update_restart_file(
     job_summary_path: Optional[str] = None,
     runwide_summary_line: Optional[str] = None,
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     # Logic removed per user request to avoid file path errors
     pass
 
@@ -5615,6 +5735,11 @@ async def continue_job_run(
     max_error_retries: int = 3,
     execution_session: Optional[ExecutionSession] = None,
 ) -> Optional[str]:
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     error_retries = 0
     last_error = None
     final_response_text = ""
@@ -5705,8 +5830,11 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
     Runs a specialized sub-agent to summarize and persist critical information
     before context is wiped (Auto-Flush).
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        start_ts = _ctx.start_ts
     # Feature Flag Check
-    if os.environ.get("UA_MEMORY_ENABLED") != "1":
+    if not memory_enabled():
         return
 
     try:
@@ -5798,17 +5926,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
     Args:
         event_callback: Optional callback to receive AgentEvents in real-time for gateway streaming.
     """
-    global \
-        trace, \
-        run_id, \
-        budget_config, \
-        budget_state, \
-        runtime_db_conn, \
-        current_step_id, \
-        tool_ledger, \
-        provider_session_forked_from
+    _ctx = _require_ctx()
     step_id = str(uuid.uuid4())
-    current_step_id = step_id
+    _ctx.current_step_id = step_id
     step_index = iteration
 
     if iteration > max_iterations:
@@ -5816,13 +5936,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         # Return equivalent of "done"
         return False, None, "Max iterations reached."
 
-    if runtime_db_conn and run_id:
+    if _ctx.runtime_db_conn and _ctx.run_id:
         try:
-            step_index = _next_step_index(runtime_db_conn, run_id)
-            start_step(runtime_db_conn, run_id, step_id, step_index)
+            step_index = _next_step_index(_ctx.runtime_db_conn, _ctx.run_id)
+            start_step(_ctx.runtime_db_conn, _ctx.run_id, step_id, step_index)
             logfire.info(
                 "durable_step_started",
-                run_id=run_id,
+                run_id=_ctx.run_id,
                 step_id=step_id,
                 step_index=step_index,
             )
@@ -5831,30 +5951,30 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                 "runtime_step_insert_failed", step_id=step_id, error=str(exc)
             )
 
-    if budget_state["start_ts"] is None:
-        budget_state["start_ts"] = start_ts
+    if _ctx.budget_state["start_ts"] is None:
+        _ctx.budget_state["start_ts"] = _ctx.start_ts
 
-    elapsed = time.time() - budget_state["start_ts"]
-    wallclock_limit = budget_config.get("max_wallclock_minutes", 0) * 60
+    elapsed = time.time() - _ctx.budget_state["start_ts"]
+    wallclock_limit = _ctx.budget_config.get("max_wallclock_minutes", 0) * 60
     if wallclock_limit and elapsed >= wallclock_limit:
         raise BudgetExceeded(
             "max_wallclock_minutes",
-            budget_config.get("max_wallclock_minutes", 0),
+            _ctx.budget_config.get("max_wallclock_minutes", 0),
             round(elapsed / 60, 2),
             detail="wallclock budget reached before starting next step",
         )
 
     if (
-        budget_config.get("max_steps")
-        and budget_state["steps"] >= budget_config["max_steps"]
+        _ctx.budget_config.get("max_steps")
+        and _ctx.budget_state["steps"] >= _ctx.budget_config["max_steps"]
     ):
         raise BudgetExceeded(
             "max_steps",
-            budget_config["max_steps"],
-            budget_state["steps"],
+            _ctx.budget_config["max_steps"],
+            _ctx.budget_state["steps"],
             detail="step limit reached before starting next step",
         )
-    budget_state["steps"] += 1
+    _ctx.budget_state["steps"] += 1
 
     # Initialize Logfire Context (Baggage) for Trace Organization
     if iteration == 1:
@@ -5866,15 +5986,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         # Update loop count for main agent
         logfire.set_baggage(loop=str(iteration))
         logfire.set_baggage(step="execution")  # Default for subsequent turns
-    if run_id:
-        logfire.set_baggage(run_id=run_id)
+    if _ctx.run_id:
+        logfire.set_baggage(run_id=_ctx.run_id)
     logfire.set_baggage(step_id=step_id)
 
     # Create Logfire span for this iteration
     with logfire.span(
         f"conversation_iteration_{iteration}",
         iteration=iteration,
-        run_id=run_id,
+        run_id=_ctx.run_id,
         step_id=step_id,
         session_id=os.path.basename(workspace_dir) if workspace_dir else None,
         workspace_dir=workspace_dir,
@@ -5889,7 +6009,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         with logfire.span(
             "llm_api_wait",
             query_length=len(query),
-            run_id=run_id,
+            run_id=_ctx.run_id,
             step_id=step_id,
             iteration=iteration,
         ):
@@ -5909,24 +6029,24 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
         with logfire.span(
             "llm_response_stream",
-            run_id=run_id,
+            run_id=_ctx.run_id,
             step_id=step_id,
             iteration=iteration,
         ):
             async for msg in client.receive_response():
                 if _is_sdk_compact_boundary_message(msg):
                     compact_payload = _extract_sdk_compact_boundary_payload(msg)
-                    trace.setdefault("compact_boundary_events", []).append(compact_payload)
+                    _ctx.trace.setdefault("compact_boundary_events", []).append(compact_payload)
                     notice = _format_compact_boundary_notice(compact_payload)
                     compaction_observed_this_turn = True
-                    pressure_state = _get_context_pressure_state(trace)
+                    pressure_state = _get_context_pressure_state(_ctx.trace)
                     pressure_state["compaction_seen_iteration"] = iteration
                     pressure_state["last_compaction_iteration"] = iteration
                     pressure_state["high_turns_without_compaction"] = 0
 
                     logfire.warning(
                         "sdk_compact_boundary_message",
-                        run_id=run_id,
+                        run_id=_ctx.run_id,
                         step_id=step_id,
                         iteration=iteration,
                         payload=compact_payload,
@@ -5954,32 +6074,32 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         turn_input_tokens = int(inp)
 
                         # Update local trace counters
-                        if trace and "token_usage" in trace:
-                            trace["token_usage"]["input"] += inp
-                            trace["token_usage"]["output"] += out
-                            trace["token_usage"]["total"] += inp + out
+                        if _ctx.trace and "token_usage" in _ctx.trace:
+                            _ctx.trace["token_usage"]["input"] += inp
+                            _ctx.trace["token_usage"]["output"] += out
+                            _ctx.trace["token_usage"]["total"] += inp + out
 
                         logfire.info(
                             "token_usage_update",
-                            run_id=run_id,
+                            run_id=_ctx.run_id,
                             step_id=step_id,
                             iteration=iteration,
                             input=inp,
                             output=out,
-                            total_so_far=trace["token_usage"]["total"] if trace else 0,
+                            total_so_far=_ctx.trace["token_usage"]["total"] if _ctx.trace else 0,
                         )
 
                         # Durability: Update DB with latest token count
-                        if run_id and runtime_db_conn:
+                        if _ctx.run_id and _ctx.runtime_db_conn:
                             update_run_tokens(
-                                runtime_db_conn, run_id, trace["token_usage"]["total"]
+                                _ctx.runtime_db_conn, _ctx.run_id, _ctx.trace["token_usage"]["total"]
                             )
 
                         # Emit token usage for UI consumers (CLI/harness/gateway path)
                         if event_callback:
                             event_callback(AgentEvent(
                                 type=EventType.STATUS,
-                                data={"token_usage": trace.get("token_usage")},
+                                data={"token_usage": _ctx.trace.get("token_usage")},
                             ))
 
                         # Fallback: Emit to legacy agent if present (for backward compat)
@@ -5987,12 +6107,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             try:
                                 await agent.send_agent_event(
                                     EventType.STATUS,
-                                    {"token_usage": trace.get("token_usage")},
+                                    {"token_usage": _ctx.trace.get("token_usage")},
                                 )
                             except Exception:
                                 pass
 
-                    pressure_state = _get_context_pressure_state(trace)
+                    pressure_state = _get_context_pressure_state(_ctx.trace)
                     if turn_input_tokens > 0:
                         pressure_state["last_turn_input_tokens"] = turn_input_tokens
                     context_tokens_for_reset = turn_input_tokens
@@ -6002,7 +6122,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         )
                     if context_tokens_for_reset <= 0:
                         context_tokens_for_reset = int(
-                            trace.get("token_usage", {}).get("total", 0) or 0
+                            _ctx.trace.get("token_usage", {}).get("total", 0) or 0
                         )
                     compaction_seen_this_turn = (
                         compaction_observed_this_turn
@@ -6019,8 +6139,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         pressure_state["high_turns_without_compaction"] = 0
 
                     # Proactive context warning (CLI/harness visibility)
-                    if trace and "token_usage" in trace:
-                        flags = trace.setdefault("token_usage_flags", {})
+                    if _ctx.trace and "token_usage" in _ctx.trace:
+                        flags = _ctx.trace.setdefault("token_usage_flags", {})
                         if CONTEXT_WINDOW_TOKENS:
                             utilization = context_tokens_for_reset / CONTEXT_WINDOW_TOKENS
                             if utilization >= 0.7 and not flags.get("warned_70"):
@@ -6041,7 +6161,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     high_turns_without_compaction = int(
                         pressure_state.get("high_turns_without_compaction", 0) or 0
                     )
-                    total_tokens = trace.get("token_usage", {}).get("total", 0)
+                    total_tokens = _ctx.trace.get("token_usage", {}).get("total", 0)
                     if (
                         context_tokens_for_reset > TRUNCATION_THRESHOLD
                         and high_turns_without_compaction <= compaction_grace_turns
@@ -6052,7 +6172,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         )
                         logfire.info(
                             "context_pressure_grace_period",
-                            run_id=run_id,
+                            run_id=_ctx.run_id,
                             step_id=step_id,
                             iteration=iteration,
                             context_tokens=context_tokens_for_reset,
@@ -6074,11 +6194,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         # to align with the "Autonomous Execution Protocol"
 
                         # 1. Increment Iteration
-                        if run_id and runtime_db_conn:
+                        if _ctx.run_id and _ctx.runtime_db_conn:
                             current_iter = get_iteration_info(
-                                runtime_db_conn, run_id
+                                _ctx.runtime_db_conn, _ctx.run_id
                             ).get("iteration_count", 0)
-                            max_iter = get_iteration_info(runtime_db_conn, run_id).get(
+                            max_iter = get_iteration_info(_ctx.runtime_db_conn, _ctx.run_id).get(
                                 "max_iterations", 10
                             )
 
@@ -6088,7 +6208,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 )
                                 break
 
-                            new_iter = increment_iteration_count(runtime_db_conn, run_id)
+                            new_iter = increment_iteration_count(_ctx.runtime_db_conn, _ctx.run_id)
 
                             # 2. Construct Handoff Prompt (Ledger-Aware)
                             # Check for handoff.json written by build_evidence_ledger
@@ -6150,9 +6270,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 print("⚠️ Could not clear history: client.history not available")
 
                             # 4. Reset token counters and pressure state for new session
-                            trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
-                            trace["token_usage_flags"] = {}
-                            trace["context_pressure"] = _default_context_pressure_state()
+                            _ctx.trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
+                            _ctx.trace["token_usage_flags"] = {}
+                            _ctx.trace["context_pressure"] = _default_context_pressure_state()
                             compaction_observed_this_turn = False
 
                             continue  # Restart inner loop with new prompt
@@ -6175,7 +6295,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     with logfire.span(
                         "assistant_message",
                         model=msg.model,
-                        run_id=run_id,
+                        run_id=_ctx.run_id,
                         step_id=step_id,
                         iteration=iteration,
                         parent_tool_use_id=parent_tool_use_id,
@@ -6186,7 +6306,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     logfire.warning(
                                         "malformed_tool_name_detected",
                                         tool_name=block.name,
-                                        run_id=run_id,
+                                        run_id=_ctx.run_id,
                                         step_id=step_id,
                                     )
                                     _mark_run_waiting_for_human(
@@ -6199,17 +6319,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     "tool_use",
                                     tool_name=block.name,
                                     tool_id=block.id,
-                                    run_id=run_id,
+                                    run_id=_ctx.run_id,
                                     step_id=step_id,
                                     iteration=iteration,
                                 ):
                                     tool_record = {
-                                        "run_id": run_id,
+                                        "run_id": _ctx.run_id,
                                         "step_id": step_id,
                                         "iteration": iteration,
                                         "name": block.name,
                                         "id": block.id,
-                                        "time_offset_seconds": round(time.time() - start_ts, 3),
+                                        "time_offset_seconds": round(time.time() - _ctx.start_ts, 3),
                                         "input": block.input if hasattr(block, "input") else None,
                                         "input_size_bytes": (
                                             len(json.dumps(block.input))
@@ -6226,21 +6346,21 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         iteration=iteration,
                                     )
 
-                                    if tool_ledger:
-                                        ledger_entry = tool_ledger.get_tool_call(str(block.id))
+                                    if _ctx.tool_ledger:
+                                        ledger_entry = _ctx.tool_ledger.get_tool_call(str(block.id))
                                         if ledger_entry:
                                             tool_record["idempotency_key"] = ledger_entry.get("idempotency_key")
                                             tool_record["side_effect_class"] = ledger_entry.get("side_effect_class")
                                             tool_record["replay_policy"] = ledger_entry.get("replay_policy")
                                             tool_record["ledger_status"] = ledger_entry.get("status")
 
-                                    trace["tool_calls"].append(tool_record)
+                                    _ctx.trace["tool_calls"].append(tool_record)
                                     tool_calls_this_iter.append(tool_record)
                                     if block.id:
                                         stream_tool_id = str(block.id)
-                                        tool_execution_stream_start_times[stream_tool_id] = (time.time(), block.name)
+                                        _ctx.tool_execution_stream_start_times[stream_tool_id] = (time.time(), block.name)
                                         # Allow re-emission if this ID is reused in a later turn.
-                                        tool_execution_emitted_ids.discard(stream_tool_id)
+                                        _ctx.tool_execution_emitted_ids.discard(stream_tool_id)
                                     
                                     # Emit TOOL_CALL event for gateway/UI streaming (deduped)
                                     hook_events.emit_tool_call_event(
@@ -6250,16 +6370,16 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         time_offset=tool_record.get("time_offset_seconds", 0),
                                     )
                                     
-                                    budget_state["tool_calls"] += 1
+                                    _ctx.budget_state["tool_calls"] += 1
                                     if (
-                                        budget_config.get("max_tool_calls")
-                                        and budget_state["tool_calls"]
-                                        > budget_config["max_tool_calls"]
+                                        _ctx.budget_config.get("max_tool_calls")
+                                        and _ctx.budget_state["tool_calls"]
+                                        > _ctx.budget_config["max_tool_calls"]
                                     ):
                                         raise BudgetExceeded(
                                             "max_tool_calls",
-                                            budget_config["max_tool_calls"],
-                                            budget_state["tool_calls"],
+                                            _ctx.budget_config["max_tool_calls"],
+                                            _ctx.budget_state["tool_calls"],
                                             detail="tool call limit exceeded",
                                         )
 
@@ -6287,7 +6407,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         input_preview=input_preview,
                                         parent_tool_use_id=parent_tool_id,  # Sub-agent context
                                         is_subagent_call=bool(parent_tool_id),
-                                        run_id=run_id,
+                                        run_id=_ctx.run_id,
                                         step_id=step_id,
                                         iteration=iteration,
                                         **_maybe_full_payload_fields(
@@ -6384,7 +6504,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     "text_block",
                                     length=len(block.text),
                                     text_preview=block.text[:500],
-                                    run_id=run_id,
+                                    run_id=_ctx.run_id,
                                     step_id=step_id,
                                     iteration=iteration,
                                     **_maybe_full_payload_fields("text", block.text),
@@ -6404,7 +6524,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     thinking_length=len(block.thinking),
                                     thinking_preview=block.thinking[:1000],
                                     signature=block.signature,
-                                    run_id=run_id,
+                                    run_id=_ctx.run_id,
                                     step_id=step_id,
                                     iteration=iteration,
                                 )
@@ -6426,7 +6546,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             with logfire.span(
                                 "tool_result",
                                 tool_use_id=tool_use_id,
-                                run_id=run_id,
+                                run_id=_ctx.run_id,
                                 step_id=step_id,
                                 iteration=iteration,
                             ):
@@ -6437,18 +6557,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 content_str = str(block_content)
 
                                 result_record = {
-                                    "run_id": run_id,
+                                    "run_id": _ctx.run_id,
                                     "step_id": step_id,
                                     "tool_use_id": tool_use_id,
-                                    "time_offset_seconds": round(time.time() - start_ts, 3),
+                                    "time_offset_seconds": round(time.time() - _ctx.start_ts, 3),
                                     "is_error": is_error,
                                     "content_size_bytes": len(content_str),
                                     "content_preview": content_str[:1000]
                                     if len(content_str) > 1000
                                     else content_str,
                                 }
-                                if tool_ledger and tool_use_id:
-                                    ledger_entry = tool_ledger.get_tool_call(
+                                if _ctx.tool_ledger and tool_use_id:
+                                    ledger_entry = _ctx.tool_ledger.get_tool_call(
                                         str(tool_use_id)
                                     )
                                     if ledger_entry:
@@ -6458,7 +6578,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         result_record["ledger_status"] = ledger_entry.get(
                                             "status"
                                         )
-                                trace["tool_results"].append(result_record)
+                                _ctx.trace["tool_results"].append(result_record)
 
                                 # Log to Logfire with CONTENT preview
                                 full_content = content_str[:2000]
@@ -6469,7 +6589,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     content_size=result_record["content_size_bytes"],
                                     is_error=result_record["is_error"],
                                     content_preview=full_content,
-                                    run_id=run_id,
+                                    run_id=_ctx.run_id,
                                     step_id=step_id,
                                     iteration=iteration,
                                     **_maybe_full_payload_fields(
@@ -6532,10 +6652,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                         if interview_data.get("__INTERVIEW_REQUEST__"):
                                             questions = interview_data.get("questions", [])
-                                            if questions and OBSERVER_WORKSPACE_DIR:
+                                            if questions and _ctx.observer_workspace_dir:
                                                 # Save questions to workspace for post-iteration processing
                                                 pending_interview_file = os.path.join(
-                                                    OBSERVER_WORKSPACE_DIR,
+                                                    _ctx.observer_workspace_dir,
                                                     "pending_interview.json",
                                                 )
                                                 with open(pending_interview_file, "w") as f:
@@ -6568,13 +6688,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                 stream_tool_id = str(tool_use_id) if tool_use_id else ""
                                 if stream_tool_id:
-                                    stream_start_info = tool_execution_stream_start_times.pop(
+                                    stream_start_info = _ctx.tool_execution_stream_start_times.pop(
                                         stream_tool_id, None
                                     )
                                     if (
                                         stream_start_info
                                         and stream_tool_id
-                                        not in tool_execution_emitted_ids
+                                        not in _ctx.tool_execution_emitted_ids
                                     ):
                                         stream_start_ts, stream_tool_name = (
                                             stream_start_info
@@ -6589,13 +6709,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             or "unknown",
                                             tool_use_id=stream_tool_id,
                                             duration_seconds=stream_duration,
-                                            run_id=run_id,
+                                            run_id=_ctx.run_id,
                                             step_id=step_id,
                                             iteration=iteration,
                                             status="failed" if is_error else "succeeded",
                                             source="stream_tool_result",
                                         )
-                                        tool_execution_emitted_ids.add(stream_tool_id)
+                                        _ctx.tool_execution_emitted_ids.add(stream_tool_id)
 
                                 # Reset sub-agent tagging if Task returned (Back to Main)
                                 if tool_name == "Task":
@@ -6633,9 +6753,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                                     continue
                                                 hook_events.emit_text_event(_sa_text, author=sa_author)
 
-                                    if not is_error and OBSERVER_WORKSPACE_DIR:
+                                    if not is_error and _ctx.observer_workspace_dir:
                                         paths = _persist_subagent_output(
-                                            workspace_dir=OBSERVER_WORKSPACE_DIR,
+                                            workspace_dir=_ctx.observer_workspace_dir,
                                             tool_use_id=str(tool_use_id)
                                             if tool_use_id
                                             else None,
@@ -6657,11 +6777,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             )
                                         )
 
-                                if tool_name and OBSERVER_WORKSPACE_DIR:
+                                if tool_name and _ctx.observer_workspace_dir:
                                     # Search results observer - pass typed content
                                     asyncio.create_task(
                                         observe_and_save_search_results(
-                                            tool_name, block_content, OBSERVER_WORKSPACE_DIR
+                                            tool_name, block_content, _ctx.observer_workspace_dir
                                         )
                                     )
                                     # Workbench activity observer
@@ -6670,7 +6790,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             tool_name,
                                             tool_input or {},
                                             content_str,
-                                            OBSERVER_WORKSPACE_DIR,
+                                            _ctx.observer_workspace_dir,
                                         )
                                     )
                                     # Work products observer - copy reports to persistent directory
@@ -6679,7 +6799,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             tool_name,
                                             tool_input or {},
                                             content_str,
-                                            OBSERVER_WORKSPACE_DIR,
+                                            _ctx.observer_workspace_dir,
                                         )
                                     )
                                     # Video/audio output observer - copy media to session workspace
@@ -6688,13 +6808,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             tool_name,
                                             tool_input or {},
                                             content_str,
-                                            OBSERVER_WORKSPACE_DIR,
+                                            _ctx.observer_workspace_dir,
                                         )
                                     )
 
                                     # Post-subagent compliance verification (for Task results)
                                     compliance_error = verify_subagent_compliance(
-                                        tool_name, content_str, OBSERVER_WORKSPACE_DIR
+                                        tool_name, content_str, _ctx.observer_workspace_dir
                                     )
                                     if compliance_error:
                                         # Log the compliance failure prominently
@@ -6706,7 +6826,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                 elif isinstance(msg, ResultMessage):
                     result_telemetry = _extract_result_message_telemetry(msg)
-                    trace.setdefault("sdk_result_messages", []).append(result_telemetry)
+                    _ctx.trace.setdefault("sdk_result_messages", []).append(result_telemetry)
                     logfire.info(
                         "result_message",
                         duration_ms=msg.duration_ms,
@@ -6716,27 +6836,27 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         subtype=result_telemetry.get("subtype"),
                         model_usage=result_telemetry.get("model_usage"),
                         usage=result_telemetry.get("usage"),
-                        run_id=run_id,
+                        run_id=_ctx.run_id,
                         step_id=step_id,
                         iteration=iteration,
                         **_maybe_full_payload_fields("result", msg.result),
                     )
                     if msg.session_id:
                         _maybe_update_provider_session(
-                            msg.session_id, forked_from=provider_session_forked_from
+                            msg.session_id, forked_from=_ctx.provider_session_forked_from
                         )
-                    if msg.is_error and msg.result and runtime_db_conn and run_id:
+                    if msg.is_error and msg.result and _ctx.runtime_db_conn and _ctx.run_id:
                         error_text = str(msg.result).lower()
                         if "resume" in error_text or "session" in error_text:
-                            update_run_provider_session(runtime_db_conn, run_id, None)
+                            update_run_provider_session(_ctx.runtime_db_conn, _ctx.run_id, None)
                             logfire.warning(
                                 "provider_session_invalidated",
-                                run_id=run_id,
+                                run_id=_ctx.run_id,
                                 error=error_text[:200],
                             )
 
         iter_record = {
-            "run_id": run_id,
+            "run_id": _ctx.run_id,
             "step_id": step_id,
             "iteration": iteration,
             "query": query[:200],
@@ -6745,13 +6865,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             "needs_user_input": needs_user_input,
             "auth_link": auth_link,
         }
-        trace["iterations"].append(iter_record)
-        if runtime_db_conn and run_id:
+        _ctx.trace["iterations"].append(iter_record)
+        if _ctx.runtime_db_conn and _ctx.run_id:
             last_tool_call_id = None
             if tool_calls_this_iter:
                 last_tool_call_id = tool_calls_this_iter[-1].get("id")
             state_snapshot = {
-                "run_id": run_id,
+                "run_id": _ctx.run_id,
                 "step_id": step_id,
                 "iteration": iteration,
                 "query_preview": query[:200],
@@ -6763,8 +6883,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             }
             try:
                 save_checkpoint(
-                    runtime_db_conn,
-                    run_id=run_id,
+                    _ctx.runtime_db_conn,
+                    run_id=_ctx.run_id,
                     step_id=step_id,
                     checkpoint_type="step_boundary",
                     state_snapshot=state_snapshot,
@@ -6772,14 +6892,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                 )
                 logfire.info(
                     "durable_checkpoint_saved",
-                    run_id=run_id,
+                    run_id=_ctx.run_id,
                     step_id=step_id,
                     checkpoint_type="step_boundary",
                 )
-                complete_step(runtime_db_conn, step_id, "succeeded")
+                complete_step(_ctx.runtime_db_conn, step_id, "succeeded")
                 logfire.info(
                     "durable_step_completed",
-                    run_id=run_id,
+                    run_id=_ctx.run_id,
                     step_id=step_id,
                     status="succeeded",
                 )
@@ -6787,9 +6907,33 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                 logfire.warning(
                     "checkpoint_save_failed", step_id=step_id, error=str(exc)
                 )
-        current_step_id = None
+        _ctx.current_step_id = None
 
         return needs_user_input, auth_link, final_text
+
+
+# ---------------------------------------------------------------------------
+# Query route types — 3-tier routing
+# ---------------------------------------------------------------------------
+ROUTE_SIMPLE = "SIMPLE"      # LLM answers from its own knowledge, no tools
+ROUTE_STANDARD = "STANDARD"  # Normal user query → Simone's full tool loop (skills, agents, capabilities)
+ROUTE_SYSTEM = "SYSTEM"      # Specialized utility (cron, heartbeat) → system routing (stub: tool loop for now)
+
+
+def _is_system_intent(query: str) -> bool:
+    """Detect cron/heartbeat/system-utility queries that bypass normal user routing."""
+    lowered = query.lower()
+    # Heartbeat/watchdog markers
+    if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
+        return True
+    # Explicit cron / scheduled-task markers
+    if any(kw in lowered for kw in ["cron job", "scheduled task", "system task", "run cron", "cron check"]):
+        return True
+    # UA run-source env signal (set by execution engine for non-user-initiated runs)
+    run_source = os.getenv("UA_RUN_SOURCE", "").strip().lower()
+    if run_source in {"heartbeat", "cron", "system"}:
+        return True
+    return False
 
 
 def _is_memory_intent(query: str) -> bool:
@@ -6822,68 +6966,108 @@ def _is_context_only_intent(query: str) -> bool:
 
 
 def _is_tool_required_intent(query: str) -> bool:
-    """Detect queries that obviously require tools — skip LLM classification."""
+    """Detect STANDARD queries that obviously need tools — skip LLM classification.
+    Note: heartbeat/cron queries are handled by _is_system_intent, not here.
+    """
     lowered = query.lower()
-    # Heartbeat prompts always need tools (date check, file reads, monitors)
-    if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
-        return True
     # Explicit tool/action verbs
     if any(kw in lowered for kw in ["search for", "send email", "run ", "execute ", "create a report"]):
+        return True
+    # YouTube/media URL fetching always needs external tools
+    if any(kw in lowered for kw in ["youtu.be", "youtube.com", "transcript", "get the transcript", "fetch transcript"]):
+        return True
+    # Any URL fetch/scrape intent needs tools
+    if any(kw in lowered for kw in ["http://", "https://"]) and any(kw in lowered for kw in ["get", "fetch", "scrape", "read", "summarize", "transcript", "content", "extract"]):
         return True
     return False
 
 
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
-    """Determine if a query is SIMPLE (direct answer) or COMPLEX (needs tools)."""
-    if _is_tool_required_intent(query):
-        print("\n🤔 Query Classification: COMPLEX (Heuristic: tool_required_intent)")
+    """Classify a query into one of three routes: SIMPLE, STANDARD, or SYSTEM.
+
+    SIMPLE   — LLM answers from its own knowledge/history, no tools needed.
+    STANDARD — Normal user request; Simone handles with full tool loop (skills, agents, capabilities).
+    SYSTEM   — Automated/utility process that is NOT a user request — cron jobs, scheduled tasks, 
+    heartbeat checks, system monitoring, background maintenance 
+    (e.g., 'run the daily digest cron', 'check system health', 'process the scheduled task queue').
+    """
+    _ctx = _get_ctx()
+    current_step_id = None
+    run_id = None
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
+
+    # --- Tier 1: System heuristic (checked first — system queries must not fall through to simple) ---
+    if _is_system_intent(query):
+        print(f"\n\U0001f914 Query Classification: {ROUTE_SYSTEM} (Heuristic: system_intent)")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
                 query=query,
-                decision="COMPLEX",
+                decision=ROUTE_SYSTEM,
+                raw_response="HEURISTIC_SYSTEM_INTENT",
+                run_id=run_id,
+                step_id=current_step_id,
+            )
+        return ROUTE_SYSTEM
+
+    # --- Tier 2: Standard tool-required heuristic ---
+    if _is_tool_required_intent(query):
+        print(f"\n\U0001f914 Query Classification: {ROUTE_STANDARD} (Heuristic: tool_required_intent)")
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "query_classification",
+                query=query,
+                decision=ROUTE_STANDARD,
                 raw_response="HEURISTIC_TOOL_REQUIRED",
                 run_id=run_id,
                 step_id=current_step_id,
             )
-        return "COMPLEX"
+        return ROUTE_STANDARD
+
+    # --- Tier 3: Simple knowledge/context heuristics ---
     if _is_memory_intent(query):
-        print("\n🤔 Query Classification: SIMPLE (Heuristic: memory_intent)")
+        print(f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: memory_intent)")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
                 query=query,
-                decision="SIMPLE",
+                decision=ROUTE_SIMPLE,
                 raw_response="HEURISTIC_MEMORY_INTENT",
                 run_id=run_id,
                 step_id=current_step_id,
             )
-        return "SIMPLE"
+        return ROUTE_SIMPLE
     if _is_context_only_intent(query):
-        print("\n🤔 Query Classification: SIMPLE (Heuristic: context_only_intent)")
+        print(f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: context_only_intent)")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
                 query=query,
-                decision="SIMPLE",
+                decision=ROUTE_SIMPLE,
                 raw_response="HEURISTIC_CONTEXT_ONLY",
                 run_id=run_id,
                 step_id=current_step_id,
             )
-        return "SIMPLE"
+        return ROUTE_SIMPLE
 
-    # Classification logic with definition-based prompting
+    # --- LLM classifier: 3-way prompt ---
     classification_prompt = (
-        f"Classify the following user query as either 'SIMPLE' or 'COMPLEX'.\n"
+        f"Classify the following query into exactly one of three categories: SIMPLE, STANDARD, or SYSTEM.\n"
         f"Query: {query}\n\n"
         f"Definitions:\n"
-        f"- SIMPLE: Can be answered directly by your foundational knowledge OR from the conversation history above, without using external tools (e.g., 'Capital of France', 'Explain concept', 'What was the filename I just asked you to create?').\n"
-        f"- COMPLEX: Requires external tools, searching the web, executing code, checking real-time data, sending emails, OR confirming/continuing a previous multi-step workflow (e.g., 'yes', 'proceed', 'continue').\n\n"
-        f"Respond with ONLY 'SIMPLE' or 'COMPLEX'."
+        f"- SIMPLE: Can be answered directly from your foundational knowledge or conversation history — no external tools needed "
+        f"(e.g., 'Capital of France', 'Explain a concept', 'What was the filename you just created?').\n"
+        f"- STANDARD: Normal user request requiring tools, skills, agents, web search, code execution, URL fetching, "
+        f"YouTube transcripts, API calls, file operations, OR continuing a multi-step workflow "
+        f"(e.g., 'yes/proceed/continue', 'get the transcript for this URL', 'research X and write a report').\n"
+        f"- SYSTEM: Automated/utility process that is NOT a user request — cron jobs, scheduled tasks, "
+        f"heartbeat checks, system monitoring, background maintenance "
+        f"(e.g., 'run the daily digest cron', 'check system health', 'process the scheduled task queue').\n\n"
+        f"Respond with ONLY one word: SIMPLE, STANDARD, or SYSTEM."
     )
 
-    # We use the client to query, but since it has tools configured, we must rely on the prompt to restrict tool usage.
-    # In a production system, we might use a separate client without tools.
     with logfire.span(
         "llm_api_wait",
         context="classification",
@@ -6909,12 +7093,15 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     decision = result_text.strip().upper()
 
-    # Safe fallback
-    final_decision = "SIMPLE" if "SIMPLE" in decision else "COMPLEX"
+    # Precedence: SYSTEM > SIMPLE > STANDARD (STANDARD is the safe fallback for ambiguous tool queries)
+    if "SYSTEM" in decision:
+        final_decision = ROUTE_SYSTEM
+    elif "SIMPLE" in decision:
+        final_decision = ROUTE_SIMPLE
+    else:
+        final_decision = ROUTE_STANDARD
 
-    print(
-        f"\n🤔 Query Classification: {final_decision} (Model logic: {decision[:50]}...)"
-    )
+    print(f"\n\U0001f914 Query Classification: {final_decision} (Model: {decision[:50]})")
     if LOGFIRE_TOKEN:
         logfire.info(
             "query_classification",
@@ -6934,6 +7121,10 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     Returns True if handled successfully, False if tool use was attempted (fallback needed).
     Also returns the full response text.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     print(f"\n⚡ Direct Answer (Fast Path):")
     print("-" * 40)
 
@@ -7481,7 +7672,7 @@ async def setup_session(
 
     # --- MEMORY SYSTEM CONTEXT INJECTION ---
     memory_context_str = ""
-    if not MEMORY_ENABLED:
+    if not memory_enabled():
         print("⚠️ Memory system disabled.")
     else:
         try:
@@ -7514,7 +7705,7 @@ async def setup_session(
     tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
     disallowed_tools = list(DISALLOWED_TOOLS)
-    if not MEMORY_ENABLED:
+    if not memory_enabled():
         disallowed_tools.extend(
             [
                 "memory_search",
@@ -7781,7 +7972,6 @@ async def process_turn(
         event_callback: Optional callback to receive AgentEvents in real-time.
                        Used by gateway/adapters for event streaming.
     """
-    global trace, start_ts, run_id, runtime_db_conn, current_execution_session
 
     session_ctx = execution_session or current_execution_session
     if session_ctx:
@@ -7799,6 +7989,36 @@ async def process_turn(
     abs_workspace_dir = bind_workspace(
         workspace_dir, absolute=True, observer_setter=_set_observer_workspace
     )
+
+    # Phase 1: Establish ContextVar-backed session context for this asyncio task.
+    # asyncio.create_task() copies the current context, so this assignment is
+    # invisible to sibling tasks — each concurrent session gets its own copy.
+    # Mutable containers are passed by reference intentionally: in-place mutations
+    # (append, pop, clear) stay in sync with the module globals during the
+    # incremental migration. Scalar fields will be migrated in Phase 2.
+    _set_ctx(_SessionContext(
+        run_id=run_id,
+        trace=trace,
+        runtime_db_conn=runtime_db_conn,
+        current_step_id=current_step_id,
+        tool_ledger=tool_ledger,
+        observer_workspace_dir=OBSERVER_WORKSPACE_DIR,
+        forced_tool_queue=forced_tool_queue,
+        start_ts=start_ts,
+        forced_tool_mode_active=forced_tool_mode_active,
+        budget_state=budget_state,
+        gateway_mode_active=gateway_mode_active,
+        budget_config=budget_config,
+        forced_tool_active_ids=forced_tool_active_ids,
+        tool_execution_emitted_ids=tool_execution_emitted_ids,
+        provider_session_forked_from=provider_session_forked_from,
+        primary_transcript_path=_primary_transcript_path,
+        tool_execution_stream_start_times=tool_execution_stream_start_times,
+        tool_execution_start_times=tool_execution_start_times,
+        gateway_tool_call_map=gateway_tool_call_map,
+        seen_transcript_paths=_seen_transcript_paths,
+    ))
+    _ctx = _require_ctx()
 
     # Ephemeral system events (cron completions, exec finishes, monitors) are
     # injected by the gateway/heartbeat service via env for this single turn.
@@ -7831,15 +8051,15 @@ async def process_turn(
     if system_events_block:
         force_complex = True
 
-    trace["query"] = user_input
-    trace["start_time"] = datetime.now().isoformat()
-    start_ts = time.time()
-    tool_execution_start_times.clear()
-    tool_execution_stream_start_times.clear()
-    tool_execution_emitted_ids.clear()
+    _ctx.trace["query"] = user_input
+    _ctx.trace["start_time"] = datetime.now().isoformat()
+    _ctx.start_ts = time.time()
+    _ctx.tool_execution_start_times.clear()
+    _ctx.tool_execution_stream_start_times.clear()
+    _ctx.tool_execution_emitted_ids.clear()
     # Reset per-turn circuit breaker state (prevents cross-turn contamination).
-    if isinstance(trace, dict):
-        trace.pop("_tool_loop_circuit", None)
+    if isinstance(_ctx.trace, dict):
+        _ctx.trace.pop("_tool_loop_circuit", None)
     
     # Helper to emit events via callback (defined early for all paths)
     def emit_event(event: AgentEvent) -> None:
@@ -7851,7 +8071,7 @@ async def process_turn(
 
     # Register gateway/UI event callback for hook-based tool streaming
     hook_events.set_event_callback(event_callback)
-    hook_events.set_event_start_ts(start_ts)
+    hook_events.set_event_start_ts(_ctx.start_ts)
     hook_events.reset_tool_event_tracking()
 
     # Bridge mcp_server.mcp_log() to the UI event stream so in-process MCP tool
@@ -7864,6 +8084,9 @@ async def process_turn(
         from mcp_server import set_mcp_log_callback
 
         def _mcp_log_bridge(msg: str, level: str, prefix: str = "") -> None:
+            _ctx = _get_ctx()
+            if _ctx is not None:
+                start_ts = _ctx.start_ts
             emit_event(AgentEvent(
                 type=EventType.STATUS,
                 data={
@@ -7871,7 +8094,7 @@ async def process_turn(
                     "level": level,
                     "prefix": prefix or "[MCP Tool]",
                     "is_log": True,
-                    "time_offset": round(time.time() - start_ts, 1) if start_ts else 0,
+                    "time_offset": round(time.time() - _ctx.start_ts, 1) if _ctx.start_ts else 0,
                 },
             ))
 
@@ -7894,8 +8117,8 @@ async def process_turn(
         logfire.info(
             "query_started",
             query=user_input,
-            run_id=run_id,
-            step_id=current_step_id,
+            run_id=_ctx.run_id,
+            step_id=_ctx.current_step_id,
             payload_full_mode_enabled=PAYLOAD_LOGGING_CONFIG.full_payload_mode,
             payload_redact_sensitive=PAYLOAD_LOGGING_CONFIG.redact_sensitive,
             payload_redact_emails=PAYLOAD_LOGGING_CONFIG.redact_emails,
@@ -7914,7 +8137,7 @@ async def process_turn(
         _clear_hook_events()
         return ExecutionResult(
             response_text="🔄 Session reset! I've cleared the conversation history.",
-            execution_time_seconds=round(time.time() - start_ts, 2),
+            execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
             workspace_path=workspace_dir,
             reset_session=True
         )
@@ -7936,7 +8159,7 @@ async def process_turn(
             if not massive_request or massive_request.strip() == "":
                 return ExecutionResult(
                     response_text="Harness run cancelled: Objective is required.",
-                    execution_time_seconds=round(time.time() - start_ts, 2),
+                    execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
                     workspace_path=workspace_dir,
                 )
 
@@ -7964,7 +8187,7 @@ async def process_turn(
             _clear_hook_events()
             return ExecutionResult(
                 response_text=summary,
-                execution_time_seconds=round(time.time() - start_ts, 2),
+                execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
                 workspace_path=workspace_dir,
             )
         except Exception as e:
@@ -7974,17 +8197,16 @@ async def process_turn(
             _clear_hook_events()
             return ExecutionResult(
                 response_text=f"Harness error: {e}",
-                execution_time_seconds=round(time.time() - start_ts, 2),
+                execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
                 workspace_path=workspace_dir,
             )
 
-    # 2. Determine Complexity
-    complexity = (
-        "COMPLEX" if force_complex else await classify_query(client, user_input)
-    )
+    # 2. Determine Route (3-tier: SIMPLE / STANDARD / SYSTEM)
+    route_type = ROUTE_STANDARD if force_complex else await classify_query(client, user_input)
 
-    # 3. Route Query
-    is_simple = (complexity == "SIMPLE") and not force_complex
+    # 3. Route Decision
+    is_simple = route_type == ROUTE_SIMPLE
+    is_system = route_type == ROUTE_SYSTEM
 
     final_response_text = ""
 
@@ -8000,11 +8222,11 @@ async def process_turn(
             return False
     
     if is_simple:
-        # Try Fast Path
+        # SIMPLE path: fast path via direct LLM answer
         emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "fast"}))
         success, fast_path_text = await handle_simple_query(client, user_input)
         if not success:
-            is_simple = False  # Fallback to Complex Path
+            is_simple = False  # Fallback to Standard Path
         else:
             final_response_text = fast_path_text
             # NOTE: Do NOT emit TEXT or ITERATION_END here.
@@ -8015,21 +8237,38 @@ async def process_turn(
             # chat output in the Web UI (every fast-path response
             # appeared twice).
 
+    if is_system and not is_simple:
+        # SYSTEM path detected — log and emit; currently falls through to the tool loop.
+        # Future: delegate immediately to cron/system subagent before entering tool loop.
+        emit_event(AgentEvent(type=EventType.STATUS, data={
+            "status": "system_query_detected",
+            "path": "system",
+            "route": ROUTE_SYSTEM,
+            "is_log": True,
+        }))
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "system_route_detected",
+                route=ROUTE_SYSTEM,
+                query=user_input[:200],
+                run_id=_ctx.run_id if _ctx else None,
+            )
+
     if not is_simple:
-        # Complex Path (Tool Loop) - track per-request timing
+        # STANDARD or SYSTEM path — tool loop (Simone's full capabilities)
         request_start_ts = time.time()
         iteration = 1
         current_query = f"{system_events_block}\n\n{user_input}" if system_events_block else user_input
-        
-        # Emit processing started for complex path
-        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "complex", "iteration": iteration}))
+
+        path_label = "system" if is_system else "standard"
+        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": path_label, "iteration": iteration}))
 
         while True:
             try:
                 needs_input, auth_link, final_text = await run_conversation(
                     client,
                     current_query,
-                    start_ts,
+                    _ctx.start_ts,
                     iteration,
                     max_iterations=max_iterations,
                     event_callback=event_callback,  # Forward callback for tool event streaming
@@ -8053,26 +8292,26 @@ async def process_turn(
                         reason=reason,
                         error_dict=err_dict,
                         user_query=user_input,
-                        trace=trace if isinstance(trace, dict) else None,
+                        trace=_ctx.trace if isinstance(_ctx.trace, dict) else None,
                     )
                     handoff_md_path = getattr(paths, "md_path", None)
-                    if isinstance(trace, dict):
-                        trace["recovery_handoff_md_path"] = paths.md_path
-                        trace["recovery_handoff_json_path"] = paths.json_path
+                    if isinstance(_ctx.trace, dict):
+                        _ctx.trace["recovery_handoff_md_path"] = paths.md_path
+                        _ctx.trace["recovery_handoff_json_path"] = paths.json_path
 
                     # Best-effort transcript + trace snapshot before the client is reset upstream.
                     try:
-                        trace["end_time"] = datetime.now().isoformat()
-                        trace["total_duration_seconds"] = round(time.time() - start_ts, 3)
+                        _ctx.trace["end_time"] = datetime.now().isoformat()
+                        _ctx.trace["total_duration_seconds"] = round(time.time() - _ctx.start_ts, 3)
                     except Exception:
                         pass
                     try:
                         transcript_path = os.path.join(workspace_dir, "transcript.md")
-                        transcript_builder.generate_transcript(trace, transcript_path)
+                        transcript_builder.generate_transcript(_ctx.trace, transcript_path)
                     except Exception:
                         pass
                     try:
-                        write_trace(trace, workspace_dir)
+                        write_trace(_ctx.trace, workspace_dir)
                     except Exception:
                         pass
 
@@ -8107,9 +8346,9 @@ async def process_turn(
                     )
                     return ExecutionResult(
                         response_text=msg,
-                        execution_time_seconds=round(time.time() - start_ts, 2),
+                        execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
                         workspace_path=workspace_dir,
-                        trace_id=trace.get("trace_id") if isinstance(trace, dict) else None,
+                        trace_id=_ctx.trace.get("trace_id") if isinstance(_ctx.trace, dict) else None,
                         reset_session=True,
                     )
 
@@ -8157,8 +8396,8 @@ async def process_turn(
         # Collect tool calls for this request
         request_tool_calls = [
             tc
-            for tc in trace["tool_calls"]
-            if tc.get("time_offset_seconds", 0) >= (request_start_ts - start_ts)
+            for tc in _ctx.trace["tool_calls"]
+            if tc.get("time_offset_seconds", 0) >= (request_start_ts - _ctx.start_ts)
         ]
 
         print(f"\n{'=' * 80}")
@@ -8225,26 +8464,26 @@ async def process_turn(
         # Collect and display all trace IDs via the trace catalog
         local_trace_ids = sorted(
             set(collect_local_tool_trace_ids(workspace_dir))
-            | set(extract_local_tool_trace_ids_from_trace(trace))
+            | set(extract_local_tool_trace_ids_from_trace(_ctx.trace))
         )
-        trace["local_toolkit_trace_ids"] = local_trace_ids
+        _ctx.trace["local_toolkit_trace_ids"] = local_trace_ids
 
         _catalog = emit_trace_catalog(
-            trace_id=trace.get("trace_id"),
-            run_id=trace.get("run_id") or os.path.basename(workspace_dir),
-            run_source=trace.get("run_source", "user"),
+            trace_id=_ctx.trace.get("trace_id"),
+            run_id=_ctx.trace.get("run_id") or os.path.basename(workspace_dir),
+            run_source=_ctx.trace.get("run_source", "user"),
             local_toolkit_trace_ids=local_trace_ids,
             workspace_dir=workspace_dir,
         )
-        enrich_trace_json(trace, _catalog)
+        enrich_trace_json(_ctx.trace, _catalog)
         # Keep a standalone catalog refreshed per turn so analysis skills do not
         # need to parse large run.log files.
         try:
             catalog_path = save_trace_catalog_md(_catalog, workspace_dir)
-            trace["trace_catalog_path"] = catalog_path
+            _ctx.trace["trace_catalog_path"] = catalog_path
             wp_catalog_paths = save_trace_catalog_work_product(_catalog, workspace_dir)
-            trace["trace_catalog_work_product_path"] = wp_catalog_paths["md_path"]
-            trace["trace_catalog_work_product_json_path"] = wp_catalog_paths["json_path"]
+            _ctx.trace["trace_catalog_work_product_path"] = wp_catalog_paths["md_path"]
+            _ctx.trace["trace_catalog_work_product_json_path"] = wp_catalog_paths["json_path"]
         except Exception as cat_err:
             print(f"⚠️ Failed to refresh trace catalog: {cat_err}")
 
@@ -8296,17 +8535,17 @@ async def process_turn(
 
             # Update stats for the snapshot
             current_ts = time.time()
-            trace["end_time"] = datetime.now().isoformat()
-            trace["total_duration_seconds"] = round(current_ts - start_ts, 3)
+            _ctx.trace["end_time"] = datetime.now().isoformat()
+            _ctx.trace["total_duration_seconds"] = round(current_ts - _ctx.start_ts, 3)
 
             transcript_path = os.path.join(workspace_dir, "transcript.md")
-            if transcript_builder.generate_transcript(trace, transcript_path):
+            if transcript_builder.generate_transcript(_ctx.trace, transcript_path):
                 print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
 
                 try:
                     sync_result = _sync_session_memory_if_enabled(
                         workspace_dir=workspace_dir,
-                        session_id=trace.get("session_id") or trace.get("run_id"),
+                        session_id=_ctx.trace.get("session_id") or _ctx.trace.get("run_id"),
                         transcript_path=transcript_path,
                         force=False,
                     )
@@ -8325,7 +8564,7 @@ async def process_turn(
 
                 flush_pre_compact_memory(
                     workspace_dir=resolve_shared_memory_workspace(workspace_dir),
-                    session_id=trace.get("session_id") or trace.get("run_id"),
+                    session_id=_ctx.trace.get("session_id") or _ctx.trace.get("run_id"),
                     transcript_path=os.path.join(workspace_dir, "transcript.md"),
                     trigger="exit",
                     max_chars=memory_flush_max_chars(default=4000),
@@ -8335,14 +8574,14 @@ async def process_turn(
 
         # NEW: Incremental Trace JSON Save (for live debugging)
         try:
-            write_trace(trace, workspace_dir)
+            write_trace(_ctx.trace, workspace_dir)
         except Exception as e:
             print(f"⚠️ Failed to save incremental trace: {e}")
 
     # End of Turn Update
     end_ts = time.time()
-    trace["end_time"] = datetime.now().isoformat()
-    trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
+    _ctx.trace["end_time"] = datetime.now().isoformat()
+    _ctx.trace["total_duration_seconds"] = round(end_ts - _ctx.start_ts, 3)
 
     _clear_hook_events()
     return ExecutionResult(
@@ -8352,7 +8591,7 @@ async def process_turn(
         tool_breakdown=tool_breakdown if not is_simple else [],
         code_execution_used=code_exec_used if not is_simple else False,
         workspace_path=workspace_dir,
-        trace_id=trace.get("trace_id"),
+        trace_id=_ctx.trace.get("trace_id"),
         follow_up_suggestions=suggestions if not is_simple else [],
     )
 
@@ -9258,17 +9497,17 @@ async def main(args: argparse.Namespace):
                         break
 
                     try:
-                        # [Harness Mode] Force Complex Path to avoid Fast Path output capture bug
+                        # [Harness Mode] Force Standard Path to avoid Fast Path output capture bug
                         harness_info = get_iteration_info(runtime_db_conn, run_id)
                         force_complex_for_harness = bool(harness_info.get("completion_promise"))
                         if force_complex_for_harness:
-                            print("📋 Harness mode active - forcing Complex Path")
+                            print("📋 Harness mode active - forcing Standard Path")
 
                         if gateway:
                             gateway_used_fast_path = False
                             if not force_complex_for_harness:
                                 gateway_decision = await classify_query(client, user_input)
-                                if gateway_decision == "SIMPLE":
+                                if gateway_decision == ROUTE_SIMPLE:
                                     handled, fast_path_text = await handle_simple_query(
                                         client, user_input
                                     )

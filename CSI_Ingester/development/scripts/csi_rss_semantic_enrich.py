@@ -57,6 +57,28 @@ def _resolve_setting(keys: list[str], env_file_values: dict[str, str]) -> str:
     return ""
 
 
+def _resolve_int_setting(
+    keys: list[str],
+    env_file_values: dict[str, str],
+    *,
+    default: int,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    raw = _resolve_setting(keys, env_file_values)
+    value = default
+    if raw:
+        try:
+            value = int(raw)
+        except Exception:
+            value = default
+    if minimum is not None:
+        value = max(int(minimum), value)
+    if maximum is not None:
+        value = min(int(maximum), value)
+    return int(value)
+
+
 def _apply_env_defaults(path: Path) -> None:
     for key, val in _load_env_file(path).items():
         os.environ.setdefault(key, val)
@@ -90,7 +112,7 @@ def _fetch_transcript_failover(
 
 def _fallback_summary(title: str, transcript_text: str, category: str) -> tuple[str, list[str], float]:
     clean = re.sub(r"\s+", " ", transcript_text).strip()
-    base = clean[:300] if clean else ""
+    base = clean[:900] if clean else ""
     if base:
         summary = f"{title.strip()} :: {base}"
     else:
@@ -104,7 +126,30 @@ def _fallback_summary(title: str, transcript_text: str, category: str) -> tuple[
         themes.extend(["security", "geopolitics"])
     else:
         themes.extend(["general_interest"])
-    return summary[:1000], themes, 0.55
+    return summary[:2000], themes[:12], 0.55
+
+
+def _transcript_fusion_excerpt(transcript_text: str, max_chars: int = 12000) -> str:
+    clean = re.sub(r"\s+", " ", str(transcript_text or "")).strip()
+    if not clean:
+        return ""
+    if len(clean) <= max_chars:
+        return clean
+    slice_size = max(1200, max_chars // 3)
+    head = clean[:slice_size]
+    mid_start = max(0, (len(clean) // 2) - (slice_size // 2))
+    middle = clean[mid_start : mid_start + slice_size]
+    tail = clean[-slice_size:]
+    return "\n\n".join(
+        [
+            "HEAD EXCERPT:",
+            head,
+            "MIDDLE EXCERPT:",
+            middle,
+            "TAIL EXCERPT:",
+            tail,
+        ]
+    )[: max_chars + 1200]
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -139,12 +184,13 @@ def _analyze_with_claude(
     endpoint: str,
     api_key: str,
 ) -> tuple[dict[str, Any] | None, dict[str, int]]:
-    transcript_excerpt = transcript_text[:12000]
+    transcript_excerpt = _transcript_fusion_excerpt(transcript_text, max_chars=12000)
     prompt = (
         "Classify and summarize this YouTube upload for trend tracking.\n"
         "Return ONLY valid JSON with keys:\n"
         "category (ai|political|war|other_interest|or short snake_case category), "
-        "summary (string <= 700 chars), themes (array up to 6), confidence (0..1).\n\n"
+        "summary (string <= 2000 chars), themes (array 10-12 concise themes), "
+        "confidence (0..1), confidence_rationale (string <= 260 chars).\n\n"
         f"Channel Name: {channel_name}\n"
         f"Channel ID: {channel_id}\n"
         f"Title: {title}\n\n"
@@ -152,7 +198,7 @@ def _analyze_with_claude(
     )
     req_body = {
         "model": model,
-        "max_tokens": 500,
+        "max_tokens": 900,
         "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -285,7 +331,7 @@ def _upsert_analysis(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="RSS semantic enrichment with transcript summaries.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--max-events", type=int, default=8)
     parser.add_argument("--env-file", default="/opt/universal_agent/.env")
     parser.add_argument(
@@ -298,7 +344,7 @@ def main() -> int:
         help="UA transcript ingest endpoint",
     )
     parser.add_argument("--transcript-timeout-seconds", type=int, default=90)
-    parser.add_argument("--transcript-max-chars", type=int, default=120000)
+    parser.add_argument("--transcript-max-chars", type=int, default=20000)
     parser.add_argument("--transcript-min-chars", type=int, default=120)
     parser.add_argument("--claude-model", default="")
     parser.add_argument("--max-categories", type=int, default=10)
@@ -331,6 +377,27 @@ def main() -> int:
     transcript_token = _resolve_setting(
         ["CSI_RSS_ANALYSIS_TRANSCRIPT_TOKEN", "UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"],
         merged_env_values,
+    )
+    transcript_timeout_seconds = _resolve_int_setting(
+        ["CSI_RSS_ANALYSIS_TRANSCRIPT_TIMEOUT_SECONDS"],
+        merged_env_values,
+        default=int(args.transcript_timeout_seconds),
+        minimum=30,
+        maximum=600,
+    )
+    transcript_max_chars = _resolve_int_setting(
+        ["CSI_RSS_ANALYSIS_TRANSCRIPT_MAX_CHARS"],
+        merged_env_values,
+        default=int(args.transcript_max_chars),
+        minimum=5000,
+        maximum=800000,
+    )
+    transcript_min_chars = _resolve_int_setting(
+        ["CSI_RSS_ANALYSIS_TRANSCRIPT_MIN_CHARS"],
+        merged_env_values,
+        default=int(args.transcript_min_chars),
+        minimum=20,
+        maximum=5000,
     )
 
     use_claude = _resolve_setting(["CSI_RSS_ANALYSIS_USE_CLAUDE"], merged_env_values).strip().lower() in {
@@ -385,9 +452,9 @@ def main() -> int:
             token=transcript_token,
             video_id=video_id,
             video_url=video_url,
-            timeout_seconds=max(30, int(args.transcript_timeout_seconds)),
-            max_chars=max(5000, int(args.transcript_max_chars)),
-            min_chars=max(20, int(args.transcript_min_chars)),
+            timeout_seconds=transcript_timeout_seconds,
+            max_chars=transcript_max_chars,
+            min_chars=transcript_min_chars,
         )
         transcript_text = str(transcript_result.get("transcript_text") or "")
         transcript_chars = int(transcript_result.get("transcript_chars") or len(transcript_text))
@@ -440,19 +507,21 @@ def main() -> int:
                     suggested_category = parsed_category
                 summary_val = str(parsed.get("summary") or "").strip()
                 if summary_val:
-                    summary_text = summary_val[:1000]
+                    summary_text = summary_val[:2000]
                 parsed_themes = parsed.get("themes")
                 if isinstance(parsed_themes, list):
-                    themes = [str(item).strip() for item in parsed_themes if str(item).strip()][:8]
+                    themes = [str(item).strip() for item in parsed_themes if str(item).strip()][:12]
                 confidence_val = parsed.get("confidence")
                 try:
                     confidence = float(confidence_val)
                 except Exception:
                     confidence = confidence
+                confidence_rationale = str(parsed.get("confidence_rationale") or "").strip()[:260]
                 analysis_json = {
                     "category": suggested_category or "other_interest",
                     "themes": themes,
                     "confidence": max(0.0, min(1.0, confidence)),
+                    "confidence_rationale": confidence_rationale,
                     "transcript_status": transcript_status,
                     "transcript_ref": transcript_ref,
                     "transcript_endpoint": endpoint_used,
@@ -524,6 +593,7 @@ def main() -> int:
     print(f"RSS_ENRICH_PENDING={len(rows)}")
     print(f"RSS_ENRICH_PROCESSED={processed}")
     print(f"RSS_ENRICH_TRANSCRIPT_OK={transcript_ok}")
+    print(f"RSS_ENRICH_TRANSCRIPT_MAX_CHARS_USED={transcript_max_chars}")
     print(f"RSS_ENRICH_CLAUDE_USED={claude_used}")
     print(f"RSS_ENRICH_AI={int(category_counts.get('ai') or 0)}")
     print(f"RSS_ENRICH_POLITICAL={int(category_counts.get('political') or 0)}")

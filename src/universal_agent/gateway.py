@@ -216,10 +216,14 @@ class InProcessGateway(Gateway):
         self._use_legacy = use_legacy_bridge or not EXECUTION_ENGINE_AVAILABLE
         self._hooks = hooks
         self._workspace_base = workspace_base or Path("AGENT_RUN_WORKSPACES")
-        # process_turn (and parts of the legacy bridge) rely on global process state
-        # (stdout/stderr redirection, env vars, module-level globals). Serialize
-        # all gateway execution to prevent cross-session contamination.
+        # _execution_lock serializes create_session / resume_session which mutate
+        # shared adapter dicts.  Per-session locks (_session_exec_locks) allow
+        # different sessions to run concurrently inside execute().
         self._execution_lock = asyncio.Lock()
+        # Per-session locks: each session can execute independently.
+        self._session_exec_locks: dict[str, asyncio.Lock] = {}
+        # Dedicated lock for CODER VP shared adapter/session (single-lane).
+        self._coder_vp_lock = asyncio.Lock()
         self._execution_runtime: dict[str, Any] = {
             "lock_waiters_current": 0,
             "lock_waiters_peak": 0,
@@ -285,6 +289,12 @@ class InProcessGateway(Gateway):
 
         if self._use_legacy:
             self._bridge = AgentBridge(hooks=hooks)
+
+    def _get_session_exec_lock(self, session_id: str) -> asyncio.Lock:
+        """Return (creating if needed) the per-session execution lock."""
+        if session_id not in self._session_exec_locks:
+            self._session_exec_locks[session_id] = asyncio.Lock()
+        return self._session_exec_locks[session_id]
 
     @asynccontextmanager
     async def _timed_execution_lock(self, operation: str) -> AsyncIterator[None]:
@@ -358,6 +368,10 @@ class InProcessGateway(Gateway):
             snapshot["lock_wait_seconds_avg"] = 0.0
             snapshot["lock_hold_seconds_avg"] = 0.0
         snapshot["lock_locked"] = bool(self._execution_lock.locked())
+        snapshot["sessions_in_flight"] = sum(
+            1 for lk in self._session_exec_locks.values() if lk.locked()
+        )
+        snapshot["sessions_with_lock"] = len(self._session_exec_locks)
         return snapshot
 
     def get_coder_vp_db_conn(self) -> Any:
@@ -727,18 +741,25 @@ class InProcessGateway(Gateway):
     async def execute(
         self, session: GatewaySession, request: GatewayRequest
     ) -> AsyncIterator[AgentEvent]:
-        async with self._timed_execution_lock("execute"):
+        # Per-session lock: different sessions execute concurrently; same session
+        # is still serialized to prevent interleaved turns.
+        _sess_lock = self._get_session_exec_lock(session.session_id)
+        async with _sess_lock:
             if self._use_legacy:
                 async for event in self._execute_legacy(session, request):
                     yield event
                 return
-            
+
             # === NEW UNIFIED PATH ===
             adapter = self._adapters.get(session.session_id)
             if not adapter:
-                # Try to resume session (lock already held)
-                await self._resume_session_new(session.session_id)
-                adapter = self._adapters.get(session.session_id)
+                # Acquire global lock only long enough to resume/create the adapter.
+                async with self._timed_execution_lock("resume_in_execute"):
+                    # Re-check after acquiring lock (another task may have resumed).
+                    adapter = self._adapters.get(session.session_id)
+                    if not adapter:
+                        await self._resume_session_new(session.session_id)
+                        adapter = self._adapters.get(session.session_id)
             
             if not adapter:
                 raise RuntimeError(f"No adapter for session: {session.session_id}")
@@ -994,7 +1015,8 @@ class InProcessGateway(Gateway):
                             )
                     else:
                         try:
-                            vp_adapter, vp_session_row = await self._ensure_coder_vp_adapter(session.user_id)
+                            async with self._coder_vp_lock:
+                                vp_adapter, vp_session_row = await self._ensure_coder_vp_adapter(session.user_id)
                             active_adapter = vp_adapter
                             vp_run_id = getattr(vp_adapter.config, "run_id", None)
                             vp_mission_id = self._coder_vp_runtime.start_mission(
@@ -1327,14 +1349,14 @@ class InProcessGateway(Gateway):
                             errors.append(msg.strip())
                 if event.type == EventType.ITERATION_END:
                     trace_id = event.data.get("trace_id")
-        except Exception as exc:
+        except BaseException as exc:
             duration = round(max(0.0, time.time() - start_time), 3)
             _write_sync_ready_marker(
                 state="failed",
                 ready=True,
                 started_at_epoch=start_time,
                 completed_at_epoch=time.time(),
-                error=str(exc),
+                error=str(exc) or type(exc).__name__,
                 execution_summary={"tool_calls": tool_calls, "duration_seconds": duration},
             )
             raise

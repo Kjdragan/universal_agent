@@ -138,7 +138,7 @@ def _build_payload(conn: sqlite3.Connection, *, request_type: str, lookback_hour
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap CSI analysis task queue with recurring baseline tasks.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--lookback-hours", type=int, default=48)
     parser.add_argument("--limit", type=int, default=180)
     parser.add_argument("--request-types", default="")

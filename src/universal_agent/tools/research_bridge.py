@@ -4,6 +4,8 @@ from claude_agent_sdk import tool
 import sys
 import os
 
+from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
+
 # Import the original function
 # We need to ensure the python path can find src/mcp_server.py if it's not a package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -131,7 +133,7 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     if isinstance(corpus_data, str) and corpus_data.strip():
         candidate = Path(corpus_data.strip())
         if not candidate.is_absolute():
-            workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+            workspace = _ctx_get_workspace()
             if workspace:
                 candidate = Path(workspace) / candidate
         if candidate.exists():

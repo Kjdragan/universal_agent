@@ -7,12 +7,16 @@ import sqlite3
 import time
 from typing import Any
 
+from csi_ingester.infisical_bootstrap import bootstrap_csi_secrets
 from csi_ingester.adapters.base import SourceAdapter
 from csi_ingester.adapters.reddit_discovery import RedditDiscoveryAdapter
+from csi_ingester.adapters.threads_owned import ThreadsOwnedAdapter
+from csi_ingester.adapters.threads_trends_broad import ThreadsBroadTrendsAdapter
+from csi_ingester.adapters.threads_trends_seeded import ThreadsSeededTrendsAdapter
 from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 from csi_ingester.adapters.youtube_playlist import YouTubePlaylistAdapter
 from csi_ingester.config import CSIConfig
-from csi_ingester.emitter.ua_client import UAEmitter
+from csi_ingester.emitter.ua_client import UAEmitter, is_transient_failure
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.scheduler import PollingScheduler
 from csi_ingester.store import dedupe as dedupe_store
@@ -26,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 class CSIService:
     def __init__(self, *, config: CSIConfig, conn: sqlite3.Connection, metrics: MetricsRegistry) -> None:
+        # Optional Infisical bootstrap — injects secrets into os.environ
+        # before config properties resolve them.  Disabled by default;
+        # enable with CSI_INFISICAL_ENABLED=1.
+        self._infisical_result = bootstrap_csi_secrets()
+        if self._infisical_result.source == "infisical":
+            logger.info("CSI Infisical bootstrap: loaded %d secrets", self._infisical_result.loaded_count)
+        elif self._infisical_result.error:
+            logger.warning("CSI Infisical bootstrap failed: %s", self._infisical_result.error)
+
         self.config = config
         self.conn = conn
         self.metrics = metrics
@@ -57,6 +70,15 @@ class CSIService:
         reddit_cfg = sources.get("reddit_discovery")
         if isinstance(reddit_cfg, dict) and reddit_cfg.get("enabled", False):
             self.adapters["reddit_discovery"] = RedditDiscoveryAdapter(reddit_cfg)
+        threads_owned_cfg = sources.get("threads_owned")
+        if isinstance(threads_owned_cfg, dict) and threads_owned_cfg.get("enabled", False):
+            self.adapters["threads_owned"] = ThreadsOwnedAdapter(threads_owned_cfg)
+        threads_seeded_cfg = sources.get("threads_trends_seeded")
+        if isinstance(threads_seeded_cfg, dict) and threads_seeded_cfg.get("enabled", False):
+            self.adapters["threads_trends_seeded"] = ThreadsSeededTrendsAdapter(threads_seeded_cfg)
+        threads_broad_cfg = sources.get("threads_trends_broad")
+        if isinstance(threads_broad_cfg, dict) and threads_broad_cfg.get("enabled", False):
+            self.adapters["threads_trends_broad"] = ThreadsBroadTrendsAdapter(threads_broad_cfg)
         for adapter in self.adapters.values():
             if hasattr(adapter, "set_state_backend"):
                 adapter.set_state_backend(
@@ -226,7 +248,11 @@ class CSIService:
                 self.metrics.inc("csi.events.dlq")
                 dlq_count += 1
                 continue
-            delivered, status_code, payload = await self.emitter.emit_with_retries([event])
+            maint = self.config.ua_maintenance_mode
+            delivered, status_code, payload = await self.emitter.emit_with_retries(
+                [event], maintenance_mode=maint,
+            )
+            fc = str(payload.get("failure_class") or "") if isinstance(payload, dict) else ""
             delivery_attempt_store.record_attempt(
                 self.conn,
                 event_id=event.event_id,
@@ -240,22 +266,29 @@ class CSIService:
                 self.metrics.inc("csi.events.delivered")
                 delivered_count += 1
             else:
+                error_reason = fc if fc else f"ua_status_{status_code}"
                 dlq_store.enqueue(
                     self.conn,
                     event_id=event.event_id,
                     event=event.model_dump(),
-                    error_reason=f"ua_status_{status_code}",
+                    error_reason=error_reason,
                     retry_count=3,
                 )
                 self.metrics.inc("csi.events.dlq")
                 dlq_count += 1
-                logger.warning(
-                    "CSI emit failed adapter=%s event_id=%s status=%s payload=%s",
-                    adapter_name,
-                    event.event_id,
-                    status_code,
-                    payload,
-                )
+                if is_transient_failure(fc):
+                    logger.info(
+                        "CSI emit deferred (transient: %s) adapter=%s event_id=%s",
+                        fc, adapter_name, event.event_id,
+                    )
+                else:
+                    logger.warning(
+                        "CSI emit failed adapter=%s event_id=%s status=%s payload=%s",
+                        adapter_name,
+                        event.event_id,
+                        status_code,
+                        payload,
+                    )
         self._record_adapter_health(
             adapter_name=adapter_name,
             ok=True,

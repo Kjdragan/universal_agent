@@ -40,6 +40,7 @@ YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
+YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
 
 
 class HookReportedTimeout(RuntimeError):
@@ -766,7 +767,10 @@ class HooksService:
         self._emit_notification(
             kind="youtube_tutorial_failed",
             title="YouTube Tutorial Processing Failed",
-            message=f"{tutorial_title}: {reason}",
+            message=(
+                f"{tutorial_title}: {reason}"
+                f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+            ),
             session_id=session_id,
             severity="error",
             requires_action=True,
@@ -782,7 +786,27 @@ class HooksService:
         max_attempts: int,
     ) -> str:
         err = str(error or "local_ingest_failed").strip()
-        cls = str(failure_class or "unknown").strip()
+        cls = str(failure_class or "unknown").strip().lower()
+        if cls == "proxy_quota_or_billing":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare quota/billing appears exhausted; verify account credits/bandwidth and retry."
+            )
+        if cls == "proxy_auth_failed":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare credentials appear invalid; verify PROXY_USERNAME/PROXY_PASSWORD secrets."
+            )
+        if cls == "proxy_not_configured":
+            return (
+                f"YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: PROXY_USERNAME and PROXY_PASSWORD env vars are missing. "
+                "Without a residential proxy, YouTube WILL ban this server's datacenter IP. "
+                "Add Webshare credentials to Infisical and redeploy."
+            )
         return (
             f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
             f"(error={err}, failure_class={cls})"
@@ -1489,7 +1513,7 @@ class HooksService:
 
         if not (ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded"):
             failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
-            if failure_class in {"request_blocked", "api_unavailable"}:
+            if failure_class in {"request_blocked", "api_unavailable", *YOUTUBE_PROXY_ALERT_FAILURE_CLASSES}:
                 self._set_youtube_ingest_cooldown(
                     video_key=video_key,
                     failure_class=failure_class,
@@ -1941,6 +1965,7 @@ class HooksService:
                     )
                 if failed_local_ingest:
                     reason = str(metadata.get("hook_youtube_ingest_reason") or "local_ingest_failed").strip()
+                    failure_class = str(metadata.get("hook_youtube_ingest_failure_class") or "").strip().lower()
                     logger.error(
                         "Hook action failed pre-dispatch session_id=%s hook=%s reason=%s",
                         session_id,
@@ -1966,6 +1991,35 @@ class HooksService:
                             "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
                         },
                     )
+                    if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
+                        if failure_class == "proxy_not_configured":
+                            _proxy_alert_msg = (
+                                "CRITICAL: YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED. "
+                                "PROXY_USERNAME/PROXY_PASSWORD env vars are missing. "
+                                "All YouTube transcript requests will fail until proxy credentials are added."
+                            )
+                        else:
+                            _proxy_alert_msg = (
+                                "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
+                                "Check Webshare account status and proxy secrets."
+                            )
+                        self._emit_notification(
+                            kind="youtube_ingest_proxy_alert",
+                            title="YouTube Proxy Alert",
+                            message=_proxy_alert_msg,
+                            session_id=session_id,
+                            severity="error",
+                            requires_action=True,
+                            metadata={
+                                "source": "hooks",
+                                "hook_name": hook_name,
+                                "hook_session_key": session_key,
+                                "failure_class": failure_class,
+                                "error": str(metadata.get("hook_youtube_ingest_error") or ""),
+                                "reason": reason,
+                                "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                            },
+                        )
                 else:
                     logger.info(
                         "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
@@ -2029,7 +2083,10 @@ class HooksService:
                 self._emit_notification(
                     kind="youtube_tutorial_started",
                     title="YouTube Tutorial Pipeline Started",
-                    message=f"Processing: {processing_label}",
+                    message=(
+                        f"Processing: {processing_label}"
+                        f"{f' [video_id: {expected_video_id}]' if expected_video_id else ''}"
+                    ),
                     session_id=session_id,
                     severity="info",
                     metadata={
@@ -2074,7 +2131,10 @@ class HooksService:
                     self._emit_notification(
                         kind="youtube_tutorial_ready",
                         title="YouTube Tutorial Artifacts Ready",
-                        message=f"{tutorial_title} artifacts are ready for review.",
+                        message=(
+                            f"{tutorial_title} artifacts are ready for review."
+                            f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+                        ),
                         session_id=session_id,
                         severity="success",
                         requires_action=True,
@@ -2349,7 +2409,7 @@ class HooksService:
         total_timeout_seconds: Optional[int],
         idle_timeout_seconds: Optional[int],
     ) -> dict[str, Any]:
-        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request))
+        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request, workspace_root=workspace_root))
         started = time.monotonic()
         last_progress = started
         run_log_path = (
@@ -2399,7 +2459,9 @@ class HooksService:
                 except BaseException:
                     pass
 
-    async def _consume_gateway_execute(self, session, request: GatewayRequest) -> dict[str, Any]:
+    async def _consume_gateway_execute(
+        self, session, request: GatewayRequest, *, workspace_root: Optional[Path] = None,
+    ) -> dict[str, Any]:
         tool_calls = 0
         duration_seconds = 0.0
         started = time.time()
@@ -2407,28 +2469,71 @@ class HooksService:
         reported_timeout_message: Optional[str] = None
         iteration_status: str = ""
         text_tail: list[str] = []
-        async for event in self.gateway.execute(session, request):
-            event_type = getattr(event, "type", None)
-            event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
-            if event_name == "tool_call":
-                tool_calls += 1
-            elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
-                text = str((event.data or {}).get("text") or "").strip()
-                if text:
-                    text_tail.append(text)
-                    if len(text_tail) > 8:
-                        text_tail = text_tail[-8:]
-            elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
-                message = str((event.data or {}).get("message") or "").strip()
-                detail = str((event.data or {}).get("detail") or "").strip()
-                if message or detail:
-                    reported_error_message = f"{message} {detail}".strip()
-            elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
-                data = getattr(event, "data", {}) or {}
-                duration_seconds = float(data.get("duration_seconds") or duration_seconds)
-                if isinstance(data.get("tool_calls"), int):
-                    tool_calls = int(data.get("tool_calls"))
-                iteration_status = str(data.get("status") or "").strip().lower()
+
+        # Open run.log for append so hook-dispatched sessions can be rehydrated
+        _rl_handle = None
+        if workspace_root is not None:
+            try:
+                _rl_path = workspace_root / "run.log"
+                _rl_handle = open(_rl_path, "a", encoding="utf-8")
+                _ts0 = time.strftime("%H:%M:%S", time.gmtime())
+                user_text = (request.user_input or "")[:500]
+                _rl_handle.write(f"[{_ts0}] \U0001f464 USER: {user_text}\n")
+                _rl_handle.flush()
+            except Exception:
+                _rl_handle = None
+
+        def _rl_write(line: str) -> None:
+            if _rl_handle:
+                try:
+                    _rl_handle.write(line + "\n")
+                    _rl_handle.flush()
+                except Exception:
+                    pass
+
+        try:
+            async for event in self.gateway.execute(session, request):
+                event_type = getattr(event, "type", None)
+                event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
+                if event_name == "tool_call":
+                    tool_calls += 1
+                    _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                    tool_name = ""
+                    if isinstance(getattr(event, "data", None), dict):
+                        tool_name = str(event.data.get("tool_name") or event.data.get("name") or "")
+                    _rl_write(f"[{_rl_ts}] \U0001f527 TOOL CALL: {tool_name}" if tool_name else f"[{_rl_ts}] \U0001f527 TOOL CALL")
+                elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
+                    text = str((event.data or {}).get("text") or "").strip()
+                    if text:
+                        text_tail.append(text)
+                        if len(text_tail) > 8:
+                            text_tail = text_tail[-8:]
+                elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
+                    message = str((event.data or {}).get("message") or "").strip()
+                    detail = str((event.data or {}).get("detail") or "").strip()
+                    if message or detail:
+                        reported_error_message = f"{message} {detail}".strip()
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] ERROR: {reported_error_message[:300]}")
+                elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
+                    data = getattr(event, "data", {}) or {}
+                    duration_seconds = float(data.get("duration_seconds") or duration_seconds)
+                    if isinstance(data.get("tool_calls"), int):
+                        tool_calls = int(data.get("tool_calls"))
+                    iteration_status = str(data.get("status") or "").strip().lower()
+                elif event_name == "status" and isinstance(getattr(event, "data", None), dict):
+                    status_msg = str((event.data or {}).get("message") or "").strip()
+                    if status_msg:
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] INFO: {status_msg[:300]}")
+        finally:
+            if _rl_handle:
+                try:
+                    _rl_ts_end = time.strftime("%H:%M:%S", time.gmtime())
+                    _rl_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_calls} tool calls) ===\n")
+                    _rl_handle.close()
+                except Exception:
+                    pass
         if duration_seconds <= 0:
             duration_seconds = round(max(0.0, time.time() - started), 3)
         text_window = "\n".join(text_tail).lower()

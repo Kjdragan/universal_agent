@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 from contextvars import ContextVar
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.constants import DISALLOWED_TOOLS, PRIMARY_ONLY_BLOCKED_TOOLS
-_TOOL_EVENT_START_TS: Optional[float] = None
+_TOOL_EVENT_START_TS: ContextVar[Optional[float]] = ContextVar("_TOOL_EVENT_START_TS", default=None)
 
 # -----------------------------------------------------------------------------
 
@@ -77,8 +77,12 @@ _RESEARCH_PIPELINE_SEARCH_MARKERS = (
     "gather information",
     "what happened",
     "news on",
-    "research",
     "look up",
+    "do some research",
+    "conduct research",
+    "research on ",
+    "research about",
+    "research this",
 )
 
 _RESEARCH_PIPELINE_REPORT_MARKERS = (
@@ -86,7 +90,8 @@ _RESEARCH_PIPELINE_REPORT_MARKERS = (
     "generate a report",
     "write a report",
     "research report",
-    "report",
+    "compile a report",
+    "put together a report",
 )
 
 _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
@@ -97,6 +102,32 @@ _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
     "send to me",
 )
 
+_YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
+    "youtu.be",
+    "youtube.com",
+    "youtube video",
+    "video id",
+    "transcript",
+    "captions",
+    "subtitles",
+)
+
+_YOUTUBE_INLINE_FETCH_MARKERS = (
+    "youtube_transcript_api",
+    "youtube-transcript-api",
+    "yt-dlp",
+    "yt_dlp",
+    "download_subtitles",
+    "get_metadata",
+    "youtu.be",
+    "youtube.com",
+)
+
+_YOUTUBE_SUBAGENT_ALIASES = {
+    "youtube-expert",
+    "youtube-explainer-expert",
+}
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -105,8 +136,7 @@ def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None
 
 def set_event_start_ts(start_ts: Optional[float]) -> None:
     """Set the start timestamp for time_offset calculation."""
-    global _TOOL_EVENT_START_TS
-    _TOOL_EVENT_START_TS = start_ts
+    _TOOL_EVENT_START_TS.set(start_ts)
 
 
 def reset_tool_event_tracking() -> None:
@@ -135,9 +165,10 @@ def _emit_event(event: AgentEvent) -> None:
 
 
 def _tool_time_offset() -> float:
-    if _TOOL_EVENT_START_TS is None:
+    _ts = _TOOL_EVENT_START_TS.get()
+    if _ts is None:
         return 0.0
-    return round(time.time() - _TOOL_EVENT_START_TS, 3)
+    return round(time.time() - _ts, 3)
 
 
 def _normalize_tool_use_id(tool_use_id: object, input_data: Optional[dict] = None) -> str:
@@ -286,6 +317,19 @@ def _looks_like_explicit_vp_intent(text: Any) -> bool:
     return any(pattern.search(candidate) for pattern in _VP_EXPLICIT_INTENT_PATTERNS)
 
 
+_RESEARCH_PIPELINE_MEDIA_EXCLUSIONS = (
+    "youtu.be",
+    "youtube.com",
+    "transcript",
+    "youtube video",
+    "subtitles",
+    "captions",
+    "download video",
+    "video id",
+    "podcast",
+)
+
+
 def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     candidate = str(text or "").strip().lower()
     if not candidate:
@@ -293,9 +337,22 @@ def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
     has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
     has_delivery = any(marker in candidate for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
+    # Avoid false positives for media-only requests (e.g., "get transcript").
+    # Mixed requests that include media plus broader research/report instructions
+    # should still trigger research delegation.
+    has_media_hint = any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS)
+    if has_media_hint and not (has_search or has_report or has_delivery):
+        return False
     # Information-gathering requests should route through specialists, with
     # report/delivery requests treated as a stronger signal.
     return has_search or has_report or has_delivery
+
+
+def _looks_like_youtube_transcript_intent(text: Any) -> bool:
+    candidate = str(text or "").strip().lower()
+    if not candidate:
+        return False
+    return any(marker in candidate for marker in _YOUTUBE_TRANSCRIPT_INTENT_MARKERS)
 
 
 def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Optional[str]) -> bool:
@@ -515,10 +572,16 @@ class AgentHookSet:
         self._vp_dispatch_seen_this_turn = False
         self._requires_research_delegate_first = False
         self._research_delegate_seen_this_turn = False
+        self._requires_youtube_skill_first = False
+        self._youtube_skill_seen_this_turn = False
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
             "/agent_run_workspaces/vp_" in workspace_norm
             and "/vp-mission-" in workspace_norm
+        )
+        self._is_cron_lane = (
+            "/agent_run_workspaces/cron_" in workspace_norm
+            or os.getenv("UA_RUN_SOURCE", "").strip().lower() == "cron"
         )
 
     def build_hooks(self) -> dict:
@@ -545,6 +608,7 @@ class AgentHookSet:
                         self.on_pre_bash_warn_dependency_installs,
                         self.on_pre_bash_block_composio_sdk,
                         self.on_pre_bash_block_playwright_non_html,
+                        self.on_pre_bash_redirect_pdf_conversion,
                         self.on_pre_bash_skill_hint,
                     ],
                 ),
@@ -738,10 +802,16 @@ class AgentHookSet:
         tool_input = input_data.get("tool_input", {}) or {}
         if not isinstance(tool_input, dict):
             tool_input = {}
+        requested_skill = ""
+        delegated_subagent = ""
         try:
             normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
         except Exception:
             normalized_tool_name = tool_name.lower()
+        if normalized_tool_name == "skill":
+            requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
+        elif normalized_tool_name == "task":
+            delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
 
         # Track transcript paths to detect sub-agent context.
         # The first transcript_path seen is the primary agent's; subsequent
@@ -756,7 +826,66 @@ class AgentHookSet:
         if normalized_tool_name == "vp_dispatch_mission":
             self._vp_dispatch_seen_this_turn = True
 
+        if normalized_tool_name == "skill":
+            if requested_skill == "youtube-transcript-metadata":
+                self._youtube_skill_seen_this_turn = True
+
         is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+
+        if (
+            self._requires_youtube_skill_first
+            and not self._youtube_skill_seen_this_turn
+            and not self._is_vp_worker_lane
+            and not self._is_cron_lane
+        ):
+            is_mcp_youtube_direct = tool_name.lower().startswith("mcp__youtube__")
+            if is_mcp_youtube_direct:
+                logfire.info(
+                    "youtube_mcp_blocked_prefer_skill",
+                    tool_name=tool_name,
+                    run_id=self.run_id,
+                )
+                return {
+                    "systemMessage": (
+                        "⚠️ YouTube transcript workflow detected.\n\n"
+                        "Do not call `mcp__youtube__*` tools before the skill — direct calls frequently fail "
+                        "bot detection on cloud IPs.\n"
+                        "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` instead. "
+                        "It uses the hardened proxy-backed transcript+metadata path and is the correct tool here."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "youtube-transcript-metadata skill must be called before any mcp__youtube__ tool."
+                        ),
+                    },
+                }
+            if normalized_tool_name == "bash":
+                command, _, _ = _extract_bash_command(input_data)
+                lowered_command = command.lower()
+                if any(marker in lowered_command for marker in _YOUTUBE_INLINE_FETCH_MARKERS):
+                    logfire.info(
+                        "youtube_bash_blocked_prefer_skill",
+                        run_id=self.run_id,
+                    )
+                    return {
+                        "systemMessage": (
+                            "⚠️ YouTube transcript workflow detected.\n\n"
+                            "Do not run inline YouTube extraction via Bash before the skill.\n"
+                            "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` first, then continue "
+                            "with downstream research/reporting."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": (
+                                "youtube-transcript-metadata skill must run before inline Bash YouTube extraction."
+                            ),
+                        },
+                    }
         if (
             self._requires_vp_tool_path
             and not self._vp_dispatch_seen_this_turn
@@ -824,18 +953,41 @@ class AgentHookSet:
             and not self._research_delegate_seen_this_turn
             and not is_subagent_context
             and not self._is_vp_worker_lane
+            and not self._is_cron_lane
         ):
+            # Mixed YouTube+research turns must allow ingestion to happen before
+            # the research-specialist handoff. Otherwise the turn deadlocks:
+            # research guard blocks YouTube skill/subagent, and YouTube guard
+            # blocks direct YouTube tool usage.
+            allows_youtube_ingestion_step = (
+                self._requires_youtube_skill_first
+                and (
+                    (normalized_tool_name == "skill" and requested_skill == "youtube-transcript-metadata")
+                    or (normalized_tool_name == "task" and delegated_subagent in _YOUTUBE_SUBAGENT_ALIASES)
+                )
+            )
+            if allows_youtube_ingestion_step:
+                return {}
+
             if normalized_tool_name == "task":
-                delegated = str(tool_input.get("subagent_type", "") or "").strip().lower()
-                if delegated == "research-specialist":
+                if delegated_subagent == "research-specialist":
                     self._research_delegate_seen_this_turn = True
                 else:
+                    ordering_hint = (
+                        "\nFor mixed YouTube + research turns, run YouTube ingestion first with either "
+                        "`Task(subagent_type='youtube-expert', ...)` or "
+                        "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
+                        "then delegate to `research-specialist`."
+                        if self._requires_youtube_skill_first
+                        else ""
+                    )
                     return {
                         "systemMessage": (
                             "⚠️ Report-style research workflow detected.\n\n"
                             "First tool call in this turn must be "
                             "`Task(subagent_type='research-specialist', ...)`.\n"
                             "Do not delegate to another specialist before the research handoff."
+                            + ordering_hint
                         ),
                         "decision": "block",
                         "hookSpecificOutput": {
@@ -847,12 +999,21 @@ class AgentHookSet:
                         },
                     }
             else:
+                ordering_hint = (
+                    "\nFor mixed YouTube + research turns, run YouTube ingestion first with either "
+                    "`Task(subagent_type='youtube-expert', ...)` or "
+                    "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
+                    "then delegate to `research-specialist`."
+                    if self._requires_youtube_skill_first
+                    else ""
+                )
                 return {
                     "systemMessage": (
                         "⚠️ Report-style research workflow detected.\n\n"
                         "First tool call in this turn must be "
                         "`Task(subagent_type='research-specialist', ...)`.\n"
                         "Direct search/tool execution is blocked until that delegation occurs."
+                        + ordering_hint
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -1055,9 +1216,9 @@ class AgentHookSet:
                 "systemMessage": (
                     "⚠️ BLOCK: Do not use the `composio` Python SDK or CLI directly from Bash. "
                     "Your environment is NOT configured for direct SDK usage.\n"
-                    "✅ REQUIRED PATH (attachments):\n"
-                    "1) Upload local file with `mcp__internal__upload_to_composio({path, tool_slug:'GMAIL_SEND_EMAIL', toolkit_slug:'gmail'})`\n"
-                    "2) Send with `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` using `GMAIL_SEND_EMAIL` and the returned `attachment.s3key`\n"
+                    "✅ REQUIRED PATH:\n"
+                    "- For Gmail/Calendar/Drive/Sheets: use `mcp__gws__*` tools (gws MCP server)\n"
+                    "- For other Composio services (Slack, GitHub, etc.): use `mcp__composio__*` tools\n"
                     "Use MCP tools only; they are pre-authenticated and reliable."
                 ),
                 "decision": "block",
@@ -1099,6 +1260,59 @@ class AgentHookSet:
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": "Playwright PDF conversion without explicit HTML input.",
+            },
+        }
+
+    async def on_pre_bash_redirect_pdf_conversion(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        PreToolUse Hook: Redirect Bash-based HTML-to-PDF conversion attempts
+        to the dedicated `mcp__internal__html_to_pdf` MCP tool.
+        Catches chrome --headless, wkhtmltopdf, and weasyprint invocations.
+        """
+        command, _, _ = _extract_bash_command(input_data)
+        command_lower = command.lower()
+
+        if "pdf" not in command_lower:
+            return {}
+
+        pdf_conversion_patterns = [
+            "google-chrome",
+            "chromium",
+            "--print-to-pdf",
+            "wkhtmltopdf",
+            "weasyprint",
+            "write_pdf",
+            "html().write_pdf",
+            "from weasyprint",
+            "import weasyprint",
+        ]
+
+        if not any(pattern in command_lower for pattern in pdf_conversion_patterns):
+            return {}
+
+        emit_status_event("Hook: redirecting Bash PDF conversion to html_to_pdf MCP tool", level="WARNING", prefix="Hook")
+        logfire.warning(
+            "bash_pdf_conversion_redirected",
+            command_preview=command[:200],
+            tool_use_id=str(tool_use_id),
+        )
+        return {
+            "systemMessage": (
+                "⚠️ REDIRECT: Use the dedicated MCP tool for HTML→PDF conversion instead of Bash.\n\n"
+                "✅ CORRECT approach:\n"
+                "```\n"
+                "mcp__internal__html_to_pdf(html_path=\"<path/to/report.html>\", output_path=\"<path/to/report.pdf>\")\n"
+                "```\n"
+                "This tool handles browser/WeasyPrint fallback automatically and resolves workspace paths correctly.\n"
+                "You can call it once per HTML file. It is faster and more reliable than manual Bash conversion."
+            ),
+            "decision": "block",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Bash PDF conversion redirected to html_to_pdf MCP tool.",
             },
         }
 
@@ -1160,8 +1374,16 @@ class AgentHookSet:
             _looks_like_research_report_pipeline_intent(prompt_text)
             and not self._requires_vp_tool_path
             and not self._is_vp_worker_lane
+            and not self._is_cron_lane
         )
         self._research_delegate_seen_this_turn = False
+        self._requires_youtube_skill_first = (
+            _looks_like_youtube_transcript_intent(prompt_text)
+            and not self._requires_vp_tool_path
+            and not self._is_vp_worker_lane
+            and not self._is_cron_lane
+        )
+        self._youtube_skill_seen_this_turn = False
 
         # Reset counters for the new user turn
         self._current_turn_tool_count = 0
@@ -1270,9 +1492,20 @@ class AgentHookSet:
             return {}
 
         try:
+            prefix_parts: list[str] = []
+
+            # UV_CACHE_DIR injection is independent of workspace — always apply
+            # so uv run commands never inherit a stale/wrong path from the env.
+            if "uv run" in command and "UV_CACHE_DIR=" not in command:
+                prefix_parts.append("export UV_CACHE_DIR=/tmp/uv_cache")
+
             ws = get_current_workspace() or self.workspace_dir or ""
             if not ws:
-                return {}
+                if not prefix_parts:
+                    return {}
+                updated_command = "; ".join(prefix_parts) + "; " + command
+                return _build_bash_command_update(command_source, tool_input, updated_command)
+
             from universal_agent.artifacts import resolve_artifacts_dir
 
             artifacts_root = str(resolve_artifacts_dir())
@@ -1295,7 +1528,6 @@ class AgentHookSet:
             auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
             auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
 
-            prefix_parts: list[str] = []
             if "CURRENT_SESSION_WORKSPACE=" not in command:
                 prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
             if "UA_ARTIFACTS_DIR=" not in command:

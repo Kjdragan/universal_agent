@@ -16,6 +16,7 @@ import yaml
 
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.runtime_role import resolve_factory_role
+from universal_agent.feature_flags import coder_vp_enabled
 
 from composio import Composio
 from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher
@@ -102,7 +103,7 @@ class AgentSetup:
         
         # Factory Role assignment (finalized fallback policy lives in runtime_role)
         self.factory_role = resolve_factory_role().value
-        self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
+        self.enable_vp_coder = coder_vp_enabled()
         
         self.run_id = str(uuid.uuid4())
         self.src_dir = _get_src_dir()
@@ -164,7 +165,7 @@ class AgentSetup:
 
         bootstrap_state = bootstrap_runtime_environment()
         self.factory_role = bootstrap_state.policy.role
-        self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
+        self.enable_vp_coder = coder_vp_enabled()
 
         # Ensure workspace directories exist
         self._setup_workspace_dirs()
@@ -467,7 +468,9 @@ class AgentSetup:
 
     def _build_mcp_servers(self) -> dict:
         """Build MCP servers configuration."""
-        return {
+        from universal_agent.services.gws_mcp_bridge import build_gws_mcp_server_config
+
+        servers = {
             "composio": {
                 "type": "http",
                 "url": self._session.mcp.url,
@@ -529,6 +532,13 @@ class AgentSetup:
             },
         }
 
+        # Google Workspace CLI MCP server (feature-gated)
+        gws_config = build_gws_mcp_server_config()
+        if gws_config is not None:
+            servers["gws"] = gws_config
+
+        return servers
+
     def _generate_capabilities_doc(self) -> None:
         """
         Generate a comprehensive capabilities registry (capabilities.md) in the workspace.
@@ -551,7 +561,7 @@ class AgentSetup:
                     "playwright",
                     "chrome",
                 ],
-                "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "professor", "scribe"],
+                "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "csi-trend-analyst", "professor", "scribe"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
                 "⚙️ Engineering & Code": ["task-decomposer", "code-writer", "codeinterpreter", "github"],
                 "🏢 Operations & Communication": [
@@ -700,7 +710,21 @@ class AgentSetup:
                 lines.append("- No skills discovered.")
             lines.append("")
 
-            # 3. TOOLKITS (By Domain)
+            # 3a. GWS MCP TOOLS (when enabled)
+            from universal_agent.feature_flags import gws_cli_enabled
+            if gws_cli_enabled():
+                lines.append("### 📧 Google Workspace (gws MCP — Primary Path)")
+                lines.append("Google Workspace operations use `mcp__gws__*` tools via the gws CLI MCP server.")
+                lines.append("- **Gmail**: Send, draft, triage, list, read (`mcp__gws__gmail.*`)")
+                lines.append("- **Calendar**: Events, agenda, scheduling (`mcp__gws__calendar.*`)")
+                lines.append("- **Drive**: Upload, download, manage files (`mcp__gws__drive.*`)")
+                lines.append("- **Sheets**: Read/write spreadsheet data (`mcp__gws__sheets.*`)")
+                lines.append("- **Docs**: Create/edit documents (`mcp__gws__docs.*`)")
+                lines.append("")
+                lines.append("**Important**: For Gmail attachments, pass local file paths directly — no `upload_to_composio` step needed.")
+                lines.append("")
+
+            # 3b. TOOLKITS (By Domain)
             lines.append("### 🛠 Toolkits & Capabilities")
             
             # Combine Core + Connected for sorting

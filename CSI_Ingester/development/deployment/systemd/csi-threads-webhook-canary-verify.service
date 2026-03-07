@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify Threads webhook end-to-end canary (verify + signed ingest)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=-/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_threads_webhook_smoke.py --base-url https://app.clearspringcg.com --verify --ingest --fixed-media-id --write-json /opt/universal_agent/artifacts/csi/threads_webhook_canary_verify/latest.json
+StandardOutput=journal
+StandardError=journal

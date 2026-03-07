@@ -50,6 +50,14 @@ from universal_agent.tools.x_trends_bridge import x_trends_posts_wrapper
 # Reddit (Composio-backed) compact structured output
 from universal_agent.tools.reddit_bridge import reddit_top_posts_wrapper
 
+# CSI bridge tools (read-only CSI reports/opportunities/health/watchlist snapshots)
+from universal_agent.tools.csi_bridge import (
+    csi_recent_reports_wrapper,
+    csi_opportunity_bundles_wrapper,
+    csi_source_health_wrapper,
+    csi_watchlist_snapshot_wrapper,
+)
+
 # Todoist task + brainstorm pipeline tools
 from universal_agent.tools.todoist_bridge import (
     todoist_setup_wrapper,
@@ -97,6 +105,10 @@ def get_core_internal_tools() -> List[Callable]:
         batch_tool_execute_wrapper,
         x_trends_posts_wrapper,
         reddit_top_posts_wrapper,
+        csi_recent_reports_wrapper,
+        csi_opportunity_bundles_wrapper,
+        csi_source_health_wrapper,
+        csi_watchlist_snapshot_wrapper,
         todoist_setup_wrapper,
         todoist_query_wrapper,
         todoist_get_task_wrapper,

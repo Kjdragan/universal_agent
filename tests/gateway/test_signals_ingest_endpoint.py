@@ -173,8 +173,8 @@ def test_signals_ingest_csi_analytics_dispatches_internal_action(client, monkeyp
     assert body["analytics_internal_dispatches"] == 1
     assert hook_stub.calls == []
     assert len(hook_stub.action_calls) >= 1
-    assert hook_stub.action_calls[0]["to"] == "trend-specialist"
-    assert hook_stub.action_calls[0]["session_key"] == "csi_trend_specialist"
+    assert hook_stub.action_calls[0]["to"] == "csi-trend-analyst"
+    assert hook_stub.action_calls[0]["session_key"] == "csi_trend_analyst"
 
 
 def test_signals_ingest_csi_analytics_throttles_noisy_events(client, monkeypatch):
@@ -628,6 +628,8 @@ def test_signals_ingest_emerging_requests_followup_and_records_loop(client, monk
     assert len(hook_stub.action_calls) >= 1
     followup_calls = [call for call in hook_stub.action_calls if str(call.get("name") or "") == "CSITrendFollowUpRequest"]
     assert followup_calls
+    assert all(call.get("to") == "csi-trend-analyst" for call in followup_calls)
+    assert all(call.get("session_key") == "csi_trend_analyst" for call in followup_calls)
 
     kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
     assert "csi_specialist_followup_requested" in kinds or "csi_specialist_confidence_reached" in kinds

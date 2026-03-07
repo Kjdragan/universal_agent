@@ -49,6 +49,7 @@ from universal_agent.delegation.redis_bus import (
     MISSION_STREAM,
     RedisMissionBus,
 )
+from universal_agent.delegation.factory_registry import FactoryRegistry, connect_registry_db
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 
 from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
@@ -63,7 +64,7 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled
+from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled, coder_vp_enabled
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_activity_db_path
 from universal_agent.durable.migrations import ensure_schema
@@ -105,6 +106,8 @@ from universal_agent.work_threads import (
 )
 from universal_agent.hooks_service import HooksService
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.services.gws_event_listener import GwsEventListener
+from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services import tutorial_telegram_notifier
 from universal_agent import process_heartbeat
 from universal_agent.security_paths import (
@@ -818,7 +821,7 @@ def _factory_capabilities_payload() -> dict[str, Any]:
         "heartbeat_scope": _FACTORY_POLICY.heartbeat_scope,
         "start_ui": bool(_FACTORY_POLICY.start_ui),
         "enable_telegram_poll": bool(_FACTORY_POLICY.enable_telegram_poll),
-        "enable_vp_coder": str(os.getenv("ENABLE_VP_CODER", "true")).strip().lower() == "true",
+        "enable_vp_coder": coder_vp_enabled(),
         "llm_provider_override": provider_override or None,
         "redis_delegation_enabled": bool(_delegation_bus_enabled and _delegation_mission_bus is not None),
         "redis_stream_name": _delegation_bus_stream if _delegation_bus_enabled else None,
@@ -851,18 +854,30 @@ def _factory_capability_labels() -> list[str]:
 
 
 def _upsert_factory_registration(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    # Fill in defaults from gateway's own identity when fields are missing
+    enriched = dict(payload)
+    enriched.setdefault("factory_id", _FACTORY_ID)
+    if not str(enriched.get("factory_id") or "").strip():
+        enriched["factory_id"] = _FACTORY_ID
+    enriched.setdefault("factory_role", _FACTORY_POLICY.role)
+    enriched.setdefault("deployment_profile", _DEPLOYMENT_PROFILE)
+
+    # Use SQLite-backed registry if available, else fall back to in-memory dict
+    if _factory_registry is not None:
+        return _factory_registry.upsert(enriched, source=source)
+
+    # Legacy in-memory fallback (only before lifespan init)
     now_iso = datetime.now(timezone.utc).isoformat()
-    factory_id = str(payload.get("factory_id") or "").strip() or _FACTORY_ID
-    role = str(payload.get("factory_role") or payload.get("role") or _FACTORY_POLICY.role).strip() or _FACTORY_POLICY.role
+    factory_id = str(enriched["factory_id"]).strip()
     record = {
         "factory_id": factory_id,
-        "factory_role": role,
-        "deployment_profile": str(payload.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip() or _DEPLOYMENT_PROFILE,
+        "factory_role": str(enriched.get("factory_role") or "UNKNOWN").strip(),
+        "deployment_profile": str(enriched.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip(),
         "source": source,
-        "registration_status": str(payload.get("registration_status") or "online").strip() or "online",
-        "heartbeat_latency_ms": payload.get("heartbeat_latency_ms"),
-        "capabilities": payload.get("capabilities") if isinstance(payload.get("capabilities"), list) else [],
-        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "registration_status": str(enriched.get("registration_status") or "online").strip() or "online",
+        "heartbeat_latency_ms": enriched.get("heartbeat_latency_ms"),
+        "capabilities": enriched.get("capabilities") if isinstance(enriched.get("capabilities"), list) else [],
+        "metadata": enriched.get("metadata") if isinstance(enriched.get("metadata"), dict) else {},
         "last_seen_at": now_iso,
         "updated_at": now_iso,
     }
@@ -1086,6 +1101,17 @@ async def _run_tutorial_review_job(
             },
         )
 
+
+def _telegram_allowed_user_ids_raw() -> str:
+    primary = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if primary:
+        return primary
+    legacy = (os.getenv("ALLOWED_USER_IDS") or "").strip()
+    if legacy:
+        logger.warning("ALLOWED_USER_IDS is deprecated; use TELEGRAM_ALLOWED_USER_IDS instead")
+    return legacy
+
+
 # 2. Allowlist Configuration
 ALLOWED_USERS = set()
 _allowed_users_str = os.getenv("UA_ALLOWED_USERS", "").strip()
@@ -1098,7 +1124,7 @@ if _allowed_users_str:
         (os.getenv("DEFAULT_USER_ID") or "").strip(),
         (os.getenv("UA_DASHBOARD_OWNER_ID") or "").strip(),
     }
-    _telegram_allowed = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    _telegram_allowed = _telegram_allowed_user_ids_raw()
     if _telegram_allowed:
         _runtime_identity_candidates.update(
             {item.strip() for item in _telegram_allowed.split(",") if item.strip()}
@@ -1531,6 +1557,8 @@ _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
 _yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
+_gws_event_listener: Optional[GwsEventListener] = None
+_agentmail_service: Optional[AgentMailService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -1657,8 +1685,13 @@ _delegation_metrics: dict[str, Any] = {
     "last_publish_at": None,
     "published_total": 0,
 }
-_factory_registration_lock = threading.Lock()
-_factory_registrations: dict[str, dict[str, Any]] = {}
+_factory_registration_lock = threading.Lock()  # kept for backward compat; registry is thread-safe internally
+_factory_registrations: dict[str, dict[str, Any]] = {}  # legacy fallback if registry not yet initialized
+_factory_registry: Optional[FactoryRegistry] = None  # SQLite-backed; initialized in lifespan
+_factory_staleness_task: Optional[asyncio.Task] = None
+_factory_staleness_stop: Optional[asyncio.Event] = None
+_hq_self_heartbeat_task: Optional[asyncio.Task] = None
+_hq_self_heartbeat_stop: Optional[asyncio.Event] = None
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -2931,6 +2964,15 @@ def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
         except Exception:
             session = None
     if not session:
+        # Disk fallback: if workspace directory exists under WORKSPACES_DIR, use it.
+        try:
+            from universal_agent.security_paths import validate_session_id as _vsid
+            safe_id = _vsid(session_id)
+            candidate = WORKSPACES_DIR / safe_id
+            if candidate.is_dir():
+                return candidate
+        except Exception:
+            pass
         return None
     workspace = Path(str(session.workspace_dir or "")).expanduser()
     if not str(workspace):
@@ -3293,8 +3335,12 @@ def _csi_is_high_value_event(event_type: str) -> bool:
     return lowered in {
         "rss_trend_report",
         "reddit_trend_report",
+        "threads_trend_report",
         "rss_insight_emerging",
         "rss_insight_daily",
+        "global_trend_brief_ready",
+        "csi_global_brief_review_due",
+        "rss_quality_gate_alert",
         "report_product_ready",
         "opportunity_bundle_ready",
         "delivery_health_auto_remediation_failed",
@@ -3359,10 +3405,12 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         (has_anomaly and event_type != "delivery_health_recovered")
         or event_type in {
             "rss_insight_daily",
+            "rss_quality_gate_alert",
             "report_product_ready",
             "opportunity_bundle_ready",
             "rss_trend_report",
             "reddit_trend_report",
+            "threads_trend_report",
             "delivery_health_regression",
             "delivery_reliability_slo_breached",
         }
@@ -3378,6 +3426,86 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     }
 
 
+def classify_csi_project_key(
+    event_type: str,
+    subject: Any,
+    quality: Any,
+    source_mix: Any,
+) -> str:
+    """Classify CSI-driven Todoist tasks into one of the 5 UA project keys."""
+    event_type_l = str(event_type or "").strip().lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+    quality_obj = quality if isinstance(quality, dict) else {}
+    mix_obj = source_mix if isinstance(source_mix, dict) else {}
+
+    text_parts: list[str] = [event_type_l]
+    for key in (
+        "report_type",
+        "report_key",
+        "title",
+        "summary",
+        "recommendation",
+        "action",
+    ):
+        value = subject_obj.get(key)
+        if isinstance(value, str) and value.strip():
+            text_parts.append(value.strip().lower())
+    tags = subject_obj.get("tags")
+    if isinstance(tags, list):
+        text_parts.extend(str(item).strip().lower() for item in tags if str(item).strip())
+    full_text = " ".join(text_parts)
+
+    if event_type_l in {
+        "delivery_health_regression",
+        "delivery_reliability_slo_breached",
+        "delivery_health_auto_remediation_failed",
+    } or any(token in full_text for token in ("outage", "regression", "failing", "incident", "breach", "degraded")):
+        return "immediate"
+
+    if any(token in full_text for token in ("memory", "profile", "knowledge gap", "knowledge_gap")):
+        return "memory"
+
+    mission_score = float(subject_obj.get("mission_relevance_score") or 0.0)
+    if mission_score < 0.0:
+        mission_score = 0.0
+    if mission_score > 1.0:
+        mission_score = 1.0
+    if bool(subject_obj.get("mission_aligned")) or mission_score >= 0.75:
+        return "mission"
+    if any(token in full_text for token in ("mission", "identity", "values", "north star", "strategy", "strategic")):
+        return "mission"
+
+    if event_type_l in {
+        "rss_insight_emerging",
+        "analysis_task_requested",
+        "analysis_task_completed",
+        "rss_quality_gate_alert",
+        "category_quality_report",
+    }:
+        return "proactive"
+    if quality_obj.get("status") in {"warning", "needs_followup"}:
+        return "proactive"
+    if float(quality_obj.get("score") or 0.0) > 0 and float(quality_obj.get("score") or 0.0) < 0.6:
+        return "proactive"
+    if any(
+        key in mix_obj
+        for key in (
+            "youtube_channel_rss",
+            "reddit_discovery",
+            "threads_owned",
+            "threads_trends_seeded",
+            "threads_trends_broad",
+        )
+    ) and event_type_l in {
+        "opportunity_bundle_ready",
+        "report_product_ready",
+    }:
+        # Normal CSI research/refinement work lands here unless promoted to mission.
+        return "csi"
+
+    return "csi"
+
+
 def _csi_source_bucket(event: Any) -> str:
     event_type = str(getattr(event, "event_type", "") or "").strip().lower()
     source = str(getattr(event, "source", "") or "").strip().lower()
@@ -3385,6 +3513,8 @@ def _csi_source_bucket(event: Any) -> str:
     subject_obj = subject if isinstance(subject, dict) else {}
     report_type = str(subject_obj.get("report_type") or event_type).strip().lower()
     text = " ".join([event_type, source, report_type])
+    if "threads" in text:
+        return "threads"
     if "reddit" in text:
         return "reddit"
     if "rss" in text:
@@ -4486,6 +4616,39 @@ async def _vp_event_bridge_loop() -> None:
             await asyncio.wait_for(stop_event.wait(), timeout=_vp_event_bridge_interval_seconds)
         except asyncio.TimeoutError:
             continue
+
+
+async def _factory_staleness_enforcement_loop(stop_event: asyncio.Event) -> None:
+    """Periodically mark stale/offline factory registrations."""
+    _staleness_interval = 60.0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_staleness_interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        if _factory_registry is not None:
+            try:
+                _factory_registry.enforce_staleness()
+            except Exception as exc:
+                logger.warning("Factory staleness enforcement failed: %s", exc)
+
+
+async def _hq_self_heartbeat_loop(stop_event: asyncio.Event) -> None:
+    """Periodically refresh HQ's own factory registration so it stays 'online'."""
+    _hq_heartbeat_interval = 60.0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_hq_heartbeat_interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            _register_local_factory_presence()
+        except Exception as exc:
+            logger.warning("HQ self-heartbeat failed: %s", exc)
 
 
 def _activity_json_dumps(value: Any, *, fallback: str = "{}") -> str:
@@ -5732,8 +5895,8 @@ async def _csi_dispatch_specialist_followup(
         {
             "kind": "agent",
             "name": "CSITrendFollowUpRequest",
-            "session_key": "csi_trend_specialist",
-            "to": "trend-specialist",
+            "session_key": "csi_trend_analyst",
+            "to": "csi-trend-analyst",
             "message": message,
             "timeout_seconds": int(max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))),
         }
@@ -6311,8 +6474,11 @@ def _activity_digest_should_compact(
     if event_type in {
         "rss_trend_report",
         "reddit_trend_report",
+        "threads_trend_report",
         "rss_insight_daily",
         "rss_insight_emerging",
+        "global_trend_brief_ready",
+        "csi_global_brief_review_due",
         "report_product_ready",
         "opportunity_bundle_ready",
     }:
@@ -7140,7 +7306,7 @@ def _calendar_project_cron_events(
                 "source": "cron",
                 "source_ref": str(job.job_id),
                 "owner_id": str(job.user_id),
-                "session_id": str(metadata.get("session_id") or workspace_session_id or ""),
+                "session_id": str(workspace_session_id or metadata.get("session_id") or ""),
                 "channel": str(metadata.get("channel") or "cron"),
                 "title": str(metadata.get("title") or f"Chron: {str(job.command)[:40]}"),
                 "description": str(job.command),
@@ -7163,6 +7329,8 @@ def _calendar_project_cron_events(
             if matched_run:
                 event["run_status"] = matched_run.get("status")
                 event["run_id"] = matched_run.get("run_id")
+                if matched_run.get("session_id"):
+                    event["session_id"] = str(matched_run["session_id"])
             if status_value == "missed":
                 if scheduled_at < (now_ts - 48 * 3600):
                     continue
@@ -7650,7 +7818,19 @@ async def _calendar_apply_event_action(
                 "path": f"/api/v1/ops/logs/tail?path=cron_runs.jsonl",
             }
         if action_norm == "open_session":
-            session_id = str((job.metadata or {}).get("session_id") or "")
+            _source, _ref, scheduled_at_int = _calendar_parse_event_id(event_id)
+            runs = _cron_service.list_runs(limit=2000)
+            matched = _calendar_match_cron_run(
+                [r for r in runs if str(r.get("job_id") or "") == source_ref], float(scheduled_at_int)
+            )
+            ws_dir = str(getattr(job, "workspace_dir", "") or "")
+            ws_session_id = Path(ws_dir).name if ws_dir else ""
+            session_id = str(
+                (matched or {}).get("session_id")
+                or ws_session_id
+                or (job.metadata or {}).get("session_id")
+                or ""
+            )
             return {"status": "ok", "action": action_norm, "session_id": session_id}
 
     if source == "heartbeat":
@@ -8276,6 +8456,22 @@ async def lifespan(app: FastAPI):
             _delegation_metrics["last_error"] = str(exc)
             logger.warning("Delegation Redis bus unavailable; falling back to http queue: %s", exc)
 
+    # Initialize SQLite-backed factory registry (survives gateway restarts)
+    global _factory_registry, _factory_staleness_task, _factory_staleness_stop
+    global _hq_self_heartbeat_task, _hq_self_heartbeat_stop
+    try:
+        _registry_conn = connect_registry_db()
+        _factory_registry = FactoryRegistry(_registry_conn)
+        # Migrate any registrations that were inserted before lifespan (unlikely but safe)
+        with _factory_registration_lock:
+            for _fid, _frec in _factory_registrations.items():
+                _factory_registry.upsert(_frec, source=str(_frec.get("source", "migrated")))
+            _factory_registrations.clear()
+        logger.info("🗄️ Factory registry initialized (SQLite-backed, persistent)")
+    except Exception as exc:
+        logger.warning("Factory registry SQLite init failed, using in-memory fallback: %s", exc)
+        _factory_registry = None
+
     _register_local_factory_presence()
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     
@@ -8300,7 +8496,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher
+    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     global _todoist_chron_reconcile_task, _todoist_chron_reconcile_stop_event
     if HEARTBEAT_ENABLED:
@@ -8384,6 +8580,37 @@ async def lifespan(app: FastAPI):
     )
     await _yt_playlist_watcher.start()
 
+    # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
+    async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_payload(
+            subpath=subpath, payload=payload, headers={"x-ua-source": "gws_event_listener"}
+        )
+
+    _gws_event_listener = GwsEventListener(
+        dispatch_fn=_gws_event_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    await _gws_event_listener.start()
+
+    # --- AgentMail Service (Simone's native inbox) ---
+    global _agentmail_service
+
+    async def _agentmail_dispatch_fn(action_payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_action(action_payload)
+
+    _agentmail_service = AgentMailService(
+        dispatch_fn=_agentmail_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    try:
+        await _agentmail_service.startup()
+    except Exception:
+        logger.exception("Failed starting AgentMail service")
+
     try:
         recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
     except Exception:
@@ -8424,6 +8651,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("⏸️ VP event bridge disabled (UA_VP_EVENT_BRIDGE_ENABLED)")
 
+    # --- Factory staleness enforcement (marks stale/offline registrations) ---
+    if _factory_registry is not None:
+        _factory_staleness_stop = asyncio.Event()
+        _factory_staleness_task = asyncio.create_task(
+            _factory_staleness_enforcement_loop(_factory_staleness_stop)
+        )
+        logger.info("🏭 Factory staleness enforcement enabled (interval=60s)")
+
+    # --- HQ self-heartbeat (keeps HQ's own registration fresh) ---
+    _hq_self_heartbeat_stop = asyncio.Event()
+    _hq_self_heartbeat_task = asyncio.create_task(
+        _hq_self_heartbeat_loop(_hq_self_heartbeat_stop)
+    )
+    logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
+
     yield
     
     # Cleanup
@@ -8445,8 +8687,26 @@ async def lifespan(app: FastAPI):
             pass
         _todoist_chron_reconcile_task = None
     _todoist_chron_reconcile_stop_event = None
+    if _factory_staleness_stop is not None:
+        _factory_staleness_stop.set()
+    if _factory_staleness_task is not None:
+        try:
+            await _factory_staleness_task
+        except Exception:
+            pass
+    if _hq_self_heartbeat_stop is not None:
+        _hq_self_heartbeat_stop.set()
+    if _hq_self_heartbeat_task is not None:
+        try:
+            await _hq_self_heartbeat_task
+        except Exception:
+            pass
     if _yt_playlist_watcher:
         await _yt_playlist_watcher.stop()
+    if _gws_event_listener:
+        await _gws_event_listener.stop()
+    if _agentmail_service:
+        await _agentmail_service.shutdown()
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:
@@ -8663,12 +8923,12 @@ async def signals_ingest_endpoint(request: Request):
             _report_key = str(subject_obj.get("report_key") or "").strip()
             _artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else None
             _source = str(event.source or "").strip()
+            _source_mix: dict[str, int] = {}
 
             # Packet 16: compute report quality score
             _quality_result: dict[str, Any] | None = None
             try:
                 from universal_agent.csi_quality_score import score_report_quality
-                _source_mix: dict[str, int] = {}
                 for opp in (subject_obj.get("opportunities") or []):
                     if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
                         for k, v in opp["source_mix"].items():
@@ -8690,6 +8950,7 @@ async def signals_ingest_endpoint(request: Request):
                 "report_key": _report_key or None,
                 "artifact_paths": _artifact_paths,
                 "quality": _quality_result,
+                "source_mix": _source_mix,
                 "notification_policy": {
                     "high_value": bool(policy.get("high_value")),
                     "has_anomaly": bool(policy.get("has_anomaly")),
@@ -8861,8 +9122,8 @@ async def signals_ingest_endpoint(request: Request):
                     followup_payload = {
                         "kind": "agent",
                         "name": "CSITrendFollowUpRequest",
-                        "session_key": "csi_trend_specialist",
-                        "to": "trend-specialist",
+                        "session_key": "csi_trend_analyst",
+                        "to": "csi-trend-analyst",
                         "message": str(loop_state.get("followup_message") or ""),
                         "timeout_seconds": int(
                             max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))
@@ -8925,16 +9186,28 @@ async def signals_ingest_endpoint(request: Request):
                     from universal_agent.services.todoist_service import TodoService
 
                     todoist = TodoService()
+                    project_key = classify_csi_project_key(
+                        event_type=event_type_norm,
+                        subject=subject_obj,
+                        quality=_quality_result,
+                        source_mix=_source_mix,
+                    )
+                    section_by_project = {
+                        "immediate": "immediate",
+                        "proactive": "inbox",
+                    }
                     todoist.create_task(
                         content=title,
                         description=f"{message}\n\nReview in CSI Dashboard Tab.",
-                        labels=["CSI"],
+                        labels=["CSI", f"csi-project:{project_key}"],
                         priority="high",
-                        project_key="csi",
+                        section=section_by_project.get(project_key, "background"),
+                        project_key=project_key,
                     )
                 except Exception as exc:
                     exc_str = str(exc)
                     is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
+                    is_auth = any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
                     if is_limit:
                         logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
                         if not _has_recent_notification(
@@ -8953,23 +9226,48 @@ async def signals_ingest_endpoint(request: Request):
                                 severity="warning",
                                 metadata={"integration": "todoist", "reason": "items_limit_reached"},
                             )
+                    elif is_auth:
+                        logger.warning("Todoist auth failure (likely expired v2 token): %s", exc)
+                        if not _has_recent_notification(
+                            kind="system_error",
+                            metadata_match={"integration": "todoist", "reason": "auth_failure"},
+                            within_seconds=3600,
+                        ):
+                            _add_notification(
+                                kind="system_error",
+                                title="Todoist Auth Failed — Token Needs Regeneration",
+                                message=(
+                                    "Todoist API returns 401/403 on task creation. The current token "
+                                    "was generated for the v2 REST API (now deprecated). Generate a new "
+                                    "API token at https://app.todoist.com/app/settings/integrations/developer "
+                                    "and update TODOIST_API_TOKEN in Infisical. CSI signals are still "
+                                    "visible in the CSI Feed tab; only Todoist sync is affected."
+                                ),
+                                severity="error",
+                                metadata={"integration": "todoist", "reason": "auth_failure"},
+                            )
                     else:
                         logger.exception("Failed to create Todoist task for CSI signal")
-                        debug_info = (
-                            f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
-                            f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
-                        )
-                        _add_notification(
+                        if not _has_recent_notification(
                             kind="system_error",
-                            title="Todoist Sync Failed",
-                            message=(
-                                "Could not sync CSI task to Todoist. "
-                                "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
-                                f"and taxonomy. Error: {exc}. Debug: {debug_info}"
-                            ),
-                            severity="error",
-                            metadata={"integration": "todoist", "reason": "task_sync_failed"},
-                        )
+                            metadata_match={"integration": "todoist", "reason": "task_sync_failed"},
+                            within_seconds=1800,
+                        ):
+                            debug_info = (
+                                f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
+                                f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
+                            )
+                            _add_notification(
+                                kind="system_error",
+                                title="Todoist Sync Failed",
+                                message=(
+                                    "Could not sync CSI task to Todoist. "
+                                    "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
+                                    f"and taxonomy. Error: {exc}. Debug: {debug_info}"
+                                ),
+                                severity="error",
+                                metadata={"integration": "todoist", "reason": "task_sync_failed"},
+                            )
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
@@ -8983,17 +9281,18 @@ async def signals_ingest_endpoint(request: Request):
 @app.post("/api/v1/youtube/ingest")
 async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
     """
-    Local worker endpoint for transcript ingestion.
+    YouTube transcript ingestion endpoint.
 
-    Intended usage:
-    - VPS control-plane forwards ingestion requests over Tailscale/reverse tunnel.
-    - Local worker performs YouTube transcript extraction from a residential IP.
+    Uses Webshare residential proxy by default to avoid datacenter IP bans.
+    Set UA_YOUTUBE_INGEST_REQUIRE_PROXY=0 only for local workstation development.
     """
     _require_youtube_ingest_auth(request)
 
     video_url, video_id = normalize_video_target(payload.video_url, payload.video_id)
     if not video_url:
         raise HTTPException(status_code=400, detail="video_url or valid video_id is required")
+
+    _require_proxy = os.getenv("UA_YOUTUBE_INGEST_REQUIRE_PROXY", "1").strip().lower() not in {"0", "false", "no", "off"}
 
     result = await asyncio.to_thread(
         ingest_youtube_transcript,
@@ -9003,6 +9302,7 @@ async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestReques
         timeout_seconds=max(5, min(int(payload.timeout_seconds or 120), 600)),
         max_chars=max(5_000, min(int(payload.max_chars or 180_000), 800_000)),
         min_chars=max(20, min(int(payload.min_chars or 160), 5000)),
+        require_proxy=_require_proxy,
     )
     result["request_id"] = (payload.request_id or "").strip() or None
     result["worker_profile"] = _DEPLOYMENT_PROFILE
@@ -9049,13 +9349,50 @@ async def health(response: Response):
     }
 
 
+def _csi_delivery_health_summary() -> dict[str, Any] | None:
+    """Read CSI delivery health canary state from the CSI SQLite DB.
+
+    Returns None if the DB is unavailable or canary has never run.
+    """
+    csi_db_path_raw = (os.getenv("CSI_DB_PATH") or "").strip()
+    if not csi_db_path_raw:
+        return None
+    csi_db = Path(csi_db_path_raw)
+    if not csi_db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(csi_db), timeout=3)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT state_json FROM source_state WHERE key = ? LIMIT 1",
+            ("delivery_health_canary",),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        state = json.loads(row["state_json"]) if isinstance(row["state_json"], str) else row["state_json"]
+        return {
+            "status": str(state.get("status") or "unknown"),
+            "last_checked_at": str(state.get("last_checked_at") or ""),
+            "failing_sources": list(state.get("failing_sources") or []),
+            "degraded_sources": list(state.get("degraded_sources") or []),
+        }
+    except Exception as exc:
+        logger.debug("CSI delivery health read failed: %s", exc)
+        return None
+
+
 @app.get("/api/v1/factory/capabilities")
 async def factory_capabilities(request: Request):
     _require_ops_auth(request)
-    return {
+    result: dict[str, Any] = {
         "factory": _factory_capabilities_payload(),
         "delegation": dict(_delegation_metrics),
     }
+    csi_health = _csi_delivery_health_summary()
+    if csi_health is not None:
+        result["csi_delivery_health"] = csi_health
+    return result
 
 
 @app.post("/api/v1/factory/registrations")
@@ -9081,20 +9418,322 @@ async def list_factory_registrations(
     _require_headquarters_role_for_fleet()
     clamped_limit = max(1, min(int(limit), 1000))
     status_filter = str(registration_status or "").strip().lower()
-    with _factory_registration_lock:
-        rows = [dict(record) for record in _factory_registrations.values()]
-    if status_filter:
-        rows = [
-            row
-            for row in rows
-            if str(row.get("registration_status") or "").strip().lower() == status_filter
-        ]
-    rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+
+    if _factory_registry is not None:
+        rows = _factory_registry.list_all(limit=clamped_limit, status_filter=status_filter)
+        total = _factory_registry.count()
+    else:
+        with _factory_registration_lock:
+            rows = [dict(record) for record in _factory_registrations.values()]
+        if status_filter:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("registration_status") or "").strip().lower() == status_filter
+            ]
+        rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+        total = len(rows)
+        rows = rows[:clamped_limit]
+
     return {
-        "registrations": rows[:clamped_limit],
-        "count": len(rows),
+        "registrations": rows,
+        "count": total,
         "headquarters_factory_id": _FACTORY_ID,
     }
+
+
+@app.get("/api/v1/ops/delegation/history")
+async def delegation_history(request: Request, limit: int = 20):
+    """Return recent VP missions sourced from the Redis bridge (delegation history)."""
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    import universal_agent.main as main_module
+    clamped = max(1, min(int(limit), 100))
+    missions: list[dict[str, Any]] = []
+    if main_module.runtime_db_conn:
+        try:
+            rows = main_module.runtime_db_conn.execute(
+                "SELECT mission_id, vp_id, mission_type, objective, status, source, "
+                "created_at, updated_at FROM vp_missions "
+                "ORDER BY created_at DESC LIMIT ?",
+                (clamped,),
+            ).fetchall()
+            for r in rows:
+                missions.append(dict(r))
+        except Exception as exc:
+            logger.warning("delegation_history query failed: %s", exc)
+    return {"missions": missions, "total": len(missions)}
+
+
+class FactoryUpdateRequest(BaseModel):
+    """Request to trigger a factory self-update via delegation bus."""
+    target_factory_id: Optional[str] = None  # None = broadcast to all workers
+    branch: str = "main"
+
+
+@app.post("/api/v1/ops/factory/update")
+async def trigger_factory_update(request: Request, payload: FactoryUpdateRequest):
+    """Publish a system:update_factory mission to the delegation bus.
+
+    HQ-only endpoint.  The target factory's bridge will execute the update
+    script, then exit for systemd to restart it with the new code.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    if _delegation_mission_bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Delegation Redis bus not connected; cannot publish update mission.",
+        )
+
+    job_id = f"update-{uuid.uuid4().hex[:12]}"
+    envelope = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=job_id,
+        priority=10,  # high priority
+        timeout_seconds=300,
+        max_retries=0,  # no retry for update missions
+        payload=MissionPayload(
+            task="Update factory to latest code",
+            context={
+                "mission_kind": "system:update_factory",
+                "branch": payload.branch or "main",
+                "target_factory_id": payload.target_factory_id or "",
+            },
+        ),
+    )
+    _delegation_mission_bus.publish_mission(envelope)
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+    logger.info(
+        "Factory update mission published job_id=%s branch=%s target=%s",
+        job_id,
+        payload.branch,
+        payload.target_factory_id or "(all)",
+    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "branch": payload.branch,
+        "target_factory_id": payload.target_factory_id,
+    }
+
+
+class FactoryControlRequest(BaseModel):
+    """Request to control a factory (pause/resume)."""
+    target_factory_id: str
+    action: str  # "pause" or "resume"
+
+
+@app.post("/api/v1/ops/factory/control")
+async def control_factory(request: Request, payload: FactoryControlRequest):
+    """Publish a system:pause_factory or system:resume_factory mission.
+
+    HQ-only endpoint.  The target factory's bridge will pause or resume
+    mission consumption while keeping the heartbeat alive.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    action = (payload.action or "").strip().lower()
+    if action not in ("pause", "resume"):
+        raise HTTPException(status_code=400, detail=f"Invalid action: {action}. Must be 'pause' or 'resume'.")
+
+    if _delegation_mission_bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Delegation Redis bus not connected; cannot publish control mission.",
+        )
+
+    mission_kind = f"system:{action}_factory"
+    job_id = f"{action}-{uuid.uuid4().hex[:12]}"
+    envelope = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=job_id,
+        priority=5,  # highest priority — control messages
+        timeout_seconds=30,
+        max_retries=0,
+        payload=MissionPayload(
+            task=f"{action.capitalize()} factory mission consumption",
+            context={
+                "mission_kind": mission_kind,
+                "target_factory_id": payload.target_factory_id,
+            },
+        ),
+    )
+    _delegation_mission_bus.publish_mission(envelope)
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Optimistically update registry status so UI reflects immediately
+    if _factory_registry is not None:
+        try:
+            existing = _factory_registry.get(payload.target_factory_id)
+            if existing:
+                new_status = "paused" if action == "pause" else "online"
+                _factory_registry.upsert({**existing, "registration_status": new_status})
+        except Exception as exc:
+            logger.warning("Failed to update registry for %s: %s", payload.target_factory_id, exc)
+
+    logger.info(
+        "Factory control mission published job_id=%s action=%s target=%s",
+        job_id, action, payload.target_factory_id,
+    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "action": action,
+        "target_factory_id": payload.target_factory_id,
+    }
+
+
+@app.get("/api/v1/ops/telegram")
+async def ops_telegram_status(request: Request):
+    """Aggregate Telegram integration status: bot, channels, notifications, sessions."""
+    _require_ops_auth(request)
+
+    # Tutorial notifier config
+    notifier_status = tutorial_telegram_notifier.configured_status()
+
+    # Bot process status via systemctl
+    bot_active = False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "is-active", "universal-agent-telegram",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        bot_active = (stdout or b"").decode().strip() == "active"
+    except Exception:
+        pass
+
+    # Recent Telegram-related notifications from activity DB
+    recent_notifications: list[dict[str, Any]] = []
+    try:
+        if _activity_db_conn is not None:
+            rows = _activity_db_conn.execute(
+                """SELECT id, kind, title, summary, severity, status, created_at, metadata_json
+                   FROM activity_events
+                   WHERE (kind LIKE '%telegram%'
+                      OR kind LIKE '%tutorial%'
+                      OR kind LIKE '%youtube%'
+                      OR kind LIKE '%playlist%'
+                      OR kind LIKE '%rss%'
+                      OR kind LIKE '%reddit%'
+                      OR kind LIKE '%csi_pipeline%'
+                      OR kind LIKE '%csi_insight%'
+                      OR kind LIKE '%csi_specialist%')
+                   ORDER BY created_at DESC LIMIT 50""",
+            ).fetchall()
+            for row in rows:
+                meta = {}
+                try:
+                    meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+                except Exception:
+                    pass
+                recent_notifications.append({
+                    "id": row["id"],
+                    "kind": row["kind"],
+                    "title": row["title"],
+                    "message": row["summary"][:200],
+                    "severity": row["severity"],
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                })
+    except Exception as exc:
+        logger.debug("Telegram ops: activity query failed: %s", exc)
+
+    # Recent Telegram sessions
+    tg_sessions: list[dict[str, Any]] = []
+    try:
+        gateway = get_gateway()
+        all_sessions = gateway.list_sessions()
+        for s in all_sessions:
+            sid = str(getattr(s, "session_id", "") or "")
+            if sid.startswith("tg_"):
+                tg_sessions.append({
+                    "session_id": sid,
+                    "user_id": str(getattr(s, "user_id", "") or ""),
+                    "status": str(getattr(s, "status", "") or ""),
+                    "last_activity": str(getattr(s, "last_activity", "") or ""),
+                })
+        tg_sessions = sorted(tg_sessions, key=lambda x: x.get("last_activity", ""), reverse=True)[:20]
+    except Exception:
+        pass
+
+    # Channel configuration — check gateway env first, then CSI env file as fallback
+    csi_env_values: dict[str, str] = {}
+    csi_env_path = Path("/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env")
+    if csi_env_path.exists():
+        try:
+            for line in csi_env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                csi_env_values[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+    channels: list[dict[str, Any]] = []
+    for name, env_key in [
+        ("UA Tutorial Feed", "YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID"),
+        ("UA RSS Feed", "CSI_RSS_TELEGRAM_CHAT_ID"),
+        ("UA Reddit Feed", "CSI_REDDIT_TELEGRAM_CHAT_ID"),
+    ]:
+        chat_id = os.getenv(env_key, "").strip() or csi_env_values.get(env_key, "")
+        channels.append({"name": name, "env_var": env_key, "configured": bool(chat_id), "chat_id": chat_id[:6] + "..." if len(chat_id) > 6 else chat_id})
+
+    return {
+        "bot": {
+            "service_active": bot_active,
+            "polling_mode": "long_polling",
+            "allowed_user_ids": os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").strip() or None,
+        },
+        "notifier": notifier_status,
+        "channels": channels,
+        "recent_notifications": recent_notifications,
+        "telegram_sessions": tg_sessions,
+    }
+
+
+@app.get("/api/v1/ops/timers")
+async def list_system_timers(request: Request):
+    """Return structured systemd timer status for the ops dashboard.
+
+    Runs ``systemctl list-timers --all --output=json`` and returns the
+    parsed result.  Requires ops auth.
+    """
+    _require_ops_auth(request)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "list-timers", "--all", "--output=json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            # Fallback: try without --output=json (older systemd)
+            proc2 = await asyncio.create_subprocess_exec(
+                "systemctl", "list-timers", "--all", "--no-pager",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
+            return {
+                "format": "text",
+                "timers": [],
+                "raw": (stdout2 or b"").decode(errors="replace")[:8000],
+            }
+        raw = (stdout or b"").decode(errors="replace")
+        timers = json.loads(raw) if raw.strip() else []
+        return {"format": "json", "timers": timers, "count": len(timers)}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="systemctl list-timers timed out")
+    except Exception as exc:
+        logger.warning("list_system_timers failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/artifacts")
@@ -9109,6 +9748,16 @@ async def list_artifacts(path: str = ""):
 async def get_artifact_file(file_path: str):
     """Get file content from the persistent artifacts root."""
     return _read_file_from_root(ARTIFACTS_DIR, file_path)
+
+
+@app.get("/api/files/{session_id}/{file_path:path}")
+async def get_session_file(session_id: str, file_path: str):
+    """Get file content from a session workspace (mirrors api/server.py endpoint)."""
+    safe_id = _sanitize_session_id_or_400(session_id)
+    session_root = WORKSPACES_DIR / safe_id
+    if not session_root.is_dir():
+        raise HTTPException(status_code=404, detail="Session workspace not found")
+    return _read_file_from_root(session_root, file_path)
 
 
 @app.get("/api/v1/dashboard/metrics/coder-vp")
@@ -9406,7 +10055,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
                     "window_start_utc": None,
                     "window_end_utc": None,
-                    "model_name": "trend-specialist",
+                    "model_name": "csi-trend-analyst",
                     "metadata": {
                         "report_key": str(metadata.get("report_key") or ""),
                         "kind": kind,
@@ -9453,6 +10102,13 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
             or 0
         )
         lowered = report_type.lower()
+        if "global_trend_brief" in lowered or lowered == "global_brief":
+            source_totals = report_data.get("source_totals")
+            if isinstance(source_totals, dict):
+                return {str(k): int(v or 0) for k, v in source_totals.items()}
+            return {"brief_items": total_items}
+        if "threads" in lowered:
+            return {"threads": total_items}
         if "reddit" in lowered:
             return {"reddit": total_items}
         if "rss" in lowered or lowered in {"daily", "emerging", "trend"}:
@@ -9502,6 +10158,8 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     def _report_class(report_type: str) -> str:
         lowered = report_type.lower()
+        if "brief" in lowered:
+            return "brief"
         if "opportunity" in lowered:
             return "opportunity"
         if "daily" in lowered:
@@ -9621,7 +10279,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     clamped_limit = max(1, min(int(limit), 50))
     db_detail: Optional[str] = None
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if db_path.exists():
         conn = None
         try:
@@ -9689,12 +10347,51 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                         }
                     )
 
+            if _table_exists(conn, "global_trend_briefs"):
+                for row in conn.execute(
+                    "SELECT * FROM global_trend_briefs ORDER BY created_at DESC LIMIT ?",
+                    (max(clamped_limit * 2, 20),),
+                ).fetchall():
+                    brief_json = _activity_json_loads_obj(row["brief_json"], default={})
+                    report_data = brief_json if isinstance(brief_json, dict) else {}
+                    report_data["markdown_content"] = str(row["brief_markdown"] or "")
+                    artifact_paths: dict[str, str] = {}
+                    md_path = str(row["artifact_markdown_path"] or "").strip()
+                    json_path = str(row["artifact_json_path"] or "").strip()
+                    if md_path:
+                        artifact_paths["markdown"] = md_path
+                    if json_path:
+                        artifact_paths["json"] = json_path
+                    if artifact_paths:
+                        report_data["artifact_paths"] = artifact_paths
+                    report_type = "global_trend_brief"
+                    reports.append(
+                        {
+                            "id": int(row["id"]),
+                            "report_type": report_type,
+                            "report_class": "brief",
+                            "window_hours": _window_hours(row["window_start_utc"], row["window_end_utc"]),
+                            "source_mix": _source_mix_for_report(report_type, report_data),
+                            "report_data": report_data,
+                            "usage": _parse_usage(
+                                prompt=row["prompt_tokens"],
+                                completion=row["completion_tokens"],
+                                total=row["total_tokens"],
+                            ),
+                            "created_at": _normalize_notification_timestamp(row["created_at"]),
+                            "window_start_utc": row["window_start_utc"],
+                            "window_end_utc": row["window_end_utc"],
+                            "model_name": row["model_name"],
+                            "metadata": {"report_key": row["brief_key"]},
+                        }
+                    )
+
             if _table_exists(conn, "events"):
                 for row in conn.execute(
                     """
-                    SELECT event_id, occurred_at, subject_json
+                    SELECT event_id, event_type, occurred_at, subject_json
                     FROM events
-                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready')
+                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready', 'global_trend_brief_ready')
                     ORDER BY occurred_at DESC
                     LIMIT ?
                     """,
@@ -9704,7 +10401,13 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     if not isinstance(subject, dict):
                         subject = {}
                     artifact_paths = subject.get("artifact_paths") if isinstance(subject.get("artifact_paths"), dict) else {}
-                    report_type_value = str(subject.get("report_type") or "hourly_report_product")
+                    raw_event_type = str(row["event_type"] or "").strip().lower()
+                    report_type_value = str(subject.get("report_type") or "").strip().lower()
+                    if not report_type_value:
+                        if raw_event_type == "global_trend_brief_ready":
+                            report_type_value = "global_trend_brief"
+                        else:
+                            report_type_value = "hourly_report_product"
                     if report_type_value == "opportunity_bundle":
                         quality_summary = subject.get("quality_summary") if isinstance(subject.get("quality_summary"), dict) else {}
                         opportunities = subject.get("opportunities") if isinstance(subject.get("opportunities"), list) else []
@@ -9731,6 +10434,12 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                             f"- has_trend_report: `{subject.get('has_trend_report')}`\n"
                             f"- insight_report_count: `{subject.get('insight_report_count')}`\n"
                         )
+                        if report_type_value == "global_trend_brief":
+                            markdown = (
+                                "## CSI Global Trend Brief\n\n"
+                                f"- brief_key: `{subject.get('brief_key')}`\n"
+                                f"- window: `{subject.get('window_start_utc')}` -> `{subject.get('window_end_utc')}`\n"
+                            )
                     if artifact_paths:
                         markdown += (
                             "\n### Artifacts\n"
@@ -9801,9 +10510,28 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
     return {"status": "ok", "source": "empty", "detail": db_detail, "reports": []}
 
 
+@app.get("/api/v1/dashboard/csi/briefings")
+async def dashboard_csi_briefings(limit: int = 12, include_suppressed: bool = False):
+    base = await dashboard_csi_reports(limit=max(1, min(int(limit), 50)), include_suppressed=include_suppressed)
+    reports = base.get("reports") if isinstance(base, dict) else []
+    if not isinstance(reports, list):
+        reports = []
+    allowed_classes = {"brief", "trend", "daily", "emerging", "product", "opportunity", "insight"}
+    filtered = [
+        item
+        for item in reports
+        if str(item.get("report_class") or "").strip().lower() in allowed_classes
+    ]
+    return {
+        "status": "ok",
+        "source": "csi_briefings",
+        "reports": filtered[: max(1, min(int(limit), 50))],
+    }
+
+
 @app.get("/api/v1/dashboard/csi/health")
 async def dashboard_csi_health():
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -9918,6 +10646,9 @@ async def dashboard_csi_health():
         tracked_types = {
             "rss_trend_report": 180,
             "reddit_trend_report": 180,
+            "threads_trend_report": 180,
+            "global_trend_brief_ready": 180,
+            "csi_global_brief_review_due": 720,
             "rss_insight_emerging": 180,
             "report_product_ready": 180,
             "opportunity_bundle_ready": 180,
@@ -10068,6 +10799,93 @@ async def dashboard_csi_health():
             conn.close()
 
 
+def _parse_source_min_events_spec(raw: str) -> dict[str, int]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    out: dict[str, int] = {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                cleaned = str(key or "").strip()
+                if not cleaned:
+                    continue
+                try:
+                    out[cleaned] = max(0, int(value))
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        pass
+    for token in text.split(","):
+        item = token.strip()
+        if not item or "=" not in item:
+            continue
+        key, value_raw = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        try:
+            out[key] = max(0, int(value_raw.strip()))
+        except Exception:
+            continue
+    return out
+
+
+def _default_delivery_source_min_events() -> dict[str, int]:
+    defaults = {
+        "youtube_channel_rss": 1,
+        "reddit_discovery": 1,
+        "threads_owned": 0,
+        "threads_trends_seeded": 0,
+        "threads_trends_broad": 0,
+        "csi_analytics": 0,
+    }
+    env_map = _parse_source_min_events_spec(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or ""))
+    defaults.update(env_map)
+    return defaults
+
+
+def _delivery_hint_for_source(source_name: str, *, under_min_volume: bool, stale: bool) -> dict[str, Any] | None:
+    if not (under_min_volume or stale):
+        return None
+    if source_name == "youtube_channel_rss":
+        return {
+            "code": "rss_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "RSS source volume below threshold",
+            "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
+            "runbook_command": (
+                "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
+                "journalctl -u csi-ingester -n 120 --no-pager"
+            ),
+        }
+    if source_name == "reddit_discovery":
+        return {
+            "code": "reddit_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "Reddit source volume below threshold",
+            "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
+            "runbook_command": (
+                "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
+                "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
+            ),
+        }
+    if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}:
+        return {
+            "code": "threads_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "Threads source volume below threshold",
+            "action": (
+                "Verify Threads token freshness, source query packs, and keyword quotas. "
+                "Confirm THREADS_* credentials are loaded in CSI runtime env."
+            ),
+            "runbook_command": "journalctl -u csi-ingester -n 200 --no-pager | grep -i threads",
+        }
+    return None
+
+
 @app.get("/api/v1/dashboard/csi/delivery-health")
 async def dashboard_csi_delivery_health(
     window_hours: int = 24,
@@ -10075,7 +10893,11 @@ async def dashboard_csi_delivery_health(
     max_failed_attempt_ratio: Optional[float] = None,
     min_rss_events: Optional[int] = None,
     min_reddit_events: Optional[int] = None,
+    min_threads_owned_events: Optional[int] = None,
+    min_threads_seeded_events: Optional[int] = None,
+    min_threads_broad_events: Optional[int] = None,
     max_dlq_recent: Optional[int] = None,
+    source_min_events: Optional[str] = None,
 ):
     clamped_window = max(1, min(int(window_hours), 24 * 30))
     stale_threshold_minutes = max(30, min(int(stale_minutes), 24 * 60 * 7))
@@ -10084,16 +10906,18 @@ async def dashboard_csi_delivery_health(
         if max_failed_attempt_ratio is not None
         else max(0.0, min(float(os.getenv("UA_CSI_DELIVERY_MAX_FAILED_ATTEMPT_RATIO", "0.2") or 0.2), 1.0))
     )
-    tuned_min_rss_events = (
-        max(0, int(min_rss_events))
-        if min_rss_events is not None
-        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H", "1") or 1))
-    )
-    tuned_min_reddit_events = (
-        max(0, int(min_reddit_events))
-        if min_reddit_events is not None
-        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H", "1") or 1))
-    )
+    source_min_map = _default_delivery_source_min_events()
+    source_min_map.update(_parse_source_min_events_spec(str(source_min_events or "")))
+    if min_rss_events is not None:
+        source_min_map["youtube_channel_rss"] = max(0, int(min_rss_events))
+    if min_reddit_events is not None:
+        source_min_map["reddit_discovery"] = max(0, int(min_reddit_events))
+    if min_threads_owned_events is not None:
+        source_min_map["threads_owned"] = max(0, int(min_threads_owned_events))
+    if min_threads_seeded_events is not None:
+        source_min_map["threads_trends_seeded"] = max(0, int(min_threads_seeded_events))
+    if min_threads_broad_events is not None:
+        source_min_map["threads_trends_broad"] = max(0, int(min_threads_broad_events))
     tuned_max_dlq_recent = (
         max(0, int(max_dlq_recent))
         if max_dlq_recent is not None
@@ -10103,14 +10927,14 @@ async def dashboard_csi_delivery_health(
         1,
         int(os.getenv("UA_CSI_DELIVERY_ADAPTER_CONSECUTIVE_FAILURES", "3") or 3),
     )
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        source_names = ["youtube_channel_rss", "reddit_discovery", "csi_analytics"]
+        source_name_set = set(source_min_map.keys())
         window_expr = f"-{clamped_window} hours"
         source_rows: list[dict[str, Any]] = []
         now_ts = time.time()
@@ -10140,11 +10964,26 @@ async def dashboard_csi_delivery_health(
             }
             adapter_health.append(adapter_entry)
             adapter_health_map[adapter_name] = adapter_entry
+            source_name_set.add(adapter_name)
 
+        try:
+            source_value_rows = conn.execute(
+                """
+                SELECT DISTINCT source
+                FROM events
+                WHERE created_at >= datetime('now', ?)
+                """,
+                (window_expr,),
+            ).fetchall()
+        except Exception:
+            source_value_rows = []
+        for row in source_value_rows:
+            source_name_set.add(str(row["source"] or "").strip())
+
+        source_names = sorted(name for name in source_name_set if name)
         expected_min_events_by_source = {
-            "youtube_channel_rss": tuned_min_rss_events,
-            "reddit_discovery": tuned_min_reddit_events,
-            "csi_analytics": 0,
+            name: int(source_min_map.get(name) or 0)
+            for name in source_names
         }
 
         for source_name in source_names:
@@ -10230,7 +11069,9 @@ async def dashboard_csi_delivery_health(
             failed_attempt_ratio = round((float(attempts_failed) / float(attempts)), 4) if attempts > 0 else 0.0
             expected_min_events = int(expected_min_events_by_source.get(source_name) or 0)
             under_min_volume = total < expected_min_events
-            stale = total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            stale = expected_min_events > 0 and (
+                total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            )
             high_failed_ratio = attempts > 0 and failed_attempt_ratio > float(tuned_max_failed_attempt_ratio)
             all_failed = attempts > 0 and attempts_failed == attempts
             dlq_exceeds = dlq_total > int(tuned_max_dlq_recent)
@@ -10250,32 +11091,13 @@ async def dashboard_csi_delivery_health(
                 status_value = "failing"
 
             repair_hints: list[dict[str, Any]] = []
-            if source_name == "youtube_channel_rss" and (under_min_volume or stale):
-                repair_hints.append(
-                    {
-                        "code": "rss_source_stale_or_low_volume",
-                        "severity": "warning",
-                        "title": "RSS source volume below threshold",
-                        "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
-                        "runbook_command": (
-                            "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
-                            "journalctl -u csi-ingester -n 120 --no-pager"
-                        ),
-                    }
-                )
-            if source_name == "reddit_discovery" and (under_min_volume or stale):
-                repair_hints.append(
-                    {
-                        "code": "reddit_source_stale_or_low_volume",
-                        "severity": "warning",
-                        "title": "Reddit source volume below threshold",
-                        "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
-                        "runbook_command": (
-                            "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
-                            "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
-                        ),
-                    }
-                )
+            low_volume_hint = _delivery_hint_for_source(
+                source_name,
+                under_min_volume=under_min_volume,
+                stale=stale,
+            )
+            if isinstance(low_volume_hint, dict):
+                repair_hints.append(low_volume_hint)
             if attempts_failed > 0 or high_failed_ratio:
                 repair_hints.append(
                     {
@@ -10285,7 +11107,7 @@ async def dashboard_csi_delivery_health(
                         "action": "Verify UA ingest endpoint auth and replay DLQ after repair.",
                         "runbook_command": (
                             "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
-                            "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 100 --max-attempts 3"
+                            "--db-path /var/lib/universal-agent/csi/csi.db --limit 100 --max-attempts 3"
                         ),
                     }
                 )
@@ -10297,7 +11119,7 @@ async def dashboard_csi_delivery_health(
                         "title": "DLQ backlog exceeds threshold",
                         "action": "Inspect latest delivery errors and replay DLQ once root cause is fixed.",
                         "runbook_command": (
-                            "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                            "sqlite3 /var/lib/universal-agent/csi/csi.db "
                             "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 25;\""
                         ),
                     }
@@ -10364,8 +11186,12 @@ async def dashboard_csi_delivery_health(
             },
             "tuning": {
                 "max_failed_attempt_ratio": tuned_max_failed_attempt_ratio,
-                "min_rss_events": tuned_min_rss_events,
-                "min_reddit_events": tuned_min_reddit_events,
+                "source_min_events": source_min_map,
+                "min_rss_events": int(source_min_map.get("youtube_channel_rss") or 0),
+                "min_reddit_events": int(source_min_map.get("reddit_discovery") or 0),
+                "min_threads_owned_events": int(source_min_map.get("threads_owned") or 0),
+                "min_threads_seeded_events": int(source_min_map.get("threads_trends_seeded") or 0),
+                "min_threads_broad_events": int(source_min_map.get("threads_trends_broad") or 0),
                 "max_dlq_recent": tuned_max_dlq_recent,
                 "adapter_consecutive_failures": tuned_adapter_consecutive_failures,
                 "stale_threshold_minutes": stale_threshold_minutes,
@@ -10384,7 +11210,7 @@ async def dashboard_csi_delivery_health(
 
 @app.get("/api/v1/dashboard/csi/reliability-slo")
 async def dashboard_csi_reliability_slo():
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -10446,7 +11272,7 @@ async def dashboard_csi_reliability_slo():
 @app.get("/api/v1/dashboard/csi/opportunities")
 async def dashboard_csi_opportunities(limit: int = 8):
     clamped_limit = max(1, min(int(limit), 50))
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}", "bundles": [], "latest": None}
     conn = None
@@ -10869,7 +11695,12 @@ async def dashboard_todolist_pipeline():
     from universal_agent.services.todoist_service import TodoService
     try:
         todoist = TodoService()
-        return {"status": "ok", "pipeline_summary": todoist.get_pipeline_summary()}
+        taxonomy = todoist._get_taxonomy_or_bootstrap()
+        return {
+            "status": "ok",
+            "pipeline_summary": todoist.get_pipeline_summary(),
+            "project_ids": taxonomy.project_ids,
+        }
     except Exception as exc:
         logger.warning(f"Failed todolist pipeline summary: {exc}")
         return {"status": "error", "detail": str(exc)}
@@ -10883,6 +11714,184 @@ async def dashboard_todolist_actionable():
         return {"status": "ok", "actionable_tasks": todoist.get_actionable_tasks()}
     except Exception as exc:
         logger.warning(f"Failed todolist actionable tasks: {exc}")
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/v1/dashboard/todolist/actionable_paged")
+async def dashboard_todolist_actionable_paged(
+    limit: int = 40,
+    offset: int = 0,
+    project_key: Optional[str] = None,
+    include_full_description: bool = False,
+    description_chars: int = 420,
+):
+    from universal_agent.services.todoist_service import PROJECT_KEY_MAP, TodoService
+
+    def _parse_created_at(raw_value: Any) -> datetime:
+        raw = str(raw_value or "").strip()
+        if not raw:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        normalized = raw.replace(" ", "T")
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    try:
+        todoist = TodoService()
+        tasks = todoist.get_actionable_tasks()
+        taxonomy = todoist._get_taxonomy_or_bootstrap()
+
+        normalized_project_key = str(project_key or "").strip().lower()
+        if normalized_project_key:
+            # Accept either canonical aliases (e.g. "csi") or full project names
+            # sent by the dashboard cards (e.g. "UA: CSI Actions").
+            project_name_by_key = {
+                str(name).strip().lower(): str(name)
+                for name in taxonomy.project_ids.keys()
+                if str(name).strip()
+            }
+            project_name = project_name_by_key.get(normalized_project_key)
+            if not project_name:
+                project_name = PROJECT_KEY_MAP.get(normalized_project_key, PROJECT_KEY_MAP["default"])
+            selected_project_id = str(taxonomy.project_ids.get(project_name, "") or "")
+            if selected_project_id:
+                tasks = [
+                    task for task in tasks
+                    if str(task.get("project_id") or "") == selected_project_id
+                ]
+            else:
+                tasks = []
+        else:
+            project_name = None
+
+        tasks.sort(key=lambda task: _parse_created_at(task.get("created_at")), reverse=True)
+
+        bounded_limit = max(1, min(int(limit or 40), 200))
+        bounded_offset = max(0, int(offset or 0))
+        total = len(tasks)
+        page = tasks[bounded_offset:bounded_offset + bounded_limit]
+        has_more = (bounded_offset + bounded_limit) < total
+
+        desc_limit = max(0, min(int(description_chars or 420), 4000))
+        materialized: list[dict[str, Any]] = []
+        for task in page:
+            row = dict(task)
+            full_desc = str(task.get("description") or "")
+            if include_full_description:
+                row["description"] = full_desc
+                row["description_truncated"] = False
+            else:
+                if desc_limit == 0:
+                    row["description"] = ""
+                    row["description_truncated"] = bool(full_desc)
+                elif len(full_desc) > desc_limit:
+                    row["description"] = full_desc[:desc_limit] + "..."
+                    row["description_truncated"] = True
+                else:
+                    row["description"] = full_desc
+                    row["description_truncated"] = False
+            materialized.append(row)
+
+        return {
+            "status": "ok",
+            "project_key": normalized_project_key or None,
+            "project_name": project_name,
+            "actionable_tasks": materialized,
+            "pagination": {
+                "total": total,
+                "offset": bounded_offset,
+                "limit": bounded_limit,
+                "count": len(materialized),
+                "has_more": has_more,
+            },
+        }
+    except Exception as exc:
+        logger.warning(f"Failed todolist actionable paged: {exc}")
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/v1/dashboard/todolist/project")
+async def dashboard_todolist_project(
+    project_key: str = "immediate",
+    section: Optional[str] = None,
+    include_agent_ready: bool = True,
+    limit: int = 50,
+):
+    from universal_agent.services.todoist_service import (
+        PROJECT_KEY_MAP,
+        UA_PROJECT_PROACTIVE,
+        TodoService,
+    )
+
+    try:
+        todoist = TodoService()
+        taxonomy = todoist._get_taxonomy_or_bootstrap()
+        normalized_project_key = str(project_key or "").strip().lower()
+        project_name = PROJECT_KEY_MAP.get(normalized_project_key, PROJECT_KEY_MAP["default"])
+        project_id = str(taxonomy.project_ids.get(project_name, "") or "")
+        if not project_id:
+            return {
+                "status": "ok",
+                "project_key": normalized_project_key,
+                "project_name": project_name,
+                "section_key": None,
+                "include_agent_ready": include_agent_ready,
+                "tasks": [],
+                "total": 0,
+            }
+
+        tasks = todoist.get_all_tasks(project_id=project_id)
+
+        normalized_section_key = str(section or "").strip().lower()
+        if normalized_section_key:
+            section_map = (
+                taxonomy.brainstorm_sections
+                if project_name == UA_PROJECT_PROACTIVE
+                else taxonomy.section_ids.get(project_name, {})
+            )
+            section_id = str(section_map.get(normalized_section_key, "") or "")
+            if section_id:
+                tasks = [task for task in tasks if str(task.get("section_id") or "") == section_id]
+            else:
+                tasks = []
+
+        if not include_agent_ready:
+            filtered: list[dict[str, Any]] = []
+            for task in tasks:
+                labels = {str(label or "").strip() for label in (task.get("labels") or [])}
+                if "agent-ready" in labels:
+                    continue
+                filtered.append(task)
+            tasks = filtered
+
+        bounded_limit = max(1, min(int(limit or 50), 200))
+
+        def _task_sort_key(task: dict[str, Any]) -> tuple[str, str]:
+            due_datetime = str(task.get("due_datetime") or "").strip()
+            due_date = str(task.get("due_date") or "").strip()
+            created_at = str(task.get("created_at") or "").strip()
+            due_key = due_datetime or (f"{due_date}T23:59:59+00:00" if due_date else "9999-12-31T23:59:59+00:00")
+            return (due_key, created_at)
+
+        tasks.sort(key=_task_sort_key)
+
+        return {
+            "status": "ok",
+            "project_key": normalized_project_key,
+            "project_name": project_name,
+            "section_key": normalized_section_key or None,
+            "include_agent_ready": include_agent_ready,
+            "tasks": tasks[:bounded_limit],
+            "total": len(tasks),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed todolist project tasks: {exc}")
         return {"status": "error", "detail": str(exc)}
 
 
@@ -12310,6 +13319,82 @@ async def ops_yt_playlist_watcher_poll_now(request: Request):
         raise HTTPException(status_code=503, detail="YouTube playlist watcher not initialized")
     result = await _yt_playlist_watcher.poll_now()
     return result
+
+
+@app.get("/api/v1/ops/gws-event-listener")
+async def ops_gws_event_listener_status(request: Request):
+    _require_ops_auth(request)
+    if _gws_event_listener is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    return _gws_event_listener.status()
+
+
+@app.post("/api/v1/ops/gws-event-listener/poll")
+async def ops_gws_event_listener_poll_now(request: Request):
+    _require_ops_auth(request)
+    if _gws_event_listener is None:
+        raise HTTPException(status_code=503, detail="gws event listener not initialized")
+    result = await _gws_event_listener.poll_now()
+    return result
+
+
+@app.get("/api/v1/ops/agentmail")
+async def ops_agentmail_status(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    return _agentmail_service.status()
+
+
+@app.get("/api/v1/ops/agentmail/messages")
+async def ops_agentmail_messages(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        label = request.query_params.get("label")
+        limit = min(50, int(request.query_params.get("limit", "20")))
+        messages = await _agentmail_service.list_messages(label=label, limit=limit)
+        return {"ok": True, "messages": messages, "count": len(messages)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/v1/ops/agentmail/send")
+async def ops_agentmail_send(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    to = str(body.get("to", "")).strip()
+    subject = str(body.get("subject", "")).strip()
+    text = str(body.get("text", "")).strip()
+    html = body.get("html")
+    force_send = bool(body.get("force_send", False))
+    if not to or not subject or not text:
+        raise HTTPException(status_code=400, detail="to, subject, and text are required")
+    try:
+        result = await _agentmail_service.send_email(
+            to=to, subject=subject, text=text, html=html, force_send=force_send,
+        )
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/v1/ops/agentmail/drafts/{draft_id}/send")
+async def ops_agentmail_send_draft(request: Request, draft_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        result = await _agentmail_service.send_draft(draft_id)
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
@@ -15609,6 +16694,22 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
     }
 
 
+@app.websocket("/ws/agent")
+async def websocket_agent_compat(websocket: WebSocket):
+    """Compatibility shim for the web-ui chat page.
+
+    The Next.js frontend connects to ``/ws/agent?session_id=<id>`` while the
+    canonical gateway endpoint is ``/api/v1/sessions/{id}/stream``.  This thin
+    wrapper extracts the *session_id* from the query string and delegates to
+    :func:`websocket_stream`.
+    """
+    raw_session_id = (websocket.query_params.get("session_id") or "").strip()
+    if not raw_session_id:
+        # Generate a default session id so brand-new chat windows still work.
+        raw_session_id = f"session_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    await websocket_stream(websocket, raw_session_id)
+
+
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
     if _FACTORY_POLICY.gateway_mode == "health_only":
@@ -15955,6 +17056,27 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         execution_start_ts = time.time()
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
+
+                        # Open run.log for append so session history can be rehydrated later
+                        _run_log_handle = None
+                        if session.workspace_dir:
+                            try:
+                                _rl_path = Path(session.workspace_dir) / "run.log"
+                                _run_log_handle = open(_rl_path, "a", encoding="utf-8")
+                                _ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                _run_log_handle.write(f"[{_ts0}] 👤 USER: {user_input}\n")
+                                _run_log_handle.flush()
+                            except Exception:
+                                _run_log_handle = None
+
+                        def _rl_write(line: str) -> None:
+                            if _run_log_handle:
+                                try:
+                                    _run_log_handle.write(line + "\n")
+                                    _run_log_handle.flush()
+                                except Exception:
+                                    pass
+
                         try:
                             # Execute the request and stream to all attached clients for this session.
                             async for event in gateway.execute(session, request):
@@ -16001,6 +17123,32 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         event.data,
                                     )
                                 await manager.broadcast(session_id, agent_event_to_wire(event))
+
+                                # Persist event to run.log for later rehydration
+                                _rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                if event.type == EventType.TEXT and isinstance(event.data, dict):
+                                    _rl_text = (event.data.get("text") or "").rstrip()
+                                    if _rl_text and event.data.get("final") is True:
+                                        _rl_write(f"[{_rl_ts}] 🤖 ASSISTANT: {_rl_text}")
+                                elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
+                                    _rl_tname = event.data.get("name") or "unknown"
+                                    _rl_write(f"[{_rl_ts}] 🔧 TOOL CALL: {_rl_tname}")
+                                elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
+                                    _rl_tsize = event.data.get("content_size") or 0
+                                    _rl_write(f"[{_rl_ts}] 📦 TOOL RESULT ({_rl_tsize} bytes)")
+                                elif event.type == EventType.ERROR and isinstance(event.data, dict):
+                                    _rl_err = event.data.get("message") or event.data.get("error") or "unknown"
+                                    _rl_write(f"[{_rl_ts}] ERROR: {_rl_err}")
+
+                            # Close the run.log handle
+                            if _run_log_handle:
+                                try:
+                                    _rl_ts_end = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                    _run_log_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_call_count} tool calls) ===\n")
+                                    _run_log_handle.close()
+                                except Exception:
+                                    pass
+                                _run_log_handle = None
 
                             if execution_duration_seconds <= 0:
                                 execution_duration_seconds = round(time.time() - execution_start_ts, 3)
@@ -16202,6 +17350,11 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     },
                                 )
                         finally:
+                            if _run_log_handle:
+                                try:
+                                    _run_log_handle.close()
+                                except Exception:
+                                    pass
                             _decrement_session_active_runs(session_id, run_source=request_source)
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)

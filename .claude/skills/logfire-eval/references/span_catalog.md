@@ -9,6 +9,7 @@ Every span type emitted by the Universal Agent, organized by source.
 | `ua_cli_session` | `main.py` | Root span for CLI-initiated runs | `run_id`, `workspace_dir` |
 | `gateway_request` | `execution_engine.py` | Root span for gateway-initiated runs (web UI, heartbeat) | `session_id`, `run_id`, `run_source` |
 | `heartbeat_run` | `heartbeat_service.py` | Parent span wrapping entire heartbeat execution | `session_id`, `run_source=heartbeat`, `wake_reason` |
+| `gateway_mode_selected` | `main.py` | Gateway dispatch decision (which mode to use) | `run_id`, `mode` |
 
 ## Conversation Spans
 
@@ -67,6 +68,14 @@ Every span type emitted by the Universal Agent, organized by source.
 | `ledger_mark_succeeded` | `main.py` | Durable step completion | — |
 | `durable_checkpoint_saved` | `main.py` | Recovery checkpoint saved | — |
 | `checkpoint_save_failed` | `main.py` | Checkpoint save failure | — |
+| `durable_run_upserted` | `main.py` | Durable run record created/updated in DB | `run_id` |
+| `durable_run_completed` | `main.py` | Durable run finalized (terminal state written) | `run_id`, `status` |
+| `execution_cancelled` | `main.py` | Run cancelled via stop signal | `run_id` |
+| `execution_error` | `main.py` | Unhandled execution error | `run_id`, exception fields |
+| `budget_exceeded` | `main.py` | Run aborted due to token/cost budget exceeded | `run_id`, `budget_type` |
+| `harness_completion_promise_met` | `main.py` | Harness detected expected completion condition | — |
+| `harness_handoff_triggered` | `main.py` | Harness triggering handoff to a new run | `run_id` |
+| `inflight_replay_error` | `main.py` | Error during crash-recovery replay of in-flight step | — |
 
 ## Pipeline Spans
 
@@ -95,6 +104,21 @@ Every span type emitted by the Universal Agent, organized by source.
 | `agent_stop_hook` | `hooks.py` | Agent stop signal detected | — |
 | `workspace_guard_blocked` | `hooks.py` | Tool blocked by workspace guard | — |
 | `skill_hint_injected` | `hooks.py` | Skill hint added to system prompt | — |
+| `user_prompt_skill_hook_error` | `hooks.py` | Error in skill hook processing | `run_id` |
+| `subagent_stop_hook_fired` | `main.py` | Stop hook fired for a sub-agent | — |
+
+## Observer Spans (Updated)
+
+| Span Name | Source | Description | Key Attributes |
+|-----------|--------|-------------|----------------|
+| `observer_search_results` | observers | Search result monitoring | — |
+| `observer_work_products` | observers | Work product file monitoring | — |
+| `observer_workbench_activity` | observers | Code execution / workbench activity | — |
+| `observer_video_outputs` | observers | Video output monitoring | — |
+| `observer_artifact_saved` | observers | Artifact save event | — |
+| `observer_file_io_error` | observers | File I/O error during observation | — |
+| `observer_file_not_created` | observers | Expected output file was not created | — |
+| `workbench_activity_saved` | observers | Workbench activity written to workspace | — |
 
 ## Auto-Instrumented Spans
 
@@ -102,7 +126,7 @@ These are created by Logfire's auto-instrumentation libraries, not by UA code di
 
 | Span Name Pattern | Source | Description |
 |-------------------|--------|-------------|
-| `POST` / `GET` | HTTPX auto-instrumentation | HTTP API calls (LLM endpoints, etc.) | 
+| `POST` / `GET` | HTTPX auto-instrumentation | HTTP API calls (LLM endpoints, etc.) |
 | `Message with {model}` | Anthropic SDK auto-instrumentation | Claude API conversation turn |
 | MCP tool spans | MCP auto-instrumentation | MCP server tool calls |
 

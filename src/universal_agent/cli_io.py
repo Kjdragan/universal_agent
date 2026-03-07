@@ -560,6 +560,8 @@ def print_job_completion_summary(
                     effects.add("email")
             elif "send_email" in haystack and "gmail" in haystack:
                 effects.add("email")
+            elif "gmail" in haystack and ("send" in haystack or "draft" in haystack):
+                effects.add("email")
             if "UPLOAD_TO_COMPOSIO" in tool_name_upper:
                 effects.add("upload")
             elif "upload_to_composio" in haystack or (

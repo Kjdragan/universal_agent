@@ -70,10 +70,14 @@ class ToolCallLedger:
 
     def _compute_scope(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         upper = tool_name.upper()
-        if "GMAIL_SEND_EMAIL" in upper:
-            to_addr = tool_input.get("to") or tool_input.get("to_email") or ""
+        low = tool_name.lower()
+        is_gmail_send = "GMAIL_SEND_EMAIL" in upper or (
+            "gmail" in low and ("send" in low or "draft" in low)
+        )
+        if is_gmail_send:
+            to_addr = tool_input.get("to") or tool_input.get("to_email") or tool_input.get("recipient_email") or ""
             subject = tool_input.get("subject") or ""
-            attachment = tool_input.get("attachment") or {}
+            attachment = tool_input.get("attachment") or tool_input.get("attachments") or {}
             attachment_key = attachment.get("s3key") if isinstance(attachment, dict) else ""
             return f"email:{to_addr}:{subject}:{attachment_key}"
         if "UPLOAD" in upper:

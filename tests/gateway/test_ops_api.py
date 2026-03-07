@@ -43,7 +43,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str((tmp_path / "coder_vp_state.db").resolve()))
     monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
-    
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity.db").resolve()))
+
     # We must reset the global singletons to force re-init with new path
     monkeypatch.setattr(gateway_server, "_gateway", None)
     monkeypatch.setattr(gateway_server, "_ops_service", None)
@@ -3878,7 +3879,7 @@ def test_ops_work_thread_decision_roundtrip(client):
 
 def test_ops_session_detail_rehydrate_with_checkpoint(client, tmp_path):
     """Packet 15: session with checkpoint -> rehydrate_ready=True."""
-    session_id = "session_hook_csi_trend_specialist"
+    session_id = "session_hook_csi_trend_analyst"
     ws = tmp_path / session_id
     ws.mkdir()
     checkpoint_data = {

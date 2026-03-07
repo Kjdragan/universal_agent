@@ -17,7 +17,7 @@ echo "3) Start CSI service in parallel-run mode (legacy timer still enabled)"
 echo "  systemctl enable --now csi-ingester"
 echo
 echo "4) Validate 24h parallel run snapshot"
-echo "  CSI_Ingester/development/scripts/csi_run.sh python CSI_Ingester/development/scripts/csi_parallel_validate.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --since-minutes 1440"
+echo "  CSI_Ingester/development/scripts/csi_run.sh python CSI_Ingester/development/scripts/csi_parallel_validate.py --db-path /var/lib/universal-agent/csi/csi.db --since-minutes 1440"
 echo
 echo "5) Cut over from legacy poller timer"
 echo "  systemctl stop universal-agent-youtube-playlist-poller.timer"

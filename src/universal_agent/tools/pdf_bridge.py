@@ -7,16 +7,17 @@ from claude_agent_sdk import tool
 
 from universal_agent.hooks import StdoutToEventStream
 from universal_agent.guardrails.workspace_guard import normalize_workspace_path
+from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
 
 
 def _resolve_path(path_value: str) -> str:
     if not path_value:
         return path_value
-    candidate = normalize_workspace_path(path_value, Path(os.getenv("CURRENT_SESSION_WORKSPACE") or "/"))
+    workspace = _ctx_get_workspace() or "/"
+    candidate = normalize_workspace_path(path_value, Path(workspace))
     if candidate.is_absolute():
         return str(candidate)
-    workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
-    if workspace:
+    if workspace and workspace != "/":
         return str(Path(workspace) / candidate)
     return str(candidate)
 

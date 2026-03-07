@@ -2,30 +2,90 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  LayoutDashboard,
+  Building2,
+  CheckCircle,
+  ListTodo,
+  MessageSquare,
+  Send,
+  CalendarDays,
+  Bell,
+  Radio,
+  GraduationCap,
+  Clock,
+  Settings,
+  Wrench,
+  FolderOpen,
+  Clipboard,
+  Menu,
+  X,
+  LogOut,
+  ChevronDown,
+  type LucideIcon,
+} from "lucide-react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
 
-const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: boolean; requiresHeadquarters?: boolean }[] = [
-  { href: "/", label: "← Back to Main App", primary: true },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/dashboard/corporation", label: "Corporation View", requiresHeadquarters: true },
-  { href: "/dashboard/chat", label: "Chat Launch" },
-  { href: "/dashboard/sessions", label: "Sessions" },
-  { href: "/dashboard/skills", label: "Skills" },
-  { href: "/dashboard/calendar", label: "Calendar" },
-  { href: "/dashboard/tutorials", label: "Tutorials" },
-  { href: "/dashboard/events", label: "Notifications & Events" },
-  { href: "/dashboard/csi", label: "CSI Feed" },
-  { href: "/dashboard/approvals", label: "Approvals" },
-  { href: "/dashboard/cron-jobs", label: "Cron Jobs" },
-  { href: "/dashboard/channels", label: "Channels" },
-  { href: "/dashboard/config", label: "Config" },
-  { href: "/dashboard/continuity", label: "Continuity" },
-  { href: "/dashboard/todolist", label: "To Do List" },
-  { href: "/dashboard/settings", label: "Settings" },
-  { href: "/files", label: "File Browser", external: true },
+/* ------------------------------------------------------------------ */
+/* Navigation structure — grouped by daily-use priority                */
+/* ------------------------------------------------------------------ */
+
+type NavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  external?: boolean;
+  requiresHeadquarters?: boolean;
+  badge?: string;
+};
+
+type NavGroup = {
+  title: string;
+  items: NavItem[];
+};
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    title: "Operations",
+    items: [
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/dashboard/corporation", label: "Corporation", icon: Building2, requiresHeadquarters: true },
+      { href: "/dashboard/approvals", label: "Approvals", icon: CheckCircle },
+      { href: "/dashboard/todolist", label: "To Do List", icon: ListTodo },
+      { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },
+    ],
+  },
+  {
+    title: "Agent",
+    items: [
+      { href: "/dashboard/telegram", label: "Telegram", icon: Send },
+      { href: "/dashboard/calendar", label: "Calendar", icon: CalendarDays },
+    ],
+  },
+  {
+    title: "Intelligence",
+    items: [
+      { href: "/dashboard/events", label: "Events", icon: Bell },
+      { href: "/dashboard/csi", label: "CSI Feed", icon: Radio },
+      { href: "/dashboard/tutorials", label: "Tutorials", icon: GraduationCap },
+    ],
+  },
+  {
+    title: "System",
+    items: [
+      { href: "/dashboard/cron-jobs", label: "Cron Jobs", icon: Clock },
+      { href: "/dashboard/config", label: "Configuration", icon: Settings },
+      { href: "/dashboard/skills", label: "Skills", icon: Wrench },
+      { href: "/files", label: "File Browser", icon: FolderOpen, external: true },
+    ],
+  },
 ];
+
+/* ------------------------------------------------------------------ */
+/* Types                                                               */
+/* ------------------------------------------------------------------ */
 
 type DashboardAuthSession = {
   authenticated: boolean;
@@ -41,6 +101,10 @@ type FactoryCapabilitiesResponse = {
   };
 };
 
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [session, setSession] = useState<DashboardAuthSession | null>(null);
@@ -50,6 +114,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [ownerId, setOwnerId] = useState("owner_primary");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [showCorporationNav, setShowCorporationNav] = useState(false);
+  const [commandBarVisible, setCommandBarVisible] = useState(false);
+  const commandBarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadAuthSession = useCallback(async () => {
     setLoadingAuth(true);
@@ -130,152 +196,237 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     await fetch("/api/dashboard/auth/logout", { method: "POST" });
     await loadAuthSession();
   }, [loadAuthSession]);
+
   const showSystemCommandBar = Boolean(
     pathname &&
     !pathname.startsWith("/dashboard/chat") &&
     !pathname.startsWith("/dashboard/csi")
   );
 
+  /* ---------------------------------------------------------------- */
+  /* Loading state                                                     */
+  /* ---------------------------------------------------------------- */
+
   if (loadingAuth) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-200">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-6 py-5 text-sm text-slate-300">
-          Verifying dashboard session...
+      <div className="flex h-screen items-center justify-center bg-[#0a0a0f] text-slate-200">
+        <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-6 py-5 text-sm text-slate-400 backdrop-blur">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-600 border-t-blue-400" />
+          Verifying session...
         </div>
       </div>
     );
   }
+
+  /* ---------------------------------------------------------------- */
+  /* Login screen                                                      */
+  /* ---------------------------------------------------------------- */
 
   if (!session?.authenticated) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 p-4">
-        <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/80 p-5">
-          <h1 className="text-lg font-semibold">Dashboard Access</h1>
-          <p className="mt-1 text-sm text-slate-400">Sign in to access operations controls and session data.</p>
-          <form onSubmit={handleLogin} className="mt-4 space-y-3">
-            <label className="block text-xs text-slate-400">
-              Owner ID
-              <input
-                value={ownerId}
-                onChange={(event) => setOwnerId(event.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-              />
-            </label>
-            <label className="block text-xs text-slate-400">
-              Password
-              <input
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                type="password"
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-              />
-            </label>
-            {authError && (
-              <div className="rounded-md border border-rose-800/70 bg-rose-900/20 px-3 py-2 text-xs text-rose-200">
-                {authError}
+      <div className="flex h-screen items-center justify-center bg-[#0a0a0f] text-slate-100 p-4">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/10 ring-1 ring-blue-500/20">
+              <LayoutDashboard className="h-6 w-6 text-blue-400" />
+            </div>
+            <h1 className="text-xl font-semibold tracking-tight">Universal Agent</h1>
+            <p className="mt-1 text-sm text-slate-500">Sign in to operations dashboard</p>
+          </div>
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6 backdrop-blur">
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-400">Owner ID</label>
+                <input
+                  value={ownerId}
+                  onChange={(event) => setOwnerId(event.target.value)}
+                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20"
+                />
               </div>
-            )}
-            <div className="flex items-center gap-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-400">Password</label>
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  type="password"
+                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20"
+                />
+              </div>
+              {authError && (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-2.5 text-xs text-red-300">
+                  {authError}
+                </div>
+              )}
               <button
                 type="submit"
-                className="rounded-md border border-cyan-700 bg-cyan-600/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-600/30"
+                className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-500 active:bg-blue-700"
               >
                 Sign In
               </button>
-              <button
-                type="button"
-                onClick={loadAuthSession}
-                className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
-              >
-                Retry
-              </button>
-            </div>
-          </form>
+            </form>
+          </div>
         </div>
       </div>
     );
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Authenticated layout                                              */
+  /* ---------------------------------------------------------------- */
+
   return (
-    <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100">
-      {/* Mobile Header */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 backdrop-blur md:hidden">
-        <div className="text-sm font-semibold tracking-wide text-slate-200">Operations</div>
-        <button
-          onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-          className="rounded-md border border-slate-700 bg-slate-800/60 p-2 text-slate-300"
-        >
-          {isMobileSidebarOpen ? "✕" : "☰"}
-        </button>
+    <div className="h-screen flex flex-col bg-[#0a0a0f] text-slate-100">
+      {/* Top bar — desktop + mobile */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-white/[0.06] bg-white/[0.02] px-4 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200 md:hidden"
+          >
+            {isMobileSidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+          <span className="text-sm font-semibold tracking-tight text-slate-300">Operations</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const url = "/?new_session=1&focus_input=1";
+              const w = window.open(url, "ua-chat-window");
+              if (w) w.focus();
+            }}
+            className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.06] hover:text-white"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Chat</span>
+          </button>
+          {session.auth_required && (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.06] hover:text-slate-300"
+              title="Sign Out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </header>
 
-      <div className="flex h-full flex-1 overflow-hidden p-0 md:p-6 lg:gap-4">
+      <div className="flex flex-1 overflow-hidden">
         {/* Sidebar Overlay (Mobile) */}
         {isMobileSidebarOpen && (
           <div
-            className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm md:hidden"
+            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm md:hidden"
             onClick={() => setIsMobileSidebarOpen(false)}
           />
         )}
 
+        {/* Sidebar */}
         <aside
           className={[
-            "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-800 bg-slate-900/95 p-3 transition-transform duration-300 md:relative md:inset-0 md:flex md:w-64 md:translate-x-0 md:rounded-xl md:border md:bg-slate-900/60 md:backdrop-blur",
-            isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+            "fixed inset-y-12 left-0 z-50 flex w-64 flex-col border-r border-white/[0.06] bg-[#0a0a0f] transition-transform duration-200 md:relative md:inset-0 md:translate-x-0",
+            isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
           ].join(" ")}
         >
-          <nav className="flex-1 space-y-1 overflow-y-auto">
-            {NAV_ITEMS.filter((item) => !item.requiresHeadquarters || showCorporationNav).map((item) => {
-              const active = !item.external && pathname === item.href;
-              if (item.external) {
-                return (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-300 transition hover:bg-slate-800/70"
-                  >
-                    {item.label}
-                    <span className="text-[10px] text-slate-500">&#x2197;</span>
-                  </a>
-                );
-              }
+          <nav className="flex-1 overflow-y-auto px-3 py-4">
+            {NAV_GROUPS.map((group) => {
+              const visibleItems = group.items.filter(
+                (item) => !item.requiresHeadquarters || showCorporationNav,
+              );
+              if (visibleItems.length === 0) return null;
               return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={[
-                    "block rounded-lg px-3 py-2 text-sm transition",
-                    active
-                      ? "bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-500/30"
-                      : item.primary
-                        ? "bg-cyan-600/10 text-cyan-400 font-bold hover:bg-cyan-600/20 border border-cyan-700/30"
-                        : "text-slate-300 hover:bg-slate-800/70",
-                  ].join(" ")}
-                >
-                  {item.label}
-                </Link>
+                <div key={group.title} className="mb-5">
+                  <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+                    {group.title}
+                  </p>
+                  <div className="space-y-0.5">
+                    {visibleItems.map((item) => {
+                      const Icon = item.icon;
+                      const active = !item.external && pathname === item.href;
+                      if (item.external) {
+                        return (
+                          <a
+                            key={item.href}
+                            href={item.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200"
+                          >
+                            <Icon className="h-4 w-4 shrink-0 opacity-60" />
+                            {item.label}
+                            <span className="ml-auto text-[10px] text-slate-600">&#x2197;</span>
+                          </a>
+                        );
+                      }
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className={[
+                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition",
+                            active
+                              ? "bg-blue-500/10 text-blue-300 font-medium"
+                              : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200",
+                          ].join(" ")}
+                        >
+                          <Icon
+                            className={[
+                              "h-4 w-4 shrink-0",
+                              active ? "text-blue-400" : "opacity-50",
+                            ].join(" ")}
+                          />
+                          {item.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
           </nav>
-          <div className="mt-4 border-t border-slate-800 pt-3">
-            <p className="text-[11px] text-slate-500">Owner: {session.owner_id}</p>
-            {session.auth_required && (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="mt-2 w-full rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800/70"
-              >
-                Sign Out
-              </button>
-            )}
+
+          <div className="border-t border-white/[0.06] px-4 py-3">
+            <p className="text-[11px] text-slate-600">{session.owner_id}</p>
           </div>
         </aside>
 
-        <main className="flex h-full flex-1 flex-col overflow-y-auto overflow-x-hidden scrollbar-thin bg-slate-900/50 p-4 pr-2 backdrop-blur md:rounded-xl md:border md:border-slate-800/80 md:p-6 md:pr-4">
-          {showSystemCommandBar && <SystemCommandBar sourcePage={pathname || "/dashboard"} />}
-          {children}
+        {/* Main Content */}
+        <main className="relative flex flex-1 flex-col overflow-hidden">
+          {/* SystemCommandBar hover trigger zone */}
+          {showSystemCommandBar && (
+            <>
+              <div
+                className="absolute top-0 left-0 right-0 z-30 h-1 cursor-pointer"
+                onMouseEnter={() => {
+                  if (commandBarTimeoutRef.current) clearTimeout(commandBarTimeoutRef.current);
+                  setCommandBarVisible(true);
+                }}
+              />
+              <div
+                className={[
+                  "absolute top-0 left-0 right-0 z-20 transition-all duration-200",
+                  commandBarVisible
+                    ? "translate-y-0 opacity-100"
+                    : "-translate-y-full opacity-0 pointer-events-none",
+                ].join(" ")}
+                onMouseLeave={() => {
+                  commandBarTimeoutRef.current = setTimeout(() => setCommandBarVisible(false), 400);
+                }}
+                onMouseEnter={() => {
+                  if (commandBarTimeoutRef.current) clearTimeout(commandBarTimeoutRef.current);
+                }}
+              >
+                <div className="border-b border-white/[0.06] bg-[#0a0a0f]/95 backdrop-blur-lg p-3">
+                  <SystemCommandBar sourcePage={pathname || "/dashboard"} />
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">
+            {children}
+          </div>
         </main>
       </div>
     </div>

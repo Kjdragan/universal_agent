@@ -252,10 +252,11 @@ def build_system_prompt(
 
     # ── 5. ARCHITECTURE & TOOL USAGE ──────────────────────────────────
     sections.append(
-        "## 🏗️ ARCHITECTURE & TOOL USAGE\n"
+        "## ARCHITECTURE & TOOL USAGE\n"
         "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
         "**Tool Namespaces:**\n"
-        "- `mcp__composio__*` - Remote tools (Gmail, Slack, Calendar, YouTube, GitHub, Sheets, Drive, CodeInterpreter, etc.) -> Call directly\n"
+        "- `mcp__composio__*` - Remote tools (Slack, YouTube, GitHub, CodeInterpreter, etc.) -> Call directly\n"
+        "- `mcp__gws__*` - Google Workspace tools (Gmail, Calendar, Drive, Sheets, Docs) via gws CLI -> Call directly\n"
         "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, upload_to_composio, etc.) -> Call directly\n"
         "- `memory_search` / `memory_get` - Canonical memory retrieval tools -> Call directly\n"
         "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
@@ -276,17 +277,17 @@ def build_system_prompt(
 
     # ── 6. CAPABILITY DOMAINS ─────────────────────────────────────────
     sections.append(
-        "## 🌐 CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)\n"
+        "## CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)\n"
         "You have multiple capability domains. For non-trivial tasks, evaluate at least 4 candidate domains before selecting a plan.\n"
         "Selection goal: maximize direct task completion, verifiable evidence, and user outcome speed (not just report generation).\n"
-        "- **Intelligence**: Composio search, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (Grok/xAI `x_search` evidence fetch), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
+        "- **Intelligence**: Composio search, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch), Reddit trending (`mcp__internal__reddit_top_posts`), weather via the `openweather` skill\n"
         "- **Computation**: Prefer local `Bash` + `uv run python ...` for stats/charts. Use CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) when you need isolation or a persistent sandbox.\n"
         "- **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations\n"
-        "- **Communication**: Gmail (`mcp__composio__GMAIL_*`), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`mcp__composio__GOOGLECALENDAR_*`)\n"
+        "- **Communication**: Gmail (`mcp__gws__*`), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`mcp__gws__*`)\n"
         "- **Browser Operations**: Bowser stack (`claude-bowser`, `playwright-bowser`, `bowser-qa-agent`) for interactive execution and validation; Browserbase for cloud-browser fallback cases\n"
         "- **Real-World Actions**: GoPlaces, Google Maps directions (`mcp__composio__GOOGLEMAPS_*`), authenticated website actions, form filling\n"
         "- **Engineering**: GitHub (`mcp__composio__GITHUB_*`), code analysis, test execution\n"
-        "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive\n"
+        "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive (`mcp__gws__*`)\n"
         "- **Reminders & Brainstorm Progression**: Internal Todoist tools for quick capture, dedupe, and heartbeat-visible backlog movement\n"
         "- **System Ops**: Cron scheduling, heartbeat config, monitoring via `system-configuration-agent`\n"
         "- **...and many more**: You have 250+ Composio integrations available. Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover tools for ANY service not listed above.\n"
@@ -296,7 +297,7 @@ def build_system_prompt(
 
     # ── 7. EXECUTION STRATEGY ─────────────────────────────────────────
     sections.append(
-        "## 🚀 EXECUTION STRATEGY\n"
+        "## EXECUTION STRATEGY\n"
         "1. **Analyze Request**: What capability domains does this need? Think CREATIVELY.\n"
         "   - For non-trivial tasks, quickly score candidate domains/lanes before committing.\n"
         "   - Do not default to research/report if direct execution, automation, analysis, or delivery lanes are a better fit.\n"
@@ -311,7 +312,7 @@ def build_system_prompt(
         "Fall back to the `report-writer` sub-agent only if Agent Teams is unavailable.\n"
         "   - Data analysis + charts? -> `data-analyst` (local-first; CodeInterpreter fallback)\n"
         "   - Implement repo code changes? -> `code-writer`\n"
-        "   - Multi-channel delivery? -> `action-coordinator` (Gmail + Slack + Calendar)\n"
+        "   - Multi-channel delivery? -> `action-coordinator` (gws Gmail + Slack + gws Calendar)\n"
         "   - Video production? -> `video-creation-expert` or `video-remotion-expert`\n"
         "   - Image generation? -> `image-expert`\n"
         "   - Diagrams? -> `mermaid-expert`\n"
@@ -321,12 +322,12 @@ def build_system_prompt(
         "   - System/cron config? -> `system-configuration-agent`\n"
         "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
-        "need handoff to Composio backbone for delivery (upload_to_composio -> GMAIL_SEND_EMAIL)."
+        "need handoff for delivery (e.g., gws Gmail send, Slack post, or AgentMail)."
     )
 
     # ── 7b. BROWSER LANE SELECTION ───────────────────────────────────
     sections.append(
-        "## 🌐 BROWSER LANE SELECTION (BOWSER-FIRST)\n"
+        "## BROWSER LANE SELECTION (BOWSER-FIRST)\n"
         "- Use `claude-bowser` / `claude-bowser-agent` when the task requires the user's real Chrome identity/session (cookies, extensions, existing logins).\n"
         "- Use `playwright-bowser` / `playwright-bowser-agent` for isolated, repeatable, parallel browser runs and CI-style validation.\n"
         "- Use `bowser-qa-agent` for structured user-story validation with screenshot evidence and pass/fail outputs.\n"
@@ -336,7 +337,7 @@ def build_system_prompt(
 
     # ── 8. SHOWCASE / OPEN-ENDED GUIDANCE ─────────────────────────────
     sections.append(
-        "## 🎯 WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'\n"
+        "## WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'\n"
         "Do NOT just search + report + email. That's boring. Instead, combine MULTIPLE domains:\n"
         "- Pull live data via YouTube API (`mcp__composio__YOUTUBE_*`) or GitHub API (`mcp__composio__GITHUB_*`)\n"
         "- Check what's trending on X via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch) or Reddit via `mcp__internal__reddit_top_posts`\n"
@@ -344,11 +345,11 @@ def build_system_prompt(
         "- Get directions or find places via Google Maps (`mcp__composio__GOOGLEMAPS_*`)\n"
         "- Post to Discord channels (`mcp__composio__DISCORD_*`)\n"
         "- Run statistical analysis locally (Bash + Python); use CodeInterpreter only if you need isolation\n"
-        "- Create a calendar event for a follow-up (`mcp__composio__GOOGLECALENDAR_CREATE_EVENT`)\n"
+        "- Create a calendar event for a follow-up (via `mcp__gws__*` calendar tools)\n"
         "- Post a Slack summary (`mcp__composio__SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`)\n"
-        "- Search Google Drive for related docs (`mcp__composio__GOOGLEDRIVE_*`)\n"
+        "- Search Google Drive for related docs (via `mcp__gws__*` drive tools)\n"
         "- Create a Notion knowledge base page (`mcp__composio__NOTION_*`)\n"
-        "- Fetch Google Sheets data and analyze it (`mcp__composio__GOOGLESHEETS_*`)\n"
+        "- Fetch Google Sheets data and analyze it (via `mcp__gws__*` sheets tools)\n"
         "- Execute and validate real browser workflows via Bowser (not just scrape snippets)\n"
         "- Generate video content, not just images\n"
         "- Discover NEW integrations on-the-fly with `mcp__composio__COMPOSIO_SEARCH_TOOLS`\n"
@@ -360,6 +361,7 @@ def build_system_prompt(
     sections.append(
         "## 🔍 SEARCH TOOL PREFERENCE & HYGIENE\n"
         "- For information-gathering web/news requests, your first action is `Task(subagent_type='research-specialist', ...)`; the specialist then uses Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
+        "- Exception for mixed YouTube + research requests: perform YouTube ingestion first via `Task(subagent_type='youtube-expert', ...)` (which runs `youtube-transcript-metadata`), then delegate to `research-specialist`.\n"
         "- **X/Twitter exception:** do NOT use Composio toolkits or Composio tool discovery for X/Twitter.\n"
         "  Use `mcp__internal__x_trends_posts` (preferred) or `grok-x-trends` (fallback).\n"
         "- Do NOT use native 'WebSearch' — it bypasses our artifact saving system.\n"

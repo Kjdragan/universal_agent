@@ -1,91 +1,87 @@
 ---
 name: youtube-tutorial-creation
-description: |
-  Turn a YouTube tutorial into durable learning artifacts (concept doc + runnable implementation) stored under UA_ARTIFACTS_DIR.
-  USE WHEN user provides a YouTube URL and wants to learn/implement from it.
+description: >
+  Convert a YouTube tutorial video into durable, referenceable learning artifacts stored
+  under UA_ARTIFACTS_DIR. Produces CONCEPT.md (standalone tutorial write-up), IMPLEMENTATION.md
+  (prerequisites + steps), runnable implementation/ code, and manifest.json (provenance).
+  USE when a user provides a YouTube URL and wants to learn, understand, implement from,
+  or deeply study a video. Also trigger when a webhook/hook payload contains a YouTube URL
+  with a learning/tutorial intent. Trigger phrases: "create a tutorial from this video",
+  "help me learn from this YouTube link", "implement what's shown in this video",
+  "turn this YouTube video into a guide", "make me study notes from this", "explain and
+  implement this YouTube tutorial", "I want to implement this", "break down this video for me".
 ---
 
 # YouTube Tutorial Creation Skill
 
-> **Mandatory Dependency:** Always invoke the `youtube-transcript-metadata` skill first (Step 3 below).
+Converts a YouTube tutorial into durable, re-usable learning artifacts. The output should
+be understandable *without* watching the video.
+
+> **Mandatory Dependency:** Always invoke the `youtube-transcript-metadata` skill first (Step 3).
 > Never fetch transcripts or metadata inline — the transcript skill is the single source of truth.
 
-This skill converts a YouTube tutorial into durable, referenceable artifacts:
-- `CONCEPT.md` (educational tutorial-style writeup)
-- `IMPLEMENTATION.md` (how to run/use)
-- `implementation/` (runnable code/scripts/config)
-- `visuals/` (key frames, OCR/code extractions, diagrams) when possible
-- `research/` (gap-filling sources + citations)
-- `manifest.json` (provenance + retention)
+## Output artifacts
 
-## Output Policy (MANDATORY)
+| File | Required | Purpose |
+|------|----------|---------|
+| `manifest.json` | ✅ Always | Provenance, status, retention map |
+| `README.md` | ✅ Always | One-page summary with metadata context block |
+| `CONCEPT.md` | ✅ Always | Standalone tutorial — understandable without watching the video |
+| `IMPLEMENTATION.md` | ✅ Always | Prerequisites, steps, expected outputs |
+| `implementation/` | ✅ Always | Runnable code/scripts (validated) |
+| `visuals/gemini_video_analysis.md` | ⬜ Best-effort | Timestamped visual analysis from Gemini |
+| `research/sources.md` | ⬜ When gaps exist | Gap-filling sources and citations |
+| `transcript.clean.txt` | ⬜ Recommended | Deduplicated transcript (retention: temp) |
 
-### Persistent artifacts (default)
-Write durable deliverables to:
-- `UA_ARTIFACTS_DIR` (env var; injected by UA)
-
-### Ephemeral scratch (only for intermediates)
-Use:
-- `CURRENT_SESSION_WORKSPACE` (env var; session directory) for downloads/caches/intermediate steps
+---
 
 ## Artifact Directory Convention
 
-Create a new run folder:
-`UA_ARTIFACTS_DIR/youtube-tutorial-creation/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/`
+All durable outputs go under:
 
-Inside it, write at minimum:
-- `manifest.json`
-- `README.md`
-- `CONCEPT.md`
-- `IMPLEMENTATION.md`
-- `implementation/`
-- `research/`
-- `visuals/` (if any visual analysis performed)
+```
+<resolved_artifacts_root>/youtube-tutorial-creation/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/
+```
 
-## References / Support Assets
+> ⚠️ **Path hygiene**: Never put a literal `UA_ARTIFACTS_DIR` in a path.  
+> BAD: `UA_ARTIFACTS_DIR/...` or `/opt/universal_agent/UA_ARTIFACTS_DIR/...`  
+> GOOD: Resolve the root first (Step 2 below), then append `youtube-tutorial-creation/...`
 
-Use these companion docs for consistent ingress, tooling, and output quality:
-
-1. `../youtube-transcript-metadata/SKILL.md` (core transcript+metadata ingestion)
-2. `references/ingestion_and_tooling.md`
-3. `references/composio_wiring_checklist.md`
-4. `references/output_contract.md`
+---
 
 ## Workflow
 
-1. Confirm inputs
-- If the user did not provide a URL, ask for one.
-- Ask for the goal: concept-only vs concept+implementation.
-- Ask for target language/framework if ambiguous.
+### Step 1 — Confirm inputs
 
-0. Preflight (MANDATORY)
-- Never rely on Bash inheriting env vars. Always be able to resolve paths yourself.
-- Resolve artifacts root (absolute) in a way that works even if `UA_ARTIFACTS_DIR` is unset in the Bash environment:
-  - `python3 -c "from universal_agent.artifacts import resolve_artifacts_dir; print(resolve_artifacts_dir())"`
-- If you cannot resolve or create the artifacts root, STOP and report the error (do not fall back to writing “artifacts” under the session workspace).
+- If no URL provided, ask for one.
+- Ask for the goal: **concept-only** vs **concept + implementation**.
+- Ask for target language/framework if the video is ambiguous about it.
 
-2. Create artifact run dir (first)
-- Compute `video-slug` from video title (preferred) or URL id.
-- Create the run dir under `UA_ARTIFACTS_DIR` using the convention above.
-- Start `manifest.json` immediately (fill fields as you go).
-IMPORTANT: Prefer the `mcp__internal__write_text_file` tool for writing into `UA_ARTIFACTS_DIR`.
-Native `Write` may be restricted to the session workspace depending on runtime.
-Do NOT `cp -r` the entire session directory into artifacts; only write/copy the files that belong in the artifact package.
-HARD RULE: Durable outputs must NOT be written under `CURRENT_SESSION_WORKSPACE/artifacts/...`. If `mcp__internal__write_text_file` is unavailable/denied, STOP and report (don’t silently fall back).
-HARD RULE: Never treat `UA_ARTIFACTS_DIR` as a literal directory name in paths.
-- BAD: `/opt/universal_agent/UA_ARTIFACTS_DIR/...`
-- BAD: `UA_ARTIFACTS_DIR/...`
-- GOOD: `<resolved_artifacts_root>/youtube-tutorial-creation/...`
+### Step 2 — Preflight: resolve artifacts root (MANDATORY)
 
-3. Transcript + metadata ingestion (MANDATORY)
-Use the core skill script so transcript and metadata are fetched in parallel:
-- Script: `.claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py`
-- Scratch outputs:
-  - `CURRENT_SESSION_WORKSPACE/downloads/youtube_ingest.json`
-  - `CURRENT_SESSION_WORKSPACE/downloads/transcript.txt`
+Never rely on Bash inheriting env vars. Resolve the artifacts root explicitly:
 
 ```bash
-uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \
+python3 -c "from universal_agent.artifacts import resolve_artifacts_dir; print(resolve_artifacts_dir())"
+```
+
+If this fails, **STOP** and report the error. Do not fall back to writing under the session workspace.
+
+Then:
+
+- Compute `video-slug` from the video title (preferred) or URL video ID.
+- Create the run directory under the resolved artifacts root.
+- Start `manifest.json` immediately — fill fields as you go.
+
+> **Tool preference:** Use `mcp__internal__write_text_file` for all writes into `UA_ARTIFACTS_DIR`.
+> Native `Write` may be restricted to the session workspace depending on runtime.
+
+### Step 3 — Transcript + metadata ingestion (MANDATORY)
+
+Run the core ingestion script with parallel transcript + metadata extraction:
+
+```bash
+UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \
   --url "<YOUTUBE_URL>" \
   --language en \
   --json-out "$CURRENT_SESSION_WORKSPACE/downloads/youtube_ingest.json" \
@@ -93,22 +89,26 @@ uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcri
   --pretty
 ```
 
+Read `youtube_ingest.json` and look at `ok`, `failure_class`, `transcript_text`, and `metadata`.
+
+**Degraded-mode decision tree:**
+
+| Situation | Action |
+|-----------|--------|
+| `ok=true` | Continue to Step 3b (normal path) |
+| `ok=false`, `failure_class=request_blocked` | Retry once; if still blocked, proceed degraded with metadata only |
+| `ok=false`, `failure_class=empty_or_low_quality_transcript` | Use Gemini visual analysis as primary source; set status `degraded_transcript_only` |
+| `ok=false`, metadata succeeded | Preserve metadata in manifest; proceed degraded |
+| Both transcript and metadata failed | Set status `failed`; still write `manifest.json` + `README.md` with error detail |
+
 Source-of-truth policy:
-- Transcript: `youtube-transcript-api` instance API (`YouTubeTranscriptApi().fetch(...)`)
-- Metadata: `yt-dlp` (allowed and expected)
-- Never use `yt-dlp` as transcript source.
-- Never use legacy `YouTubeTranscriptApi.get_transcript(...)`.
 
-Anti-blocking hygiene (mandatory):
-- Keep transcript requests idempotent and dedupe by video id.
-- Persist failure classes (`request_blocked`, `api_unavailable`, `empty_or_low_quality_transcript`) in run metadata.
-- Enforce a minimum transcript character threshold before treating extraction as success.
-- If transcript fails but metadata succeeds, still preserve metadata in manifest and docs.
+- Transcript: `YouTubeTranscriptApi().fetch(video_id)` — **never** `get_transcript()` (legacy)
+- Metadata: `yt-dlp` only — **never** use yt-dlp for transcript text
 
-3b. Transcript cleanup (HIGHLY RECOMMENDED)
-Caption transcripts often include heavy duplication. After creating `downloads/transcript.txt`, dedupe consecutive identical lines and write:
-- Scratch: `CURRENT_SESSION_WORKSPACE/downloads/transcript.clean.txt`
-- Artifact: `<run_dir>/transcript.clean.txt` (typically `retention: temp`)
+### Step 3b — Transcript cleanup (recommended)
+
+Caption transcripts often contain consecutive duplicate lines. Deduplicate:
 
 ```bash
 python3 - <<'PY'
@@ -120,30 +120,25 @@ src = ws / "downloads" / "transcript.txt"
 dst = ws / "downloads" / "transcript.clean.txt"
 
 lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
-out = []
-prev = None
+out, prev = [], None
 for line in lines:
-  if line == prev:
-    continue
-  out.append(line)
-  prev = line
+    if line != prev:
+        out.append(line)
+    prev = line
 
-dst.write_text("\\n".join(out).strip() + "\\n", encoding="utf-8")
-print(f"Wrote {dst} ({len(out)} lines, from {len(lines)} lines)")
+dst.write_text("\n".join(out).strip() + "\n", encoding="utf-8")
+print(f"Wrote {dst} ({len(out)} lines, from {len(lines)} original)")
 PY
 ```
 
-3c. Full-transcript pass (MANDATORY)
-To avoid “cut off” problems from partial `Read` previews, always do at least one full-file pass over the cleaned transcript before synthesizing docs.
-This also verifies the transcript is readable end-to-end.
+### Step 3c — Full-transcript pass (MANDATORY)
 
-- Input: `CURRENT_SESSION_WORKSPACE/downloads/transcript.clean.txt`
-- Output: `CURRENT_SESSION_WORKSPACE/downloads/transcript.stats.json`
+Do a full-file read of the cleaned transcript to avoid "cut-off" issues from partial previews,
+and produce a stats snapshot for the manifest:
 
 ```bash
 python3 - <<'PY'
-import json
-import os
+import json, os
 from pathlib import Path
 
 ws = Path(os.environ["CURRENT_SESSION_WORKSPACE"])
@@ -153,144 +148,156 @@ dst = ws / "downloads" / "transcript.stats.json"
 text = src.read_text(encoding="utf-8", errors="replace")
 lines = text.splitlines()
 stats = {
-  "path": str(src),
-  "bytes": len(text.encode("utf-8", errors="replace")),
-  "chars": len(text),
-  "lines": len(lines),
-  "head": lines[:5],
-  "tail": lines[-5:],
+    "path": str(src),
+    "bytes": len(text.encode("utf-8", errors="replace")),
+    "chars": len(text),
+    "lines": len(lines),
+    "head": lines[:5],
+    "tail": lines[-5:],
 }
 dst.write_text(json.dumps(stats, indent=2), encoding="utf-8")
-print(f"Wrote {dst} ({stats['lines']} lines)")
+print(f"Wrote {dst} ({stats['lines']} lines, {stats['chars']} chars)")
 PY
 ```
 
-3d. Metadata handoff (MANDATORY)
-Read `downloads/youtube_ingest.json` and carry key metadata into:
-- `manifest.json` (`title`, `channel`, `duration`, `upload_date`, `metadata_status`, `metadata_source`)
-- `README.md` context block
+### Step 3d — Metadata handoff (MANDATORY)
 
-4. Visual analysis (best effort)
-Use Gemini multimodal understanding against the YouTube URL (preferred model: `gemini-3-pro-preview`):
-- Script path: `.claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py`
-- Output target: `<run_dir>/visuals/gemini_video_analysis.md`
-- Include timestamped findings when possible and separate visual-only observations from transcript-derived claims.
+Carry key fields from `youtube_ingest.json` into:
 
-If vision tooling is unavailable OR fails, proceed transcript-only and record the limitation in the manifest + docs.
-Do NOT skip vision analysis just because you *assume* the transcript is sufficient.
+- `manifest.json`: `title`, `channel`, `duration`, `upload_date`, `metadata_status`, `metadata_source`
+- `README.md`: context block at the top (URL, title, channel, duration, upload date)
 
-5. Synthesis
-Merge “what they said” (transcript) and “what they showed” (visual findings):
-- Identify gaps/ambiguities
-- Do supplementary research as needed (prefer official docs, then reputable sources)
-- Record all gap-filling sources in `research/sources.md`
+### Step 4 — Visual analysis (best-effort)
 
-6. Write durable artifacts
-- `CONCEPT.md`: standalone tutorial, includes diagrams/images (or references in `visuals/`) and carefully sourced code snippets.
-- `IMPLEMENTATION.md`: prerequisites, steps, expected outputs.
-- `implementation/`: runnable, cleaned code. Add comments with provenance + references to `visuals/code-extractions/` when relevant.
-- `visuals/code-extractions/`: store raw OCR extractions with confidence headers (high/medium/low) and "COMPLETE/VALIDATED" flags.
+Attempt Gemini multimodal analysis against the YouTube URL:
 
-7. Finish and finalize manifest
-Update `manifest.json` with:
-- inputs, extraction status, outputs map, tags
-- retention map (mark safe-to-delete items as `temp`)
-For each extraction step (transcript, visual), set an explicit status:
-- `not_attempted` (only if tools are unavailable)
-- `attempted_succeeded`
-- `attempted_failed` (include the error and fallback)
-
-8. Implementation validation (MANDATORY)
-When you generate a Python sample script in `implementation/`, it MUST be runnable without a separate venv/pyproject.
-Use uv inline scripting (PEP 723) and validate the script executes.
-
-Requirements:
-- Put dependency metadata at the top of the script:
-
-```python
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["<dep1>", "<dep2>"]
-# ///
+```bash
+UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py \
+  --url "<YOUTUBE_URL>" \
+  --out "<run_dir>/visuals/gemini_video_analysis.md" \
+  --json-out "<run_dir>/visuals/gemini_video_analysis.json"
 ```
 
-- Add a `--self-test` mode that does imports + basic object construction WITHOUT requiring secrets.
-- Validate with:
-`uv run implementation/<script>.py --self-test`
+If the script fails (no API key, model unavailable, rate limited), **do not skip the whole skill**.
+Set `extraction.visual = "attempted_failed"` in the manifest and continue with transcript only.
 
-HARD RULE: Do NOT run `pip install`, `uv pip install`, or `uv add` as part of the skill run.
-If dependencies are missing, fix the PEP 723 header and re-run using `uv run`.
+> Do NOT skip visual analysis just because you *assume* the transcript is sufficient.
+> Attempt it, record the result, and proceed.
 
-SDK drift note (MANDATORY):
-- Prefer `google.genai` for new code (it is current). If the video uses `google.generativeai`, document that as “video used legacy SDK”, but implement with the current SDK and verify it imports with `uv run`.
+Self-test (verifies imports only, no API call):
 
-Secrets policy (MANDATORY):
-- Never write API keys or secrets into artifacts (no hardcoded strings in scripts, no keys in docs).
-- Make scripts "just work" by auto-loading a `.env` file at runtime:
-  - Add `python-dotenv` to PEP 723 deps.
-  - Call `load_dotenv(find_dotenv(usecwd=True))` near the top of the script.
-  - Read secrets only from environment variables (e.g., `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `Z_AI_API_KEY`, `ANTHROPIC_API_KEY`).
+```bash
+UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py --self-test
+```
 
-Suggested implementation pattern (google.genai + YouTube URL multimodal):
+### Step 5 — Synthesis
+
+Merge "what they said" (transcript) with "what they showed" (visual findings):
+
+- Identify gaps and ambiguities in the content
+- Do supplementary research when needed (prefer official docs, then reputable sources)
+- Record all gap-filling sources in `research/sources.md` with URLs and access dates
+
+### Step 6 — Write durable artifacts
+
+Write each artifact to the run directory. Quality bar for each:
+
+**`README.md`**
+
+- Video title, channel, URL, duration, upload date (from metadata)
+- 2–3 sentence summary of what the video covers
+- Links to `CONCEPT.md` and `IMPLEMENTATION.md`
+
+**`CONCEPT.md`** — standalone tutorial, no video required
+
+- Introduction explaining *why* this technology/approach exists
+- Core concepts with enough depth to understand the implementation
+- Diagrams or references to `visuals/` when available
+- Code snippets with provenance comments linking to source timestamps or `visuals/code-extractions/`
+- Must be readable by someone who has never seen the video
+
+**`IMPLEMENTATION.md`** — practical runbook
+
+- Prerequisites (exact versions where known)
+- Step-by-step instructions with expected outputs at each step
+- Troubleshooting section for likely failure modes
+- References to `implementation/` scripts
+
+**`implementation/`** — runnable code
+
+- Use uv inline scripting (PEP 723) for all Python scripts (see Step 8)
+- Add comments with provenance (timestamp reference or visual extraction source)
+- Store raw OCR code extractions with confidence headers in `visuals/code-extractions/`
+
+### Step 7 — Finalize manifest
+
+Update `manifest.json` to its final state. See `references/output_contract.md` for the
+full schema. Required fields:
+
+```json
+{
+  "skill": "youtube-tutorial-creation",
+  "status": "full | degraded_transcript_only | failed",
+  "learning_mode": "concept_only | concept_plus_implementation",
+  "video_url": "...",
+  "video_id": "...",
+  "source": "manual | composio | direct",
+  "metadata": { "title": "...", "channel": "...", "duration": 0, "upload_date": "...", "metadata_status": "...", "metadata_source": "yt_dlp" },
+  "extraction": {
+    "transcript": "attempted_succeeded | attempted_failed | not_attempted",
+    "metadata": "attempted_succeeded | attempted_failed | not_attempted",
+    "visual": "attempted_succeeded | attempted_failed | not_attempted"
+  },
+  "outputs": { "CONCEPT.md": "...", "IMPLEMENTATION.md": "...", "manifest.json": "..." },
+  "retention": { "transcript.txt": "temp", "transcript.clean.txt": "temp" },
+  "notes": []
+}
+```
+
+### Step 8 — Implementation validation (MANDATORY)
+
+Every Python script in `implementation/` must be runnable without a separate venv.
+
+Requirements:
+
+1. Include PEP 723 inline dependency metadata at the top:
 
 ```python
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["google-genai>=1.0.0", "python-dotenv>=1.0.1"]
 # ///
-
-from __future__ import annotations
-
-import os
-from google import genai
-from dotenv import find_dotenv, load_dotenv
-
-load_dotenv(find_dotenv(usecwd=True))
-
-def _api_key() -> str | None:
-    return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-
-def build_client() -> genai.Client:
-    key = _api_key()
-    if not key:
-        raise RuntimeError("Missing GOOGLE_API_KEY (or GEMINI_API_KEY)")
-    return genai.Client(api_key=key)
-
-def analyze_video(url: str, prompt: str) -> str:
-    client = build_client()
-    contents = [
-        {
-            "role": "user",
-            "parts": [
-                {"file_data": {"file_uri": url}},
-                {"text": prompt},
-            ],
-        }
-    ]
-    resp = client.models.generate_content(
-        model="gemini-3-pro-preview",
-        contents=contents,
-    )
-    return resp.text or ""
 ```
 
-Reference implementation to run directly:
-- `uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py --self-test`
-- `uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py --url "<youtube_url>" --out "<run_dir>/visuals/gemini_video_analysis.md"`
+1. Add a `--self-test` flag that checks imports + basic object construction **without** requiring secrets.
+2. Load secrets from environment only (never hardcode), using `load_dotenv(find_dotenv(usecwd=True))`.
+3. Valid secret env var names: `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `Z_AI_API_KEY`, `ANTHROPIC_API_KEY`.
+4. Validate with: `UV_CACHE_DIR=/tmp/uv_cache uv run implementation/<script>.py --self-test`
 
-## Retention (Recommended Defaults)
+> **Hard rules:**  
+> Do NOT run `pip install`, `uv pip install`, or `uv add` as part of a skill run.  
+> If deps are missing, fix the PEP 723 header and re-run via `uv run`.
 
-In `manifest.json`:
-- default: `keep`
-- `transcript.txt`: `temp`
-- `video-segments/`: `temp` (if created)
-- large raw dumps/caches: `temp`
+**SDK drift note:** Prefer `google.genai` for all new code. If the tutorial video uses
+`google.generativeai`, note it as "video used legacy SDK" and implement with the current SDK.
 
-These `temp` items are safe to delete later via a cleanup command.
+---
 
 ## Success Criteria
 
-- Artifacts live under `UA_ARTIFACTS_DIR/...` (never only in session scratch)
-- `manifest.json` exists and is accurate
+- All required artifacts live under the resolved `UA_ARTIFACTS_DIR` (never only in session scratch)
+- `manifest.json` exists, is accurate, and has a valid `status`
 - `CONCEPT.md` is understandable without watching the video
-- `implementation/` is runnable or clearly documents what is missing and why
+- `implementation/` scripts pass `--self-test` (or has clear documented reason if not applicable)
+
+---
+
+## Reference files
+
+Read these when you need deeper detail:
+
+| File | When to read |
+|------|-------------|
+| `references/output_contract.md` | Full manifest schema, required vs optional files, status/mode values |
+| `references/ingestion_and_tooling.md` | Tool selection decision matrix, runtime strategy |
+| `references/composio_wiring_checklist.md` | Composio + webhook ingress validation |

@@ -6,6 +6,8 @@ type ChatWindowOptions = {
   role?: "writer" | "viewer";
   newSession?: boolean;
   focusInput?: boolean;
+  message?: string;
+  autoSend?: boolean;
 };
 
 export function buildChatUrl(options?: ChatWindowOptions): string {
@@ -25,6 +27,13 @@ export function buildChatUrl(options?: ChatWindowOptions): string {
   }
   if (options?.focusInput) {
     params.set("focus_input", "1");
+  }
+  const message = String(options?.message || "").trim();
+  if (message) {
+    params.set("message", message);
+  }
+  if (options?.autoSend) {
+    params.set("auto_send", "1");
   }
   const query = params.toString();
   return query ? `/?${query}` : "/";

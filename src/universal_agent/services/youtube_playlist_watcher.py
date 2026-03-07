@@ -316,7 +316,7 @@ class YouTubePlaylistWatcher:
             "video_id": item.get("video_id", ""),
             "channel_id": item.get("channel_id", ""),
             "title": item.get("title", ""),
-            "mode": "explainer_only",
+            "mode": "explainer_plus_code",
             "allow_degraded_transcript_only": True,
             "source": "yt_playlist_watcher",
         }

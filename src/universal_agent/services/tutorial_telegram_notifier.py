@@ -74,8 +74,11 @@ def _build_message(kind: str, title: str, message: str, metadata: dict[str, Any]
             lines.append(f"`{video_id}`")
 
     elif kind == "youtube_tutorial_ready":
+        video_id = str(metadata.get("video_id") or "")
         status = str(metadata.get("tutorial_status") or "full")
         run_path = str(metadata.get("tutorial_run_path") or "")
+        if video_id:
+            lines.append(f"Video ID: `{video_id}`")
         lines.append(f"Status: `{status}`")
         if run_path:
             lines.append(f"Path: `{run_path}`")
@@ -91,7 +94,10 @@ def _build_message(kind: str, title: str, message: str, metadata: dict[str, Any]
                 lines.append("Files: " + ", ".join(f"`{x}`" for x in visible))
 
     elif kind == "youtube_tutorial_failed":
+        video_id = str(metadata.get("video_id") or "")
         reason = str(metadata.get("error") or metadata.get("reason") or "")
+        if video_id:
+            lines.append(f"Video ID: `{video_id}`")
         if reason:
             lines.append(f"Reason: `{_escape(reason[:120])}`")
 
@@ -118,58 +124,21 @@ def _escape(text: str) -> str:
     return text
 
 
-_SEND_MAX_RETRIES = 3
-_SEND_RETRY_BACKOFF = (1.0, 3.0, 5.0)
-
-
 def _send(text: str) -> bool:
     token = _bot_token()
     chat = _chat_id()
     if not token or not chat:
         return False
-    url = _BASE.format(token=token)
-    last_exc: Optional[Exception] = None
-    for attempt in range(_SEND_MAX_RETRIES):
-        try:
-            resp = httpx.post(
-                url,
-                json={
-                    "chat_id": chat,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True,
-                },
-                timeout=10,
-            )
-            if resp.is_success:
-                return True
-            # 4xx errors are not retryable (bad request, chat not found, etc.)
-            if 400 <= resp.status_code < 500:
-                logger.warning(
-                    "Telegram tutorial notify failed status=%d body=%s",
-                    resp.status_code,
-                    resp.text[:200],
-                )
-                return False
-            # 5xx — retry
-            logger.warning(
-                "Telegram tutorial notify server error status=%d attempt=%d/%d",
-                resp.status_code,
-                attempt + 1,
-                _SEND_MAX_RETRIES,
-            )
-        except Exception as exc:
-            last_exc = exc
-            logger.warning(
-                "Telegram tutorial notify error attempt=%d/%d: %s",
-                attempt + 1,
-                _SEND_MAX_RETRIES,
-                exc,
-            )
-        if attempt < _SEND_MAX_RETRIES - 1:
-            time.sleep(_SEND_RETRY_BACKOFF[min(attempt, len(_SEND_RETRY_BACKOFF) - 1)])
-    logger.warning("Telegram tutorial notify exhausted %d retries (last: %s)", _SEND_MAX_RETRIES, last_exc)
-    return False
+    from universal_agent.services.telegram_send import telegram_send_sync
+
+    ok, _err = telegram_send_sync(
+        chat_id=chat,
+        text=text,
+        bot_token=token,
+        parse_mode="Markdown",
+        disable_preview=True,
+    )
+    return ok
 
 
 def maybe_send(payload: dict[str, Any]) -> bool:

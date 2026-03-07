@@ -16,9 +16,9 @@ Choose the most reliable path for:
 4. Gemini multimodal video understanding for audio+visual analysis.
 5. Official YouTube API only when account-scoped operations are explicitly required.
 
-Core script path:
+Core script path (relative to repo root):
 
-`/home/kjdragan/lrepos/universal_agent/.claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py`
+`.claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py`
 
 ## Decision Matrix
 

@@ -4,12 +4,17 @@
 
 This plan moves CSI ingestion from validated canary behavior to stable production operation on VPS using Tailnet-first access and controls.
 
-Lane: VPS runtime (`root@100.106.113.93`)  
+Lane: VPS runtime (`root@srv1360701.taildcc090.ts.net`)  
 Date baseline: 2026-02-22
+
+Current-state note (2026-03-06):
+1. This document captures the earlier CSI playlist cutover plan/history.
+2. Native UA playlist watching is now the authoritative active watcher path via `src/universal_agent/services/youtube_playlist_watcher.py`.
+3. CSI playlist-related adapters and downstream digest/reporting flows remain in the repo, but this document should not be read as the current ownership model for tutorial playlist polling.
 
 ## 2. Current Baseline (Already Verified)
 
-1. `tailscaled` is active on VPS and reachable over tailnet (`100.106.113.93`).
+1. `tailscaled` is active on VPS and reachable over tailnet (`srv1360701.taildcc090.ts.net`).
 2. `csi-ingester` is active and polling playlist `PLjL3liQSixtsREpdYc959W_K7AIL_chHr` with `HTTP 200`.
 3. Gateway ingest is accepting signed CSI events (`POST /api/v1/signals/ingest` -> `200`).
 4. Hook dispatch is firing from CSI ingest.
@@ -20,7 +25,7 @@ Date baseline: 2026-02-22
 Use these defaults for all operator sessions:
 
 ```bash
-export UA_VPS_HOST='root@100.106.113.93'
+export UA_VPS_HOST='root@srv1360701.taildcc090.ts.net'
 export UA_SSH_AUTH_MODE='tailscale_ssh'
 export UA_TAILNET_PREFLIGHT='required'
 ```
@@ -37,7 +42,7 @@ Notes:
 2. Push only required files using `scripts/vpsctl.sh push`.
 3. Restart only affected services:
    1. `scripts/vpsctl.sh restart gateway`
-   2. `ssh root@100.106.113.93 'systemctl restart csi-ingester'`
+   2. `ssh root@srv1360701.taildcc090.ts.net 'systemctl restart csi-ingester'`
 
 Gate:
 1. gateway `active`
@@ -63,10 +68,10 @@ Gate:
 1. Confirm legacy timer is stopped/disabled:
    1. `universal-agent-youtube-playlist-poller.timer`
    2. `universal-agent-youtube-playlist-poller.service`
-2. Confirm CSI is the only active ingestion path for playlist additions.
+2. Historical note: this step reflected the original CSI playlist cutover. Current production ownership has since moved to native UA playlist watching.
 
 Gate:
-1. new playlist additions only appear as CSI event IDs (`yt:playlist:*`)
+1. historical cutover validation only; do not treat this as the current production ownership check
 
 ### Phase D - Post-Cutover Guardrails
 
@@ -105,7 +110,7 @@ If CSI path regresses:
 
 ## 7. Next Workstream - RSS Investigation (Active Next Step)
 
-After CSI playlist cutover stability is confirmed, the next planned phase is RSS investigation and rollout.
+After the historical CSI playlist cutover stability work, the next planned phase was RSS investigation and rollout.
 
 ### 7.1 Scope
 
@@ -131,7 +136,7 @@ Implementation status update (2026-02-22):
 2. Active path uses `/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json`.
 3. VPS load confirmed with `channels=443` in `csi-ingester` logs.
 4. Signed `youtube_channel_rss` events confirmed ingest (`200`) and durable storage in CSI.
-5. UA internal manual-youtube dispatch is now intentionally restricted to `youtube_playlist` only.
+5. At that phase of implementation, UA internal manual-youtube dispatch was intentionally restricted to `youtube_playlist` only.
 
 ### 7.3 RSS Acceptance Gates
 
@@ -231,7 +236,7 @@ Purpose: bypass YouTube cloud-IP transcript blocking without introducing third-p
 Status (2026-02-23): Implemented in repo.
 
 1. UA `/api/v1/signals/ingest` now dispatches two internal paths:
-   1. playlist source (`youtube_playlist`) -> existing manual YouTube tutorial route,
+   1. playlist source (`youtube_playlist`) -> existing manual YouTube tutorial route at that time,
    2. CSI analytics/analyst sources (`csi_analytics`, `csi_analyst`) -> internal UA trend/data-agent dispatch.
 2. Mapping logic is centralized in `src/universal_agent/signals_ingest.py`:
    1. `to_manual_youtube_payload(...)`

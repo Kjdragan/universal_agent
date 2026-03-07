@@ -20,6 +20,7 @@ Use this skill to keep Todoist as a helper lane, not the main execution lane.
 4. Use Composio Todoist connector flow only when:
    - user explicitly asks for connector-level/OAuth behavior, or
    - internal Todoist tools are unavailable/failing.
+5. For pause/resume handoff reminders that need rich restart context and personal-only exclusions, use `todoist-rich-handoff`.
 
 ## Intent Mapping
 

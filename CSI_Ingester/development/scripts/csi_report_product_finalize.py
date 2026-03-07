@@ -164,6 +164,15 @@ def _safe_parse_dt(raw: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _source_from_report_type(report_type: str) -> str:
+    lowered = str(report_type or "").strip().lower()
+    if "threads" in lowered:
+        return "threads_trends_seeded" if "seed" in lowered else "threads_trends_broad"
+    if "reddit" in lowered:
+        return "reddit_discovery"
+    return "youtube_channel_rss"
+
+
 def _opportunity_id(label: str, *, index: int) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", str(label or "").strip().lower()).strip("-")
     if not slug:
@@ -272,7 +281,7 @@ def _build_opportunity_bundle(
         report_json = report.get("report_json") if isinstance(report.get("report_json"), dict) else {}
         totals = report_json.get("totals") if isinstance(report_json.get("totals"), dict) else {}
         total_signal_volume += _to_int(report_json.get("total_items") or totals.get("items"), default=0)
-        source = "reddit_discovery" if "reddit" in report_type else "youtube_channel_rss"
+        source = _source_from_report_type(report_type)
         source_presence.add(source)
         insight_start = _safe_parse_dt(report.get("window_start_utc"))
         insight_end = _safe_parse_dt(report.get("window_end_utc"))
@@ -471,12 +480,12 @@ def _build_markdown(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Finalize hourly CSI report product and emit UA readiness event.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--window-hours", type=int, default=24)
     parser.add_argument("--output-root", default="/opt/universal_agent/artifacts/csi-reports")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/rss_report_product_state.json",
+        default="/var/lib/universal-agent/csi/rss_report_product_state.json",
     )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
