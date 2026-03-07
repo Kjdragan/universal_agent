@@ -567,31 +567,21 @@ export default function DashboardTutorialsPage() {
         const res = await fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-repo`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ run_path: normalized, execution_target: "local" }),
+          body: JSON.stringify({ run_path: normalized, execution_target: "server" }),
         });
         const payload = await res.json().catch(() => ({} as Record<string, unknown>));
         if (!res.ok) {
           const detail = asText((payload as Record<string, unknown>).detail) || `Create repo failed (${res.status})`;
           throw new Error(detail);
         }
-        const queued = Boolean((payload as Record<string, unknown>).queued);
-        if (queued) {
-          const jobId = asText((payload as Record<string, unknown>).job_id);
-          const reused = Boolean((payload as Record<string, unknown>).existing_job_reused);
-          setDispatchStatus(
-            reused
-              ? (jobId
-                ? `Job ${jobId} is already in progress. Local worker will continue execution.`
-                : "A repo creation job is already in progress.")
-              : (jobId
-                ? `Queued local repo creation job ${jobId}. Run the local bootstrap worker to execute it.`
-                : "Queued local repo creation job."),
-          );
-          await load();
-          return;
-        }
         const repoDir = asText((payload as Record<string, unknown>).repo_dir);
-        setDispatchStatus(repoDir ? `Repo created and synced: ${repoDir}` : "Repo created and synced.");
+        const repoOpenHint = asText((payload as Record<string, unknown>).repo_open_hint);
+        if (repoDir) {
+          setDispatchStatus(`Repo created: ${repoDir}${repoOpenHint ? ` — ${repoOpenHint}` : ""}`);
+        } else {
+          setDispatchStatus("Repo created successfully.");
+        }
+        await load();
       } catch (err: any) {
         setDispatchStatus(err?.message || "Failed to create repo");
       } finally {
