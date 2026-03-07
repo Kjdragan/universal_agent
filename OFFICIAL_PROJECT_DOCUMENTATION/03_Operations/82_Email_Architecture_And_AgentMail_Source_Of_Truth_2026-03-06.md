@@ -225,14 +225,16 @@ That code transforms AgentMail webhook payloads into hook actions for the `email
 However, **this is not the primary production path today**.
 
 Current status:
-- WebSocket delivery is the authoritative live inbound path
-- the webhook transform should be treated as a secondary or legacy-compatible integration path unless explicitly reintroduced for a production reason
+- WebSocket delivery is the **canonical production** inbound path
+- the webhook transform is **formally deprecated** as of 2026-03-06
+- a runtime deprecation warning is logged whenever the webhook transform is invoked
+- the webhook transform file is retained only as reference and emergency fallback
 
-Important difference:
-- the WebSocket path currently includes reply extraction before dispatch
-- the webhook transform currently passes the raw email body and does not yet mirror the same reply-extraction behavior
+Important note on parity:
+- the webhook transform now imports `_extract_reply_text` from `agentmail_service.py`, so reply extraction parity exists
+- however, the WebSocket path remains the only actively maintained and tested path
 
-If webhook usage is revived later, it should be brought to parity with the WebSocket path.
+Do **not** use the webhook transform as the primary ingest path for new deployments.
 
 ## Environment Variables
 

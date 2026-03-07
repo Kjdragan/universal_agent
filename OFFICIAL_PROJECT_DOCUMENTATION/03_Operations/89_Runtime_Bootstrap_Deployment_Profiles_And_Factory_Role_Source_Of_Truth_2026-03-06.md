@@ -157,6 +157,8 @@ Current policy:
 - `enable_telegram_poll=True`
 - `heartbeat_scope=global`
 - `delegation_mode=publish_and_listen`
+- `enable_csi_ingest=True`
+- `enable_agentmail=True`
 
 Meaning:
 - full gateway/API surface is available
@@ -171,6 +173,8 @@ Current policy:
 - `enable_telegram_poll=False`
 - `heartbeat_scope=local`
 - `delegation_mode=listen_only`
+- `enable_csi_ingest=False`
+- `enable_agentmail=False`
 
 Meaning:
 - worker node does not expose full interactive API/UI surfaces
@@ -184,6 +188,8 @@ Current policy:
 - `enable_telegram_poll` controlled by `UA_STANDALONE_ENABLE_TELEGRAM_POLL`
 - `heartbeat_scope=local`
 - `delegation_mode=disabled`
+- `enable_csi_ingest=True` (default)
+- `enable_agentmail=True` (default)
 
 Meaning:
 - standalone node is interactive like HQ in local behavior

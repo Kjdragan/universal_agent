@@ -132,6 +132,10 @@ Workspace root for Telegram user lane:
 When creating a fresh gateway session, the adapter uses:
 - `user_id="telegram_<user_id>"`
 - `workspace_dir=<AGENT_RUN_WORKSPACES/tg_<user_id>>`
+- `session_id="tg_<user_id>_<short_uuid>"` — unique per query for traceability
+- session metadata includes `source: "telegram"` and `telegram_user_id: "<user_id>"`
+
+The workspace is rooted at the stable `tg_<user_id>/` key for checkpoint continuity, while each session gets a unique ID for dashboard visibility and audit.
 
 ### Fresh vs Continue
 
@@ -141,7 +145,7 @@ Current command semantics:
 
 Actual runtime behavior:
 - default path is **fresh-session-per-request plus checkpoint reinjection**
-- when continuation mode is enabled, adapter first tries `resume_session("tg_<user_id>")`
+- when continuation mode is enabled, adapter first tries `resume_session("tg_<user_id>")` using the workspace key
 - if resume fails, it falls back to fresh session creation
 
 ### Checkpoint Reinjection
@@ -237,9 +241,17 @@ Current completion formatting behavior:
 - truncates long output to Telegram-friendly size
 
 Current outbound send behavior:
-- `_send_with_retry()` retries bounded times for transient failures
-- failures are logged
-- final exhaustion raises runtime error
+- `_send_with_retry()` in `bot/main.py` delegates to the shared `telegram_send_async()` utility
+- the shared utility (`src/universal_agent/services/telegram_send.py`) provides unified retry policy across all Telegram senders
+- both async and sync variants are available for different contexts (gateway vs scripts)
+- failures are logged with structured context (chat_id, attempt, error type)
+- final exhaustion raises runtime error in the bot context
+
+The shared send utility replaces four previously separate send mechanisms:
+1. `bot/main.py` `_send_with_retry()` — now delegates to shared utility
+2. CSI scripts `_send_telegram_message()` — can adopt shared utility (separate process)
+3. `mcp_server_telegram.py` — now uses shared utility
+4. `services/tutorial_telegram_notifier.py` — now uses shared utility
 
 This is an important current hardening layer for Telegram reliability.
 

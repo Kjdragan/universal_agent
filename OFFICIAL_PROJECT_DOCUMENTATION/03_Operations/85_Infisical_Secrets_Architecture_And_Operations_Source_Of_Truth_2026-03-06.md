@@ -126,8 +126,13 @@ and then continues with:
 
 There is also explicit Infisical loading in:
 - `src/universal_agent/delegation/bridge_main.py`
+- `CSI_Ingester/development/csi_ingester/infisical_bootstrap.py` (optional, `CSI_INFISICAL_ENABLED=1`)
 
-This ensures certain standalone execution surfaces can self-bootstrap secrets before reading env-driven configuration.
+This ensures standalone execution surfaces (factory bridge, CSI ingester) can self-bootstrap secrets before reading env-driven configuration.
+
+### CSI Infisical Bootstrap
+
+CSI now has an optional Infisical-first bootstrap (`csi_ingester/infisical_bootstrap.py`) that mirrors the UA pattern. It uses the same `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID` credentials but defaults to `INFISICAL_ENVIRONMENT=csi`. The bootstrap is disabled by default (`CSI_INFISICAL_ENABLED=0`) to preserve backward compatibility with existing env-file deployments. When enabled, secrets are injected into `os.environ` before `CSIConfig` reads them.
 
 ## Environment Variables
 

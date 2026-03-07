@@ -283,6 +283,35 @@ Common failure signatures:
 - runtime DB/schema issues prevent local queue insertion
 - result bridge errors leave mission results unpublished
 
+## 8. Ops Dashboard Endpoints
+
+### System Timers
+
+Endpoint: `GET /api/v1/ops/timers`
+
+Returns structured systemd timer status for the Corporation View dashboard. Runs `systemctl list-timers --all --output=json` and returns parsed results. Falls back to text output for older systemd versions. Requires ops auth.
+
+This gives operators visibility over the full timer fleet (32+ timers across UA and CSI) without SSH access.
+
+### Cross-Health: CSI Delivery Status
+
+The factory capabilities endpoint (`GET /api/v1/factory/capabilities`) now includes an optional `csi_delivery_health` field when the CSI SQLite DB is accessible. This field surfaces the CSI delivery health canary's last result:
+
+```json
+{
+  "csi_delivery_health": {
+    "status": "healthy",
+    "last_checked_at": "2026-03-06T...",
+    "failing_sources": [],
+    "degraded_sources": []
+  }
+}
+```
+
+This bridges the gap between factory heartbeat liveness and CSI delivery health — two parallel liveness models that now share a single ops surface.
+
+Requires: `CSI_DB_PATH` env var pointing to the CSI SQLite database.
+
 ## Current Gaps and Follow-Up Items
 
 1. **Capability reporting is partly declarative**

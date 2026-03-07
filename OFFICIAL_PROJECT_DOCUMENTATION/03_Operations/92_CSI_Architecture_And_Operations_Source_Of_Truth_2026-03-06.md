@@ -411,6 +411,19 @@ Source/auth controls commonly used by adapters:
 - `INFISICAL_PROJECT_ID`
 - `INFISICAL_ENVIRONMENT`
 - `INFISICAL_SECRET_PATH`
+- `CSI_INFISICAL_ENABLED` — set to `1` to enable optional Infisical bootstrap for CSI startup
+
+### Optional Infisical Bootstrap for CSI
+
+CSI now has an optional Infisical-first secret bootstrap (`csi_ingester/infisical_bootstrap.py`) that mirrors the UA pattern. When `CSI_INFISICAL_ENABLED=1`:
+
+1. Fetches secrets from Infisical (SDK → REST fallback)
+2. Injects them into `os.environ` before config loads
+3. `CSIConfig` properties read them transparently via `os.getenv()`
+
+When disabled (default) or when credentials are absent, CSI falls back to its existing env-file behaviour. This closes the operational gap between UA (Infisical-managed, fail-closed on VPS) and CSI (env-file-managed).
+
+The bootstrap runs as the first step in `CSIService.__init__()`, before adapters and emitters are built.
 
 CSI Telegram/reporting controls:
 - `CSI_RSS_TELEGRAM_CHAT_ID`
