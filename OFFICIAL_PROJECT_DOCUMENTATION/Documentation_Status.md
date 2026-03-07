@@ -29,30 +29,14 @@ These are the authoritative references for each subsystem. When older documents 
 | 94 | Architectural Integration Review |
 | 95 | Integration Architectural Decisions (ADRs) |
 
-## Superseded Documents
+## Deleted Documents (2026-03-06 Cleanup)
 
-The following older documents have been superseded by canonical docs above. They are retained for historical context but should **not** be used as operational references:
+26 outdated documents were deleted as part of the canonical review cleanup. Their content is fully covered by the canonical source-of-truth documents above. Deleted docs included: webhook implementation notes (15, 18, 29, 30, 42, 75), Telegram implementation plan (44), Running The Agent (46), Tailnet DevOps phases (63, 66-73), CSI strategy (74), security hardening (21), and stale guides (Configuration_Guide, AgentMail_Digest_Email_Plan, Advanced_CLI_Harnessing, Skill_Development, Testing_Strategy).
 
-| Old Doc | Superseded By |
-|---------|--------------|
-| 15 (Webhook Service Implementation) | **83** (Webhooks) |
-| 18 (Hostinger VPS Composio Webhook) | **83** (Webhooks) + **87** (Tailscale) |
-| 21 (Web Chat Security Hardening) | **08** (Auth & Session Security) |
-| 29 (YouTube Hook Mirroring) | **83** (Webhooks) + **42** (Hybrid Local/VPS) |
-| 42 (Hybrid Local VPS Webhook Ops) | **83** (Webhooks) |
-| 44 (Telegram Functionality Plan) | **91** (Telegram) |
-| 46 (Running The Agent) | **89** (Runtime Bootstrap) |
-| 63-73 (Tailnet DevOps Phases A-D) | **87** (Tailscale) |
-| 74 (Unified CSI Strategy) | **92** (CSI Architecture) |
-| 75 (Composio YouTube Trigger Guide) | **83** (Webhooks) + **92** (CSI) |
-| AgentMail_Digest_Email_Plan.md | **82** (Email/AgentMail) |
-| Configuration_Guide.md | **89** (Runtime Bootstrap) |
-
-## Still Current (Not Yet Canonicalized)
+## Not Yet Canonicalized
 
 These older docs cover topics not yet addressed by canonical docs and remain valid:
 
-- `01_Heartbeat_Debug_Fixes.md` — historical debug reference
 - `13_Skill_Dependency_Setup_Guide.md` — skill setup
 - `15_Execution_Lock_Concurrency_Architecture_2026-03-02.md` — concurrency model
 - `24_VPS_Service_Recovery_System_Runbook_2026-02-12.md` — service watchdog
