@@ -28,8 +28,7 @@ def _validate_config():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
 
-@mcp.tool() # Sync wrapper mainly because FastMCP handles async? 
-# Actually FastMCP supports async def tools.
+@mcp.tool()
 async def telegram_send_message(chat_id: int, text: str) -> str:
     """
     Send a message to a Telegram chat.
@@ -43,9 +42,17 @@ async def telegram_send_message(chat_id: int, text: str) -> str:
         return f"Error: Chat ID {chat_id} is not in allowed list."
 
     try:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-        return f"Message sent to {chat_id}"
+        from universal_agent.services.telegram_send import telegram_send_async
+
+        ok, err = await telegram_send_async(
+            chat_id=chat_id,
+            text=text,
+            bot_token=TELEGRAM_BOT_TOKEN,
+            parse_mode="Markdown",
+        )
+        if ok:
+            return f"Message sent to {chat_id}"
+        return f"Error sending message: {err}"
     except Exception as e:
         return f"Error sending message: {str(e)}"
 

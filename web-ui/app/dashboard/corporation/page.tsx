@@ -135,16 +135,18 @@ export default function DashboardCorporationPage() {
   const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
   const [expandedFactory, setExpandedFactory] = useState<string | null>(null);
   const [controllingFactory, setControllingFactory] = useState<string | null>(null);
+  const [systemTimers, setSystemTimers] = useState<any[]>([]);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError("");
     try {
-      const [capsRes, regsRes, histRes] = await Promise.all([
+      const [capsRes, regsRes, histRes, timersRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/factory/capabilities`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/factory/registrations?limit=500`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/ops/delegation/history?limit=20`, { cache: "no-store" }).catch(() => null),
+        fetch(`${API_BASE}/api/v1/ops/timers`, { cache: "no-store" }).catch(() => null),
       ]);
 
       let nextCaps: FactoryCapabilities | null = null;
@@ -175,6 +177,13 @@ export default function DashboardCorporationPage() {
       if (histRes && histRes.ok) {
         const payload = (await histRes.json()) as DelegationHistoryResponse;
         setDelegationHistory(Array.isArray(payload.missions) ? payload.missions : []);
+      }
+
+      if (timersRes && timersRes.ok) {
+        try {
+          const tp = await timersRes.json();
+          setSystemTimers(Array.isArray(tp.timers) ? tp.timers : []);
+        } catch { setSystemTimers([]); }
       }
 
       setCapabilities(nextCaps);
@@ -497,6 +506,40 @@ export default function DashboardCorporationPage() {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {systemTimers.length > 0 && (
+            <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+              <h2 className="mb-3 text-lg font-semibold text-slate-100">System Timers ({systemTimers.length})</h2>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="px-2 py-2">Timer</th>
+                      <th className="px-2 py-2">Next</th>
+                      <th className="px-2 py-2">Last</th>
+                      <th className="px-2 py-2">Activates</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {systemTimers.map((t: any, idx: number) => {
+                      const unit = asText(t.unit || t.UNIT || "");
+                      const next = asText(t.next || t.NEXT || "");
+                      const last = asText(t.last || t.LAST || "");
+                      const activates = asText(t.activates || t.ACTIVATES || "");
+                      return (
+                        <tr key={unit || idx} className="border-t border-slate-800/80 align-top">
+                          <td className="px-2 py-2 text-slate-200 font-mono text-xs">{unit || "--"}</td>
+                          <td className="px-2 py-2 text-slate-400 text-xs">{next || "--"}</td>
+                          <td className="px-2 py-2 text-slate-400 text-xs">{last || "--"}</td>
+                          <td className="px-2 py-2 text-slate-400 text-xs">{activates || "--"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

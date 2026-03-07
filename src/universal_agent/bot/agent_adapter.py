@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Optional, Any, AsyncIterator
 from dataclasses import dataclass
 from .config import UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
+# UA_GATEWAY_URL is the canonical production path (ExternalGateway).
+# InProcessGateway is for local-dev only and does not go through
+# the gateway server's session store.
 from universal_agent.timeout_policy import telegram_task_timeout_seconds
 from universal_agent.gateway import (
     Gateway, 
@@ -114,14 +117,15 @@ class AgentAdapter:
         - Prevents context token accumulation across multiple messages
         - Preserves continuity via structured checkpoint (~2-4k tokens)
         """
-        session_id = f"tg_{user_id}"
-        workspace_path = _telegram_workspace_base() / session_id
+        workspace_key = f"tg_{user_id}"
+        session_id = f"tg_{user_id}_{uuid.uuid4().hex[:8]}"
+        workspace_path = _telegram_workspace_base() / workspace_key
         workspace_dir = str(workspace_path.resolve())
 
         # Continuation mode: attempt to resume pinned session first.
         if continue_session:
             try:
-                session = await self.gateway.resume_session(session_id)
+                session = await self.gateway.resume_session(workspace_key)
                 print(f"🔁 Resumed session for {user_id}: {session.session_id}")
 
                 if hasattr(self, 'heartbeat_service') and self.heartbeat_service:
@@ -147,11 +151,14 @@ class AgentAdapter:
                 print(f"⚠️ Failed to load checkpoint: {e}")
         
         # Always create fresh session (clears Claude SDK context)
-        print(f"🆕 Creating fresh session for {user_id}...")
+        print(f"🆕 Creating fresh session for {user_id} (id={session_id})...")
         session = await self.gateway.create_session(
             user_id=f"telegram_{user_id}", 
-            workspace_dir=workspace_dir
+            workspace_dir=workspace_dir,
         )
+        # Tag session with source for dashboard visibility
+        session.metadata["source"] = "telegram"
+        session.metadata["telegram_user_id"] = str(user_id)
         
         # Inject prior checkpoint as context if available
         if prior_checkpoint_context:

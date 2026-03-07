@@ -1,5 +1,12 @@
 """AgentMail webhook transform for UA hooks pipeline.
 
+.. deprecated::
+    This webhook transform is **deprecated** in favor of the WebSocket
+    listener in ``agentmail_service.py``.  The WebSocket path is the
+    canonical production ingest for inbound email.  This file is retained
+    only as a reference and emergency fallback.  It should NOT be used as
+    the primary ingest path for new deployments.
+
 Transforms inbound AgentMail webhook payloads into HookAction dicts
 that the hooks_service can dispatch to the email-handler agent.
 
@@ -40,10 +47,16 @@ _ACTIONABLE_EVENTS = {"message.received"}
 def transform(context: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Transform AgentMail webhook payload into a HookAction dict.
 
+    .. deprecated:: Use the WebSocket listener in agentmail_service.py instead.
+
     Returns:
         dict — merged into base HookAction
         None — skip this event (not actionable)
     """
+    logger.warning(
+        "agentmail_transform webhook path invoked — this path is DEPRECATED. "
+        "Use UA_AGENTMAIL_WS_ENABLED=1 (WebSocket listener) as the canonical ingest."
+    )
     payload = context.get("payload", {})
     if not isinstance(payload, dict):
         return None

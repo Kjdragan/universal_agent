@@ -7,6 +7,7 @@ import sqlite3
 import time
 from typing import Any
 
+from csi_ingester.infisical_bootstrap import bootstrap_csi_secrets
 from csi_ingester.adapters.base import SourceAdapter
 from csi_ingester.adapters.reddit_discovery import RedditDiscoveryAdapter
 from csi_ingester.adapters.threads_owned import ThreadsOwnedAdapter
@@ -29,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 class CSIService:
     def __init__(self, *, config: CSIConfig, conn: sqlite3.Connection, metrics: MetricsRegistry) -> None:
+        # Optional Infisical bootstrap — injects secrets into os.environ
+        # before config properties resolve them.  Disabled by default;
+        # enable with CSI_INFISICAL_ENABLED=1.
+        self._infisical_result = bootstrap_csi_secrets()
+        if self._infisical_result.source == "infisical":
+            logger.info("CSI Infisical bootstrap: loaded %d secrets", self._infisical_result.loaded_count)
+        elif self._infisical_result.error:
+            logger.warning("CSI Infisical bootstrap failed: %s", self._infisical_result.error)
+
         self.config = config
         self.conn = conn
         self.metrics = metrics

@@ -28,31 +28,23 @@ logger = logging.getLogger(__name__)
 
 
 async def _send_with_retry(bot, chat_id, text, retries: int = 3, base_delay_s: float = 0.5):
-    """Best-effort Telegram send with bounded retry for transient failures."""
-    last_error = None
-    for attempt in range(1, retries + 1):
-        try:
-            await bot.send_message(chat_id=chat_id, text=text)
-            return
-        except Exception as e:
-            last_error = e
-            logger.warning(
-                "telegram_send_retry chat_id=%s attempt=%s/%s error=%s",
-                chat_id,
-                attempt,
-                retries,
-                e,
-            )
-            if attempt >= retries:
-                break
-            await asyncio.sleep(base_delay_s * attempt)
-    logger.error(
-        "telegram_send_retry_exhausted chat_id=%s retries=%s error=%s",
-        chat_id,
-        retries,
-        last_error,
+    """Best-effort Telegram send with bounded retry for transient failures.
+
+    Uses the shared :func:`telegram_send_async` utility which provides
+    unified retry policy, rate-limit awareness, and structured logging.
+    The ``bot`` parameter is accepted for API compatibility but not used;
+    the shared utility sends directly via the Telegram HTTP API.
+    """
+    from universal_agent.services.telegram_send import telegram_send_async
+
+    ok, err = await telegram_send_async(
+        chat_id=chat_id,
+        text=text,
+        retries=retries,
+        base_delay=base_delay_s,
     )
-    raise RuntimeError(f"telegram_send_failed after {retries} attempts: {last_error}")
+    if not ok:
+        raise RuntimeError(f"telegram_send_failed: {err}")
 
 async def run_bot():
     bootstrap_state = bootstrap_runtime_environment(profile=os.getenv("UA_DEPLOYMENT_PROFILE"))

@@ -9323,13 +9323,50 @@ async def health(response: Response):
     }
 
 
+def _csi_delivery_health_summary() -> dict[str, Any] | None:
+    """Read CSI delivery health canary state from the CSI SQLite DB.
+
+    Returns None if the DB is unavailable or canary has never run.
+    """
+    csi_db_path_raw = (os.getenv("CSI_DB_PATH") or "").strip()
+    if not csi_db_path_raw:
+        return None
+    csi_db = Path(csi_db_path_raw)
+    if not csi_db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(csi_db), timeout=3)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT state_json FROM source_state WHERE key = ? LIMIT 1",
+            ("delivery_health_canary",),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        state = json.loads(row["state_json"]) if isinstance(row["state_json"], str) else row["state_json"]
+        return {
+            "status": str(state.get("status") or "unknown"),
+            "last_checked_at": str(state.get("last_checked_at") or ""),
+            "failing_sources": list(state.get("failing_sources") or []),
+            "degraded_sources": list(state.get("degraded_sources") or []),
+        }
+    except Exception as exc:
+        logger.debug("CSI delivery health read failed: %s", exc)
+        return None
+
+
 @app.get("/api/v1/factory/capabilities")
 async def factory_capabilities(request: Request):
     _require_ops_auth(request)
-    return {
+    result: dict[str, Any] = {
         "factory": _factory_capabilities_payload(),
         "delegation": dict(_delegation_metrics),
     }
+    csi_health = _csi_delivery_health_summary()
+    if csi_health is not None:
+        result["csi_delivery_health"] = csi_health
+    return result
 
 
 @app.post("/api/v1/factory/registrations")
@@ -9523,6 +9560,44 @@ async def control_factory(request: Request, payload: FactoryControlRequest):
         "action": action,
         "target_factory_id": payload.target_factory_id,
     }
+
+
+@app.get("/api/v1/ops/timers")
+async def list_system_timers(request: Request):
+    """Return structured systemd timer status for the ops dashboard.
+
+    Runs ``systemctl list-timers --all --output=json`` and returns the
+    parsed result.  Requires ops auth.
+    """
+    _require_ops_auth(request)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "list-timers", "--all", "--output=json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            # Fallback: try without --output=json (older systemd)
+            proc2 = await asyncio.create_subprocess_exec(
+                "systemctl", "list-timers", "--all", "--no-pager",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
+            return {
+                "format": "text",
+                "timers": [],
+                "raw": (stdout2 or b"").decode(errors="replace")[:8000],
+            }
+        raw = (stdout or b"").decode(errors="replace")
+        timers = json.loads(raw) if raw.strip() else []
+        return {"format": "json", "timers": timers, "count": len(timers)}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="systemctl list-timers timed out")
+    except Exception as exc:
+        logger.warning("list_system_timers failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/artifacts")
