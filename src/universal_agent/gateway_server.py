@@ -64,7 +64,7 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled
+from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled, coder_vp_enabled
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_activity_db_path
 from universal_agent.durable.migrations import ensure_schema
