@@ -9207,6 +9207,7 @@ async def signals_ingest_endpoint(request: Request):
                 except Exception as exc:
                     exc_str = str(exc)
                     is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
+                    is_auth = any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
                     if is_limit:
                         logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
                         if not _has_recent_notification(
@@ -9225,23 +9226,48 @@ async def signals_ingest_endpoint(request: Request):
                                 severity="warning",
                                 metadata={"integration": "todoist", "reason": "items_limit_reached"},
                             )
+                    elif is_auth:
+                        logger.warning("Todoist auth failure (likely expired v2 token): %s", exc)
+                        if not _has_recent_notification(
+                            kind="system_error",
+                            metadata_match={"integration": "todoist", "reason": "auth_failure"},
+                            within_seconds=3600,
+                        ):
+                            _add_notification(
+                                kind="system_error",
+                                title="Todoist Auth Failed — Token Needs Regeneration",
+                                message=(
+                                    "Todoist API returns 401/403 on task creation. The current token "
+                                    "was generated for the v2 REST API (now deprecated). Generate a new "
+                                    "API token at https://app.todoist.com/app/settings/integrations/developer "
+                                    "and update TODOIST_API_TOKEN in Infisical. CSI signals are still "
+                                    "visible in the CSI Feed tab; only Todoist sync is affected."
+                                ),
+                                severity="error",
+                                metadata={"integration": "todoist", "reason": "auth_failure"},
+                            )
                     else:
                         logger.exception("Failed to create Todoist task for CSI signal")
-                        debug_info = (
-                            f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
-                            f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
-                        )
-                        _add_notification(
+                        if not _has_recent_notification(
                             kind="system_error",
-                            title="Todoist Sync Failed",
-                            message=(
-                                "Could not sync CSI task to Todoist. "
-                                "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
-                                f"and taxonomy. Error: {exc}. Debug: {debug_info}"
-                            ),
-                            severity="error",
-                            metadata={"integration": "todoist", "reason": "task_sync_failed"},
-                        )
+                            metadata_match={"integration": "todoist", "reason": "task_sync_failed"},
+                            within_seconds=1800,
+                        ):
+                            debug_info = (
+                                f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
+                                f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
+                            )
+                            _add_notification(
+                                kind="system_error",
+                                title="Todoist Sync Failed",
+                                message=(
+                                    "Could not sync CSI task to Todoist. "
+                                    "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
+                                    f"and taxonomy. Error: {exc}. Debug: {debug_info}"
+                                ),
+                                severity="error",
+                                metadata={"integration": "todoist", "reason": "task_sync_failed"},
+                            )
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
