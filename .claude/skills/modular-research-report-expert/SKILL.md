@@ -7,8 +7,9 @@ description: >
   Visual Director, Diagram Craftsman, Editorial Judge) through a multi-phase pipeline
   that extracts maximum value from both refined and original source materials.
   Use when: (1) a refined_corpus.md or research corpus exists, (2) user asks to
-  "build a report" from research, (3) user wants a visual, thematic, magazine-quality
-  HTML report exported to PDF.
+  "build a report" from research, (3) user wants a professional, visually-integrated
+  HTML report exported to PDF. Adapts structure, tone, and component usage to the
+  material — works across any topic domain.
   Requires Agent Teams: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1.
 argument-hint: "corpus path, topic description, or task name"
 user-invocable: true
@@ -420,9 +421,17 @@ The **Storyteller** writes each section as a polished HTML fragment.
 - The source pack from `build/source-packs/{section-id}.md` (if exists)
 
 **Writing directives** (embedded in spawn prompt):
-- Write for a READER, not a database. Lead with the story, weave in facts.
-- Use the `narrative_role` from the outline: "setup" sections establish context,
-  "rising_action" builds tension, "climax" delivers the key revelation, etc.
+- **University-level writing quality.** Clear, substantive prose with logical flow
+  and precise language. The reader is intelligent and engaged.
+- **Tone follows material.** Read `tone` and `material_type` from the outline.
+  A market analysis needs authority. A profile needs narrative warmth. A scientific
+  review needs methodical precision. Do not default to one voice for every topic.
+- **Components follow `component_guidance`.** The outline specifies which components
+  (stat-cards, pull-quotes, callouts, etc.) suit THIS report. Use only what's
+  specified — these are a toolkit, not a checklist.
+- Write for a READER, not a database. Lead with substance, weave in facts.
+- Use the `narrative_role` from the outline flexibly: "setup", "analysis",
+  "comparison", "synthesis", "implications" etc.
 - Integrate direct quotes from source packs naturally within paragraphs.
 - Use stat-cards and key-finding boxes for standout data, not for every number.
 - Write transitions that connect sections into a coherent narrative.
@@ -675,26 +684,78 @@ Inspired by the banana-squad workflow:
 
 ## Adaptive Behavior
 
-### When Corpus is Small (< 5K tokens)
-- Skip Phase 2 (source mining) — refined corpus has enough detail
-- Reduce to 3-5 sections
-- Reduce to 2-4 images
+**Core principle: the report adapts to the material, not the other way around.**
 
-### When No Original Sources Exist
-- Skip Phase 2 entirely
-- Storyteller works from refined corpus only
-- Note in report footer that depth was limited
+Reports span every domain — technology, finance, health, policy, culture, science,
+history, and more. No single template, tone, or component mix fits all. The Narrative
+Architect's `material_type` and `component_guidance` fields in `outline.json` drive
+adaptation decisions downstream. All teammates read these fields and adjust accordingly.
 
-### When Corpus is News/Events (Many Disparate Facts)
-- Narrative Architect should recognize this pattern
-- Use `narrative_role: "context"` and chronological ordering
-- Storyteller adopts journalistic voice: factual, attributed, timeline-driven
-- Visual Director favors timelines and maps over abstract infographics
+### Material-Driven Adaptation
 
-### When Corpus is Thematic/Analytical
-- Use full narrative arc (setup → analysis → findings → implications)
-- Storyteller adopts analytical voice with interpretation
-- Visual Director favors charts, comparisons, process diagrams
+The Narrative Architect classifies the material and sets `component_guidance`:
+
+| Material Pattern | Structure | Tone | Stat-cards | Pull-quotes | Diagrams |
+|---|---|---|---|---|---|
+| Data-heavy analysis | Logical progression | Analytical | Heavy | Light | Essential |
+| News/events | Chronological | Journalistic | Moderate | Heavy (expert voices) | Supplementary |
+| Technology review | Problem → approaches → comparison | Explanatory | Moderate | Moderate | Essential |
+| Policy/regulation | Context → landscape → implications | Authoritative | Light | Heavy (officials) | Supplementary |
+| Profile/case study | Origin → development → impact | Narrative | Light | Heavy | Minimal |
+| Scientific review | Background → methods → findings → gaps | Analytical | Moderate | Light | Essential |
+| Market landscape | Overview → segments → trends → outlook | Authoritative | Heavy | Moderate | Essential |
+| Historical/cultural | Thematic or chronological | Narrative | Rare | Heavy | Supplementary |
+| Comparative review | Framework → candidates → synthesis | Explanatory | Moderate (tables) | Moderate | Moderate |
+
+### Component Toolkit (Not Checklist)
+
+The HTML template provides a toolkit of components. **Not every report uses all of them.**
+The Narrative Architect decides which components earn their place in THIS report:
+
+- **Stat-cards**: Use when the material has standout quantitative data. Skip for
+  narrative/qualitative topics.
+- **Key-finding boxes**: Use when a section has a clear, concrete takeaway. Skip
+  when the value is in the nuance, not a headline.
+- **Pull-quotes**: Use when compelling voices are in the sources. Skip when the
+  material is data/analysis without attributable quotes.
+- **Callouts**: Use for caveats, definitions, or highlighted recommendations.
+  Skip when the prose handles nuance inline.
+- **Tables**: Use for structured comparisons. Don't force tabular format on
+  material that reads better as prose.
+- **Diagrams**: Use when relationships, flows, or hierarchies need visual
+  explanation. Skip when the material is narrative or descriptive.
+- **Images/infographics**: Use when data visualization or scene-setting adds
+  real value. Reduce count for topics where visuals would be decorative filler.
+
+### Corpus-Driven Scaling
+
+| Corpus Size | Sections | Images | Diagrams |
+|---|---|---|---|
+| Small (< 5K tokens) | 3-5 | 2-4 | 0-1 |
+| Medium (5K-20K tokens) | 4-6 | 3-5 | 1-2 |
+| Large (20K+ tokens) | 5-8 | 4-8 | 2-4 |
+
+### Source Availability
+
+- **No original sources (filtered_corpus/)**: Skip Phase 2 entirely. Storyteller
+  works from refined corpus only.
+- **Few original sources (1-5)**: Phase 2 is quick — focus on the most quote-rich
+  and data-rich articles.
+- **Many original sources (10+)**: Phase 2 is thorough — Deep Reader should
+  prioritize based on source-map relevance rankings.
+
+### What NOT to Do
+
+- Don't force a "dramatic narrative arc" on a straightforward analytical topic.
+  A market overview doesn't need "rising_action" — it needs clear segmentation.
+- Don't add stat-cards to a topic with no meaningful quantitative data. A
+  cultural analysis may have zero numbers and that's fine.
+- Don't generate images for the sake of having images. If the topic is abstract
+  and every image would be generic stock-photo-style filler, use fewer or none.
+- Don't use pull-quotes when the corpus has no attributable voices. A single-source
+  dataset or statistical report may have nothing quotable.
+- Don't assume "magazine style" for every topic. A technical comparison may read
+  better with a methodical, reference-guide voice than a narrative one.
 
 ---
 
