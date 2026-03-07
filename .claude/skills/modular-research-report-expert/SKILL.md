@@ -245,6 +245,26 @@ All 6 teammates can be active simultaneously during peak phases. The Director ca
 **Recommendation**: Start with the default of 4. If you observe no rate limit errors
 in the first run, try 5. If you see 429s or timeouts, drop to 3.
 
+### Team Size vs. Concurrency Ceiling
+
+The team has 6 teammates, but `MAX_CONCURRENT_AGENTS` may be lower than 6. This is
+fine — **larger teams run sequentially within the ceiling, not in violation of it.**
+
+If the pipeline needs more parallelism than the ceiling allows, the Director simply
+serializes the excess work. The team size is about *specialization* (each teammate
+has a focused role), not about running everyone simultaneously.
+
+Example with ceiling = 3 during Phase 3 (3 producers):
+- Storyteller, Visual Director, Diagram Craftsman all active → 3 = ceiling, OK
+- If future pipeline adds a 4th producer → queue it until one of the 3 finishes
+
+Example with ceiling = 2 during Phase 3:
+- Storyteller runs alone → completes → Visual Director runs → completes → Diagram runs
+- Same work, same quality, just sequential
+
+**The ceiling constrains concurrency, never team composition.** Add more specialized
+teammates if the report quality benefits — just schedule them within the ceiling.
+
 ### Teammate Lifecycle & Slot Tracking
 
 Teammates are **spawned once** and reused across phases. A teammate is "active" when
