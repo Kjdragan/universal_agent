@@ -9617,10 +9617,14 @@ async def ops_telegram_status(request: Request):
                    FROM activity_events
                    WHERE (kind LIKE '%telegram%'
                       OR kind LIKE '%tutorial%'
-                      OR kind LIKE '%youtube_playlist%'
-                      OR kind LIKE '%rss%digest%'
-                      OR kind LIKE '%reddit%digest%')
-                   ORDER BY created_at DESC LIMIT 30""",
+                      OR kind LIKE '%youtube%'
+                      OR kind LIKE '%playlist%'
+                      OR kind LIKE '%rss%'
+                      OR kind LIKE '%reddit%'
+                      OR kind LIKE '%csi_pipeline%'
+                      OR kind LIKE '%csi_insight%'
+                      OR kind LIKE '%csi_specialist%')
+                   ORDER BY created_at DESC LIMIT 50""",
             ).fetchall()
             for row in rows:
                 meta = {}
@@ -9658,15 +9662,28 @@ async def ops_telegram_status(request: Request):
     except Exception:
         pass
 
-    # Channel configuration
-    channels: list[dict[str, str]] = []
+    # Channel configuration — check gateway env first, then CSI env file as fallback
+    csi_env_values: dict[str, str] = {}
+    csi_env_path = Path("/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env")
+    if csi_env_path.exists():
+        try:
+            for line in csi_env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                csi_env_values[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+    channels: list[dict[str, Any]] = []
     for name, env_key in [
         ("UA Tutorial Feed", "YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID"),
         ("UA RSS Feed", "CSI_RSS_TELEGRAM_CHAT_ID"),
         ("UA Reddit Feed", "CSI_REDDIT_TELEGRAM_CHAT_ID"),
     ]:
-        chat_id = os.getenv(env_key, "").strip()
-        channels.append({"name": name, "env_var": env_key, "configured": bool(chat_id)})
+        chat_id = os.getenv(env_key, "").strip() or csi_env_values.get(env_key, "")
+        channels.append({"name": name, "env_var": env_key, "configured": bool(chat_id), "chat_id": chat_id[:6] + "..." if len(chat_id) > 6 else chat_id})
 
     return {
         "bot": {
