@@ -47,6 +47,12 @@ Run endpoint smoke against a live UA endpoint:
 PYTHONPATH=src:CSI_Ingester/development .venv/bin/python CSI_Ingester/development/scripts/csi_emit_smoke_event.py --require-internal-dispatch
 ```
 
+Current architecture note:
+
+- Native UA playlist watching (`src/universal_agent/services/youtube_playlist_watcher.py`) is now the authoritative tutorial-playlist polling path.
+- The CSI `youtube_playlist` adapter remains in the repo for compatibility/history, but it is disabled by default in current checked-in config.
+- CSI playlist tutorial digest/reporting flows still operate on CSI-side state where applicable, but the primary playlist watcher is no longer CSI-owned.
+
 Run RSS digest in dry-run mode (no Telegram send):
 
 ```bash

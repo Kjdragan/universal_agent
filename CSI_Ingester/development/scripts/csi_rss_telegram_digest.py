@@ -109,7 +109,7 @@ def _resolve_chat_id(env_files: list[Path]) -> str:
     if chat_id:
         return chat_id
 
-    raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS"], env_files)
+    raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"], env_files)
     if raw_allowed:
         first = raw_allowed.split(",", 1)[0].strip()
         if first:

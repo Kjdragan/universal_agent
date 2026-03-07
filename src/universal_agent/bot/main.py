@@ -1,9 +1,12 @@
 
 import asyncio
 import logging
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, TypeHandler
-from .config import TELEGRAM_BOT_TOKEN
+from universal_agent import process_heartbeat
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from .config import get_telegram_bot_token
 from .core.runner import UpdateRunner
 from .core.context import BotContext
 from .core.middleware import MiddlewareChain
@@ -52,9 +55,28 @@ async def _send_with_retry(bot, chat_id, text, retries: int = 3, base_delay_s: f
     raise RuntimeError(f"telegram_send_failed after {retries} attempts: {last_error}")
 
 async def run_bot():
-    if not TELEGRAM_BOT_TOKEN:
+    bootstrap_state = bootstrap_runtime_environment(profile=os.getenv("UA_DEPLOYMENT_PROFILE"))
+    if not bootstrap_state.policy.enable_telegram_poll:
+        logger.info(
+            "Telegram polling disabled by runtime policy role=%s",
+            bootstrap_state.policy.role,
+        )
+        return
+
+    telegram_bot_token = get_telegram_bot_token()
+    if not telegram_bot_token:
         logger.error("TELEGRAM_BOT_TOKEN not set!")
         return
+
+    process_heartbeat.start(
+        path_env_var="UA_TELEGRAM_PROCESS_HEARTBEAT_FILE",
+        legacy_path_env_var=None,
+        interval_env_var="UA_TELEGRAM_PROCESS_HEARTBEAT_INTERVAL_SECONDS",
+        default_path="/var/lib/universal-agent/heartbeat/telegram.heartbeat",
+        default_interval=10,
+        thread_name="telegram-process-heartbeat",
+        log_label="Telegram process heartbeat",
+    )
 
     # 1. Initialize Core Components
     session_store = FileSessionStore()
@@ -123,7 +145,7 @@ async def run_bot():
     runner = UpdateRunner(process_callback=process_update_callback)
 
     # 6. Setup PTB Application
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(telegram_bot_token).build()
     app_ref["bot"] = app.bot
 
     # 6. Global Helper to feed the runner
@@ -153,22 +175,25 @@ async def run_bot():
     task_worker = asyncio.create_task(task_manager.worker(agent_adapter))
 
     # 8. Run
-    async with app:
-        await app.start()
-        await app.updater.start_polling()
-        
-        # Keep running until cancelled
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await app.updater.stop()
-            await app.stop()
-            await runner.stop()
-            task_worker.cancel()
-            await agent_adapter.shutdown()
+    try:
+        async with app:
+            await app.start()
+            await app.updater.start_polling()
+
+            # Keep running until cancelled
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                await app.updater.stop()
+                await app.stop()
+                await runner.stop()
+                task_worker.cancel()
+                await agent_adapter.shutdown()
+    finally:
+        process_heartbeat.stop()
 
 if __name__ == "__main__":
     try:

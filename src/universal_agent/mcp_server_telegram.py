@@ -1,4 +1,3 @@
-
 from mcp.server.fastmcp import FastMCP
 import asyncio
 import os
@@ -6,13 +5,22 @@ import logging
 from telegram import Bot
 from telegram.error import TelegramError
 
-# Config
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ALLOWED_USER_IDS = [int(uid) for uid in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if uid]
-
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_server_telegram")
+
+
+def _telegram_allowed_user_ids_raw() -> str:
+    primary = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if primary:
+        return primary
+    legacy = (os.getenv("ALLOWED_USER_IDS") or "").strip()
+    if legacy:
+        logger.warning("ALLOWED_USER_IDS is deprecated; use TELEGRAM_ALLOWED_USER_IDS instead")
+    return legacy
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ALLOWED_USER_IDS = [int(uid) for uid in _telegram_allowed_user_ids_raw().split(",") if uid]
 
 mcp = FastMCP("Telegram Toolkit")
 

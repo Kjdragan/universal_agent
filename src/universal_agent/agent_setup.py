@@ -16,6 +16,7 @@ import yaml
 
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.runtime_role import resolve_factory_role
+from universal_agent.feature_flags import coder_vp_enabled
 
 from composio import Composio
 from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher
@@ -102,7 +103,7 @@ class AgentSetup:
         
         # Factory Role assignment (finalized fallback policy lives in runtime_role)
         self.factory_role = resolve_factory_role().value
-        self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
+        self.enable_vp_coder = coder_vp_enabled()
         
         self.run_id = str(uuid.uuid4())
         self.src_dir = _get_src_dir()
@@ -164,7 +165,7 @@ class AgentSetup:
 
         bootstrap_state = bootstrap_runtime_environment()
         self.factory_role = bootstrap_state.policy.role
-        self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
+        self.enable_vp_coder = coder_vp_enabled()
 
         # Ensure workspace directories exist
         self._setup_workspace_dirs()

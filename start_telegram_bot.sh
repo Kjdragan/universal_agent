@@ -1,7 +1,10 @@
 #!/bin/bash
 # ============================================================
-# Universal Agent Telegram Bot - Startup Script
+# Universal Agent Telegram Bot - Legacy Webhook Startup Script
 # ============================================================
+# Legacy helper for the older webhook/ngrok/Docker dev path.
+# Current production/runtime Telegram flow uses polling via
+# `src/universal_agent/bot/main.py`.
 # This script handles all the startup steps for you:
 # 1. Starts ngrok to expose port 8000
 # 2. Waits for ngrok to be ready
@@ -17,6 +20,7 @@ cd "$PROJECT_DIR"
 
 echo "🚀 Starting Universal Agent Telegram Bot..."
 echo "============================================"
+echo "⚠️  Legacy webhook/ngrok helper; current runtime uses polling via src/universal_agent/bot/main.py"
 echo "ℹ️  Local dev override: enabling in-process gateway."
 export UA_TELEGRAM_ALLOW_INPROCESS=1
 

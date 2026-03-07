@@ -211,7 +211,7 @@ def _resolve_telegram_target(env_file_values: dict[str, str]) -> tuple[str, str]
         env_file_values,
     )
     if not chat_id:
-        raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS"], env_file_values)
+        raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"], env_file_values)
         if raw_allowed:
             chat_id = raw_allowed.split(",", 1)[0].strip()
     return token, chat_id

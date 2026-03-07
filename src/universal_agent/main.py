@@ -201,10 +201,9 @@ interrupt_requested = False
 last_sigint_ts = None
 current_step_id = None
 
-# Feature flags (placeholders for future gating; no behavior change yet)
-HEARTBEAT_ENABLED = heartbeat_enabled()
-MEMORY_INDEX_ENABLED = memory_index_enabled()
-MEMORY_ENABLED = memory_enabled()
+# Feature flags — evaluated lazily at call sites so they read env AFTER
+# Infisical runtime bootstrap has injected secrets.  Do NOT snapshot these
+# at import time; use the function calls directly where needed.
 
 
 class BudgetExceeded(RuntimeError):
@@ -5833,7 +5832,7 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
     if _ctx is not None:
         start_ts = _ctx.start_ts
     # Feature Flag Check
-    if os.environ.get("UA_MEMORY_ENABLED") != "1":
+    if not memory_enabled():
         return
 
     try:
@@ -7671,7 +7670,7 @@ async def setup_session(
 
     # --- MEMORY SYSTEM CONTEXT INJECTION ---
     memory_context_str = ""
-    if not MEMORY_ENABLED:
+    if not memory_enabled():
         print("⚠️ Memory system disabled.")
     else:
         try:
@@ -7704,7 +7703,7 @@ async def setup_session(
     tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
     disallowed_tools = list(DISALLOWED_TOOLS)
-    if not MEMORY_ENABLED:
+    if not memory_enabled():
         disallowed_tools.extend(
             [
                 "memory_search",

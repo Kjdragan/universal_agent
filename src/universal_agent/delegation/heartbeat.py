@@ -19,6 +19,8 @@ from typing import Any, Callable, Optional
 
 import httpx
 
+from universal_agent.feature_flags import coder_vp_enabled, vp_enabled_ids
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,9 +60,9 @@ class HeartbeatConfig:
         capabilities = []
         if os.getenv("UA_DELEGATION_REDIS_ENABLED", "").strip() == "1":
             capabilities.append("delegation_redis")
-        if os.getenv("ENABLE_VP_CODER", "").strip().lower() in ("1", "true"):
+        if coder_vp_enabled():
             capabilities.append("vp_coder")
-        if os.getenv("ENABLE_VP_GENERAL", "").strip().lower() in ("1", "true"):
+        if "vp.general.primary" in vp_enabled_ids():
             capabilities.append("vp_general")
         capabilities.append(f"delegation_mode:listen_only")
         capabilities.append(f"heartbeat_scope:local")

@@ -12,12 +12,12 @@ set -euo pipefail
 #   scripts/verify_vps_todoist_chron_reconcile.sh
 #
 # Optional env:
-#   UA_VPS_HOST=root@100.106.113.93
+#   UA_VPS_HOST=root@srv1360701.taildcc090.ts.net
 #   UA_VPS_SSH_KEY=~/.ssh/id_ed25519
 #   UA_SSH_AUTH_MODE=keys|tailscale_ssh
 #   UA_GATEWAY_INTERNAL_URL=http://127.0.0.1:8002
 
-VPS_HOST="${UA_VPS_HOST:-root@100.106.113.93}"
+VPS_HOST="${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 GATEWAY_INTERNAL_URL="${UA_GATEWAY_INTERNAL_URL:-http://127.0.0.1:8002}"

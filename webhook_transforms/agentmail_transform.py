@@ -29,6 +29,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from universal_agent.services.agentmail_service import _extract_reply_text
+
 logger = logging.getLogger(__name__)
 
 # Only process these event types (ignore sent/delivered/bounced for now)
@@ -72,6 +74,8 @@ def transform(context: dict[str, Any]) -> Optional[dict[str, Any]]:
     message_id = str(message.get("message_id", "")).strip()
     subject = str(message.get("subject", "(no subject)")).strip()
     text_body = str(message.get("text", "")).strip()
+    reply_text = _extract_reply_text(text_body)
+    reply_is_extracted = reply_text != text_body
     event_id = str(payload.get("event_id", "")).strip()
 
     # Build session key from thread for continuity
@@ -86,10 +90,17 @@ def transform(context: dict[str, Any]) -> Optional[dict[str, Any]]:
         f"message_id: {message_id}",
         f"inbox: {inbox_id}",
         f"event_id: {event_id}",
+        f"reply_extracted: {reply_is_extracted}",
         "",
-        "--- Email Body ---",
-        text_body[:4000],
+        "--- Reply (new content) ---",
+        reply_text[:4000],
     ]
+
+    # Include full body when reply extraction stripped quoted content
+    if reply_is_extracted:
+        message_lines.append("")
+        message_lines.append("--- Full Email Body (for reference) ---")
+        message_lines.append(text_body[:4000])
 
     # Note attachments if present
     attachments = message.get("attachments", [])

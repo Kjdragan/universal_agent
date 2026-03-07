@@ -54,7 +54,7 @@ This keeps **parity** with web UI and CLI (same engine path).
 
 ### 4.3 Session continuity + multi-user
 - Keep **per-user session** in gateway.
-- For family use (3–4 users), use an allowlist (existing `ALLOWED_USER_IDS`).
+- For family use (3–4 users), use an allowlist (existing `TELEGRAM_ALLOWED_USER_IDS`).
 - Optional: add a lightweight “invite” flow in the future.
 
 ### 4.4 Heartbeat integration

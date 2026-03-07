@@ -8,6 +8,11 @@ Deploy CSI Ingester v1 to VPS with:
 2. parallel-run validation against legacy playlist timer,
 3. explicit cutover and rollback steps.
 
+Current-state note (2026-03-06):
+1. This runbook captures the earlier CSI deployment/cutover process for tutorial playlist ingestion.
+2. Native UA playlist watching is now the authoritative active watcher path via `src/universal_agent/services/youtube_playlist_watcher.py`.
+3. CSI remains authoritative for its own signal ingestion, delivery, analytics, and timer-driven reporting flows, but this document should not be read as the current end-to-end owner of tutorial playlist polling.
+
 ## 2. Preconditions
 
 Complete these locally first.
@@ -85,7 +90,7 @@ Create `/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ing
 On VPS:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "cp /opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.service /etc/systemd/system/csi-ingester.service && \
    systemctl daemon-reload && \
    systemctl enable csi-ingester"
@@ -96,7 +101,7 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
 Run strict preflight:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "cd /opt/universal_agent && \
    set -a && source CSI_Ingester/development/deployment/systemd/csi-ingester.env && set +a && \
    CSI_Ingester/development/scripts/csi_run.sh CSI_Ingester/development/scripts/csi_preflight.sh --strict"
@@ -105,13 +110,13 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
 Start CSI service:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 "systemctl restart csi-ingester && systemctl is-active csi-ingester"
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net "systemctl restart csi-ingester && systemctl is-active csi-ingester"
 ```
 
 Run CSI->UA signed smoke:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "cd /opt/universal_agent && \
    set -a && source CSI_Ingester/development/deployment/systemd/csi-ingester.env && source .env && set +a && \
    CSI_Ingester/development/scripts/csi_run.sh uv run python CSI_Ingester/development/scripts/csi_emit_smoke_event.py --require-internal-dispatch"
@@ -124,7 +129,7 @@ Expected: `SMOKE_OK`.
 Keep legacy timer enabled while CSI runs. Monitor:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "cd /opt/universal_agent && \
    CSI_Ingester/development/scripts/csi_run.sh python CSI_Ingester/development/scripts/csi_parallel_validate.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --since-minutes 1440"
 ```
@@ -138,7 +143,7 @@ scripts/vpsctl.sh logs gateway
 CSI service logs:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 "journalctl -u csi-ingester -n 220 --no-pager"
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net "journalctl -u csi-ingester -n 220 --no-pager"
 ```
 
 ## 8. Cutover
@@ -146,7 +151,7 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 "journalctl -u csi-ingester -n 220 
 After successful 24h parallel run:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "systemctl stop universal-agent-youtube-playlist-poller.timer && \
    systemctl disable universal-agent-youtube-playlist-poller.timer && \
    systemctl stop universal-agent-youtube-playlist-poller.service"
@@ -155,7 +160,7 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
 Confirm:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "systemctl is-active csi-ingester; systemctl is-enabled universal-agent-youtube-playlist-poller.timer || true"
 ```
 
@@ -164,7 +169,7 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
 If CSI fails:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "systemctl stop csi-ingester && \
    systemctl enable --now universal-agent-youtube-playlist-poller.timer"
 ```

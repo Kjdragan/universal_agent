@@ -25,7 +25,7 @@ References:
 
 Capabilities:
 - `/start`, `/help`, `/status`, `/agent <prompt>`, `/continue`, `/new`
-- Simple **authorized-user** gating via `ALLOWED_USER_IDS`
+- Simple **authorized-user** gating via `TELEGRAM_ALLOWED_USER_IDS`
 
 References:
 - Handlers: @/home/kjdragan/lrepos/universal_agent/src/universal_agent/bot/telegram_handlers.py#12-117
@@ -81,7 +81,7 @@ References:
    - This creates divergence from the gateway web UI execution model.
 
 2. **Authentication is simple**
-   - `ALLOWED_USER_IDS` is static and env-driven.
+   - `TELEGRAM_ALLOWED_USER_IDS` is static and env-driven.
    - No user/session management beyond that.
 
 3. **Deployment assumptions**
@@ -96,7 +96,7 @@ References:
 ## 4. Recommended integration direction (high level)
 ### 4.1 Short-term (revive Telegram quickly)
 - Keep the existing bot and verify env + webhook flow.
-- Ensure `ALLOWED_USER_IDS` is set.
+- Ensure `TELEGRAM_ALLOWED_USER_IDS` is set.
 - Use `AgentAdapter` as-is to validate basic functionality.
 
 ### 4.2 Medium-term (align with gateway)

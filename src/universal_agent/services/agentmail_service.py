@@ -534,22 +534,15 @@ class AgentMailService:
                     "session_key": f"agentmail_{thread_id or message_id}",
                     "to": "email-handler",
                     "deliver": True,
-                    "message": (
-                        f"Inbound email received in Simone's AgentMail inbox.\n"
-                        f"from: {sender}\n"
-                        f"subject: {subject}\n"
-                        f"thread_id: {thread_id}\n"
-                        f"message_id: {message_id}\n"
-                        f"inbox: {self._inbox_address}\n"
-                        f"reply_extracted: {reply_is_extracted}\n"
-                        f"\n--- Reply (new content) ---\n"
-                        f"{reply_text[:4000]}\n"
-                        + (
-                            f"\n--- Full Email Body (for reference) ---\n"
-                            f"{text_body[:4000]}"
-                            if reply_is_extracted
-                            else ""
-                        )
+                    "message": self._build_inbound_message(
+                        sender=sender,
+                        subject=subject,
+                        thread_id=thread_id,
+                        message_id=message_id,
+                        reply_text=reply_text,
+                        reply_is_extracted=reply_is_extracted,
+                        text_body=text_body,
+                        attachments=getattr(msg, "attachments", None),
                     ),
                 }
                 try:
@@ -592,6 +585,54 @@ class AgentMailService:
             "drafts_created": self._drafts_created,
             "last_error": self._last_error,
         }
+
+    def _build_inbound_message(
+        self,
+        *,
+        sender: str,
+        subject: str,
+        thread_id: str,
+        message_id: str,
+        reply_text: str,
+        reply_is_extracted: bool,
+        text_body: str,
+        attachments: Any = None,
+    ) -> str:
+        """Build a structured inbound email message for the email-handler agent.
+
+        Matches the format used by the AgentMail webhook transform so the
+        email-handler receives a consistent payload regardless of ingest path.
+        """
+        lines = [
+            "Inbound email received in Simone's AgentMail inbox.",
+            f"from: {sender}",
+            f"subject: {subject}",
+            f"thread_id: {thread_id}",
+            f"message_id: {message_id}",
+            f"inbox: {self._inbox_address}",
+            f"reply_extracted: {reply_is_extracted}",
+            "",
+            "--- Reply (new content) ---",
+            reply_text[:4000],
+        ]
+        if reply_is_extracted:
+            lines.append("")
+            lines.append("--- Full Email Body (for reference) ---")
+            lines.append(text_body[:4000])
+
+        if attachments and isinstance(attachments, (list, tuple)):
+            lines.append("")
+            lines.append(f"--- Attachments ({len(attachments)}) ---")
+            for att in attachments[:10]:
+                if isinstance(att, dict):
+                    fname = att.get("filename", "unnamed")
+                    fsize = att.get("size", "?")
+                    ftype = att.get("content_type", "unknown")
+                    lines.append(f"- {fname} ({ftype}, {fsize} bytes)")
+                elif hasattr(att, "filename"):
+                    lines.append(f"- {getattr(att, 'filename', 'unnamed')} ({getattr(att, 'content_type', 'unknown')}, {getattr(att, 'size', '?')} bytes)")
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Helpers

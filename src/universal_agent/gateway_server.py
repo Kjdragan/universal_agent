@@ -821,7 +821,7 @@ def _factory_capabilities_payload() -> dict[str, Any]:
         "heartbeat_scope": _FACTORY_POLICY.heartbeat_scope,
         "start_ui": bool(_FACTORY_POLICY.start_ui),
         "enable_telegram_poll": bool(_FACTORY_POLICY.enable_telegram_poll),
-        "enable_vp_coder": str(os.getenv("ENABLE_VP_CODER", "true")).strip().lower() == "true",
+        "enable_vp_coder": coder_vp_enabled(),
         "llm_provider_override": provider_override or None,
         "redis_delegation_enabled": bool(_delegation_bus_enabled and _delegation_mission_bus is not None),
         "redis_stream_name": _delegation_bus_stream if _delegation_bus_enabled else None,
@@ -1101,6 +1101,17 @@ async def _run_tutorial_review_job(
             },
         )
 
+
+def _telegram_allowed_user_ids_raw() -> str:
+    primary = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if primary:
+        return primary
+    legacy = (os.getenv("ALLOWED_USER_IDS") or "").strip()
+    if legacy:
+        logger.warning("ALLOWED_USER_IDS is deprecated; use TELEGRAM_ALLOWED_USER_IDS instead")
+    return legacy
+
+
 # 2. Allowlist Configuration
 ALLOWED_USERS = set()
 _allowed_users_str = os.getenv("UA_ALLOWED_USERS", "").strip()
@@ -1113,7 +1124,7 @@ if _allowed_users_str:
         (os.getenv("DEFAULT_USER_ID") or "").strip(),
         (os.getenv("UA_DASHBOARD_OWNER_ID") or "").strip(),
     }
-    _telegram_allowed = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    _telegram_allowed = _telegram_allowed_user_ids_raw()
     if _telegram_allowed:
         _runtime_identity_candidates.update(
             {item.strip() for item in _telegram_allowed.split(",") if item.strip()}
