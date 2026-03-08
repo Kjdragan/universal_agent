@@ -836,26 +836,28 @@ async def pre_tool_use_schema_guardrail(
                     "permissionDecisionReason": "Missing CURRENT_SESSION_WORKSPACE.",
                 },
             }
-        # Primary should not call this tool directly; it belongs in delegated research workflows.
-        if not is_subagent_context:
-            has_search_inputs = _has_search_results_inputs(workspace)
-            if not has_search_inputs:
-                return {
-                    "systemMessage": (
-                        "⚠️ `run_research_phase` was called from the Primary Agent without collected search inputs.\n\n"
-                        "Happy path:\n"
-                        "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
-                        "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
-                        "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
-                        "Then continue with downstream analysis/delivery."
-                    ),
-                    "decision": "block",
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": "Primary called run_research_phase without search_results inputs.",
-                    },
-                }
+        # Allow run_research_phase when search_results already exist (research was done).
+        # This covers both subagent context AND primary agent context after delegation.
+        has_search_inputs = _has_search_results_inputs(workspace)
+        if has_search_inputs:
+            pass  # Allow: search results are present, processing is valid
+        elif not is_subagent_context:
+            return {
+                "systemMessage": (
+                    "⚠️ `run_research_phase` was called without collected search inputs.\n\n"
+                    "Happy path:\n"
+                    "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
+                    "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
+                    "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
+                    "Then continue with downstream analysis/delivery."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "No search_results inputs found in workspace.",
+                },
+            }
     if isinstance(tool_input, dict):
         if (
             is_subagent_context

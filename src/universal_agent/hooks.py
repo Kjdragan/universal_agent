@@ -683,6 +683,17 @@ class AgentHookSet:
             "read_file",
             "list_dir",
         }
+
+        # Tools that legitimately operate across session workspaces (e.g.,
+        # reading HTML from one session, writing PDF to current session).
+        CROSS_WORKSPACE_TOOLS = {
+            "mcp__internal__html_to_pdf",
+            "mcp__internal__run_research_phase",
+            "mcp__internal__run_report_generation",
+            "mcp__internal__run_research_pipeline",
+        }
+        if tool_name in CROSS_WORKSPACE_TOOLS:
+            return {}  # Allow cross-workspace access for pipeline tools
         
         # Check if tool name contains read-only patterns
         tool_lower = tool_name.lower()
