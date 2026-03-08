@@ -663,57 +663,103 @@ class CronService:
                             if job.model:
                                 request_metadata["model"] = job.model
 
-                            # Resolve UA_ARTIFACTS_DIR and inject as preamble so the
-                            # agent always sees a concrete absolute path (fix #2).
-                            try:
-                                from universal_agent.artifacts import resolve_artifacts_dir
-                                _artifacts_dir = str(resolve_artifacts_dir())
-                            except Exception:
-                                _artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip()
-                            if _artifacts_dir:
-                                resolved_command = (
-                                    f"[SYSTEM CONTEXT: UA_ARTIFACTS_DIR={_artifacts_dir}]\n\n"
-                                    + job.command
+                            raw_command = job.command.strip()
+                            if raw_command.startswith("!script "):
+                                script_path = raw_command.replace("!script ", "", 1).strip()
+                                logger.info(f"Chron job {job.job_id} executing native script: {script_path}")
+                                
+                                # Use asyncio.create_subprocess_exec
+                                import sys
+                                import subprocess
+                                import os
+                                
+                                env = os.environ.copy()
+                                cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else "/home/kjdragan/lrepos/universal_agent"
+                                env["PYTHONPATH"] = f"/home/kjdragan/lrepos/universal_agent/src:{env.get('PYTHONPATH', '')}"
+                                
+                                proc = await asyncio.create_subprocess_exec(
+                                    sys.executable, "-m", script_path.replace("/", ".").replace(".py", ""),
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    cwd=cwd_str,
+                                    env=env,
                                 )
-                            else:
-                                resolved_command = job.command
-
-                            request = GatewayRequest(
-                                user_input=resolved_command,
-                                force_complex=True,
-                                metadata=request_metadata,
-                            )
-                            run_coro = self.gateway.run_query(session, request)
-                            if timeout_seconds is not None:
-                                result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
-                            else:
-                                result = await run_coro
-                            meta = getattr(result, "metadata", None)
-                            auth_required = False
-                            auth_link = None
-                            errors: list[str] = []
-                            if isinstance(meta, dict):
-                                auth_required = bool(meta.get("auth_required"))
-                                raw_link = meta.get("auth_link")
-                                auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
-                                raw_errors = meta.get("errors")
-                                if isinstance(raw_errors, list):
-                                    errors = [str(e) for e in raw_errors if str(e).strip()]
-
-                            if auth_required:
-                                record.status = "auth_required"
-                                # Preserve the link in output so the Web UI can display it without terminal access.
-                                if auth_link:
-                                    record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                                
+                                exit_code = proc.returncode
+                                output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
+                                
+                                if exit_code == 0:
+                                    record.status = "success"
+                                    record.output_preview = output_text[:400]
                                 else:
-                                    record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
-                            elif errors:
-                                record.status = "error"
-                                record.error = errors[0]
-                                record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                                    record.status = "error"
+                                    record.error = f"Script exited with {exit_code}"
+                                    record.output_preview = output_text[:400]
+
+                                # Manually construct a result object to satisfy _persist_run_output
+                                class _MockResult:
+                                    def __init__(self, text):
+                                        self.response_text = text
+                                        self.session_id = session_id
+                                result = _MockResult(output_text)
+                                record.finished_at = time.time()
+                                self._persist_run_output(job, record, result)
+                                break
                             else:
-                                record.status = "success"
-                                record.output_preview = (getattr(result, "response_text", "") or "")[:400]
+                                # Standard LLM cron execution
+                                try:
+                                    from universal_agent.artifacts import resolve_artifacts_dir
+                                    _artifacts_dir = str(resolve_artifacts_dir())
+                                except Exception:
+                                    _artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip()
+                                if _artifacts_dir:
+                                    resolved_command = (
+                                        f"[SYSTEM CONTEXT: UA_ARTIFACTS_DIR={_artifacts_dir}]\n\n"
+                                        + job.command
+                                    )
+                                else:
+                                    resolved_command = job.command
+
+                                request = GatewayRequest(
+                                    user_input=resolved_command,
+                                    force_complex=True,
+                                    metadata=request_metadata,
+                                )
+                                run_coro = self.gateway.run_query(session, request)
+                                if timeout_seconds is not None:
+                                    result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+                                else:
+                                    result = await run_coro
+                                meta = getattr(result, "metadata", None)
+                                auth_required = False
+                                auth_link = None
+                                errors: list[str] = []
+                                if isinstance(meta, dict):
+                                    auth_required = bool(meta.get("auth_required"))
+                                    raw_link = meta.get("auth_link")
+                                    auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
+                                    raw_errors = meta.get("errors")
+                                    if isinstance(raw_errors, list):
+                                        errors = [str(e) for e in raw_errors if str(e).strip()]
+
+                                if auth_required:
+                                    record.status = "auth_required"
+                                    # Preserve the link in output so the Web UI can display it without terminal access.
+                                    if auth_link:
+                                        record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                                    else:
+                                        record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
+                                elif errors:
+                                    record.status = "error"
+                                    record.error = errors[0]
+                                    record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                                else:
+                                    record.status = "success"
+                                    record.output_preview = (getattr(result, "response_text", "") or "")[:400]
+                                record.finished_at = time.time()
+                                self._persist_run_output(job, record, result)
+                                break
                             record.finished_at = time.time()
                             self._persist_run_output(job, record, result)
                             break

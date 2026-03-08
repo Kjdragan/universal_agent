@@ -92,7 +92,22 @@ def _load_local_dotenv() -> int:
     return inserted
 
 
+def _bootstrap_infisical_env() -> None:
+    try:
+        from dotenv import load_dotenv
+        dotenv_path_raw = str(os.getenv("UA_DOTENV_PATH") or "").strip()
+        if dotenv_path_raw:
+            dotenv_path = Path(dotenv_path_raw).expanduser()
+        else:
+            dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+        
+        if dotenv_path.exists() and dotenv_path.is_file():
+            load_dotenv(dotenv_path)
+    except Exception:
+        pass
+
 def _fetch_infisical_secrets() -> dict[str, str]:
+    _bootstrap_infisical_env()
     client_id = str(os.getenv("INFISICAL_CLIENT_ID") or "").strip()
     client_secret = str(os.getenv("INFISICAL_CLIENT_SECRET") or "").strip()
     project_id = str(os.getenv("INFISICAL_PROJECT_ID") or "").strip()

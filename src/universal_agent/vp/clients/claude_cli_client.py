@@ -19,7 +19,23 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from universal_agent.feature_flags import vp_handoff_root, vp_hard_block_ua_repo
+from universal_agent.guardrails.workspace_guard import (
+    WorkspaceGuardError,
+    enforce_external_target_path,
+)
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
+
+# Lazy-import session budget to avoid circular dependencies
+_session_budget = None
+
+
+def _get_budget():
+    global _session_budget
+    if _session_budget is None:
+        from universal_agent.session_budget import SessionBudget
+        _session_budget = SessionBudget.get_instance()
+    return _session_budget
 
 logger = logging.getLogger(__name__)
 
@@ -76,47 +92,74 @@ class ClaudeCodeCLIClient(VpClient):
         # Build the prompt for the CLI
         prompt = _build_cli_prompt(objective, payload, workspace_dir, skill_name)
 
-        # Attempt execution with retries
-        last_outcome: Optional[MissionOutcome] = None
-        for attempt in range(1, max_retries + 2):  # +2 because range is exclusive and attempt 1 is the first try
-            logger.info(
-                "CLI mission %s attempt %d/%d workspace=%s",
-                mission_id, attempt, max_retries + 1, workspace_dir,
+        # Acquire session budget slots
+        budget = _get_budget()
+        cli_consumer_id = f"cli.{mission_id}" if mission_id else "cli.unknown"
+        estimated_slots = 2 if enable_agent_teams else 1  # Agent Teams uses ~2 sessions
+        budget_acquired = budget.acquire(
+            cli_consumer_id,
+            slots=estimated_slots,
+            metadata={"mission_id": mission_id, "agent_teams": enable_agent_teams},
+        )
+        if not budget_acquired:
+            logger.warning(
+                "CLI mission %s: session budget full (available=%d, needed=%d)",
+                mission_id, budget.available(), estimated_slots,
+            )
+            return MissionOutcome(
+                status="failed",
+                message=f"session budget exhausted (available={budget.available()}, needed={estimated_slots})",
             )
 
-            current_prompt = prompt
-            if attempt > 1 and last_outcome and last_outcome.message:
-                current_prompt = _build_retry_prompt(
-                    original_prompt=prompt,
-                    previous_error=last_outcome.message,
-                    attempt=attempt,
+        # Enter heavy mode if using Agent Teams
+        if enable_agent_teams:
+            budget.enter_heavy_mode(cli_consumer_id)
+
+        try:
+            # Attempt execution with retries
+            last_outcome: Optional[MissionOutcome] = None
+            for attempt in range(1, max_retries + 2):  # +2 because range is exclusive and attempt 1 is the first try
+                logger.info(
+                    "CLI mission %s attempt %d/%d workspace=%s",
+                    mission_id, attempt, max_retries + 1, workspace_dir,
                 )
 
-            outcome = await _execute_cli_session(
-                prompt=current_prompt,
-                workspace_dir=workspace_dir,
-                timeout_seconds=timeout_seconds,
-                enable_agent_teams=enable_agent_teams,
-                mission_id=mission_id,
+                current_prompt = prompt
+                if attempt > 1 and last_outcome and last_outcome.message:
+                    current_prompt = _build_retry_prompt(
+                        original_prompt=prompt,
+                        previous_error=last_outcome.message,
+                        attempt=attempt,
+                    )
+
+                outcome = await _execute_cli_session(
+                    prompt=current_prompt,
+                    workspace_dir=workspace_dir,
+                    timeout_seconds=timeout_seconds,
+                    enable_agent_teams=enable_agent_teams,
+                    mission_id=mission_id,
+                )
+
+                if outcome.status == "completed":
+                    return outcome
+
+                last_outcome = outcome
+                if attempt > max_retries:
+                    break
+
+                logger.warning(
+                    "CLI mission %s attempt %d failed: %s — retrying",
+                    mission_id, attempt, outcome.message,
+                )
+
+            return last_outcome or MissionOutcome(
+                status="failed",
+                result_ref=f"workspace://{workspace_dir}",
+                message="CLI execution failed after all retries",
             )
-
-            if outcome.status == "completed":
-                return outcome
-
-            last_outcome = outcome
-            if attempt > max_retries:
-                break
-
-            logger.warning(
-                "CLI mission %s attempt %d failed: %s — retrying",
-                mission_id, attempt, outcome.message,
-            )
-
-        return last_outcome or MissionOutcome(
-            status="failed",
-            result_ref=f"workspace://{workspace_dir}",
-            message="CLI execution failed after all retries",
-        )
+        finally:
+            budget.release(cli_consumer_id)
+            budget.exit_heavy_mode(cli_consumer_id)
 
 
 async def _execute_cli_session(
@@ -265,6 +308,9 @@ async def _monitor_cli_output(
                 cost_info = event.get("cost") or event.get("usage") or {}
                 duration_ms = event.get("duration_ms") or event.get("duration") or 0
                 cost_info["duration_ms"] = duration_ms
+                cost_usd = event.get("cost_usd")
+                if cost_usd is not None:
+                    cost_info["cost_usd"] = float(cost_usd)
 
             elif event_type in ("assistant", "message"):
                 # Intermediate assistant message
@@ -348,6 +394,11 @@ def _build_cli_env(enable_agent_teams: bool, workspace_dir: Path) -> dict[str, s
     env["CURRENT_SESSION_WORKSPACE"] = str(workspace_dir)
     env.pop("UA_INFISICAL_STRICT", None)  # Don't enforce Infisical in CLI subprocess
 
+    # Forward Agent Team concurrency limit if set
+    max_agents = os.getenv("REPORT_MAX_CONCURRENT_AGENTS", "")
+    if max_agents:
+        env["REPORT_MAX_CONCURRENT_AGENTS"] = max_agents
+
     return env
 
 
@@ -382,6 +433,10 @@ def _build_cli_prompt(
     if corpus_path:
         parts.append(f"## Input Corpus\n\nResearch corpus is at: {corpus_path}\n")
 
+    output_dir = str(payload.get("output_dir") or "").strip()
+    if output_dir:
+        parts.append(f"## Output Directory\n\nWrite final deliverables to: {output_dir}\n")
+
     parts.append(
         "## Instructions\n\n"
         "Work autonomously to complete the objective. "
@@ -407,15 +462,47 @@ def _resolve_workspace(
     workspace_root: Path,
     payload: dict[str, Any],
 ) -> Path:
-    """Resolve the workspace directory for the CLI session."""
+    """Resolve the workspace directory for the CLI session.
+
+    When a target_path is provided, it is validated against the workspace
+    guardrail to prevent writes into the UA repository tree.
+    """
     target_path = str(payload.get("target_path") or "").strip()
     if target_path:
         resolved = Path(target_path).expanduser().resolve()
+        _enforce_cli_target_guardrails(resolved)
         resolved.mkdir(parents=True, exist_ok=True)
         return resolved
 
     safe_id = mission_id.replace("/", "_").replace("..", "_").strip() or f"cli_{uuid.uuid4().hex[:8]}"
     return (workspace_root / safe_id).resolve()
+
+
+def _enforce_cli_target_guardrails(target: Path) -> None:
+    """Block CLI sessions from writing into the UA repository tree."""
+    if not vp_hard_block_ua_repo(default=True):
+        return
+    handoff = Path(vp_handoff_root()).expanduser().resolve()
+
+    repo_root = Path(__file__).resolve().parents[4]
+    blocked_roots = [
+        repo_root.resolve(),
+        (repo_root / "AGENT_RUN_WORKSPACES").resolve(),
+        (repo_root / "artifacts").resolve(),
+        (repo_root / "Memory_System").resolve(),
+    ]
+    try:
+        enforce_external_target_path(
+            target,
+            blocked_roots=blocked_roots,
+            allowlisted_roots=[handoff],
+            operation="CLI target path",
+        )
+    except WorkspaceGuardError as exc:
+        raise ValueError(
+            "CLI target path is blocked inside UA repository/runtime roots. "
+            f"Use handoff root {handoff} or another external path. ({exc})"
+        ) from exc
 
 
 def _parse_payload(payload_json: Any) -> dict[str, Any]:
@@ -433,13 +520,41 @@ def _parse_payload(payload_json: Any) -> dict[str, Any]:
 
 
 def _kill_process(proc: asyncio.subprocess.Process) -> None:
-    """Kill a subprocess safely."""
+    """Gracefully terminate a subprocess (SIGTERM first, then SIGKILL)."""
+    if proc.returncode is not None:
+        return  # Already exited
     try:
-        proc.kill()
-    except ProcessLookupError:
-        pass
+        proc.send_signal(signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        return
     except Exception as exc:
-        logger.debug("Error killing CLI process: %s", exc)
+        logger.debug("SIGTERM failed for CLI process: %s", exc)
+
+    # Give it 5 seconds to terminate gracefully, then force-kill
+    async def _wait_and_kill():
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_wait_and_kill())
+        else:
+            # Fallback: immediate kill if no running loop
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+    except RuntimeError:
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
 
 
 def _save_stream_log(

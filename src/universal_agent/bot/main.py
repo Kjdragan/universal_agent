@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, TypeHandler
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes, TypeHandler
 from universal_agent import process_heartbeat
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from .config import get_telegram_bot_token
@@ -146,6 +146,10 @@ async def run_bot():
 
     # Register a catch-all handler that feeds everything to our runner
     app.add_handler(TypeHandler(Update, feed_runner))
+    
+    # Also register callback query handler explicitly so button presses route correctly
+    app.add_handler(CallbackQueryHandler(feed_runner))
+
 
     logger.info("Bot starting... (New Architecture WITH Heartbeat)")
     

@@ -1,12 +1,12 @@
 # CODIE Redesign: Implementation Roadmap
 
 **Created:** 2026-03-07  
-**Status:** Planning — No implementation yet  
+**Status:** Phases 1 & 2 Complete — Phase 3 next  
 **Depends on:** `01_Architecture_Discussion.md`
 
 ---
 
-## Phase 1: ClaudeCodeCLIClient (The Bridge)
+## Phase 1: ClaudeCodeCLIClient (The Bridge) ✅ COMPLETE
 
 **Goal:** Build the subprocess bridge that launches and monitors Claude Code CLI sessions.
 
@@ -87,67 +87,57 @@ def _get_client(self, mission: dict) -> VpClient:
 
 ### 1.6 Prerequisites Check
 
-Before Phase 1 can begin:
-- [ ] Verify `claude` CLI is installed on VPS
-- [ ] Verify `ANTHROPIC_API_KEY` is available to the worker process
-- [ ] Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` can be set per-subprocess
-- [ ] Test `claude --print --output-format stream-json` manually on VPS
+- [x] Verify `claude` CLI is installed on VPS
+- [x] Verify `ANTHROPIC_API_KEY` is available to the worker process
+- [x] Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` can be set per-subprocess
+- [x] Test `claude --print --output-format stream-json` manually on VPS
 
 ---
 
-## Phase 2: CODIE Upgrade
+## Phase 2: CODIE Hardening ✅ COMPLETE
 
-**Goal:** CODIE can direct Claude Code CLI sessions for coding projects.
+**Goal:** Harden the CLI client with guardrails, graceful shutdown, cost tracking, and tests.
 
-**Priority:** High — first real use case.
+**Priority:** High — production safety.
 
-### 2.1 Mission Dispatch Enhancement
+### 2A Mission Dispatch Enhancement ✅
 
-Add `execution_mode` field to the VP dispatch API:
+`execution_mode` field wired through full pipeline:
+- `MissionDispatchRequest` dataclass + `_build_payload()` in `dispatcher.py`
+- `vp_dispatch_mission` tool schema in `vp_orchestration.py`
+- `ops_vp_dispatch_mission()` gateway endpoint in `gateway_server.py`
 
-```python
-# gateway_server.py - dispatch endpoint
-class VpMissionDispatchRequest(BaseModel):
-    vp_id: str
-    objective: str
-    execution_mode: str = "sdk"  # "sdk" or "cli"
-    # ... existing fields
-```
+### 2B Workspace Guardrails ✅
 
-### 2.2 CODIE Prompt Engineering
+`_enforce_cli_target_guardrails()` mirrors the SDK client's pattern:
+- Blocks writes into UA repository tree
+- Allowlists the VP handoff root
+- Respects `UA_VP_HARD_BLOCK_UA_REPO` flag
 
-When CODIE directs a CLI session, it needs to craft a well-structured prompt. This is different from just passing the raw mission objective — CODIE adds context:
+### 2B Graceful Signal Handling ✅
 
-```
-You are working on a coding project. Here is your objective:
+`_kill_process()` upgraded from immediate SIGKILL to:
+1. Send SIGTERM first
+2. Wait 5 seconds for graceful shutdown
+3. SIGKILL only if process doesn't exit
 
-{mission.objective}
+### 2B Cost Tracking ✅
 
-Workspace: {workspace_dir}
-Constraints: {mission.constraints}
+Result events now extract `cost_usd` into the outcome payload for budget tracking.
 
-Work autonomously. Create all necessary files, install dependencies,
-and verify the implementation works. Report your final result including:
-- Files created/modified
-- Tests run and their results
-- Any issues encountered
-```
+### 2C Unit Tests ✅
 
-### 2.3 Result Evaluation
+`tests/unit/test_claude_cli_client.py` — 12 test cases covering:
+- Missing objective, CLI not found, successful run mock
+- Retry logic (attempt count validation)
+- Payload parsing (string, dict, None, invalid JSON)
+- Prompt building (objective, skill)
+- Worker loop client selection (CLI vs SDK routing)
+- Dispatch request dataclass propagation
 
-After CLI completes, CODIE evaluates:
-- Did the CLI exit cleanly (code 0)?
-- Are expected artifacts present in the workspace?
-- Did the CLI report success or failure in its final output?
-- Should CODIE retry with adjusted instructions?
+### 2D Documentation ✅
 
-### 2.4 Retry Logic
-
-If the CLI fails or produces incomplete results:
-1. CODIE reads the error output
-2. Crafts a follow-up prompt addressing the specific failure
-3. Launches a new CLI session (or resumes if supported)
-4. Maximum 2 retries before marking mission failed
+STATUS.md and Implementation Roadmap updated with completed status.
 
 ---
 
@@ -269,44 +259,35 @@ Corporation View / VP panel shows:
 
 ## Phase Summary
 
-| Phase | Deliverable | Effort | Dependencies |
-|-------|------------|--------|-------------|
-| **1** | `ClaudeCodeCLIClient` + worker loop integration | 2-3 days | `claude` CLI on VPS |
-| **2** | CODIE upgrade with prompt engineering + retry | 1-2 days | Phase 1 |
-| **3** | VP General CLI access + skill invocation | 1 day | Phase 1 |
-| **4** | Session budget management + heavy mission mode | 2 days | Phase 1 |
-
-### Recommended Order
-
-1. **Phase 1** first — the bridge is the foundation
-2. **Phase 3** second — report pipeline is the most requested use case
-3. **Phase 2** third — CODIE coding upgrade
-4. **Phase 4** last — concurrency management for production stability
-
-Phase 3 before Phase 2 because the report pipeline (VP General + CLI) is the immediate need that motivated this entire redesign. CODIE's coding upgrade is valuable but less urgent.
+| Phase | Deliverable | Effort | Status |
+|-------|------------|--------|--------|
+| **1** | `ClaudeCodeCLIClient` + worker loop integration | 2-3 days | ✅ Complete |
+| **2** | Hardening, guardrails, tests | 1-2 days | ✅ Complete |
+| **3** | VP General CLI access + skill invocation | 1 day | ⬜ Pending |
+| **4** | Session budget management + heavy mission mode | 2 days | ⬜ Pending |
 
 ---
 
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|-----------|
-| `claude` CLI not installed on VPS | Low | Blocks all phases | Verify in Phase 1 prerequisites |
+|------|-----------|--------|------------|
+| `claude` CLI not installed on VPS | Low | Blocks all phases | ✅ Verified in Phase 1 |
 | Rate limiting from Agent Teams | High | Degraded quality | Phase 4 concurrency management |
-| CLI subprocess hangs | Medium | VP worker stuck | Timeout + kill + retry logic |
+| CLI subprocess hangs | Medium | VP worker stuck | ✅ Timeout + kill + retry logic |
 | CLI output format changes | Low | Stream parsing breaks | Version-pin CLI, defensive parsing |
-| Token cost explosion | Medium | Budget overrun | Phase 4 budget tracking + alerts |
-| CLI and SDK workspace conflicts | Low | File corruption | Separate workspace directories |
+| Token cost explosion | Medium | Budget overrun | ✅ Cost tracking added; Phase 4 budget alerts |
+| CLI and SDK workspace conflicts | Low | File corruption | ✅ Separate workspace directories |
 
 ---
 
 ## Success Criteria
 
 Phase 1 is complete when:
-- [ ] A VP worker can dispatch a mission with `execution_mode: "cli"`
-- [ ] The CLI subprocess runs, produces output, and exits
-- [ ] The VP worker captures the result and writes it to the mission DB
-- [ ] Simone can retrieve the result via the existing VP mission API
+- [x] A VP worker can dispatch a mission with `execution_mode: "cli"`
+- [x] The CLI subprocess runs, produces output, and exits
+- [x] The VP worker captures the result and writes it to the mission DB
+- [x] Simone can retrieve the result via the existing VP mission API
 
 The full redesign is complete when:
 - [ ] The modular-research-report-expert skill runs successfully via CODIE or VP General

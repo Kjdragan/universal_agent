@@ -4255,23 +4255,8 @@ def _emit_cron_event(payload: dict) -> None:
                 ).strip()
         is_autonomous = bool(job_metadata.get("autonomous"))
         system_job = str(job_metadata.get("system_job") or "").strip()
-        is_daily_briefing_job = system_job == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY
-        briefing_payload: dict[str, Any] = {}
-        if is_daily_briefing_job:
-            try:
-                briefing_payload = _generate_autonomous_daily_briefing_artifact(
-                    now_ts=float(run_data.get("finished_at") or time.time()),
-                )
-            except Exception:
-                logger.exception("Failed generating deterministic autonomous daily briefing artifact")
-                briefing_payload = {}
 
-        if run_status == "success" and is_daily_briefing_job and briefing_payload:
-            title = "Daily Autonomous Briefing Ready"
-            severity = "info"
-            kind = "autonomous_daily_briefing_ready"
-            message = str(briefing_payload.get("summary_line") or command)
-        elif run_status == "success":
+        if run_status == "success":
             title = "Autonomous Task Completed" if is_autonomous else "Chron Run Succeeded"
             severity = "info"
             kind = "autonomous_run_completed" if is_autonomous else "cron_run_success"
@@ -4284,14 +4269,6 @@ def _emit_cron_event(payload: dict) -> None:
             message = f"{command}"
             if error_text:
                 message = f"{message} | {error_text[:240]}"
-            if is_daily_briefing_job and briefing_payload:
-                message = (
-                    f"{message} | fallback briefing summary: "
-                    f"{str(briefing_payload.get('summary_line') or '').strip()[:180]}"
-                )
-
-        markdown_payload = briefing_payload.get("markdown") if isinstance(briefing_payload, dict) else None
-        json_payload = briefing_payload.get("json") if isinstance(briefing_payload, dict) else None
 
         _add_notification(
             kind=kind,
@@ -4299,6 +4276,7 @@ def _emit_cron_event(payload: dict) -> None:
             message=message,
             session_id=session_id or None,
             severity=severity,
+            source="cron",
             metadata={
                 "job_id": job_id,
                 "run_id": run_id,
@@ -4311,15 +4289,6 @@ def _emit_cron_event(payload: dict) -> None:
                 "autonomous": is_autonomous,
                 "system_job": system_job,
                 "todoist_task_id": str(job_metadata.get("todoist_task_id") or ""),
-                "report_api_url": str((markdown_payload or {}).get("api_url") or ""),
-                "report_storage_href": str((markdown_payload or {}).get("storage_href") or ""),
-                "report_json_api_url": str((json_payload or {}).get("api_url") or ""),
-                "report_relative_path": str((markdown_payload or {}).get("relative_path") or ""),
-                "report_counts": (
-                    dict(briefing_payload.get("counts") or {})
-                    if isinstance(briefing_payload.get("counts"), dict)
-                    else {}
-                ),
             },
         )
     event = {
@@ -8242,12 +8211,12 @@ def _require_delegation_consume_allowed() -> None:
 
 
 def _require_headquarters_role_for_fleet() -> None:
-    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+    if not _FACTORY_POLICY.is_headquarters:
         raise HTTPException(
             status_code=403,
             detail=(
                 "Factory registration endpoints are only available for "
-                f"FACTORY_ROLE={FactoryRole.HEADQUARTERS.value}"
+                f"FACTORY_ROLE={_FACTORY_POLICY.role}"
             ),
         )
 
@@ -8828,10 +8797,10 @@ async def hooks_readyz():
 
 @app.post("/auth/ops-token", response_model=OpsTokenIssueResponse)
 async def issue_ops_token_endpoint(request: Request, payload: OpsTokenIssueRequest):
-    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+    if not _FACTORY_POLICY.is_headquarters:
         raise HTTPException(
             status_code=403,
-            detail=f"/auth/ops-token is only available for FACTORY_ROLE={FactoryRole.HEADQUARTERS.value}",
+            detail=f"/auth/ops-token is only available for FACTORY_ROLE={_FACTORY_POLICY.role}",
         )
     _require_ops_token_issuance_auth(request)
     if not OPS_JWT_SECRET:
@@ -13398,6 +13367,17 @@ async def ops_agentmail_send_draft(request: Request, draft_id: str):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+@app.get("/api/v1/ops/telemetry/briefing")
+async def ops_telemetry_briefing_get(request: Request):
+    _require_ops_auth(request)
+    now_ts = time.time()
+    try:
+        data = _collect_autonomous_activity_rows(now_ts=now_ts)
+        return {"ok": True, "briefing_data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
 async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
     _require_ops_auth(request)
@@ -16077,6 +16057,7 @@ async def ops_vp_dispatch_mission(
                 reply_mode=(body.reply_mode or "async").strip() or "async",
                 priority=int(body.priority or 100),
                 run_id=(body.run_id or "").strip() or None,
+                execution_mode=(body.execution_mode or "sdk").strip() or "sdk",
             ),
             workspace_base=WORKSPACES_DIR,
         )
@@ -16110,6 +16091,44 @@ async def ops_vp_cancel_mission(
         raise
     except Exception as exc:
         raise _vp_api_error("cancel_mission", exc) from exc
+
+
+@app.get("/api/v1/ops/session-budget/status")
+async def ops_session_budget_status(request: Request):
+    """Return current session budget slot usage for the dashboard."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.session_budget import SessionBudget
+        budget = SessionBudget.get_instance()
+        return budget.status()
+    except Exception as exc:
+        raise _vp_api_error("session_budget_status", exc) from exc
+
+
+class HeavyModeRequest(BaseModel):
+    consumer_id: str
+    action: str  # "enter" or "exit"
+
+
+@app.post("/api/v1/ops/session-budget/heavy-mode")
+async def ops_session_budget_heavy_mode(request: Request, body: HeavyModeRequest):
+    """Enter or exit heavy mission mode."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.session_budget import SessionBudget
+        budget = SessionBudget.get_instance()
+        if body.action == "enter":
+            ok = budget.enter_heavy_mode(body.consumer_id)
+            return {"heavy_mode_active": budget.heavy_mode_active, "entered": ok}
+        elif body.action == "exit":
+            budget.exit_heavy_mode(body.consumer_id)
+            return {"heavy_mode_active": budget.heavy_mode_active, "exited": True}
+        else:
+            raise HTTPException(status_code=400, detail="action must be 'enter' or 'exit'")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("session_budget_heavy_mode", exc) from exc
 
 
 @app.get("/api/v1/ops/metrics/coder-vp")

@@ -110,5 +110,17 @@
   "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260227_195151_2927affc/transcript.md": {
     "size": 18305,
     "lines": 379
+  },
+  "/tmp/pytest-of-kjdragan/pytest-13/test_ops_vp_general_worker_exe0/vp_general_primary_external/vp-mission-80ee7aabc2a31e5815316a3b/transcript.md": {
+    "size": 1967,
+    "lines": 44
+  },
+  "/tmp/pytest-of-kjdragan/pytest-13/test_vp_event_bridge_injects_l0/vp_general_primary_external/vp-mission-71aecb2b1970e6a8280a6ab0/transcript.md": {
+    "size": 4320,
+    "lines": 128
+  },
+  "/tmp/pytest-of-kjdragan/pytest-13/test_vp_event_bridge_cursor_pe0/vp_general_primary_external/vp-mission-4dc0a8325ea9c5f703be94d0/transcript.md": {
+    "size": 4321,
+    "lines": 128
   }
 }

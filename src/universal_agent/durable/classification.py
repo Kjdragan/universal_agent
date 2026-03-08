@@ -214,6 +214,7 @@ KNOWN_MCP_SIDE_EFFECTS = {
     "finalize_research": "local",
     "generate_image": "local",
     "preview_image": "local",
+    "core_memory_append": "memory",
 }
 
 KNOWN_MCP_READ_ONLY = {

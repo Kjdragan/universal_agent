@@ -46,6 +46,7 @@ class MissionDispatchRequest:
     reply_mode: str
     priority: int
     run_id: Optional[str] = None
+    execution_mode: str = "sdk"  # "sdk" (default) or "cli" (Claude Code CLI)
 
 
 def dispatch_mission(
@@ -60,7 +61,7 @@ def dispatch_mission(
 
     mission_id = _resolve_mission_id(request)
     payload = _build_payload(request=request, profile=profile, mission_id=mission_id)
-    _validate_dispatch_constraints(profile=profile, constraints=request.constraints)
+    _validate_dispatch_constraints(profile=profile, constraints=request.constraints, execution_mode=request.execution_mode)
 
     existing = get_vp_mission(conn, mission_id)
     if existing is not None:
@@ -208,11 +209,21 @@ def _build_payload(
         "source_turn_id": request.source_turn_id,
         "reply_mode": request.reply_mode or "async",
         "priority": int(request.priority),
+        "execution_mode": request.execution_mode,
     }
 
 
-def _validate_dispatch_constraints(profile: VpProfile, constraints: dict[str, Any]) -> None:
-    if profile.vp_id != coder_vp_id():
+def _validate_dispatch_constraints(
+    profile: VpProfile,
+    constraints: dict[str, Any],
+    execution_mode: str = "sdk",
+) -> None:
+    """Guard dispatch paths for coder VP and any CLI-mode mission."""
+    is_coder = profile.vp_id == coder_vp_id()
+    is_cli_mode = execution_mode == "cli"
+
+    # Only guard coder VP or CLI-mode missions
+    if not is_coder and not is_cli_mode:
         return
     if not vp_hard_block_ua_repo(default=True):
         return
@@ -231,17 +242,18 @@ def _validate_dispatch_constraints(profile: VpProfile, constraints: dict[str, An
     handoff_root = Path(vp_handoff_root()).expanduser().resolve()
     runtime_roots = [path for path in runtime_roots if path.exists()]
 
+    vp_label = profile.display_name or profile.vp_id
     for raw_path in candidate_paths:
         try:
             enforce_external_target_path(
                 raw_path,
                 blocked_roots=runtime_roots,
                 allowlisted_roots=[handoff_root],
-                operation="CODIE mission target",
+                operation=f"{vp_label} mission target",
             )
         except WorkspaceGuardError as exc:
             raise ValueError(
-                "CODIE external mission target path is blocked inside UA runtime/repo roots. "
+                f"{vp_label} external mission target path is blocked inside UA runtime/repo roots. "
                 f"Use handoff root {handoff_root} or another external project path. ({exc})"
             ) from exc
 

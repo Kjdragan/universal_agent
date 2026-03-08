@@ -41,7 +41,7 @@ class TestHeartbeatConfig:
         monkeypatch.setenv("FACTORY_ROLE", "LOCAL_WORKER")
         monkeypatch.setenv("UA_DEPLOYMENT_PROFILE", "local_workstation")
         monkeypatch.setenv("UA_DELEGATION_REDIS_ENABLED", "1")
-        monkeypatch.setenv("ENABLE_VP_CODER", "true")
+        monkeypatch.setenv("UA_ENABLE_CODER_VP", "true")
         monkeypatch.setenv("UA_HEARTBEAT_INTERVAL_SECONDS", "30")
 
         cfg = HeartbeatConfig.from_env()

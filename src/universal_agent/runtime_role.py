@@ -61,40 +61,73 @@ def resolve_factory_role(raw_role: Optional[str] = None) -> FactoryRole:
         return FactoryRole.LOCAL_WORKER
 
 
+from typing import Optional, Any
+
 def build_factory_runtime_policy(raw_role: Optional[str] = None) -> FactoryRuntimePolicy:
     role = resolve_factory_role(raw_role)
+    kwargs: dict[str, Any] = {}
 
+    # Base defaults determined by role
     if role is FactoryRole.HEADQUARTERS:
-        return FactoryRuntimePolicy(
-            role=role.value,
-            gateway_mode="full",
-            start_ui=True,
-            enable_telegram_poll=True,
-            heartbeat_scope="global",
-            delegation_mode="publish_and_listen",
-        )
+        kwargs = {
+            "gateway_mode": "full",
+            "start_ui": True,
+            "enable_telegram_poll": True,
+            "heartbeat_scope": "global",
+            "delegation_mode": "publish_and_listen",
+            "enable_csi_ingest": True,
+            "enable_agentmail": True,
+        }
+    elif role is FactoryRole.LOCAL_WORKER:
+        kwargs = {
+            "gateway_mode": "health_only",
+            "start_ui": False,
+            "enable_telegram_poll": False,
+            "heartbeat_scope": "local",
+            "delegation_mode": "listen_only",
+            "enable_csi_ingest": False,
+            "enable_agentmail": False,
+        }
+    else:
+        # STANDALONE_NODE
+        kwargs = {
+            "gateway_mode": "full",
+            "start_ui": True,
+            "enable_telegram_poll": _env_flag("UA_STANDALONE_ENABLE_TELEGRAM_POLL", default=False),
+            "heartbeat_scope": "local",
+            "delegation_mode": "disabled",
+            "enable_csi_ingest": True,
+            "enable_agentmail": True,
+        }
 
-    if role is FactoryRole.LOCAL_WORKER:
-        return FactoryRuntimePolicy(
-            role=role.value,
-            gateway_mode="health_only",
-            start_ui=False,
-            enable_telegram_poll=False,
-            heartbeat_scope="local",
-            delegation_mode="listen_only",
-            enable_csi_ingest=False,
-            enable_agentmail=False,
-        )
+    # Allow explicit UA_CAPABILITY_* flag overrides for boolean fields
+    bool_fields = {
+        "start_ui": "UA_CAPABILITY_START_UI",
+        "enable_telegram_poll": "UA_CAPABILITY_TELEGRAM_POLL",
+        "enable_csi_ingest": "UA_CAPABILITY_CSI_INGEST",
+        "enable_agentmail": "UA_CAPABILITY_AGENTMAIL",
+    }
+    
+    for field, env_var in bool_fields.items():
+        base_val = bool(kwargs[field])
+        # _env_flag treats empty as default, so we only override if explicitly set
+        raw = str(os.getenv(env_var, "")).strip()
+        if raw:
+            kwargs[field] = _env_flag(env_var, base_val)
 
-    # STANDALONE_NODE
-    return FactoryRuntimePolicy(
-        role=role.value,
-        gateway_mode="full",
-        start_ui=True,
-        enable_telegram_poll=_env_flag("UA_STANDALONE_ENABLE_TELEGRAM_POLL", default=False),
-        heartbeat_scope="local",
-        delegation_mode="disabled",
-    )
+    # Allow explicit overrides for enum/string fields
+    str_fields = {
+        "gateway_mode": "UA_CAPABILITY_GATEWAY_MODE",
+        "heartbeat_scope": "UA_CAPABILITY_HEARTBEAT_SCOPE",
+        "delegation_mode": "UA_CAPABILITY_DELEGATION_MODE",
+    }
+    
+    for field, env_var in str_fields.items():
+        val = str(os.getenv(env_var, "")).strip()
+        if val:
+            kwargs[field] = val
+
+    return FactoryRuntimePolicy(role=role.value, **kwargs)
 
 
 def normalize_llm_provider_override() -> Optional[str]:

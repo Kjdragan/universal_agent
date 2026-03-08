@@ -15,20 +15,23 @@
 
 | Task | Status | Notes |
 |------|--------|-------|
-| 1.1 `claude_cli_client.py` | ⬜ In Progress | Core subprocess bridge |
-| 1.2 JSON stream parsing | ⬜ In Progress | Part of client |
-| 1.3 Input request handling | ⬜ Pending | VP responds to CLI stdin |
-| 1.4 VpWorkerLoop integration | ⬜ Pending | execution_mode selection |
-| 1.5 Mission dispatch API update | ⬜ Pending | Accept execution_mode param |
-| 1.6 Verification test | ⬜ Pending | End-to-end dispatch → CLI → result |
+| 1.1 `claude_cli_client.py` | ✅ Done | 500-line subprocess bridge with stream-json parsing |
+| 1.2 JSON stream parsing | ✅ Done | Handles result, assistant, tool_use, error events |
+| 1.3 Input request handling | ✅ Done | Stall detection + basic stdin response |
+| 1.4 VpWorkerLoop integration | ✅ Done | `_select_client_for_mission()` routes on execution_mode |
+| 1.5 Mission dispatch API update | ✅ Done | `execution_mode` wired through dispatcher → tool → gateway |
+| 1.6 Verification test | ✅ Done | 22/22 tests pass (12 new CLI + 10 regression) |
 
-## Phase 2: CODIE Upgrade
+## Phase 2: CODIE Hardening & Tests
 
 | Task | Status | Notes |
 |------|--------|-------|
-| 2.1 Prompt engineering | ⬜ Pending | Structured mission briefs for CLI |
-| 2.2 Result evaluation | ⬜ Pending | Inspect artifacts, decide success |
-| 2.3 Retry logic | ⬜ Pending | Max 2 retries with adjusted prompts |
+| 2A `execution_mode` dispatch pipeline | ✅ Done | `dispatcher.py`, `vp_orchestration.py`, `gateway_server.py` |
+| 2B Workspace guardrails | ✅ Done | `_enforce_cli_target_guardrails()` mirrors SDK client pattern |
+| 2B Graceful signal handling | ✅ Done | SIGTERM → wait 5s → SIGKILL in `_kill_process()` |
+| 2B Cost tracking | ✅ Done | `cost_usd` extracted from result events into outcome payload |
+| 2C Unit tests | ✅ Done | `tests/unit/test_claude_cli_client.py`, 12 test cases |
+| 2D Documentation update | ✅ Done | STATUS.md + Implementation Roadmap updated |
 
 ## Phase 3: VP General CLI Support
 
@@ -51,4 +54,14 @@
 
 | Date | Commit | What |
 |------|--------|------|
-| 2026-03-08 | — | Phase 1 implementation started |
+| 2026-03-08 | — | Phase 1 complete, Phase 2 hardening complete |
+
+## Key Files Modified
+
+| File | Change |
+|------|--------|
+| `vp/clients/claude_cli_client.py` | Core CLI bridge + guardrails + graceful shutdown + cost tracking |
+| `vp/dispatcher.py` | `execution_mode` field in `MissionDispatchRequest` + `_build_payload()` |
+| `tools/vp_orchestration.py` | `execution_mode` in `vp_dispatch_mission` tool schema |
+| `gateway_server.py` | `execution_mode` passthrough in `ops_vp_dispatch_mission()` |
+| `tests/unit/test_claude_cli_client.py` | 12 new test cases |

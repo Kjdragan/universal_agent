@@ -13,9 +13,6 @@ sys.modules["universal_agent.hooks_service"] = MagicMock()
 sys.modules["logfire"] = MagicMock()
 
 # Also mock fastapi
-mock_fastapi = MagicMock()
-mock_fastapi.WebSocket = MagicMock
-sys.modules["fastapi"] = mock_fastapi
 
 # Now import server
 # We might need to mock some env vars if they are read at module level
@@ -40,21 +37,22 @@ async def test_websocket_missing_session_metrics():
             metrics[name] = metrics.get(name, 0) + amount
             
         with patch("universal_agent.gateway_server._increment_metric", side_effect=fake_increment):
-            with patch("universal_agent.gateway_server.get_session", return_value=None):
-                with patch("universal_agent.gateway_server.get_gateway") as mock_get_gw:
-                    # Mock gateway resume to raise ValueError
-                    mock_gw = MagicMock()
-                    mock_gw.resume_session = AsyncMock(side_effect=ValueError("Not found"))
-                    mock_get_gw.return_value = mock_gw
-                    
-                    # Call the endpoint
-                    await server.websocket_endpoint(mock_websocket, "missing_session")
-                    
-                    # Verify behaviour
-                    # Should NOT count attempts or failures for missing session
-                    assert metrics.get("ws_attach_attempts", 0) == 0
-                    assert metrics.get("ws_attach_failures", 0) == 0
-                    assert metrics.get("resume_failures", 0) == 0
-                    
-                    # Verify close
-                    mock_websocket.close.assert_called_with(code=4004, reason="Session not found")
+            with patch("universal_agent.gateway_server._require_session_ws_auth", return_value=True):
+                with patch("universal_agent.gateway_server.get_session", return_value=None):
+                    with patch("universal_agent.gateway_server.get_gateway") as mock_get_gw:
+                        # Mock gateway resume to raise ValueError
+                        mock_gw = MagicMock()
+                        mock_gw.resume_session = AsyncMock(side_effect=ValueError("Not found"))
+                        mock_get_gw.return_value = mock_gw
+                        
+                        # Call the endpoint
+                        await server.websocket_stream(mock_websocket, "missing_session")
+                        
+                        # Verify behaviour
+                        # Should NOT count attempts or failures for missing session
+                        assert metrics.get("ws_attach_attempts", 0) == 0
+                        assert metrics.get("ws_attach_failures", 0) == 0
+                        assert metrics.get("resume_failures", 0) == 0
+                        
+                        # Verify close
+                        mock_websocket.close.assert_called_with(code=4004, reason="Session not found")
