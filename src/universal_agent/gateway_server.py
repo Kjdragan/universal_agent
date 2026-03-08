@@ -134,6 +134,7 @@ from universal_agent.signals_ingest import (
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.memory.memory_index import load_index
 from universal_agent.csi_confidence import confidence_baseline as _csi_confidence_baseline_model
 from universal_agent.csi_confidence import score_event_confidence as _csi_score_event_confidence
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
@@ -141,6 +142,7 @@ from universal_agent.timeout_policy import (
     gateway_ws_send_timeout_seconds,
     session_cancel_wait_seconds,
 )
+from universal_agent import task_hub
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1443,6 +1445,25 @@ class ActivityEventActionRequest(BaseModel):
     action: str
     note: Optional[str] = None
     snooze_minutes: Optional[int] = None
+
+
+class ToDoTaskActionRequest(BaseModel):
+    action: str
+    reason: Optional[str] = None
+    note: Optional[str] = None
+    agent_id: Optional[str] = None
+
+
+class TodoistMirrorPolicyPatchRequest(BaseModel):
+    mode: Optional[str] = None
+    classes: Optional[list[str]] = None
+    reverse_sync_fields: Optional[list[str]] = None
+    enabled: Optional[bool] = None
+
+
+class MemoryTaskCompactRequest(BaseModel):
+    dry_run: bool = True
+    apply: Optional[bool] = None
 
 
 class CSISpecialistLoopActionRequest(BaseModel):
@@ -3427,6 +3448,59 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     }
 
 
+def _csi_incident_key(
+    *,
+    event_id: str,
+    event_type: str,
+    source: str,
+    subject_obj: dict[str, Any],
+) -> str:
+    report_key = str(subject_obj.get("report_key") or "").strip()
+    if report_key:
+        return report_key
+    brief_key = str(subject_obj.get("brief_key") or "").strip()
+    if brief_key:
+        return brief_key
+    if event_type in {"delivery_health_regression", "delivery_reliability_slo_breached"}:
+        return f"{event_type}:{source or 'csi'}"
+    if event_type in {"rss_quality_gate_alert", "rss_quality_gate_ok"}:
+        return f"{event_type}:{source or 'csi'}"
+    return str(event_id or f"{event_type}:{source}").strip()
+
+
+def _task_hub_mirror_class_for_csi(
+    *,
+    event_type: str,
+    has_anomaly: bool,
+    high_value: bool,
+    requires_action: bool,
+) -> str:
+    if has_anomaly or event_type in {
+        "delivery_health_regression",
+        "delivery_reliability_slo_breached",
+        "delivery_health_auto_remediation_failed",
+    }:
+        return "csi_incident_high"
+    if high_value and requires_action:
+        return "csi_incident_high"
+    return "internal_only"
+
+
+def _task_hub_should_mirror(policy: dict[str, Any], mirror_class: str) -> bool:
+    if not bool(policy.get("enabled", True)):
+        return False
+    mode = str(policy.get("mode") or "selective").strip().lower()
+    if mode == "all":
+        return True
+    if mode == "off":
+        return False
+    classes = policy.get("classes")
+    if not isinstance(classes, list):
+        return False
+    normalized = {str(item).strip().lower() for item in classes if str(item).strip()}
+    return str(mirror_class or "").strip().lower() in normalized
+
+
 def classify_csi_project_key(
     event_type: str,
     subject: Any,
@@ -4888,6 +4962,8 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE csi_specialist_loops ADD COLUMN suppressed_until TEXT"
         )
+    # Task hub tables share the activity DB operational plane.
+    task_hub.ensure_schema(conn)
     conn.commit()
 
 
@@ -9166,10 +9242,63 @@ async def signals_ingest_endpoint(request: Request):
                         created_at=event.occurred_at or event.received_at,
                     )
 
-            # Create Todoist task when credentials are configured. Missing credentials
-            # are treated as a sync skip, not a system error.
-            if not bool(policy.get("todoist_sync")):
+            # Internal-first task hub write (source of truth).
+            project_key = classify_csi_project_key(
+                event_type=event_type_norm,
+                subject=subject_obj,
+                quality=_quality_result,
+                source_mix=_source_mix,
+            )
+            incident_key = _csi_incident_key(
+                event_id=str(getattr(event, "event_id", "") or ""),
+                event_type=event_type_norm,
+                source=source,
+                subject_obj=subject_obj if isinstance(subject_obj, dict) else {},
+            )
+            mirror_class = _task_hub_mirror_class_for_csi(
+                event_type=event_type_norm,
+                has_anomaly=bool(policy.get("has_anomaly")),
+                high_value=bool(policy.get("high_value")),
+                requires_action=bool(policy.get("requires_action")),
+            )
+            csi_labels = ["CSI", f"csi-project:{project_key}", "agent-ready"]
+            must_complete = bool(
+                event_type_norm in {"delivery_health_regression", "delivery_reliability_slo_breached"}
+                or mirror_class == "csi_incident_high"
+            )
+            if must_complete:
+                csi_labels.append("must-complete")
+
+            mirror_policy: dict[str, Any] = dict(task_hub.DEFAULT_MIRROR_POLICY)
+            should_mirror = False
+            hub_task_id = ""
+            with _activity_store_lock:
+                hub_conn = _task_hub_open_conn()
+                try:
+                    mirror_policy = task_hub.get_mirror_policy(hub_conn)
+                    should_mirror = _task_hub_should_mirror(mirror_policy, mirror_class)
+                    hub_item = task_hub.upsert_csi_item(
+                        hub_conn,
+                        event_id=str(getattr(event, "event_id", "") or ""),
+                        event_type=event_type_norm,
+                        source=source,
+                        title=title,
+                        message=message,
+                        project_key=project_key,
+                        labels=csi_labels,
+                        priority=4 if must_complete else 3,
+                        incident_key=incident_key,
+                        must_complete=must_complete,
+                        mirror_status="mirror_eligible" if should_mirror else "internal_only",
+                    )
+                    hub_task_id = str(hub_item.get("task_id") or "")
+                finally:
+                    hub_conn.close()
+
+            # Mirror to Todoist only when both event and mirror policy allow it.
+            if (not bool(policy.get("todoist_sync"))) or (not should_mirror):
                 continue
+
             has_api_key = bool((os.getenv("TODOIST_API_KEY") or "").strip())
             has_api_token = bool((os.getenv("TODOIST_API_TOKEN") or "").strip())
             if not (has_api_key or has_api_token):
@@ -9192,113 +9321,152 @@ async def signals_ingest_endpoint(request: Request):
                         severity="info",
                         metadata={"integration": "todoist", "reason": "credentials_missing"},
                     )
-            else:
-                try:
-                    from universal_agent.services.todoist_service import TodoService
+                continue
 
-                    todoist = TodoService()
-                    project_key = classify_csi_project_key(
-                        event_type=event_type_norm,
-                        subject=subject_obj,
-                        quality=_quality_result,
-                        source_mix=_source_mix,
-                    )
-                    section_by_project = {
-                        "immediate": "immediate",
-                        "proactive": "inbox",
-                    }
-                    todoist.create_task(
-                        content=title,
-                        description=f"{message}\n\nReview in CSI Dashboard Tab.",
-                        labels=["CSI", f"csi-project:{project_key}"],
-                        priority="high",
-                        section=section_by_project.get(project_key, "background"),
-                        project_key=project_key,
-                    )
-                except Exception as exc:
-                    exc_str = str(exc)
-                    is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
-                    is_rate_limited = "429" in exc_str or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
-                    is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
-                    if is_limit:
-                        logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
-                        if not _has_recent_notification(
+            try:
+                from universal_agent.services.todoist_service import TodoService
+
+                existing_todoist_task_id = ""
+                if hub_task_id:
+                    with _activity_store_lock:
+                        hub_conn = _task_hub_open_conn()
+                        try:
+                            row = hub_conn.execute(
+                                "SELECT todoist_task_id FROM task_hub_mirror_map WHERE task_id = ? LIMIT 1",
+                                (hub_task_id,),
+                            ).fetchone()
+                            existing_todoist_task_id = str((row["todoist_task_id"] if row else "") or "").strip()
+                        finally:
+                            hub_conn.close()
+
+                if existing_todoist_task_id:
+                    continue
+
+                todoist = TodoService()
+                section_by_project = {
+                    "immediate": "immediate",
+                    "proactive": "inbox",
+                }
+                created = todoist.create_task(
+                    content=title,
+                    description=f"{message}\n\nReview in CSI Dashboard Tab.",
+                    labels=["CSI", f"csi-project:{project_key}"],
+                    priority="high",
+                    section=section_by_project.get(project_key, "background"),
+                    project_key=project_key,
+                )
+                if hub_task_id:
+                    todoist_task_id = str((created or {}).get("id") or "").strip()
+                    with _activity_store_lock:
+                        hub_conn = _task_hub_open_conn()
+                        try:
+                            task_hub.upsert_mirror_map(
+                                hub_conn,
+                                task_id=hub_task_id,
+                                todoist_task_id=todoist_task_id or None,
+                                mirror_class=mirror_class,
+                                mirror_state="synced" if todoist_task_id else "sync_unknown",
+                            )
+                        finally:
+                            hub_conn.close()
+            except Exception as exc:
+                if hub_task_id:
+                    with _activity_store_lock:
+                        hub_conn = _task_hub_open_conn()
+                        try:
+                            task_hub.upsert_mirror_map(
+                                hub_conn,
+                                task_id=hub_task_id,
+                                todoist_task_id=None,
+                                mirror_class=mirror_class,
+                                mirror_state="sync_failed",
+                                last_error=str(exc),
+                            )
+                        finally:
+                            hub_conn.close()
+                exc_str = str(exc)
+                is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
+                is_rate_limited = "429" in exc_str or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
+                is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
+                if is_limit:
+                    logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_notice",
+                        metadata_match={"integration": "todoist", "reason": "items_limit_reached"},
+                        within_seconds=3600,
+                    ):
+                        _add_notification(
                             kind="system_notice",
-                            metadata_match={"integration": "todoist", "reason": "items_limit_reached"},
-                            within_seconds=3600,
-                        ):
-                            _add_notification(
-                                kind="system_notice",
-                                title="Todoist CSI Project Full",
-                                message=(
-                                    "The 'UA: CSI Actions' Todoist project has reached its item limit. "
-                                    "Complete or delete old tasks to resume syncing. "
-                                    "New CSI signals are still visible in the CSI Feed tab."
-                                ),
-                                severity="warning",
-                                metadata={"integration": "todoist", "reason": "items_limit_reached"},
-                            )
-                    elif is_rate_limited:
-                        logger.warning("Todoist rate limit hit (429); backing off: %s", exc)
-                        if not _has_recent_notification(
+                            title="Todoist CSI Project Full",
+                            message=(
+                                "The 'UA: CSI Actions' Todoist project has reached its item limit. "
+                                "Complete or delete old tasks to resume syncing. "
+                                "New CSI signals are still visible in the CSI Feed tab."
+                            ),
+                            severity="warning",
+                            metadata={"integration": "todoist", "reason": "items_limit_reached"},
+                        )
+                elif is_rate_limited:
+                    logger.warning("Todoist rate limit hit (429); backing off: %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_notice",
+                        metadata_match={"integration": "todoist", "reason": "rate_limited"},
+                        within_seconds=900,
+                    ):
+                        _add_notification(
                             kind="system_notice",
-                            metadata_match={"integration": "todoist", "reason": "rate_limited"},
-                            within_seconds=900,  # 15-minute window matches Todoist's rate limit window
-                        ):
-                            _add_notification(
-                                kind="system_notice",
-                                title="Todoist Rate Limit Hit",
-                                message=(
-                                    "Todoist returned HTTP 429 (Too Many Requests). The CSI pipeline "
-                                    "is generating more than 1000 Todoist API calls within a 15-minute "
-                                    "window. Task sync will resume automatically. No action needed — "
-                                    "CSI signals are still visible in the CSI Feed tab."
-                                ),
-                                severity="warning",
-                                metadata={"integration": "todoist", "reason": "rate_limited", "source_domain": "system"},
-                            )
-                    elif is_auth:
-                        logger.warning("Todoist auth failure (401/403 — token may be invalid or revoked): %s", exc)
-                        if not _has_recent_notification(
+                            title="Todoist Rate Limit Hit",
+                            message=(
+                                "Todoist returned HTTP 429 (Too Many Requests). The CSI pipeline "
+                                "is generating more than 1000 Todoist API calls within a 15-minute "
+                                "window. Task sync will resume automatically. No action needed — "
+                                "CSI signals are still visible in the CSI Feed tab."
+                            ),
+                            severity="warning",
+                            metadata={"integration": "todoist", "reason": "rate_limited", "source_domain": "system"},
+                        )
+                elif is_auth:
+                    logger.warning("Todoist auth failure (401/403 — token may be invalid or revoked): %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_error",
+                        metadata_match={"integration": "todoist", "reason": "auth_failure"},
+                        within_seconds=3600,
+                    ):
+                        _add_notification(
                             kind="system_error",
-                            metadata_match={"integration": "todoist", "reason": "auth_failure"},
-                            within_seconds=3600,
-                        ):
-                            _add_notification(
-                                kind="system_error",
-                                title="Todoist Auth Failed — Token Needs Regeneration",
-                                message=(
-                                    "Todoist API returned 401/403. The API token stored in Infisical "
-                                    "is invalid or has been revoked. Personal API tokens can be "
-                                    "regenerated at https://app.todoist.com/app/settings/integrations/developer "
-                                    "— update TODOIST_API_TOKEN in Infisical and restart the gateway. "
-                                    "CSI signals are still visible in the CSI Feed tab; only Todoist sync is affected."
-                                ),
-                                severity="error",
-                                metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
-                            )
-                    else:
-                        logger.exception("Failed to create Todoist task for CSI signal")
-                        if not _has_recent_notification(
+                            title="Todoist Auth Failed — Token Needs Regeneration",
+                            message=(
+                                "Todoist API returned 401/403. The API token stored in Infisical "
+                                "is invalid or has been revoked. Personal API tokens can be "
+                                "regenerated at https://app.todoist.com/app/settings/integrations/developer "
+                                "— update TODOIST_API_TOKEN in Infisical and restart the gateway. "
+                                "CSI signals are still visible in the CSI Feed tab; only Todoist sync is affected."
+                            ),
+                            severity="error",
+                            metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
+                        )
+                else:
+                    logger.exception("Failed to create Todoist task for CSI signal")
+                    if not _has_recent_notification(
+                        kind="system_error",
+                        metadata_match={"integration": "todoist", "reason": "task_sync_failed"},
+                        within_seconds=1800,
+                    ):
+                        debug_info = (
+                            f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
+                            f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
+                        )
+                        _add_notification(
                             kind="system_error",
-                            metadata_match={"integration": "todoist", "reason": "task_sync_failed"},
-                            within_seconds=1800,
-                        ):
-                            debug_info = (
-                                f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
-                                f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
-                            )
-                            _add_notification(
-                                kind="system_error",
-                                title="Todoist Sync Failed",
-                                message=(
-                                    "Could not sync CSI task to Todoist. "
-                                    "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
-                                    f"and taxonomy. Error: {exc}. Debug: {debug_info}"
-                                ),
-                                severity="error",
-                                metadata={"integration": "todoist", "reason": "task_sync_failed"},
-                            )
+                            title="Todoist Sync Failed",
+                            message=(
+                                "Could not sync CSI task to Todoist. "
+                                "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
+                                f"and taxonomy. Error: {exc}. Debug: {debug_info}"
+                            ),
+                            severity="error",
+                            metadata={"integration": "todoist", "reason": "task_sync_failed"},
+                        )
 
 
         if dispatch_count > 0:
@@ -11722,224 +11890,327 @@ async def dashboard_csi_specialist_loop_cleanup(payload: CSISpecialistLoopCleanu
     }
 
 
-@app.get("/api/v1/dashboard/todolist/pipeline")
-async def dashboard_todolist_pipeline():
-    from universal_agent.services.todoist_service import TodoService
+def _task_hub_enabled() -> bool:
+    return str(os.getenv("UA_TASK_HUB_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _task_hub_sync_pending_approvals(conn: sqlite3.Connection) -> int:
+    if not _task_hub_enabled():
+        return 0
+    pending = list_approvals(status="pending")
+    rows = task_hub.approvals_as_tasks(pending if isinstance(pending, list) else [])
+    count = 0
+    for row in rows:
+        task_hub.upsert_item(conn, row)
+        count += 1
+    return count
+
+
+def _task_hub_open_conn() -> sqlite3.Connection:
+    conn = _activity_connect()
+    _ensure_activity_schema(conn)
+    return conn
+
+
+def _approval_priority_value(record: dict[str, Any]) -> int:
+    meta = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    if bool(meta.get("must_complete")):
+        return 4
+    due = str(record.get("due_at") or record.get("deadline") or "").strip()
+    if due:
+        due_dt = _parse_iso_timestamp(due)
+        if due_dt and (due_dt - datetime.now(timezone.utc)).total_seconds() <= 6 * 3600:
+            return 4
+    created_raw = record.get("created_at")
     try:
-        todoist = TodoService()
-        taxonomy = todoist._get_taxonomy_or_bootstrap()
-        return {
-            "status": "ok",
-            "pipeline_summary": todoist.get_pipeline_summary(),
-            "project_ids": taxonomy.project_ids,
-        }
-    except Exception as exc:
-        logger.warning(f"Failed todolist pipeline summary: {exc}")
-        return {"status": "error", "detail": str(exc)}
+        created_ts = float(created_raw)
+    except Exception:
+        created_ts = 0.0
+    if created_ts > 0 and (time.time() - created_ts) > (24 * 3600):
+        return 3
+    return 2
 
 
-@app.get("/api/v1/dashboard/todolist/actionable")
-async def dashboard_todolist_actionable():
-    from universal_agent.services.todoist_service import TodoService
-    try:
-        todoist = TodoService()
-        return {"status": "ok", "actionable_tasks": todoist.get_actionable_tasks()}
-    except Exception as exc:
-        logger.warning(f"Failed todolist actionable tasks: {exc}")
-        return {"status": "error", "detail": str(exc)}
-
-
-@app.get("/api/v1/dashboard/todolist/actionable_paged")
-async def dashboard_todolist_actionable_paged(
-    limit: int = 40,
-    offset: int = 0,
-    project_key: Optional[str] = None,
-    include_full_description: bool = False,
-    description_chars: int = 420,
-):
-    from universal_agent.services.todoist_service import PROJECT_KEY_MAP, TodoService
-
-    def _parse_created_at(raw_value: Any) -> datetime:
-        raw = str(raw_value or "").strip()
-        if not raw:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        normalized = raw.replace(" ", "T")
-        if normalized.endswith("Z"):
-            normalized = normalized[:-1] + "+00:00"
+def _parse_memory_entry_ts(entry: dict[str, Any]) -> Optional[datetime]:
+    raw = entry.get("timestamp")
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
         try:
-            parsed = datetime.fromisoformat(normalized)
+            return datetime.fromtimestamp(float(raw), timezone.utc)
         except Exception:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            return None
+    return _parse_iso_timestamp(str(raw))
 
-    try:
-        todoist = TodoService()
-        tasks = todoist.get_actionable_tasks()
-        taxonomy = todoist._get_taxonomy_or_bootstrap()
 
-        normalized_project_key = str(project_key or "").strip().lower()
-        if normalized_project_key:
-            # Accept either canonical aliases (e.g. "csi") or full project names
-            # sent by the dashboard cards (e.g. "UA: CSI Actions").
-            project_name_by_key = {
-                str(name).strip().lower(): str(name)
-                for name in taxonomy.project_ids.keys()
-                if str(name).strip()
+def _compact_task_memory_indexes(*, dry_run: bool) -> dict[str, Any]:
+    shared_root = Path(resolve_shared_memory_workspace("")).resolve()
+    memory_dir = shared_root / "memory"
+    index_paths = [
+        memory_dir / "index.json",
+        memory_dir / "session_index.json",
+        memory_dir / "research" / "index.json",
+    ]
+    keep_tags = {"task_policy", "task_strategy", "task_risk"}
+    raw_tag = "task_event_raw"
+    max_daily = max(1, int(os.getenv("UA_TASK_MEMORY_MAX_DURABLE_ENTRIES_PER_DAY", "10") or 10))
+    raw_retention_days = max(1, int(os.getenv("UA_TASK_MEMORY_RAW_RETENTION_DAYS", "14") or 14))
+    summary_retention_days = max(7, int(os.getenv("UA_TASK_MEMORY_SUMMARY_RETENTION_DAYS", "180") or 180))
+    now_dt = datetime.now(timezone.utc)
+    raw_cutoff = now_dt - timedelta(days=raw_retention_days)
+    summary_cutoff = now_dt - timedelta(days=summary_retention_days)
+
+    report_files: list[dict[str, Any]] = []
+    total_before = 0
+    total_after = 0
+    total_pruned = 0
+
+    for idx_path in index_paths:
+        if not idx_path.exists():
+            continue
+        rows = load_index(str(idx_path))
+        if not isinstance(rows, list):
+            continue
+        total_before += len(rows)
+        # Keep deterministic behavior: newest first for cap decisions.
+        rows_sorted = sorted(
+            rows,
+            key=lambda row: (_parse_memory_entry_ts(row) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            reverse=True,
+        )
+        kept: list[dict[str, Any]] = []
+        dropped: list[dict[str, Any]] = []
+        day_counts: dict[str, int] = {}
+        for row in rows_sorted:
+            tags = {str(tag).strip().lower() for tag in (row.get("tags") or []) if str(tag).strip()}
+            is_task_entry = any(tag.startswith("task_") for tag in tags) or bool(tags & keep_tags)
+            if not is_task_entry:
+                kept.append(row)
+                continue
+
+            ts = _parse_memory_entry_ts(row)
+            if raw_tag in tags and ts and ts < raw_cutoff:
+                dropped.append(row)
+                continue
+
+            if raw_tag not in tags and ts and ts < summary_cutoff and not bool(tags & keep_tags):
+                dropped.append(row)
+                continue
+
+            date_key = (ts or now_dt).strftime("%Y-%m-%d")
+            current_count = int(day_counts.get(date_key) or 0)
+            if current_count >= max_daily and not bool(tags & keep_tags):
+                dropped.append(row)
+                continue
+
+            day_counts[date_key] = current_count + 1
+            kept.append(row)
+
+        # Restore chronological order in file.
+        kept_sorted = sorted(
+            kept,
+            key=lambda row: (_parse_memory_entry_ts(row) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+        )
+        if not dry_run:
+            idx_path.parent.mkdir(parents=True, exist_ok=True)
+            idx_path.write_text(json.dumps(kept_sorted, indent=2, ensure_ascii=True))
+
+        total_after += len(kept_sorted)
+        total_pruned += len(dropped)
+        report_files.append(
+            {
+                "path": str(idx_path),
+                "before": len(rows),
+                "after": len(kept_sorted),
+                "pruned": len(dropped),
             }
-            project_name = project_name_by_key.get(normalized_project_key)
-            if not project_name:
-                project_name = PROJECT_KEY_MAP.get(normalized_project_key, PROJECT_KEY_MAP["default"])
-            selected_project_id = str(taxonomy.project_ids.get(project_name, "") or "")
-            if selected_project_id:
-                tasks = [
-                    task for task in tasks
-                    if str(task.get("project_id") or "") == selected_project_id
-                ]
-            else:
-                tasks = []
-        else:
-            project_name = None
+        )
 
-        tasks.sort(key=lambda task: _parse_created_at(task.get("created_at")), reverse=True)
-
-        bounded_limit = max(1, min(int(limit or 40), 200))
-        bounded_offset = max(0, int(offset or 0))
-        total = len(tasks)
-        page = tasks[bounded_offset:bounded_offset + bounded_limit]
-        has_more = (bounded_offset + bounded_limit) < total
-
-        desc_limit = max(0, min(int(description_chars or 420), 4000))
-        materialized: list[dict[str, Any]] = []
-        for task in page:
-            row = dict(task)
-            full_desc = str(task.get("description") or "")
-            if include_full_description:
-                row["description"] = full_desc
-                row["description_truncated"] = False
-            else:
-                if desc_limit == 0:
-                    row["description"] = ""
-                    row["description_truncated"] = bool(full_desc)
-                elif len(full_desc) > desc_limit:
-                    row["description"] = full_desc[:desc_limit] + "..."
-                    row["description_truncated"] = True
-                else:
-                    row["description"] = full_desc
-                    row["description_truncated"] = False
-            materialized.append(row)
-
-        return {
-            "status": "ok",
-            "project_key": normalized_project_key or None,
-            "project_name": project_name,
-            "actionable_tasks": materialized,
-            "pagination": {
-                "total": total,
-                "offset": bounded_offset,
-                "limit": bounded_limit,
-                "count": len(materialized),
-                "has_more": has_more,
-            },
-        }
-    except Exception as exc:
-        logger.warning(f"Failed todolist actionable paged: {exc}")
-        return {"status": "error", "detail": str(exc)}
+    return {
+        "dry_run": dry_run,
+        "memory_root": str(shared_root),
+        "files": report_files,
+        "totals": {
+            "before": total_before,
+            "after": total_after,
+            "pruned": total_pruned,
+        },
+        "policy": {
+            "keep_tags": sorted(keep_tags),
+            "raw_tag": raw_tag,
+            "max_daily": max_daily,
+            "raw_retention_days": raw_retention_days,
+            "summary_retention_days": summary_retention_days,
+        },
+    }
 
 
-@app.get("/api/v1/dashboard/todolist/project")
-async def dashboard_todolist_project(
-    project_key: str = "immediate",
-    section: Optional[str] = None,
-    include_agent_ready: bool = True,
-    limit: int = 50,
+@app.get("/api/v1/dashboard/todolist/overview")
+async def dashboard_todolist_overview():
+    approvals_pending = list_approvals(status="pending")
+    pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            synced_approvals = _task_hub_sync_pending_approvals(conn)
+            task_hub.rebuild_dispatch_queue(conn)
+            data = task_hub.overview(conn, approvals_pending=pending_count)
+            data["sync"] = {"approvals_upserted": synced_approvals}
+            data["mode_default"] = "agent"
+            data["status"] = "ok"
+            return data
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/agent-queue")
+async def dashboard_todolist_agent_queue(
+    offset: int = 0,
+    limit: int = 60,
+    include_csi: bool = True,
+    collapse_csi: bool = True,
+    project_key: Optional[str] = None,
 ):
-    from universal_agent.services.todoist_service import (
-        PROJECT_KEY_MAP,
-        UA_PROJECT_PROACTIVE,
-        TodoService,
-    )
-
-    try:
-        todoist = TodoService()
-        taxonomy = todoist._get_taxonomy_or_bootstrap()
-        normalized_project_key = str(project_key or "").strip().lower()
-        project_name = PROJECT_KEY_MAP.get(normalized_project_key, PROJECT_KEY_MAP["default"])
-        project_id = str(taxonomy.project_ids.get(project_name, "") or "")
-        if not project_id:
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            queue = task_hub.list_agent_queue(
+                conn,
+                offset=max(0, int(offset)),
+                limit=max(1, min(int(limit), 200)),
+                include_csi=bool(include_csi),
+                collapse_csi=bool(collapse_csi),
+                project_key=project_key,
+            )
             return {
                 "status": "ok",
-                "project_key": normalized_project_key,
-                "project_name": project_name,
-                "section_key": None,
-                "include_agent_ready": include_agent_ready,
-                "tasks": [],
-                "total": 0,
+                "items": queue.get("items") if isinstance(queue, dict) else [],
+                "pagination": queue.get("pagination") if isinstance(queue, dict) else {},
             }
+        finally:
+            conn.close()
 
-        tasks = todoist.get_all_tasks(project_id=project_id)
 
-        normalized_section_key = str(section or "").strip().lower()
-        if normalized_section_key:
-            section_map = (
-                taxonomy.brainstorm_sections
-                if project_name == UA_PROJECT_PROACTIVE
-                else taxonomy.section_ids.get(project_name, {})
+@app.get("/api/v1/dashboard/todolist/personal-queue")
+async def dashboard_todolist_personal_queue(limit: int = 120):
+    pending = list_approvals(status="pending")
+    pending_rows = pending if isinstance(pending, list) else []
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            items = task_hub.list_personal_queue(conn, limit=max(1, min(int(limit), 500)))
+            approval_rows = []
+            for approval in pending_rows:
+                approval_rows.append(
+                    {
+                        "approval_id": str(approval.get("approval_id") or approval.get("phase_id") or ""),
+                        "title": str(approval.get("title") or approval.get("summary") or "Approval required"),
+                        "status": str(approval.get("status") or "pending"),
+                        "priority": _approval_priority_value(approval),
+                        "focus_href": "/dashboard/todolist?mode=personal&focus=approvals",
+                        "created_at": approval.get("created_at"),
+                        "updated_at": approval.get("updated_at"),
+                        "approval": approval,
+                    }
+                )
+            approval_rows.sort(key=lambda row: int(row.get("priority") or 0), reverse=True)
+            return {
+                "status": "ok",
+                "items": items,
+                "approval_priority_rows": approval_rows,
+            }
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/action")
+async def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRequest):
+    action = str(payload.action or "").strip().lower()
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            updated = task_hub.perform_task_action(
+                conn,
+                task_id=str(task_id or "").strip(),
+                action=action,
+                reason=str(payload.reason or "").strip(),
+                note=str(payload.note or "").strip(),
+                agent_id=str(payload.agent_id or "dashboard_operator").strip() or "dashboard_operator",
             )
-            section_id = str(section_map.get(normalized_section_key, "") or "")
-            if section_id:
-                tasks = [task for task in tasks if str(task.get("section_id") or "") == section_id]
-            else:
-                tasks = []
-
-        if not include_agent_ready:
-            filtered: list[dict[str, Any]] = []
-            for task in tasks:
-                labels = {str(label or "").strip() for label in (task.get("labels") or [])}
-                if "agent-ready" in labels:
-                    continue
-                filtered.append(task)
-            tasks = filtered
-
-        bounded_limit = max(1, min(int(limit or 50), 200))
-
-        def _task_sort_key(task: dict[str, Any]) -> tuple[str, str]:
-            due_datetime = str(task.get("due_datetime") or "").strip()
-            due_date = str(task.get("due_date") or "").strip()
-            created_at = str(task.get("created_at") or "").strip()
-            due_key = due_datetime or (f"{due_date}T23:59:59+00:00" if due_date else "9999-12-31T23:59:59+00:00")
-            return (due_key, created_at)
-
-        tasks.sort(key=_task_sort_key)
-
-        return {
-            "status": "ok",
-            "project_key": normalized_project_key,
-            "project_name": project_name,
-            "section_key": normalized_section_key or None,
-            "include_agent_ready": include_agent_ready,
-            "tasks": tasks[:bounded_limit],
-            "total": len(tasks),
-        }
-    except Exception as exc:
-        logger.warning(f"Failed todolist project tasks: {exc}")
-        return {"status": "error", "detail": str(exc)}
+            return {"status": "ok", "item": updated}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
 
 
-@app.get("/api/v1/dashboard/todolist/heartbeat")
-async def dashboard_todolist_heartbeat():
-    from universal_agent.services.todoist_service import TodoService
-    try:
-        todoist = TodoService()
-        return {
-            "status": "ok",
-            "heartbeat_summary": todoist.heartbeat_summary(),
-            "heartbeat_candidates": todoist.heartbeat_brainstorm_candidates()
-        }
-    except Exception as exc:
-        logger.warning(f"Failed todolist heartbeat summary: {exc}")
-        return {"status": "error", "detail": str(exc)}
+@app.get("/api/v1/dashboard/todolist/agent-activity")
+async def dashboard_todolist_agent_activity():
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            return {"status": "ok", **task_hub.get_agent_activity(conn)}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/dispatch-queue")
+async def dashboard_todolist_dispatch_queue(limit: int = 120):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            task_hub.rebuild_dispatch_queue(conn)
+            queue = task_hub.get_dispatch_queue(conn, limit=max(1, min(int(limit), 500)))
+            return {"status": "ok", **queue}
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/dispatch-queue/rebuild")
+async def dashboard_todolist_dispatch_queue_rebuild():
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            summary = task_hub.rebuild_dispatch_queue(conn)
+            return {"status": "ok", **summary}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/approvals/highlight")
+async def dashboard_approvals_highlight():
+    pending = list_approvals(status="pending")
+    rows = []
+    for approval in pending if isinstance(pending, list) else []:
+        rows.append(
+            {
+                "approval_id": str(approval.get("approval_id") or approval.get("phase_id") or ""),
+                "title": str(approval.get("title") or approval.get("summary") or "Approval required"),
+                "status": str(approval.get("status") or "pending"),
+                "priority": _approval_priority_value(approval),
+                "focus_href": "/dashboard/todolist?mode=personal&focus=approvals",
+                "metadata": approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {},
+                "created_at": approval.get("created_at"),
+                "updated_at": approval.get("updated_at"),
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("priority") or 0), reverse=True)
+    return {
+        "status": "ok",
+        "pending_count": len(rows),
+        "approvals": rows,
+        "banner": {
+            "show": len(rows) > 0,
+            "text": f"{len(rows)} approval{'s' if len(rows) != 1 else ''} pending" if rows else "",
+        },
+    }
 
 
 @app.get("/api/v1/dashboard/notifications")
@@ -12736,87 +13007,77 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         source_context=source_context,
     )
 
-    try:
-        from universal_agent.services.todoist_service import TodoService
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Todoist service unavailable: {exc}")
-
-    try:
-        todoist = TodoService()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Todoist not configured: {exc}")
-
     if _system_command_is_status_query(text):
-        summary = todoist.heartbeat_summary()
-        pipeline = todoist.get_pipeline_summary()
+        pending_approvals = list_approvals(status="pending")
+        pending_count = len(pending_approvals if isinstance(pending_approvals, list) else [])
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                approvals_upserted = _task_hub_sync_pending_approvals(conn)
+                rebuild_summary = task_hub.rebuild_dispatch_queue(conn)
+                overview = task_hub.overview(conn, approvals_pending=pending_count)
+                dispatch = task_hub.get_dispatch_queue(conn, limit=20)
+                agent_activity = task_hub.get_agent_activity(conn)
+                mirror_policy = task_hub.get_mirror_policy(conn)
+                mirror_metrics = task_hub.get_mirror_metrics(conn)
+            finally:
+                conn.close()
         return {
             "ok": True,
             "lane": "system",
             "intent": "status_query",
-            "interpreted": {"query": text, "scope": "todoist"},
-            "todoist": {
-                "summary": summary,
-                "pipeline": pipeline,
+            "interpreted": {"query": text, "scope": "task_hub"},
+            "task_hub": {
+                "overview": overview,
+                "dispatch": dispatch,
+                "agent_activity": agent_activity,
+                "sync": {"approvals_upserted": approvals_upserted},
+                "dispatch_rebuild": rebuild_summary,
+                "mirror": {
+                    "policy": mirror_policy,
+                    "metrics": mirror_metrics,
+                },
             },
             "dry_run": dry_run,
         }
 
-    if _system_command_is_brainstorm_capture(text):
-        content, schedule_text = _extract_system_command_content_and_schedule(text)
-        if not content:
-            content = text
-        interpreted = {
-            "content": content,
-            "schedule_text": schedule_text,
-            "priority": _system_command_priority_from_text(text),
-            "source_page": source_page,
-            "source_context": source_context,
-        }
-        if dry_run:
-            return {
-                "ok": True,
-                "lane": "system",
-                "intent": "capture_idea",
-                "interpreted": interpreted,
-                "dry_run": True,
-            }
-        task = todoist.record_idea(
-            content=content,
-            description=task_description,
-            source_session_id=source_session_id,
-            impact="M",
-            effort="M",
-        )
-        _add_notification(
-            kind="system_command_idea_recorded",
-            title="Idea Captured",
-            message=f"Todoist brainstorm idea captured: {content[:120]}",
-            severity="info",
-            metadata={
-                "source": "system_command",
-                "source_page": source_page,
-                "todoist_task_id": str(task.get("id") or ""),
-            },
-        )
-        return {
-            "ok": True,
-            "lane": "system",
-            "intent": "capture_idea",
-            "interpreted": interpreted,
-            "todoist": {"task": task},
-            "dry_run": False,
-        }
-
+    is_brainstorm = _system_command_is_brainstorm_capture(text)
     content, schedule_text = _extract_system_command_content_and_schedule(text)
     if not content:
         content = _strip_system_command_prefix(text) or text
-    priority = _system_command_priority_from_text(text)
-    section = "scheduled" if schedule_text else "background"
+
+    priority_text = _system_command_priority_from_text(text)
+    priority_map = {"low": 1, "medium": 2, "high": 3, "urgent": 4}
+    priority_value = int(priority_map.get(priority_text, 2))
+    schedule_section = "scheduled" if schedule_text else "background"
+    is_personal = is_brainstorm or _system_command_is_personal_task(text)
+    repeat_schedule = bool(schedule_text and _schedule_text_suggests_repeat(schedule_text))
+    intent = "capture_idea" if is_brainstorm else ("schedule_task" if schedule_text else "capture_task")
+
+    due_at_iso: Optional[str] = None
+    if schedule_text and not repeat_schedule:
+        run_at_ts = parse_run_at(schedule_text, timezone_name=timezone_name)
+        if run_at_ts is not None:
+            due_at_iso = datetime.fromtimestamp(float(run_at_ts), tz=timezone.utc).isoformat()
+
+    project_key = "proactive" if is_brainstorm else "immediate"
+    labels = ["system-lane"]
+    if is_brainstorm:
+        labels.extend(["brainstorm", "human"])
+    elif is_personal:
+        labels.extend(["human", "personal-reminder"])
+    else:
+        labels.append("agent-ready")
+
     interpreted = {
         "content": content,
         "schedule_text": schedule_text,
-        "priority": priority,
-        "section": section,
+        "priority": priority_text,
+        "section": schedule_section,
+        "project_key": project_key,
+        "personal_task": is_personal,
+        "agent_ready": not is_personal,
+        "repeat_schedule": repeat_schedule,
         "source_page": source_page,
         "source_context": source_context,
     }
@@ -12824,19 +13085,99 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         return {
             "ok": True,
             "lane": "system",
-            "intent": "schedule_task" if schedule_text else "capture_task",
+            "intent": intent,
             "interpreted": interpreted,
             "dry_run": True,
         }
 
-    task = todoist.create_task(
-        content=content,
-        description=task_description,
-        priority=priority,
-        section=section,
-        due_string=schedule_text or None,
-        labels=["agent-ready", "system-lane"],
-    )
+    hub_task: dict[str, Any] = {}
+    mirror_policy: dict[str, Any] = {}
+    mirror_class = "personal" if is_personal else "internal_only"
+    should_mirror = False
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            mirror_policy = task_hub.get_mirror_policy(conn)
+            should_mirror = _task_hub_should_mirror(mirror_policy, mirror_class)
+            hub_task = task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": f"scmd:{uuid.uuid4().hex[:16]}",
+                    "source_kind": "system_command",
+                    "source_ref": source_session_id or "",
+                    "title": content,
+                    "description": task_description,
+                    "project_key": project_key,
+                    "priority": priority_value,
+                    "due_at": due_at_iso,
+                    "labels": labels,
+                    "status": "open",
+                    "must_complete": False,
+                    "agent_ready": not is_personal,
+                    "mirror_status": "mirror_eligible" if should_mirror else "internal_only",
+                    "metadata": {
+                        "source_page": source_page,
+                        "source_context": source_context,
+                        "source_session_id": source_session_id or "",
+                        "schedule_text": schedule_text or "",
+                        "repeat_schedule": repeat_schedule,
+                        "intent": intent,
+                    },
+                },
+            )
+            task_hub.rebuild_dispatch_queue(conn)
+        finally:
+            conn.close()
+
+    mirrored_task: Optional[dict[str, Any]] = None
+    mirror_state = "not_attempted"
+    mirror_error = ""
+    if should_mirror:
+        mirror_state = "skipped"
+        try:
+            from universal_agent.services.todoist_service import TodoService
+
+            todoist = TodoService()
+            mirror_labels = sorted({*labels, "ua-mirror"})
+            mirror_project_key = "proactive" if is_brainstorm else "immediate"
+            mirror_section = "inbox" if is_brainstorm else ("scheduled" if schedule_text else "background")
+            mirrored_task = todoist.create_personal_task(
+                content=content,
+                description=task_description,
+                priority=priority_text,
+                section=mirror_section,
+                labels=mirror_labels,
+                due_string=schedule_text or None,
+                project_key=mirror_project_key,
+                upsert_key=str(hub_task.get("task_id") or ""),
+            )
+            mirror_state = "synced"
+        except Exception as exc:
+            mirror_state = "sync_failed"
+            mirror_error = str(exc)
+            logger.warning("System command Todoist mirror failed: %s", exc)
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            task_hub.upsert_mirror_map(
+                conn,
+                task_id=str(hub_task.get("task_id") or ""),
+                todoist_task_id=str((mirrored_task or {}).get("id") or "").strip() or None,
+                mirror_class=mirror_class,
+                mirror_state=mirror_state,
+                last_error=mirror_error or None,
+            )
+            hub_task = task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": str(hub_task.get("task_id") or ""),
+                    "mirror_status": mirror_state,
+                },
+            )
+            task_hub.rebuild_dispatch_queue(conn)
+        finally:
+            conn.close()
 
     cron_job: Optional[dict[str, Any]] = None
     cron_bridge_status: Optional[str] = None
@@ -12845,111 +13186,43 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     )
     if schedule_text and _cron_service and enable_cron_bridge:
         try:
-            task_id = str(task.get("id") or "").strip()
-            repeat = _schedule_text_suggests_repeat(schedule_text)
             every_raw, cron_expr, run_at_ts, delete_after_run = _resolve_simplified_schedule_fields(
                 schedule_time=schedule_text,
-                repeat=repeat,
+                repeat=repeat_schedule,
                 timezone_name=timezone_name,
             )
-            schedule_signature = _todoist_chron_schedule_signature(
-                schedule_text=schedule_text,
-                timezone_name=timezone_name,
-                every_raw=every_raw,
-                cron_expr=cron_expr,
-                run_at_ts=run_at_ts,
-                delete_after_run=delete_after_run,
-            )
-            run_command = _build_todoist_execution_cron_command(
-                task_id=task_id,
+            run_command = _build_task_hub_execution_cron_command(
+                task_id=str(hub_task.get("task_id") or ""),
                 content=content,
             )
             job_metadata = {
                 "source": "system_command",
-                "autonomous": True,
-                "todoist_task_id": task_id,
+                "autonomous": not is_personal,
+                "task_hub_task_id": str(hub_task.get("task_id") or ""),
+                "todoist_task_id": str((mirrored_task or {}).get("id") or "").strip() or None,
                 "source_page": source_page,
                 "source_context": source_context,
-                "schedule_signature": schedule_signature,
             }
-
-            existing_mapping = _todoist_chron_mapping_get(task_id) if task_id else None
-            existing_job_id = str((existing_mapping or {}).get("cron_job_id") or "").strip()
-            existing_job = _cron_service.get_job(existing_job_id) if existing_job_id else None
-
-            if existing_job is not None:
-                existing_signature = str((existing_mapping or {}).get("schedule_signature") or "").strip()
-                if existing_signature == schedule_signature:
-                    cron_bridge_status = "reused_existing"
-                    cron_job = {
-                        **existing_job.to_dict(),
-                        "running": existing_job.job_id in _cron_service.running_jobs,
-                    }
-                else:
-                    updated_job = _cron_service.update_job(
-                        existing_job.job_id,
-                        {
-                            "command": run_command,
-                            "enabled": True,
-                            "every_seconds": every_raw if every_raw is not None else 0,
-                            "cron_expr": cron_expr,
-                            "timezone": timezone_name,
-                            "run_at": run_at_ts,
-                            "delete_after_run": delete_after_run,
-                            "metadata": job_metadata,
-                        },
-                    )
-                    cron_bridge_status = "updated_existing"
-                    cron_job = {
-                        **updated_job.to_dict(),
-                        "running": updated_job.job_id in _cron_service.running_jobs,
-                    }
-                    todoist.add_comment(
-                        task_id,
-                        f"UA updated Chron job: {updated_job.job_id} ({schedule_text})",
-                    )
-            else:
-                job = _cron_service.add_job(
-                    user_id="cron_system",
-                    workspace_dir=str(
-                        WORKSPACES_DIR
-                        / f"cron_todoist_{str(task.get('id') or 'task')[:8]}_{int(time.time())}"
-                    ),
-                    command=run_command,
-                    every_raw=every_raw,
-                    cron_expr=cron_expr,
-                    timezone=timezone_name,
-                    run_at=run_at_ts,
-                    delete_after_run=delete_after_run,
-                    enabled=True,
-                    metadata=job_metadata,
-                )
-                cron_bridge_status = "created"
-                cron_job = {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
-                todoist.add_comment(
-                    task_id,
-                    f"UA scheduled Chron job: {job.job_id} ({schedule_text})",
-                )
-
-            if cron_job and task_id:
-                _todoist_chron_mapping_upsert(
-                    task_id,
-                    {
-                        "cron_job_id": str(cron_job.get("job_id") or ""),
-                        "schedule_text": schedule_text,
-                        "schedule_signature": schedule_signature,
-                        "timezone": timezone_name,
-                        "bridge_status": cron_bridge_status or "unknown",
-                        "source_page": source_page,
-                        "source_context": source_context,
-                    },
-                )
+            job = _cron_service.add_job(
+                user_id="cron_system",
+                workspace_dir=str(
+                    WORKSPACES_DIR
+                    / f"cron_taskhub_{str(hub_task.get('task_id') or 'task').split(':')[-1][:8]}_{int(time.time())}"
+                ),
+                command=run_command,
+                every_raw=every_raw,
+                cron_expr=cron_expr,
+                timezone=timezone_name,
+                run_at=run_at_ts,
+                delete_after_run=delete_after_run,
+                enabled=True,
+                metadata=job_metadata,
+            )
+            cron_bridge_status = "created"
+            cron_job = {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
         except Exception as exc:
             cron_bridge_status = "failed"
-            todoist.add_comment(
-                str(task.get("id") or ""),
-                f"UA could not create Chron schedule automatically: {exc}",
-            )
+            logger.warning("System command cron bridge failed: %s", exc)
 
     _add_notification(
         kind="system_command_routed",
@@ -12959,7 +13232,8 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         metadata={
             "source": "system_command",
             "source_page": source_page,
-            "todoist_task_id": str(task.get("id") or ""),
+            "task_hub_task_id": str(hub_task.get("task_id") or ""),
+            "todoist_task_id": str((mirrored_task or {}).get("id") or ""),
             "schedule_text": schedule_text or "",
             "cron_job_id": str((cron_job or {}).get("job_id") or ""),
             "cron_bridge_status": cron_bridge_status or "",
@@ -12969,9 +13243,18 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     return {
         "ok": True,
         "lane": "system",
-        "intent": "schedule_task" if schedule_text else "capture_task",
+        "intent": intent,
         "interpreted": interpreted,
-        "todoist": {"task": task},
+        "task_hub": {
+            "task": hub_task,
+            "mirror": {
+                "class": mirror_class,
+                "requested": should_mirror,
+                "status": mirror_state,
+                "policy_mode": str(mirror_policy.get("mode") or "selective"),
+            },
+        },
+        "todoist": {"task": mirrored_task} if mirrored_task else None,
         "cron": {"job": cron_job, "status": cron_bridge_status} if cron_job or cron_bridge_status else None,
         "dry_run": False,
     }
@@ -14322,23 +14605,35 @@ def _system_command_is_status_query(text: str) -> bool:
     return has_query_verb and bool(re.search(r"\b(todo|todoist|to-?do)\b", lowered))
 
 
+def _system_command_is_personal_task(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return bool(
+        re.search(
+            r"\b(remind me|for me|personal reminder|my reminder|don't let me forget|follow up with me)\b",
+            lowered,
+        )
+    )
+
+
 def _system_command_is_brainstorm_capture(text: str) -> bool:
     lowered = str(text or "").strip().lower()
     return bool(re.search(r"\b(idea|brainstorm|backlog|capture this)\b", lowered))
 
 
-def _build_todoist_execution_cron_command(*, task_id: str, content: str) -> str:
+def _build_task_hub_execution_cron_command(*, task_id: str, content: str) -> str:
     safe_content = str(content or "").strip()
     if len(safe_content) > 200:
         safe_content = safe_content[:197] + "..."
     return "\n".join(
         [
-            "Autonomous Todoist execution task.",
-            f"todoist_task_id: {task_id}",
-            f"todoist_task_content: {safe_content}",
+            "Autonomous Task Hub execution task.",
+            f"task_hub_task_id: {task_id}",
+            f"task_hub_task_content: {safe_content}",
             "Run the task now using available UA tools and produce concrete outputs when relevant.",
-            "If completed, call internal Todoist task action to complete the task with a concise summary comment.",
-            "If blocked, add a Todoist comment describing exactly what is missing.",
+            "If completed, update the corresponding Task Hub task as completed with a concise summary note.",
+            "If blocked, update the Task Hub task metadata with exactly what is missing.",
         ]
     )
 
@@ -16612,6 +16907,49 @@ async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequ
         "config_key": "remote_debug.local_workspace_sync_enabled",
         "base_hash": ops_config_hash(updated),
     }
+
+
+@app.get("/api/v1/ops/todoist/mirror-policy")
+async def ops_todoist_mirror_policy_get(request: Request):
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            return {"status": "ok", "policy": task_hub.get_mirror_policy(conn)}
+        finally:
+            conn.close()
+
+
+@app.patch("/api/v1/ops/todoist/mirror-policy")
+async def ops_todoist_mirror_policy_patch(request: Request, payload: TodoistMirrorPolicyPatchRequest):
+    _require_ops_auth(request)
+    patch = payload.model_dump(exclude_none=True)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            policy = task_hub.update_mirror_policy(conn, patch)
+            return {"status": "ok", "policy": policy}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/ops/todoist/mirror-metrics")
+async def ops_todoist_mirror_metrics(request: Request):
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            return {"status": "ok", "metrics": task_hub.get_mirror_metrics(conn)}
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/ops/memory/compact-task-intel")
+async def ops_memory_compact_task_intel(request: Request, payload: MemoryTaskCompactRequest):
+    _require_ops_auth(request)
+    apply_changes = bool(payload.apply) if payload.apply is not None else (not bool(payload.dry_run))
+    result = _compact_task_memory_indexes(dry_run=not apply_changes)
+    return {"status": "ok", **result}
 
 
 @app.post("/api/v1/ops/workspaces/purge")

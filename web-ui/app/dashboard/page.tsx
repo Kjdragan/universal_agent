@@ -18,6 +18,16 @@ type SummaryResponse = {
   deployment_profile?: { profile: string };
 };
 
+type ApprovalHighlightResponse = {
+  status?: string;
+  pending_count?: number;
+  banner?: {
+    show?: boolean;
+    text?: string;
+    focus_href?: string;
+  };
+};
+
 type DashboardNotification = {
   id: string;
   title: string;
@@ -217,6 +227,7 @@ export default function DashboardPage() {
   const [dispatchObjective, setDispatchObjective] = useState("");
   const [dispatchPending, setDispatchPending] = useState(false);
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
+  const [approvalHighlight, setApprovalHighlight] = useState<ApprovalHighlightResponse | null>(null);
   const [tutorialDispatchingId, setTutorialDispatchingId] = useState<string>("");
   const [dismissedVpEventIds, setDismissedVpEventIds] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
@@ -229,9 +240,10 @@ export default function DashboardPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [summaryRes, notificationsRes, vpSessionsRes, vpMissionsRes, vpMetricResponses] = await Promise.all([
+      const [summaryRes, notificationsRes, approvalsHighlightRes, vpSessionsRes, vpMissionsRes, vpMetricResponses] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/summary`),
         fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`),
+        fetch(`${API_BASE}/api/v1/dashboard/approvals/highlight`),
         fetch(`${API_BASE}/api/v1/ops/vp/sessions?status=all&limit=50`),
         fetch(`${API_BASE}/api/v1/ops/vp/missions?status=all&limit=100`),
         Promise.all(
@@ -251,6 +263,9 @@ export default function DashboardPage() {
       const notificationsData = notificationsRes.ok
         ? await notificationsRes.json()
         : { notifications: [] };
+      const approvalsHighlightData = approvalsHighlightRes.ok
+        ? await approvalsHighlightRes.json()
+        : { pending_count: 0, banner: { show: false, text: "", focus_href: "/dashboard/todolist?mode=personal&focus=approvals" } };
       const vpSessionsData = vpSessionsRes.ok ? await vpSessionsRes.json() : { sessions: [] };
       const vpMissionsData = vpMissionsRes.ok ? await vpMissionsRes.json() : { missions: [] };
       const sessions = await fetchSessionDirectory(120);
@@ -296,6 +311,7 @@ export default function DashboardPage() {
         setVpError("");
       }
       setSessionDirectory(sessions);
+      setApprovalHighlight(approvalsHighlightData as ApprovalHighlightResponse);
     } finally {
       setLoading(false);
     }
@@ -732,6 +748,22 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {approvalHighlight?.banner?.show ? (
+        <section className="sticky top-0 z-20 rounded-xl border border-amber-700/60 bg-amber-950/90 px-3 py-2 text-xs text-amber-100 backdrop-blur">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <span className="font-semibold uppercase tracking-wide">Approval Outstanding:</span>{" "}
+              {approvalHighlight?.banner?.text || `${approvalHighlight?.pending_count || 0} approval(s) pending`}
+            </div>
+            <Link
+              href={approvalHighlight?.banner?.focus_href || "/dashboard/todolist?mode=personal&focus=approvals"}
+              className="rounded border border-amber-600/70 bg-amber-800/25 px-2 py-1 font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-800/35"
+            >
+              Review
+            </Link>
+          </div>
+        </section>
+      ) : null}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>

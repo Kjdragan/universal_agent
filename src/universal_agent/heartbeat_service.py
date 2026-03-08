@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from typing import Optional, Dict, Callable
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent import task_hub
 import shutil
 
 
@@ -1166,8 +1169,8 @@ class HeartbeatService:
                 metadata["system_events"] = system_events
                 logger.info("Injecting %d system events into heartbeat for %s", len(system_events), session.session_id)
 
-            todoist_actionable_count: Optional[int] = None
-            todoist_brainstorm_candidate_count: Optional[int] = None
+            dispatch_actionable_count: Optional[int] = None
+            dispatch_claimed_count: Optional[int] = None
             guard_policy = _heartbeat_guard_policy(
                 actionable_count=None,
                 brainstorm_candidate_count=0,
@@ -1177,81 +1180,54 @@ class HeartbeatService:
             max_proactive_per_cycle = int(guard_policy.get("max_proactive_per_cycle") or 1)
             max_system_events = int(guard_policy.get("max_system_events") or 1)
 
-            # Deterministic Todoist pre-step: inject actionable summary and/or
-            # brainstorm candidates when present.
+            # Deterministic Task Hub pre-step: heartbeat consumes prepared dispatch queue.
+            task_hub_claimed: list[dict] = []
             try:
-                from universal_agent.services.todoist_service import TodoService
-
-                todoist = TodoService()
-                summary = todoist.heartbeat_summary()
-                actionable = int(summary.get("actionable_count") or 0)
-                todoist_actionable_count = actionable
-                candidates = []
+                conn = connect_runtime_db(get_activity_db_path())
+                conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
                 try:
-                    candidates = todoist.heartbeat_brainstorm_candidates(
-                        limit=max(3, max_proactive_per_cycle),
+                    task_hub.ensure_schema(conn)
+                    queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
+                    dispatch_actionable_count = int(queue.get("eligible_total") or 0)
+                    task_hub_claimed = task_hub.claim_next_dispatch_tasks(
+                        conn,
+                        limit=max(1, max_proactive_per_cycle),
+                        agent_id=f"heartbeat:{session.session_id}",
                     )
-                except Exception:
-                    candidates = []
-                todoist_brainstorm_candidate_count = len(candidates)
-                selected_candidates = candidates[:max_proactive_per_cycle]
-                selected_tasks = []
-                if isinstance(summary.get("tasks"), list):
-                    selected_tasks = summary.get("tasks", [])[:max_proactive_per_cycle]
-                if actionable > 0:
-                    summary = {
-                        **summary,
-                        "selected_tasks": selected_tasks,
-                        "selected_count": len(selected_tasks),
-                        "actionable_count_total": actionable,
-                    }
-
-                if selected_candidates:
-                    brainstorm_event = {
-                        "type": "todoist_brainstorm_candidates",
-                        "payload": {
-                            "count": len(candidates),
-                            "selected_count": len(selected_candidates),
-                            "candidates": selected_candidates,
-                        },
-                        "created_at": datetime.now().isoformat(),
-                        "session_id": session.session_id,
-                    }
-                    system_events.append(brainstorm_event)
-                    metadata["system_events"] = system_events
-                    metadata["todoist_brainstorm_candidates"] = selected_candidates
-
-                if actionable > 0:
-                    todoist_event = {
-                        "type": "todoist_summary",
-                        "payload": summary,
-                        "created_at": datetime.now().isoformat(),
-                        "session_id": session.session_id,
-                    }
-                    system_events.append(todoist_event)
-                    metadata["system_events"] = system_events
-                    metadata["todoist_summary"] = summary
-                    logger.info(
-                        "Injected Todoist heartbeat summary (%d actionable) into heartbeat for %s",
-                        actionable,
-                        session.session_id,
-                    )
-                elif selected_candidates:
-                    logger.info(
-                        "Injected Todoist brainstorm candidates (%d) into heartbeat for %s",
-                        len(selected_candidates),
-                        session.session_id,
-                    )
+                    dispatch_claimed_count = len(task_hub_claimed)
+                    if task_hub_claimed:
+                        hub_event = {
+                            "type": "task_hub_dispatch",
+                            "payload": {
+                                "queue_build_id": str(queue.get("queue_build_id") or ""),
+                                "eligible_total": int(queue.get("eligible_total") or 0),
+                                "claimed_count": len(task_hub_claimed),
+                                "claimed": task_hub_claimed,
+                            },
+                            "created_at": datetime.now().isoformat(),
+                            "session_id": session.session_id,
+                        }
+                        system_events.append(hub_event)
+                        metadata["system_events"] = system_events
+                        metadata["task_hub_dispatch"] = hub_event["payload"]
+                        logger.info(
+                            "Injected Task Hub dispatch payload (%d claimed / %d eligible) into heartbeat for %s",
+                            len(task_hub_claimed),
+                            int(queue.get("eligible_total") or 0),
+                            session.session_id,
+                        )
+                finally:
+                    conn.close()
             except Exception as exc:
-                logger.info("Todoist heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
+                logger.info("Task Hub heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
 
             if len(system_events) > max_system_events:
                 system_events = system_events[-max_system_events:]
                 metadata["system_events"] = system_events
 
             guard_policy = _heartbeat_guard_policy(
-                actionable_count=todoist_actionable_count,
-                brainstorm_candidate_count=int(todoist_brainstorm_candidate_count or 0),
+                actionable_count=dispatch_actionable_count,
+                brainstorm_candidate_count=int(dispatch_claimed_count or 0),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
             )
@@ -1263,8 +1239,8 @@ class HeartbeatService:
                 "max_proactive_per_cycle": int(
                     guard_policy.get("max_proactive_per_cycle") or DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE
                 ),
-                "actionable_count": int(todoist_actionable_count or 0),
-                "brainstorm_candidate_count": int(todoist_brainstorm_candidate_count or 0),
+                "actionable_count": int(dispatch_actionable_count or 0),
+                "brainstorm_candidate_count": int(dispatch_claimed_count or 0),
                 "system_event_count": len(system_events),
                 "skip_reason": guard_skip_reason or None,
             }
@@ -1301,7 +1277,7 @@ class HeartbeatService:
             if should_skip_agent_run:
                 full_response = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
                 logger.info(
-                    "Skipping heartbeat agent execution for %s (no actionable Todoist tasks)",
+                    "Skipping heartbeat agent execution for %s (no actionable task-hub dispatch items)",
                     session.session_id,
                 )
             elif os.getenv("UA_HEARTBEAT_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:

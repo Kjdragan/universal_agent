@@ -122,5 +122,9 @@
   "/tmp/pytest-of-kjdragan/pytest-13/test_vp_event_bridge_cursor_pe0/vp_general_primary_external/vp-mission-4dc0a8325ea9c5f703be94d0/transcript.md": {
     "size": 4321,
     "lines": 128
+  },
+  "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_hook_yt_UC_a85mUHqsy5j0CYCgLnkEQ_VFBGCxXk1nA/transcript.md": {
+    "size": 52487,
+    "lines": 456
   }
 }
