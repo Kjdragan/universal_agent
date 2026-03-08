@@ -1531,7 +1531,8 @@ async def on_pre_tool_use_ledger(
     # Keep Bash execution rooted in the active session workspace by default to
     # prevent accidental repo-root artifacts.
     if tool_name == "Bash" and isinstance(tool_input, dict):
-        bash_workspace = _ctx.observer_workspace_dir or os.getenv("CURRENT_SESSION_WORKSPACE")
+        from universal_agent.execution_context import get_current_workspace as _get_ws
+        bash_workspace = _ctx.observer_workspace_dir or _get_ws()
         if bash_workspace:
             cmd = tool_input.get("command") or tool_input.get("cmd")
             if isinstance(cmd, str):
@@ -3056,7 +3057,10 @@ async def on_pre_task_skill_awareness(
 
     # Inject workspace path so sub-agents know where to save files.
     # Without this, background sub-agents default to cwd (repo root).
-    workspace_path = OBSERVER_WORKSPACE_DIR or os.getenv("CURRENT_SESSION_WORKSPACE", "")
+    # Use context-aware workspace (ContextVar) to avoid leakage between
+    # concurrent sessions sharing the gateway process.
+    from universal_agent.execution_context import get_current_workspace
+    workspace_path = OBSERVER_WORKSPACE_DIR or get_current_workspace() or ""
     if workspace_path:
         combined_context = (
             f"# SESSION WORKSPACE (MANDATORY)\n"

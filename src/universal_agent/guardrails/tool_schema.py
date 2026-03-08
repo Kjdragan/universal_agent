@@ -532,7 +532,8 @@ def _should_block_list_directory_research(path_value: str, workspace: str) -> bo
 
 
 def _resolve_refined_corpus_path(task_name: Optional[str]) -> Optional[str]:
-    workspace = (os.getenv("CURRENT_SESSION_WORKSPACE") or "").strip()
+    from universal_agent.execution_context import get_current_workspace
+    workspace = (get_current_workspace() or "").strip()
     if not workspace:
         return None
     workspace_path = Path(workspace)
@@ -815,7 +816,8 @@ async def pre_tool_use_schema_guardrail(
         }
 
     normalized_name = identity.tool_name.lower()
-    workspace = os.getenv("CURRENT_SESSION_WORKSPACE", "")
+    from universal_agent.execution_context import get_current_workspace
+    workspace = get_current_workspace() or ""
     is_subagent_context = _is_subagent_context(input_data)
     run_key = str(run_id or input_data.get("run_id") or "").strip()
 
