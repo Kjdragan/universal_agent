@@ -8399,9 +8399,13 @@ async def lifespan(app: FastAPI):
 
     process_heartbeat.start()
     logger.info("🚀 Universal Agent Gateway Server starting...")
-    logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
-    logger.info("🏭 Factory role resolved: %s (gateway_mode=%s)", _FACTORY_POLICY.role, _FACTORY_POLICY.gateway_mode)
+    logger.info("Lifespan: Resolving bootstrap state...")
+    bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
+    _FACTORY_POLICY = bootstrap_state.policy
+    _refresh_ops_auth_config_from_env()
+    _maybe_instrument_logfire_fastapi()
 
+    logger.info("Lifespan: Probing Todoist token health...")
     # Probe Todoist token health at startup so failures are discovered immediately.
     _todoist_startup_token = (
         (os.getenv("TODOIST_API_TOKEN") or "").strip()
@@ -8434,6 +8438,8 @@ async def lifespan(app: FastAPI):
             logger.debug("Todoist startup probe skipped (service unavailable): %s", _td_exc)
     else:
         logger.info("ℹ️ TODOIST_API_TOKEN/TODOIST_API_KEY not set — Todoist sync will be skipped")
+
+    logger.info("Lifespan: Initializing Redis delegation bus...")
 
 
 

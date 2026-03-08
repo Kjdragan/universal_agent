@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -144,6 +146,11 @@ class TodoistTaxonomy:
 class TodoService:
     """Pure Todoist API service. No LLM/tool coupling."""
 
+    # Shared across all instances to respect global rate limits (1000 req / 15 min)
+    _last_call_time = 0.0
+    _global_lock = threading.Lock()
+    _RATE_LIMIT_DELAY = 1.1  # Stay slightly under 1 request per second
+
     def __init__(self, api_token: str | None = None, *, api: Optional[object] = None):
         if api_token is None:
             token = (
@@ -158,11 +165,40 @@ class TodoService:
                 raise ValueError("TODOIST_API_TOKEN or TODOIST_API_KEY is required")
             if TodoistAPI is None:
                 raise RuntimeError("todoist-api-python is not installed")
-            self._api = TodoistAPI(token)
+            actual_api = TodoistAPI(token)
         else:
-            self._api = api
+            actual_api = api
 
+        self._api = self._wrap_api(actual_api)
         self._taxonomy: Optional[UA5Taxonomy] = None
+
+    def _wrap_api(self, api_instance: Any) -> Any:
+        """Wraps the TodoistAPI instance with a rate-limiting throttler."""
+        service_self = self
+
+        class ThrottledAPI:
+            def __getattr__(self, name):
+                attr = getattr(api_instance, name)
+                if callable(attr):
+
+                    def wrapper(*args, **kwargs):
+                        service_self._wait_for_slot()
+                        return attr(*args, **kwargs)
+
+                    return wrapper
+                return attr
+
+        return ThrottledAPI()
+
+    def _wait_for_slot(self):
+        """Global throttle to stay under Todoist's rate limit."""
+        with self._global_lock:
+            now = time.time()
+            elapsed = now - self.__class__._last_call_time
+            if elapsed < self.__class__._RATE_LIMIT_DELAY:
+                sleep_time = self.__class__._RATE_LIMIT_DELAY - elapsed
+                time.sleep(sleep_time)
+            self.__class__._last_call_time = time.time()
 
     @property
     def api(self):
