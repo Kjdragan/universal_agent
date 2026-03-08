@@ -168,6 +168,24 @@ class TodoService:
     def api(self):
         return self._api
 
+    def verify_token(self) -> tuple[bool, str]:
+        """Probe the Todoist API to verify the token is valid.
+
+        Makes a single lightweight GET request (list projects) and returns
+        ``(True, "")`` on success or ``(False, error_message)`` on failure.
+        Distinguishes 401/403 auth errors from 429 rate-limit errors.
+        """
+        try:
+            _collect_items(self._api.get_projects())
+            return True, ""
+        except Exception as exc:
+            exc_str = str(exc)
+            if "429" in exc_str or "rate limit" in exc_str.lower():
+                return False, f"rate_limited: {exc_str}"
+            if any(s in exc_str for s in ("401", "403", "Unauthorized", "Forbidden", "UNAUTHORIZED")):
+                return False, f"auth_failure: {exc_str}"
+            return False, f"unknown: {exc_str}"
+
     def ensure_taxonomy(self) -> dict:
         """Idempotently create all 5 UA projects, sections, and labels."""
 

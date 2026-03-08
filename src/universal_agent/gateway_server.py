@@ -8402,6 +8402,41 @@ async def lifespan(app: FastAPI):
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
     logger.info("🏭 Factory role resolved: %s (gateway_mode=%s)", _FACTORY_POLICY.role, _FACTORY_POLICY.gateway_mode)
 
+    # Probe Todoist token health at startup so failures are discovered immediately.
+    _todoist_startup_token = (
+        (os.getenv("TODOIST_API_TOKEN") or "").strip()
+        or (os.getenv("TODOIST_API_KEY") or "").strip()
+    )
+    if _todoist_startup_token:
+        try:
+            from universal_agent.services.todoist_service import TodoService
+            _td_ok, _td_err = TodoService(api_token=_todoist_startup_token).verify_token()
+            if _td_ok:
+                logger.info("✅ Todoist token verified successfully at startup")
+            else:
+                logger.warning("⚠️ Todoist token probe failed at startup: %s", _td_err)
+                if "auth_failure" in _td_err:
+                    _add_notification(
+                        kind="system_error",
+                        title="Todoist Auth Failed — Token Invalid at Startup",
+                        message=(
+                            "The Todoist API token (TODOIST_API_TOKEN) was rejected with 401/403 "
+                            "at gateway startup. Regenerate the token at "
+                            "https://app.todoist.com/app/settings/integrations/developer "
+                            "and update TODOIST_API_TOKEN in Infisical, then restart the gateway."
+                        ),
+                        severity="error",
+                        metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
+                    )
+                elif "rate_limited" in _td_err:
+                    logger.info("Todoist rate-limited at startup probe; will retry normally on first CSI write")
+        except Exception as _td_exc:
+            logger.debug("Todoist startup probe skipped (service unavailable): %s", _td_exc)
+    else:
+        logger.info("ℹ️ TODOIST_API_TOKEN/TODOIST_API_KEY not set — Todoist sync will be skipped")
+
+
+
     _delegation_mission_bus = None
     _delegation_metrics["connected"] = False
     _delegation_metrics["last_error"] = None
@@ -9177,7 +9212,8 @@ async def signals_ingest_endpoint(request: Request):
                 except Exception as exc:
                     exc_str = str(exc)
                     is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
-                    is_auth = any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
+                    is_rate_limited = "429" in exc_str or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
+                    is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
                     if is_limit:
                         logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
                         if not _has_recent_notification(
@@ -9196,8 +9232,27 @@ async def signals_ingest_endpoint(request: Request):
                                 severity="warning",
                                 metadata={"integration": "todoist", "reason": "items_limit_reached"},
                             )
+                    elif is_rate_limited:
+                        logger.warning("Todoist rate limit hit (429); backing off: %s", exc)
+                        if not _has_recent_notification(
+                            kind="system_notice",
+                            metadata_match={"integration": "todoist", "reason": "rate_limited"},
+                            within_seconds=900,  # 15-minute window matches Todoist's rate limit window
+                        ):
+                            _add_notification(
+                                kind="system_notice",
+                                title="Todoist Rate Limit Hit",
+                                message=(
+                                    "Todoist returned HTTP 429 (Too Many Requests). The CSI pipeline "
+                                    "is generating more than 1000 Todoist API calls within a 15-minute "
+                                    "window. Task sync will resume automatically. No action needed — "
+                                    "CSI signals are still visible in the CSI Feed tab."
+                                ),
+                                severity="warning",
+                                metadata={"integration": "todoist", "reason": "rate_limited", "source_domain": "system"},
+                            )
                     elif is_auth:
-                        logger.warning("Todoist auth failure (likely expired v2 token): %s", exc)
+                        logger.warning("Todoist auth failure (401/403 — token may be invalid or revoked): %s", exc)
                         if not _has_recent_notification(
                             kind="system_error",
                             metadata_match={"integration": "todoist", "reason": "auth_failure"},
@@ -9207,14 +9262,14 @@ async def signals_ingest_endpoint(request: Request):
                                 kind="system_error",
                                 title="Todoist Auth Failed — Token Needs Regeneration",
                                 message=(
-                                    "Todoist API returns 401/403 on task creation. The current token "
-                                    "was generated for the v2 REST API (now deprecated). Generate a new "
-                                    "API token at https://app.todoist.com/app/settings/integrations/developer "
-                                    "and update TODOIST_API_TOKEN in Infisical. CSI signals are still "
-                                    "visible in the CSI Feed tab; only Todoist sync is affected."
+                                    "Todoist API returned 401/403. The API token stored in Infisical "
+                                    "is invalid or has been revoked. Personal API tokens can be "
+                                    "regenerated at https://app.todoist.com/app/settings/integrations/developer "
+                                    "— update TODOIST_API_TOKEN in Infisical and restart the gateway. "
+                                    "CSI signals are still visible in the CSI Feed tab; only Todoist sync is affected."
                                 ),
                                 severity="error",
-                                metadata={"integration": "todoist", "reason": "auth_failure"},
+                                metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
                             )
                     else:
                         logger.exception("Failed to create Todoist task for CSI signal")
@@ -9238,6 +9293,7 @@ async def signals_ingest_endpoint(request: Request):
                                 severity="error",
                                 metadata={"integration": "todoist", "reason": "task_sync_failed"},
                             )
+
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count

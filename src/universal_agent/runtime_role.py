@@ -37,6 +37,10 @@ class FactoryRuntimePolicy:
     def can_listen_delegations(self) -> bool:
         return self.delegation_mode in {"publish_and_listen", "listen_only"}
 
+    @property
+    def is_headquarters(self) -> bool:
+        return self.role == FactoryRole.HEADQUARTERS.value
+
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = str(os.getenv(name, "")).strip().lower()
