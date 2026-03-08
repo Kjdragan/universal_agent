@@ -1220,6 +1220,7 @@ class VpMissionDispatchRequest(BaseModel):
     objective: str
     constraints: dict = {}
     budget: dict = {}
+    execution_mode: str = "sdk"  # "sdk" (default) or "cli" (Claude Code CLI)
     idempotency_key: Optional[str] = None
     source_session_id: Optional[str] = None
     source_turn_id: Optional[str] = None
