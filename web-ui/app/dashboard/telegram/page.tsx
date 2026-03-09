@@ -7,6 +7,8 @@ const API_BASE = "/api/dashboard/gateway";
 
 type BotStatus = {
   service_active?: boolean;
+  enabled_by_policy?: boolean;
+  service_scope?: string;
   polling_mode?: string;
   allowed_user_ids?: string | null;
 };
@@ -100,6 +102,18 @@ export default function TelegramPage() {
   }, [load]);
 
   const bot = data.bot || {};
+  const botEnabled = bot.enabled_by_policy !== false;
+  const botStateLabel = !botEnabled ? "Disabled" : bot.service_active ? "Active" : "Down";
+  const botStateDotClass = !botEnabled
+    ? "bg-slate-500"
+    : bot.service_active
+      ? "bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/50"
+      : "bg-red-500";
+  const botStateDetail = !botEnabled
+    ? "disabled by runtime policy"
+    : bot.service_scope
+      ? `${bot.polling_mode || "long_polling"} (${bot.service_scope})`
+      : (bot.polling_mode || "long_polling");
   const channels = data.channels || [];
   const notifications = data.recent_notifications || [];
   const sessions = data.telegram_sessions || [];
@@ -140,10 +154,10 @@ export default function TelegramPage() {
                 Bot Service
               </div>
               <div className="mt-3 flex items-center gap-2">
-                <div className={`h-2.5 w-2.5 rounded-full ${bot.service_active ? "bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/50" : "bg-red-500"}`} />
-                <span className="text-lg font-semibold text-slate-100">{bot.service_active ? "Active" : "Down"}</span>
+                <div className={`h-2.5 w-2.5 rounded-full ${botStateDotClass}`} />
+                <span className="text-lg font-semibold text-slate-100">{botStateLabel}</span>
               </div>
-              <p className="mt-1 text-xs text-slate-500">{bot.polling_mode || "long_polling"}</p>
+              <p className="mt-1 text-xs text-slate-500">{botStateDetail}</p>
             </div>
 
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">

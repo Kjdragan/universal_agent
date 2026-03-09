@@ -176,6 +176,7 @@ from universal_agent.feature_flags import (
     memory_flush_max_chars,
     memory_session_enabled,
     memory_session_index_on_end,
+    sdk_typed_task_events_enabled,
 )
 from universal_agent.memory.paths import (
     resolve_shared_memory_workspace,
@@ -185,6 +186,8 @@ from universal_agent.logfire_payloads import (
     load_payload_logging_config,
     serialize_payload_for_logfire,
 )
+from universal_agent.sdk.runtime_info import emit_sdk_runtime_banner
+from universal_agent.sdk.task_events import extract_typed_task_payload
 
 
 # Global State Initialization
@@ -3866,6 +3869,7 @@ trace: dict = {
     "token_usage": {"input": 0, "output": 0, "total": 0},
     "compact_boundary_events": [],
     "sdk_result_messages": [],
+    "typed_task_messages": [],
     # Keep import-time globals self-contained; helper is defined later in file.
     "context_pressure": {
         "high_turns_without_compaction": 0,
@@ -4177,6 +4181,7 @@ def _extract_result_message_telemetry(msg: Any) -> dict[str, Any]:
     telemetry: dict[str, Any] = {}
     for key in (
         "subtype",
+        "stop_reason",
         "duration_ms",
         "total_cost_usd",
         "num_turns",
@@ -6028,6 +6033,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         compaction_grace_turns = _read_env_int(
             "UA_COMPACTION_GRACE_TURNS", default=2, minimum=1
         )
+        typed_task_events_active = sdk_typed_task_events_enabled(default=False)
+        latest_result_telemetry: dict[str, Any] = {}
 
         with logfire.span(
             "llm_response_stream",
@@ -6065,7 +6072,43 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     )
                     continue
 
+                typed_task_payload = (
+                    extract_typed_task_payload(msg) if typed_task_events_active else None
+                )
+                if typed_task_payload is not None:
+                    _ctx.trace.setdefault("typed_task_messages", []).append(typed_task_payload)
+                    lifecycle = str(typed_task_payload.get("task_lifecycle") or "event")
+                    summary = str(
+                        typed_task_payload.get("summary")
+                        or typed_task_payload.get("description")
+                        or typed_task_payload.get("status")
+                        or ""
+                    ).strip()
+                    message = f"Task {lifecycle}"
+                    if summary:
+                        message = f"{message}: {summary[:200]}"
+                    hook_events.emit_status_event(
+                        message,
+                        level="INFO",
+                        prefix="Task",
+                        event_kind="sdk_task_message",
+                        sdk_task=typed_task_payload,
+                    )
+                    logfire.info(
+                        "sdk_task_message",
+                        run_id=_ctx.run_id,
+                        step_id=step_id,
+                        iteration=iteration,
+                        task_lifecycle=lifecycle,
+                        task_id=typed_task_payload.get("task_id"),
+                        tool_use_id=typed_task_payload.get("tool_use_id"),
+                        session_id=typed_task_payload.get("session_id"),
+                        status=typed_task_payload.get("status"),
+                    )
+                    continue
+
                 if isinstance(msg, ResultMessage):
+                    latest_result_telemetry = _extract_result_message_telemetry(msg)
                     turn_input_tokens = 0
                     # Track token usage from the final ResultMessage of the turn
                     # This explicitly contains the usage statistics for the turn
@@ -6836,6 +6879,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         num_turns=msg.num_turns,
                         is_error=msg.is_error,
                         subtype=result_telemetry.get("subtype"),
+                        stop_reason=result_telemetry.get("stop_reason"),
                         model_usage=result_telemetry.get("model_usage"),
                         usage=result_telemetry.get("usage"),
                         run_id=_ctx.run_id,
@@ -6866,6 +6910,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             "tool_calls": len(tool_calls_this_iter),
             "needs_user_input": needs_user_input,
             "auth_link": auth_link,
+            "stop_reason": latest_result_telemetry.get("stop_reason"),
         }
         _ctx.trace["iterations"].append(iter_record)
         if _ctx.runtime_db_conn and _ctx.run_id:
@@ -7443,6 +7488,11 @@ async def setup_session(
         workspace_dir, \
         current_execution_session
     run_id = run_id_override or str(uuid.uuid4())
+    runtime_info = emit_sdk_runtime_banner(required="0.1.48")
+    print(
+        "🔧 Claude Agent SDK runtime: "
+        f"sdk={runtime_info.sdk_version}, bundled_cli={runtime_info.bundled_cli_version}"
+    )
 
     # Create main span for entire execution
     # with logfire.span("standalone_composio_test") as span: # Moved to caller
@@ -7765,6 +7815,9 @@ async def setup_session(
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
             if resolve_agent_teams_enabled(default=True)
             else "0",
+            "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"),
+            "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv("UA_ENABLE_SDK_SESSION_HISTORY", "0"),
+            "UA_ENABLE_DYNAMIC_MCP": os.getenv("UA_ENABLE_DYNAMIC_MCP", "0"),
             "CURRENT_SESSION_WORKSPACE": abs_workspace_path,
             "UA_ARTIFACTS_DIR": os.path.abspath(
                 os.getenv(
@@ -7878,6 +7931,7 @@ async def setup_session(
         "token_usage": {"input": 0, "output": 0, "total": 0},
         "compact_boundary_events": [],
         "sdk_result_messages": [],
+        "typed_task_messages": [],
         "context_pressure": _default_context_pressure_state(),
         "logfire_enabled": bool(LOGFIRE_TOKEN),
     }

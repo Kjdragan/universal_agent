@@ -694,6 +694,15 @@ class ProcessTurnAdapter:
                 # Emit completion — prefer the gateway span trace_id over
                 # the result's trace_id (which may be None on gateway path)
                 effective_trace_id = _gateway_trace_id_hex or getattr(result, 'trace_id', None)
+                latest_stop_reason = None
+                try:
+                    sdk_results = self._trace.get("sdk_result_messages", [])
+                    if isinstance(sdk_results, list) and sdk_results:
+                        tail = sdk_results[-1]
+                        if isinstance(tail, dict):
+                            latest_stop_reason = tail.get("stop_reason")
+                except Exception:
+                    latest_stop_reason = None
                 yield AgentEvent(
                     type=EventType.ITERATION_END,
                     data={
@@ -701,6 +710,7 @@ class ProcessTurnAdapter:
                         "duration_seconds": round(time.time() - start_ts, 2),
                         "tool_calls": getattr(result, 'tool_calls', 0),
                         "trace_id": effective_trace_id,
+                        "stop_reason": latest_stop_reason,
                     },
                 )
         else:
@@ -772,6 +782,70 @@ class ProcessTurnAdapter:
                 pass
             self._client = None
         logger.info("Session reset: client history cleared")
+
+    async def get_mcp_status(self) -> dict[str, Any]:
+        """Return typed MCP status for the active SDK client."""
+        client = await self._ensure_client()
+        status = await client.get_mcp_status()
+        if isinstance(status, dict):
+            return status
+        try:
+            return json.loads(json.dumps(status, default=str))
+        except Exception:
+            return {"mcpServers": []}
+
+    async def add_mcp_server(self, server_name: str, server_config: dict[str, Any]) -> dict[str, Any]:
+        """Attach an MCP server config for this adapter session."""
+        name = str(server_name or "").strip()
+        if not name:
+            raise ValueError("server_name is required")
+        if not isinstance(server_config, dict) or not server_config:
+            raise ValueError("server_config must be a non-empty object")
+        if self._options is None:
+            raise RuntimeError("Adapter is not initialized")
+
+        mcp_servers = dict(getattr(self._options, "mcp_servers", {}) or {})
+        mcp_servers[name] = server_config
+        self._options.mcp_servers = mcp_servers
+
+        # If the SDK adds native runtime attach support, use it.
+        if self._client is not None and hasattr(self._client, "add_mcp_server"):
+            await self._client.add_mcp_server(name, server_config)  # type: ignore[attr-defined]
+        else:
+            # Current SDK path requires client restart to pick up modified options.
+            await self.reset()
+        return {
+            "server_name": name,
+            "configured": True,
+            "status": await self.get_mcp_status(),
+        }
+
+    async def remove_mcp_server(self, server_name: str) -> dict[str, Any]:
+        """Detach an MCP server config from this adapter session."""
+        name = str(server_name or "").strip()
+        if not name:
+            raise ValueError("server_name is required")
+        if self._options is None:
+            raise RuntimeError("Adapter is not initialized")
+
+        mcp_servers = dict(getattr(self._options, "mcp_servers", {}) or {})
+        if name not in mcp_servers:
+            raise ValueError(f"MCP server '{name}' is not configured")
+
+        if self._client is not None and hasattr(self._client, "remove_mcp_server"):
+            await self._client.remove_mcp_server(name)  # type: ignore[attr-defined]
+        elif self._client is not None and hasattr(self._client, "toggle_mcp_server"):
+            # Best-effort immediate detach before restart fallback.
+            await self._client.toggle_mcp_server(name, enabled=False)  # type: ignore[attr-defined]
+
+        mcp_servers.pop(name, None)
+        self._options.mcp_servers = mcp_servers
+        await self.reset()
+        return {
+            "server_name": name,
+            "removed": True,
+            "status": await self.get_mcp_status(),
+        }
 
     async def close(self) -> None:
         """Clean up resources and flush memory."""

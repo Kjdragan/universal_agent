@@ -60,6 +60,7 @@ from universal_agent.feature_flags import (
 from universal_agent.memory.paths import (
     resolve_shared_memory_workspace,
 )
+from universal_agent.sdk.runtime_info import emit_sdk_runtime_banner
 
 
 # Get project directories
@@ -166,6 +167,11 @@ class AgentSetup:
         bootstrap_state = bootstrap_runtime_environment()
         self.factory_role = bootstrap_state.policy.role
         self.enable_vp_coder = coder_vp_enabled()
+        runtime_info = emit_sdk_runtime_banner(required="0.1.48")
+        self._log(
+            "🔧 Claude Agent SDK runtime: "
+            f"sdk={runtime_info.sdk_version}, bundled_cli={runtime_info.bundled_cli_version}"
+        )
 
         # Ensure workspace directories exist
         self._setup_workspace_dirs()
@@ -427,6 +433,9 @@ class AgentSetup:
                 "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
                 if resolve_agent_teams_enabled(default=True)
                 else "0",
+                "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"),
+                "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv("UA_ENABLE_SDK_SESSION_HISTORY", "0"),
+                "UA_ENABLE_DYNAMIC_MCP": os.getenv("UA_ENABLE_DYNAMIC_MCP", "0"),
                 "CURRENT_SESSION_WORKSPACE": os.path.abspath(self.workspace_dir),
                 # Durable outputs should go here; session workspace is scratch.
                 "UA_ARTIFACTS_DIR": os.path.abspath(

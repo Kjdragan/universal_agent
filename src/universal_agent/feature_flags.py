@@ -375,3 +375,30 @@ def vp_general_workspace_root(default: str = "") -> str:
     """Workspace root for external generalist VP worker."""
     value = (os.getenv("UA_VP_GENERAL_WORKSPACE_ROOT") or "").strip()
     return value or default
+
+
+def sdk_typed_task_events_enabled(default: bool = False) -> bool:
+    """Enable typed SDK task lifecycle message handling."""
+    if _is_truthy(os.getenv("UA_DISABLE_SDK_TYPED_TASK_EVENTS")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS")):
+        return True
+    return default
+
+
+def sdk_session_history_enabled(default: bool = False) -> bool:
+    """Enable SDK-native session history list/message APIs."""
+    if _is_truthy(os.getenv("UA_DISABLE_SDK_SESSION_HISTORY")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_SDK_SESSION_HISTORY")):
+        return True
+    return default
+
+
+def dynamic_mcp_enabled(default: bool = False) -> bool:
+    """Enable runtime MCP server attach/detach controls."""
+    if _is_truthy(os.getenv("UA_DISABLE_DYNAMIC_MCP")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_DYNAMIC_MCP")):
+        return True
+    return default

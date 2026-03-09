@@ -64,7 +64,15 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled, coder_vp_enabled
+from universal_agent.feature_flags import (
+    heartbeat_enabled,
+    memory_index_enabled,
+    cron_enabled,
+    coder_vp_enabled,
+    dynamic_mcp_enabled,
+    sdk_session_history_enabled,
+)
+from universal_agent.sdk import session_history_adapter
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_activity_db_path
 from universal_agent.durable.migrations import ensure_schema
@@ -1394,6 +1402,15 @@ class OpsCsiSessionPurgeRequest(BaseModel):
     keep_latest: int = 2
     older_than_minutes: int = 30
     include_active: bool = False
+
+
+class OpsMcpAddServerRequest(BaseModel):
+    server_name: str
+    server_config: dict[str, Any]
+
+
+class OpsMcpRemoveServerRequest(BaseModel):
+    server_name: str
 
 
 class CalendarEventActionRequest(BaseModel):
@@ -9788,6 +9805,37 @@ async def control_factory(request: Request, payload: FactoryControlRequest):
     }
 
 
+async def _systemd_unit_active(
+    unit_name: str,
+    *,
+    user_scope: bool = False,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    cmd = ["systemctl"]
+    if user_scope:
+        cmd.append("--user")
+    cmd.extend(["is-active", unit_name])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        return (stdout or b"").decode().strip() == "active"
+    except Exception:
+        return False
+
+
+async def _resolve_telegram_service_status() -> dict[str, Any]:
+    unit = "universal-agent-telegram"
+    if await _systemd_unit_active(unit, user_scope=False):
+        return {"active": True, "scope": "system", "unit": unit}
+    if await _systemd_unit_active(unit, user_scope=True):
+        return {"active": True, "scope": "user", "unit": unit}
+    return {"active": False, "scope": "none", "unit": unit}
+
+
 @app.get("/api/v1/ops/telegram")
 async def ops_telegram_status(request: Request):
     """Aggregate Telegram integration status: bot, channels, notifications, sessions."""
@@ -9796,17 +9844,7 @@ async def ops_telegram_status(request: Request):
     # Tutorial notifier config
     notifier_status = tutorial_telegram_notifier.configured_status()
 
-    # Bot process status via systemctl
-    bot_active = False
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "systemctl", "is-active", "universal-agent-telegram",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        bot_active = (stdout or b"").decode().strip() == "active"
-    except Exception:
-        pass
+    bot_status = await _resolve_telegram_service_status()
 
     # Recent Telegram-related notifications from activity DB
     recent_notifications: list[dict[str, Any]] = []
@@ -9887,7 +9925,10 @@ async def ops_telegram_status(request: Request):
 
     return {
         "bot": {
-            "service_active": bot_active,
+            "service_active": bool(bot_status.get("active")),
+            "service_scope": str(bot_status.get("scope") or "none"),
+            "service_unit": "universal-agent-telegram",
+            "enabled_by_policy": bool(_FACTORY_POLICY.enable_telegram_poll),
             "polling_mode": "long_polling",
             "allowed_user_ids": os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").strip() or None,
         },
@@ -15830,6 +15871,51 @@ async def delete_session(session_id: str, request: Request):
 # Ops / Control Plane Endpoints
 # =============================================================================
 
+_DYNAMIC_MCP_ALLOWED_TYPES_DEFAULT = {"stdio", "http", "sse", "sdk", "claude_ai_proxy"}
+_DYNAMIC_MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def _dynamic_mcp_allowed_types() -> set[str]:
+    raw = str(os.getenv("UA_DYNAMIC_MCP_ALLOWED_TYPES") or "").strip()
+    if not raw:
+        return set(_DYNAMIC_MCP_ALLOWED_TYPES_DEFAULT)
+    parsed = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    return parsed or set(_DYNAMIC_MCP_ALLOWED_TYPES_DEFAULT)
+
+
+def _validate_dynamic_mcp_config(
+    server_name: str, server_config: dict[str, Any]
+) -> dict[str, Any]:
+    name = str(server_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="server_name is required")
+    if not _DYNAMIC_MCP_SERVER_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid server_name format")
+    if not isinstance(server_config, dict) or not server_config:
+        raise HTTPException(status_code=400, detail="server_config must be an object")
+
+    config_type = str(server_config.get("type") or "").strip().lower()
+    if not config_type:
+        raise HTTPException(status_code=400, detail="server_config.type is required")
+    if config_type not in _dynamic_mcp_allowed_types():
+        raise HTTPException(status_code=400, detail=f"MCP server type '{config_type}' is not allowed")
+
+    if config_type == "stdio":
+        command = str(server_config.get("command") or "").strip()
+        if not command:
+            raise HTTPException(status_code=400, detail="stdio MCP config requires command")
+    elif config_type in {"http", "sse"}:
+        url = str(server_config.get("url") or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail=f"{config_type} MCP config requires url")
+
+    return dict(server_config)
+
+
+def _require_dynamic_mcp_enabled() -> None:
+    if not dynamic_mcp_enabled(default=False):
+        raise HTTPException(status_code=404, detail="Dynamic MCP controls are disabled")
+
 
 @app.post("/api/v1/ops/notifications")
 async def ops_create_notification(request: Request, payload: OpsNotificationCreateRequest):
@@ -15883,6 +15969,104 @@ async def ops_list_sessions(
     except Exception:
         logger.exception("CRITICAL: Failed to list sessions")
         raise HTTPException(status_code=500, detail="Internal Server Error: check gateway logs")
+
+
+@app.get("/api/v1/ops/sdk/sessions")
+async def ops_list_sdk_sessions(
+    request: Request,
+    limit: int = 100,
+):
+    _require_ops_auth(request)
+    if not sdk_session_history_enabled(default=False):
+        raise HTTPException(status_code=404, detail="SDK session history is disabled")
+    rows = session_history_adapter.list_session_summaries_for_workspace(
+        WORKSPACES_DIR,
+        limit=max(1, min(int(limit), 500)),
+    )
+    return {"sessions": rows, "total": len(rows)}
+
+
+@app.get("/api/v1/ops/sdk/sessions/{session_id}/messages")
+async def ops_get_sdk_session_messages(
+    request: Request,
+    session_id: str,
+    limit: int = 100,
+    offset: int = 0,
+):
+    _require_ops_auth(request)
+    if not sdk_session_history_enabled(default=False):
+        raise HTTPException(status_code=404, detail="SDK session history is disabled")
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    rows = session_history_adapter.get_session_messages(
+        safe_session_id,
+        directory=str(WORKSPACES_DIR.resolve()),
+        limit=max(1, min(int(limit), 1000)),
+        offset=max(0, int(offset)),
+    )
+    return {"session_id": safe_session_id, "messages": rows, "total": len(rows)}
+
+
+@app.get("/api/v1/ops/sessions/{session_id}/mcp")
+async def ops_get_session_mcp_status(request: Request, session_id: str):
+    _require_ops_auth(request)
+    _require_dynamic_mcp_enabled()
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    gateway = get_gateway()
+    try:
+        status = await gateway.get_session_mcp_status(safe_session_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not active" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail)
+    return {"session_id": safe_session_id, "status": status}
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/mcp")
+async def ops_add_session_mcp_server(
+    request: Request,
+    session_id: str,
+    payload: OpsMcpAddServerRequest,
+):
+    _require_ops_auth(request)
+    _require_dynamic_mcp_enabled()
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    server_config = _validate_dynamic_mcp_config(payload.server_name, payload.server_config)
+    gateway = get_gateway()
+    try:
+        result = await gateway.add_session_mcp_server(
+            safe_session_id,
+            str(payload.server_name).strip(),
+            server_config,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not active" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail)
+    return {"session_id": safe_session_id, **result}
+
+
+@app.delete("/api/v1/ops/sessions/{session_id}/mcp")
+async def ops_remove_session_mcp_server(
+    request: Request,
+    session_id: str,
+    payload: OpsMcpRemoveServerRequest,
+):
+    _require_ops_auth(request)
+    _require_dynamic_mcp_enabled()
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    server_name = str(payload.server_name or "").strip()
+    if not server_name:
+        raise HTTPException(status_code=400, detail="server_name is required")
+    gateway = get_gateway()
+    try:
+        result = await gateway.remove_session_mcp_server(safe_session_id, server_name)
+    except ValueError as exc:
+        detail = str(exc)
+        lowered = detail.lower()
+        if "not active" in lowered:
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    return {"session_id": safe_session_id, **result}
 
 
 @app.post("/api/v1/ops/sessions/cancel")

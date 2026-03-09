@@ -200,15 +200,32 @@ def emit_tool_call_event(
     emitted_calls.add(tool_id)
     _EMITTED_TOOL_CALL_IDS_VAR.set(emitted_calls)
     input_payload = tool_input if isinstance(tool_input, dict) else {"value": tool_input}
+    agent_id = None
+    agent_type = None
+    parent_tool_use_id = None
+    if isinstance(input_data, dict):
+        agent_id, agent_type = _extract_hook_agent_identity(input_data)
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+    if not agent_type and isinstance(input_payload, dict):
+        fallback_type = input_payload.get("subagent_type")
+        if isinstance(fallback_type, str) and fallback_type.strip():
+            agent_type = fallback_type.strip()
+    event_data = {
+        "id": tool_id,
+        "name": tool_name or "",
+        "input": input_payload,
+        "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
+    }
+    if parent_tool_use_id:
+        event_data["parent_tool_use_id"] = str(parent_tool_use_id)
+    if agent_id:
+        event_data["agent_id"] = str(agent_id)
+    if agent_type:
+        event_data["agent_type"] = str(agent_type)
     _emit_event(
         AgentEvent(
             type=EventType.TOOL_CALL,
-            data={
-                "id": tool_id,
-                "name": tool_name or "",
-                "input": input_payload,
-                "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
-            },
+            data=event_data,
         )
     )
     return True
@@ -355,8 +372,35 @@ def _looks_like_youtube_transcript_intent(text: Any) -> bool:
     return any(marker in candidate for marker in _YOUTUBE_TRANSCRIPT_INTENT_MARKERS)
 
 
+def _extract_hook_agent_identity(input_data: dict) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(input_data, dict):
+        return None, None
+    raw_agent_id = (
+        input_data.get("agent_id")
+        or input_data.get("agentId")
+        or input_data.get("agent-id")
+    )
+    raw_agent_type = (
+        input_data.get("agent_type")
+        or input_data.get("agentType")
+        or input_data.get("subagent_type")
+    )
+    agent_id = str(raw_agent_id or "").strip() or None
+    agent_type = str(raw_agent_type or "").strip() or None
+    return agent_id, agent_type
+
+
 def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Optional[str]) -> bool:
     parent_tool_use_id = input_data.get("parent_tool_use_id")
+    _agent_id, agent_type = _extract_hook_agent_identity(input_data)
+    normalized_agent_type = str(agent_type or "").strip().lower()
+    if normalized_agent_type and normalized_agent_type not in {
+        "primary",
+        "primary_agent",
+        "main",
+        "root",
+    }:
+        return True
     transcript_path = str(input_data.get("transcript_path", "") or "")
     return bool(parent_tool_use_id) or (
         bool(primary_transcript_path)
@@ -505,16 +549,29 @@ def emit_tool_result_event(
     emitted_results.add(tool_id)
     _EMITTED_TOOL_RESULT_IDS_VAR.set(emitted_results)
     content_text = _extract_tool_result_text(tool_result)
+    agent_id = None
+    agent_type = None
+    parent_tool_use_id = None
+    if isinstance(input_data, dict):
+        agent_id, agent_type = _extract_hook_agent_identity(input_data)
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+    event_data = {
+        "tool_use_id": tool_id,
+        "is_error": bool(is_error),
+        "content_preview": content_text[:2500],
+        "content_size": len(content_text),
+        "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
+    }
+    if parent_tool_use_id:
+        event_data["parent_tool_use_id"] = str(parent_tool_use_id)
+    if agent_id:
+        event_data["agent_id"] = str(agent_id)
+    if agent_type:
+        event_data["agent_type"] = str(agent_type)
     _emit_event(
         AgentEvent(
             type=EventType.TOOL_RESULT,
-            data={
-                "tool_use_id": tool_id,
-                "is_error": bool(is_error),
-                "content_preview": content_text[:2500],
-                "content_size": len(content_text),
-                "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
-            },
+            data=event_data,
         )
     )
     return True
@@ -1121,10 +1178,13 @@ class AgentHookSet:
         # 1b. Primary-only blocked tools (sub-agents are allowed)
         if tool_name in PRIMARY_ONLY_BLOCKED_TOOLS:
              is_subagent = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+             hook_agent_id, hook_agent_type = _extract_hook_agent_identity(input_data)
              logfire.info(
                  "primary_only_tool_check",
                  tool=tool_name,
                  is_subagent=is_subagent,
+                 agent_id=hook_agent_id,
+                 agent_type=hook_agent_type,
                  parent_tool_use_id=input_data.get("parent_tool_use_id"),
                  transcript_path=str(input_data.get("transcript_path", ""))[:80],
                  primary_path=str(self._primary_transcript_path or "")[:80],
@@ -1168,7 +1228,11 @@ class AgentHookSet:
             if thought and isinstance(thought, str) and thought.strip():
                 # Resolve author from sub-agent context
                 parent_tool_use_id = input_data.get("parent_tool_use_id")
-                if parent_tool_use_id:
+                _agent_id, agent_type = _extract_hook_agent_identity(input_data)
+                normalized_agent_type = str(agent_type or "").strip()
+                if normalized_agent_type:
+                    thought_author = normalized_agent_type
+                elif parent_tool_use_id:
                     # Sub-agent thought — try to resolve from transcript path or default
                     transcript_path = input_data.get("transcript_path", "")
                     if "research" in transcript_path.lower() if transcript_path else False:

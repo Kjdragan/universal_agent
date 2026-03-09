@@ -24,6 +24,8 @@ from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import (
     coder_vp_display_name,
     coder_vp_id,
+    dynamic_mcp_enabled,
+    sdk_session_history_enabled,
     vp_dispatch_mode,
     vp_require_live_worker_for_dispatch,
     vp_explicit_intent_require_external,
@@ -43,6 +45,7 @@ from universal_agent.vp import (
     MissionDispatchRequest,
     dispatch_mission_with_retry,
 )
+from universal_agent.sdk import session_history_adapter
 
 try:
     from universal_agent.agent_core import AgentEvent, EventType
@@ -199,6 +202,17 @@ class Gateway:
         raise NotImplementedError
 
     def list_sessions(self) -> list[GatewaySessionSummary]:
+        raise NotImplementedError
+
+    async def get_session_mcp_status(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def add_session_mcp_server(
+        self, session_id: str, server_name: str, server_config: dict[str, Any]
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def remove_session_mcp_server(self, session_id: str, server_name: str) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -1478,8 +1492,72 @@ class InProcessGateway(Gateway):
                             },
                         )
                     )
+
+        if sdk_session_history_enabled(default=False):
+            try:
+                sdk_rows = session_history_adapter.list_session_summaries_for_workspace(
+                    self._workspace_base,
+                    limit=200,
+                )
+                by_session_id = {item.session_id: item for item in summaries}
+                for row in sdk_rows:
+                    session_id = str(row.get("session_id", "") or "").strip()
+                    if not session_id:
+                        continue
+                    if session_id in by_session_id:
+                        existing = by_session_id[session_id]
+                        existing_meta = (
+                            dict(existing.metadata)
+                            if isinstance(existing.metadata, dict)
+                            else {}
+                        )
+                        existing_meta["sdk_history"] = {
+                            "summary": row.get("summary"),
+                            "cwd": row.get("cwd"),
+                            "last_modified": row.get("last_modified"),
+                            "file_size": row.get("file_size"),
+                        }
+                        existing.metadata = existing_meta
+                        continue
+                    summaries.append(
+                        GatewaySessionSummary(
+                            session_id=session_id,
+                            workspace_dir=str(row.get("workspace_dir") or ""),
+                            status="history_only",
+                            metadata={"source": "sdk_history", "sdk_history": row},
+                        )
+                    )
+            except Exception:
+                if logfire:
+                    logfire.warning("gateway_sdk_history_augmentation_failed")
         
         return summaries[:50]  # Limit to 50 sessions
+
+    async def get_session_mcp_status(self, session_id: str) -> dict[str, Any]:
+        if not dynamic_mcp_enabled(default=False):
+            raise ValueError("Dynamic MCP controls are disabled by feature flag")
+        adapter = self._adapters.get(session_id)
+        if adapter is None:
+            raise ValueError("Session is not active")
+        return await adapter.get_mcp_status()
+
+    async def add_session_mcp_server(
+        self, session_id: str, server_name: str, server_config: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not dynamic_mcp_enabled(default=False):
+            raise ValueError("Dynamic MCP controls are disabled by feature flag")
+        adapter = self._adapters.get(session_id)
+        if adapter is None:
+            raise ValueError("Session is not active")
+        return await adapter.add_mcp_server(server_name, server_config)
+
+    async def remove_session_mcp_server(self, session_id: str, server_name: str) -> dict[str, Any]:
+        if not dynamic_mcp_enabled(default=False):
+            raise ValueError("Dynamic MCP controls are disabled by feature flag")
+        adapter = self._adapters.get(session_id)
+        if adapter is None:
+            raise ValueError("Session is not active")
+        return await adapter.remove_mcp_server(server_name)
 
     async def close_session(self, session_id: str) -> None:
         """Close and clean up a single session's adapter and state."""
@@ -1730,6 +1808,33 @@ class ExternalGateway(Gateway):
                 )
             )
         return summaries
+
+    async def get_session_mcp_status(self, session_id: str) -> dict[str, Any]:
+        client = await self._get_client()
+        resp = await client.get(f"/api/v1/ops/sessions/{session_id}/mcp")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def add_session_mcp_server(
+        self, session_id: str, server_name: str, server_config: dict[str, Any]
+    ) -> dict[str, Any]:
+        client = await self._get_client()
+        resp = await client.post(
+            f"/api/v1/ops/sessions/{session_id}/mcp",
+            json={"server_name": server_name, "server_config": server_config},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def remove_session_mcp_server(self, session_id: str, server_name: str) -> dict[str, Any]:
+        client = await self._get_client()
+        resp = await client.request(
+            "DELETE",
+            f"/api/v1/ops/sessions/{session_id}/mcp",
+            json={"server_name": server_name},
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     async def health_check(self) -> bool:
         try:

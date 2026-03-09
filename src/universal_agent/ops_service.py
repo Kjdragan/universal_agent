@@ -10,6 +10,8 @@ from universal_agent.gateway import InProcessGateway
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.security_paths import validate_session_id
+from universal_agent.feature_flags import sdk_session_history_enabled
+from universal_agent.sdk import session_history_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +212,42 @@ class OpsService:
         session_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         
         summaries = [self._build_session_summary(p) for p in session_dirs]
+
+        if sdk_session_history_enabled(default=False):
+            try:
+                sdk_rows = session_history_adapter.list_session_summaries_for_workspace(
+                    self.workspaces_dir,
+                    limit=200,
+                )
+                existing = {str(item.get("session_id", "")) for item in summaries}
+                for row in sdk_rows:
+                    session_id = str(row.get("session_id", "") or "").strip()
+                    if not session_id:
+                        continue
+                    if session_id in existing:
+                        for item in summaries:
+                            if str(item.get("session_id", "")) == session_id:
+                                item["sdk_history"] = row
+                                break
+                        continue
+                    summaries.append(
+                        {
+                            "session_id": session_id,
+                            "status": "history_only",
+                            "workspace_dir": str(row.get("workspace_dir") or ""),
+                            "source": "sdk_history",
+                            "owner": "",
+                            "memory_mode": "unknown",
+                            "active_runs": 0,
+                            "active_connections": 0,
+                            "last_modified": row.get("last_modified"),
+                            "last_activity": row.get("last_modified"),
+                            "sdk_history": row,
+                        }
+                    )
+                    existing.add(session_id)
+            except Exception as exc:
+                logger.warning("OpsService SDK history augmentation failed: %s", exc)
         
         if status_filter != "all":
             normalized = status_filter.strip().lower()

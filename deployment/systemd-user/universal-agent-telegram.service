@@ -1,0 +1,18 @@
+[Unit]
+Description=Universal Agent local Telegram poller
+After=network-online.target universal-agent-local-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+Environment=PYTHONPATH=__REPO_ROOT__/src
+Environment=UA_GATEWAY_URL=http://127.0.0.1:8002
+Environment=UA_TELEGRAM_ALLOW_INPROCESS=0
+Environment=UA_TELEGRAM_PROCESS_HEARTBEAT_FILE=__REPO_ROOT__/heartbeat/telegram.heartbeat
+ExecStart=__REPO_ROOT__/.venv/bin/python -m universal_agent.bot.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.feature_flags import sdk_typed_task_events_enabled
+from universal_agent.sdk.task_events import extract_typed_task_payload
 
 import logfire
 from claude_agent_sdk.client import ClaudeSDKClient
@@ -266,6 +268,7 @@ def _extract_result_message_telemetry(msg: Any) -> dict[str, Any]:
     telemetry: dict[str, Any] = {}
     for key in (
         "subtype",
+        "stop_reason",
         "duration_ms",
         "total_cost_usd",
         "num_turns",
@@ -1271,6 +1274,7 @@ class UniversalAgent:
             "token_usage": {"input": 0, "output": 0, "total": 0},
             "compact_boundary_events": [],
             "sdk_result_messages": [],
+            "typed_task_messages": [],
             "context_pressure": _default_context_pressure_state(),
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
@@ -1463,6 +1467,7 @@ class UniversalAgent:
             "token_usage": {"input": 0, "output": 0, "total": 0},
             "compact_boundary_events": [],
             "sdk_result_messages": [],
+            "typed_task_messages": [],
             "context_pressure": _default_context_pressure_state(),
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
@@ -2052,6 +2057,8 @@ class UniversalAgent:
         tool_calls_this_iter = []
         auth_link = None
         current_agent_name = getattr(self, "current_agent_name", DEFAULT_AGENT_NAME)
+        typed_task_events_active = sdk_typed_task_events_enabled(default=False)
+        latest_result_telemetry: dict[str, Any] = {}
 
         with logfire.span("llm_response_stream"):
             async for msg in self.client.receive_response():  # type: ignore
@@ -2082,6 +2089,33 @@ class UniversalAgent:
                             "event_kind": "sdk_compact_boundary",
                             "compact_boundary": compact_payload,
                             "source": "claude_sdk",
+                        },
+                    )
+                    continue
+
+                typed_task_payload = (
+                    extract_typed_task_payload(msg) if typed_task_events_active else None
+                )
+                if typed_task_payload is not None:
+                    self.trace.setdefault("typed_task_messages", []).append(typed_task_payload)
+                    lifecycle = str(typed_task_payload.get("task_lifecycle") or "event")
+                    summary = str(
+                        typed_task_payload.get("summary")
+                        or typed_task_payload.get("description")
+                        or typed_task_payload.get("status")
+                        or ""
+                    ).strip()
+                    status_text = f"Task {lifecycle}"
+                    if summary:
+                        status_text = f"{status_text}: {summary[:200]}"
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": status_text,
+                            "level": "INFO",
+                            "prefix": "Task",
+                            "event_kind": "sdk_task_message",
+                            "sdk_task": typed_task_payload,
                         },
                     )
                     continue
@@ -2194,6 +2228,7 @@ class UniversalAgent:
 
                 elif isinstance(msg, ResultMessage):
                     result_telemetry = _extract_result_message_telemetry(msg)
+                    latest_result_telemetry = result_telemetry
                     self.trace.setdefault("sdk_result_messages", []).append(result_telemetry)
                     if msg.session_id:
                         self.trace["provider_session_id"] = msg.session_id
@@ -2247,6 +2282,7 @@ class UniversalAgent:
                         total_cost_usd=result_telemetry.get("total_cost_usd"),
                         num_turns=result_telemetry.get("num_turns"),
                         is_error=result_telemetry.get("is_error"),
+                        stop_reason=result_telemetry.get("stop_reason"),
                         usage=result_telemetry.get("usage"),
                         model_usage=result_telemetry.get("model_usage"),
                         context_tokens=context_tokens_for_reset,
@@ -2324,6 +2360,7 @@ class UniversalAgent:
             "query": query[:200],
             "duration_seconds": round(time.time() - self.start_ts, 3),
             "tool_calls": len(tool_calls_this_iter),
+            "stop_reason": latest_result_telemetry.get("stop_reason"),
         }
         self.trace["iterations"].append(iter_record)
 
@@ -2334,6 +2371,7 @@ class UniversalAgent:
                 "tool_calls": len(tool_calls_this_iter),
                 "duration_seconds": round(time.time() - self.start_ts, 3),
                 "token_usage": self.trace.get("token_usage"),
+                "stop_reason": latest_result_telemetry.get("stop_reason"),
             },
         )
 
