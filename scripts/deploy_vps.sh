@@ -122,13 +122,13 @@ fi
 RSYNC_RSH="$(printf '%q ' "${rsync_ssh[@]}")"
 
 # Sync tracked project content while preserving runtime secrets/state on VPS.
+# - Keep per-host operational memory on VPS (no local runtime memory bleed-over).
+# - Keep per-host prompt warm-cache (`capabilities.last_good.md`) on VPS.
 rsync -az \
   --exclude ".git/" \
   --exclude ".venv/" \
   --exclude ".env" \
-  # Preserve per-host operational memory/state on the VPS; do not sync local runtime memory.
   --exclude "Memory_System/ua_shared_workspace/" \
-  # Runtime prompt warm-cache generated locally; keep host-local copy on VPS.
   --exclude "src/universal_agent/prompt_assets/capabilities.last_good.md" \
   --exclude "AGENT_RUN_WORKSPACES/" \
   --exclude "artifacts/" \
