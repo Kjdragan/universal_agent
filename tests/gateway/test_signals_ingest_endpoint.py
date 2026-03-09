@@ -262,7 +262,7 @@ def test_signals_ingest_missing_todoist_credentials_is_notice_not_error(client, 
     assert notice.get("title") == "Todoist Sync Skipped"
 
 
-def test_signals_ingest_keeps_full_csi_notification_message(client, monkeypatch):
+def test_signals_ingest_compacts_csi_notification_message(client, monkeypatch):
     monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
     monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
     monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
@@ -289,8 +289,47 @@ def test_signals_ingest_keeps_full_csi_notification_message(client, monkeypatch)
     response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
     assert response.status_code == 200
     csi_notice = next(item for item in gateway_server._notifications if item.get("kind") == "csi_insight")
-    assert "subject_json:" in str(csi_notice.get("message") or "")
-    assert not str(csi_notice.get("message") or "").endswith("...")
+    rendered = str(csi_notice.get("message") or "")
+    assert "subject_json:" not in rendered
+    assert "specialist_followup_policy:" not in rendered
+    assert "window: 2026-02-22T00:00:00Z -> 2026-02-22T01:00:00Z" in rendered
+    assert len(rendered) < 2500
+
+
+def test_signals_ingest_dedupes_notifications_by_event_id(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_trend_report"
+    payload["events"][0]["event_id"] = "evt-dedupe-1"
+
+    timestamp = str(int(time.time()))
+    headers_1 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": "req-dedupe-1",
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", "req-dedupe-1", timestamp, payload),
+    }
+    headers_2 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": "req-dedupe-2",
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", "req-dedupe-2", timestamp, payload),
+    }
+
+    first = client.post("/api/v1/signals/ingest", json=payload, headers=headers_1)
+    second = client.post("/api/v1/signals/ingest", json=payload, headers=headers_2)
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    csi_notifications = [item for item in gateway_server._notifications if item.get("kind") == "csi_insight"]
+    assert len(csi_notifications) == 1
+    assert csi_notifications[0].get("metadata", {}).get("event_id") == "evt-dedupe-1"
 
 
 def test_signals_ingest_delivery_health_regression_emits_actionable_alert(client, monkeypatch):

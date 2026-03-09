@@ -4742,6 +4742,27 @@ def _activity_summary_text(text: str, *, max_chars: int = 240) -> str:
     return f"{compact[: max_chars - 3]}..."
 
 
+def _compact_csi_notification_message(text: str, *, max_chars: int = 1800) -> str:
+    """Trim high-volume CSI payload sections for dashboard readability."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    trimmed = raw
+    cut_idx: Optional[int] = None
+    for marker in ("\nspecialist_followup_policy:", "\nsubject_json:"):
+        idx = trimmed.find(marker)
+        if idx < 0:
+            continue
+        if cut_idx is None or idx < cut_idx:
+            cut_idx = idx
+    if cut_idx is not None:
+        trimmed = trimmed[:cut_idx].rstrip()
+    trimmed = re.sub(r"\n{3,}", "\n\n", trimmed).strip()
+    if len(trimmed) <= max_chars:
+        return trimmed
+    return f"{trimmed[: max_chars - 3]}..."
+
+
 def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None) -> str:
     lowered = str(kind or "").strip().lower()
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -6642,6 +6663,37 @@ def _add_notification(
     summary_text = summary
     full_message_text = full_message if full_message is not None else message
     timestamp = _normalize_notification_timestamp(created_at)
+
+    # Idempotency for repeated ingest/replay of the same source event.
+    event_id = str(metadata_obj.get("event_id") or "").strip()
+    if event_id:
+        kind_norm = str(kind or "").strip().lower()
+        for existing in reversed(_notifications):
+            if str(existing.get("kind") or "").strip().lower() != kind_norm:
+                continue
+            existing_meta = existing.get("metadata")
+            if not isinstance(existing_meta, dict):
+                continue
+            if str(existing_meta.get("event_id") or "").strip() != event_id:
+                continue
+            existing["title"] = title
+            existing["summary"] = summary_text if summary_text is not None else _activity_summary_text(message)
+            existing["full_message"] = full_message_text
+            existing["message"] = full_message_text
+            existing["session_id"] = session_id
+            existing["severity"] = severity
+            existing["requires_action"] = requires_action
+            existing["status"] = "new"
+            existing["updated_at"] = _utc_now_iso()
+            existing["metadata"] = {
+                **existing_meta,
+                **metadata_obj,
+                "source_domain": _activity_source_domain(str(kind or ""), metadata_obj),
+            }
+            _replace_notification_cache_record(existing)
+            _persist_notification_activity(existing)
+            return existing
+
     source_domain = _activity_source_domain(str(kind or ""), metadata_obj)
     should_compact = _activity_digest_should_compact(
         kind=str(kind or ""),
@@ -9124,7 +9176,12 @@ async def signals_ingest_endpoint(request: Request):
                         if first_command:
                             metadata["primary_runbook_command"] = first_command
 
+            notification_detail = _compact_csi_notification_message(message)
             full_signal_message = (
+                "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
+                f"{notification_detail}"
+            )
+            full_signal_message_raw = (
                 "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
                 f"{message}"
             )
@@ -9142,8 +9199,8 @@ async def signals_ingest_endpoint(request: Request):
                     metadata=metadata,
                     created_at=event.occurred_at or event.received_at,
                 )
-            _csi_emit_specialist_synthesis(event, full_signal_message)
-            loop_state = _csi_update_specialist_loop(event, full_signal_message)
+            _csi_emit_specialist_synthesis(event, full_signal_message_raw)
+            loop_state = _csi_update_specialist_loop(event, full_signal_message_raw)
             if loop_state.get("updated"):
                 for alert in loop_state.get("quality_alerts", []) if isinstance(loop_state.get("quality_alerts"), list) else []:
                     if not isinstance(alert, dict):
@@ -9269,7 +9326,7 @@ async def signals_ingest_endpoint(request: Request):
             incident_key = _csi_incident_key(
                 event_id=str(getattr(event, "event_id", "") or ""),
                 event_type=event_type_norm,
-                source=source,
+                source=_source,
                 subject_obj=subject_obj if isinstance(subject_obj, dict) else {},
             )
             mirror_class = _task_hub_mirror_class_for_csi(
@@ -9298,7 +9355,7 @@ async def signals_ingest_endpoint(request: Request):
                         hub_conn,
                         event_id=str(getattr(event, "event_id", "") or ""),
                         event_type=event_type_norm,
-                        source=source,
+                        source=_source,
                         title=title,
                         message=message,
                         project_key=project_key,

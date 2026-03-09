@@ -144,6 +144,11 @@ class HooksService:
             self._safe_int_env("UA_HOOKS_AGENT_DISPATCH_QUEUE_LIMIT", 40),
         )
         self._agent_dispatch_pending_count = 0
+        self._dispatch_overflow_notification_cooldown_seconds = max(
+            0,
+            self._safe_int_env("UA_HOOKS_AGENT_DISPATCH_OVERFLOW_NOTIFICATION_COOLDOWN_SECONDS", 120),
+        )
+        self._dispatch_overflow_state: Dict[str, dict[str, Any]] = {}
         self.config = self._load_config()
         self.transform_cache = {}
         self._seen_webhook_ids: Dict[str, float] = {}
@@ -1902,12 +1907,26 @@ class HooksService:
                     candidate_pending,
                     self._agent_dispatch_queue_limit,
                 )
+                now_ts = time.time()
+                cooldown = int(self._dispatch_overflow_notification_cooldown_seconds)
+                state = self._dispatch_overflow_state.get(session_id) or {}
+                last_emit_ts = float(state.get("last_emit_ts") or 0.0)
+                suppressed_count = int(state.get("suppressed_count") or 0)
+                if cooldown > 0 and (now_ts - last_emit_ts) < cooldown:
+                    state["suppressed_count"] = suppressed_count + 1
+                    state["last_pending"] = candidate_pending
+                    self._dispatch_overflow_state[session_id] = state
+                    return
+
+                note_suffix = ""
+                if suppressed_count > 0:
+                    note_suffix = f"; suppressed {suppressed_count} duplicate overflow alert(s)"
                 self._emit_notification(
                     kind="hook_dispatch_queue_overflow",
                     title="Hook Dispatch Queue Overflow",
                     message=(
                         f"Dropped hook action for {session_id} "
-                        f"(pending={candidate_pending}, limit={self._agent_dispatch_queue_limit})"
+                        f"(pending={candidate_pending}, limit={self._agent_dispatch_queue_limit}{note_suffix})"
                     ),
                     session_id=session_id,
                     severity="error",
@@ -1915,8 +1934,15 @@ class HooksService:
                         "source": "hooks",
                         "pending": candidate_pending,
                         "limit": int(self._agent_dispatch_queue_limit),
+                        "suppressed_duplicates": suppressed_count,
+                        "cooldown_seconds": cooldown,
                     },
                 )
+                self._dispatch_overflow_state[session_id] = {
+                    "last_emit_ts": now_ts,
+                    "suppressed_count": 0,
+                    "last_pending": candidate_pending,
+                }
                 return
             self._agent_dispatch_pending_count = candidate_pending
             pending_admitted = True

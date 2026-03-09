@@ -1135,12 +1135,15 @@ async def test_dispatch_queue_overflow_emits_notification(mock_gateway):
 
         first = await service.handle_request(request, "test")
         second = await service.handle_request(request, "test")
+        third = await service.handle_request(request, "test")
         assert first.status_code == 200
         assert second.status_code == 200
+        assert third.status_code == 200
 
         await asyncio.sleep(0.2)
 
-    assert any(item.get("kind") == "hook_dispatch_queue_overflow" for item in notifications)
+    overflow_notifications = [item for item in notifications if item.get("kind") == "hook_dispatch_queue_overflow"]
+    assert len(overflow_notifications) == 1
     # One dispatch should execute, the overflow dispatch should be dropped.
     assert mock_gateway.execute.call_count == 1
 
