@@ -348,9 +348,22 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
     if not agent_ready:
         agent_ready = "agent-ready" in label_set
 
-    status = str(item.get("status") or existing.get("status") or TASK_STATUS_OPEN).strip().lower()
+    existing_status = str(existing.get("status") or "").strip().lower()
+    status = str(item.get("status") or existing_status or TASK_STATUS_OPEN).strip().lower()
     if status not in ACTIVE_STATUSES | TERMINAL_STATUSES:
         status = TASK_STATUS_OPEN
+    # Preserve active non-open states when a source refresh blindly re-upserts as open.
+    # This avoids clobbering a live claim back to open while the assignment remains seized.
+    if (
+        "status" in item
+        and status == TASK_STATUS_OPEN
+        and existing_status in {TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED, TASK_STATUS_REVIEW}
+    ):
+        status = existing_status
+
+    seizure_state = str(item.get("seizure_state") or existing.get("seizure_state") or "unseized")
+    if status == TASK_STATUS_OPEN and seizure_state == "seized":
+        seizure_state = "unseized"
 
     payload = {
         "task_id": task_id,
@@ -372,7 +385,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         "score": _safe_float(item.get("score"), _safe_float(existing.get("score"), 0.0)),
         "score_confidence": _safe_float(item.get("score_confidence"), _safe_float(existing.get("score_confidence"), 0.0)),
         "stale_state": str(item.get("stale_state") or existing.get("stale_state") or "fresh"),
-        "seizure_state": str(item.get("seizure_state") or existing.get("seizure_state") or "unseized"),
+        "seizure_state": seizure_state,
         "mirror_status": str(item.get("mirror_status") or existing.get("mirror_status") or "internal"),
         "metadata_json": _json_dumps(metadata),
         "created_at": str(existing.get("created_at") or item.get("created_at") or now_iso),
@@ -802,6 +815,136 @@ def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent
 
     conn.commit()
     return claimed
+
+
+def finalize_assignments(
+    conn: sqlite3.Connection,
+    *,
+    assignment_ids: list[str],
+    state: str = "completed",
+    result_summary: str = "",
+    reopen_in_progress: bool = True,
+) -> dict[str, int]:
+    ensure_schema(conn)
+    cleaned_ids = [str(v).strip() for v in assignment_ids if str(v).strip()]
+    if not cleaned_ids:
+        return {"finalized": 0, "reopened": 0}
+
+    placeholders = ",".join("?" for _ in cleaned_ids)
+    rows = conn.execute(
+        f"""
+        SELECT assignment_id, task_id, state
+        FROM task_hub_assignments
+        WHERE assignment_id IN ({placeholders})
+        """,
+        tuple(cleaned_ids),
+    ).fetchall()
+
+    now_iso = _now_iso()
+    finalized = 0
+    reopened = 0
+    for row in rows:
+        assignment_id = str(row["assignment_id"] or "").strip()
+        task_id = str(row["task_id"] or "").strip()
+        current_state = str(row["state"] or "").strip().lower()
+        if not assignment_id or not task_id or current_state not in {"seized", "running"}:
+            continue
+
+        conn.execute(
+            """
+            UPDATE task_hub_assignments
+            SET state=?, ended_at=?, result_summary=?
+            WHERE assignment_id=?
+            """,
+            (state, now_iso, result_summary.strip() or None, assignment_id),
+        )
+        finalized += 1
+
+        if not reopen_in_progress:
+            continue
+
+        task_row = conn.execute(
+            "SELECT status, seizure_state, metadata_json FROM task_hub_items WHERE task_id = ? LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if not task_row:
+            continue
+
+        task_status = str(task_row["status"] or "").strip().lower()
+        if task_status != TASK_STATUS_IN_PROGRESS:
+            continue
+
+        metadata = _json_loads_obj(task_row["metadata_json"], default={})
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta.update(
+            {
+                "last_assignment_state": state,
+                "last_assignment_ended_at": now_iso,
+            }
+        )
+        metadata["dispatch"] = dispatch_meta
+
+        conn.execute(
+            """
+            UPDATE task_hub_items
+            SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+            WHERE task_id=?
+            """,
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        reopened += 1
+
+    conn.commit()
+    return {"finalized": finalized, "reopened": reopened}
+
+
+def release_stale_assignments(
+    conn: sqlite3.Connection,
+    *,
+    agent_id_prefix: str = "heartbeat:",
+    stale_after_seconds: int = 1800,
+    limit: int = 500,
+) -> dict[str, int]:
+    ensure_schema(conn)
+    stale_after_seconds = max(1, int(stale_after_seconds))
+    rows = conn.execute(
+        """
+        SELECT assignment_id, started_at
+        FROM task_hub_assignments
+        WHERE state IN ('seized', 'running')
+          AND agent_id LIKE ?
+        ORDER BY started_at ASC
+        LIMIT ?
+        """,
+        (f"{agent_id_prefix}%", max(1, int(limit))),
+    ).fetchall()
+
+    now_dt = datetime.now(timezone.utc)
+    stale_ids: list[str] = []
+    for row in rows:
+        assignment_id = str(row["assignment_id"] or "").strip()
+        started_at = _parse_iso(row["started_at"])
+        if not assignment_id or started_at is None:
+            continue
+        age_seconds = (now_dt - started_at).total_seconds()
+        if age_seconds >= stale_after_seconds:
+            stale_ids.append(assignment_id)
+
+    if not stale_ids:
+        return {"stale_detected": 0, "finalized": 0, "reopened": 0}
+
+    result = finalize_assignments(
+        conn,
+        assignment_ids=stale_ids,
+        state="abandoned",
+        result_summary=f"stale_assignment_timeout:{stale_after_seconds}s",
+        reopen_in_progress=True,
+    )
+    return {
+        "stale_detected": len(stale_ids),
+        "finalized": int(result.get("finalized") or 0),
+        "reopened": int(result.get("reopened") or 0),
+    }
 
 
 def _incident_key_from_text(title: str, description: str) -> str:

@@ -8737,6 +8737,15 @@ async def lifespan(app: FastAPI):
             event_sink=_emit_heartbeat_event,
         )
         await _heartbeat_service.start()
+        try:
+            seeded = 0
+            for existing_session in get_gateway().list_sessions():
+                _heartbeat_service.register_session(existing_session)
+                seeded += 1
+            if seeded > 0:
+                logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
+        except Exception as exc:
+            logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 

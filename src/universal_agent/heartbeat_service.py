@@ -1086,6 +1086,11 @@ class HeartbeatService:
         self.busy_sessions.add(session.session_id)
         keep_busy_until_collect_finishes = False
         timed_out = False
+        run_failed = False
+        task_hub_agent_id = f"heartbeat:{session.session_id}"
+        task_hub_claimed: list[dict] = []
+        task_hub_finalize_state = "completed"
+        task_hub_finalize_summary = "heartbeat_run_finished"
         
         # Resolve wake_reason for tracing
         _wake_reason = self.last_wake_reason.get(session.session_id, "scheduled")
@@ -1181,18 +1186,31 @@ class HeartbeatService:
             max_system_events = int(guard_policy.get("max_system_events") or 1)
 
             # Deterministic Task Hub pre-step: heartbeat consumes prepared dispatch queue.
-            task_hub_claimed: list[dict] = []
             try:
                 conn = connect_runtime_db(get_activity_db_path())
                 conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
                 try:
                     task_hub.ensure_schema(conn)
+                    stale_result = task_hub.release_stale_assignments(
+                        conn,
+                        agent_id_prefix="heartbeat:",
+                        stale_after_seconds=max(
+                            60,
+                            _parse_int(os.getenv("UA_TASK_HUB_STALE_ASSIGNMENT_SECONDS"), 1800),
+                        ),
+                    )
+                    if int(stale_result.get("finalized") or 0) > 0:
+                        logger.warning(
+                            "Released stale Task Hub heartbeat assignments: finalized=%s reopened=%s",
+                            stale_result.get("finalized"),
+                            stale_result.get("reopened"),
+                        )
                     queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
                     dispatch_actionable_count = int(queue.get("eligible_total") or 0)
                     task_hub_claimed = task_hub.claim_next_dispatch_tasks(
                         conn,
                         limit=max(1, max_proactive_per_cycle),
-                        agent_id=f"heartbeat:{session.session_id}",
+                        agent_id=task_hub_agent_id,
                     )
                     dispatch_claimed_count = len(task_hub_claimed)
                     if task_hub_claimed:
@@ -1353,6 +1371,9 @@ class HeartbeatService:
                     await asyncio.wait_for(collect_task, timeout=self.execution_timeout_seconds)
                 except asyncio.TimeoutError:
                     timed_out = True
+                    run_failed = True
+                    task_hub_finalize_state = "failed"
+                    task_hub_finalize_summary = f"heartbeat_timeout:{self.execution_timeout_seconds}s"
                     logger.error(
                         "Heartbeat execution timed out after %ss for %s",
                         self.execution_timeout_seconds,
@@ -1593,6 +1614,9 @@ class HeartbeatService:
             )
 
         except Exception as e:
+            run_failed = True
+            task_hub_finalize_state = "failed"
+            task_hub_finalize_summary = f"heartbeat_failed:{str(e)[:180]}"
             logger.error(f"Heartbeat execution failed for {session.session_id}: {e}")
             self._emit_event(
                 {
@@ -1611,6 +1635,41 @@ class HeartbeatService:
             except Exception:
                 pass
         finally:
+            if task_hub_claimed:
+                assignment_ids = [
+                    str(item.get("assignment_id") or "").strip()
+                    for item in task_hub_claimed
+                    if str(item.get("assignment_id") or "").strip()
+                ]
+                if assignment_ids:
+                    conn = None
+                    try:
+                        conn = connect_runtime_db(get_activity_db_path())
+                        conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
+                        result = task_hub.finalize_assignments(
+                            conn,
+                            assignment_ids=assignment_ids,
+                            state=task_hub_finalize_state,
+                            result_summary=task_hub_finalize_summary,
+                            reopen_in_progress=True,
+                        )
+                        logger.info(
+                            "Finalized Task Hub heartbeat claims for %s: state=%s finalized=%s reopened=%s%s",
+                            session.session_id,
+                            task_hub_finalize_state,
+                            result.get("finalized"),
+                            result.get("reopened"),
+                            " (run_failed)" if run_failed else "",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to finalize Task Hub heartbeat claims for %s: %s",
+                            session.session_id,
+                            exc,
+                        )
+                    finally:
+                        if conn is not None:
+                            conn.close()
             # Close the heartbeat Logfire span
             if _hb_span is not None:
                 try:
