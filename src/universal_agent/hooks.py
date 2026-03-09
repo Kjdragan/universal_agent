@@ -1034,7 +1034,19 @@ class AgentHookSet:
                     or (normalized_tool_name == "task" and delegated_subagent in _YOUTUBE_SUBAGENT_ALIASES)
                 )
             )
-            if allows_youtube_ingestion_step:
+            
+            # Allow read-only/context-gathering tools to run before the research delegation
+            # so the agent does not deadlock when asked to "look at this image and research it".
+            ALLOWED_PRE_DELEGATION_TOOLS = {
+                "describe_image", "mcp__internal__describe_image",
+                "preview_image", "mcp__internal__preview_image",
+                "read", "read_file", "read_document", "view",
+                "mcp__composio__read_file",
+                "memory_search", "memory_get",
+                "mcp__internal__memory_search", "mcp__internal__memory_get"
+            }
+
+            if allows_youtube_ingestion_step or normalized_tool_name in ALLOWED_PRE_DELEGATION_TOOLS:
                 return {}
 
             if normalized_tool_name == "task":
