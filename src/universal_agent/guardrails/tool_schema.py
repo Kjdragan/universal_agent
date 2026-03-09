@@ -449,6 +449,41 @@ def _should_enforce_research_phase_next(workspace: str) -> bool:
     return _has_search_results_inputs(workspace) and not _has_refined_corpus_outputs(workspace)
 
 
+def _workspace_from_transcript_path(input_data: dict) -> str:
+    transcript_path = str(input_data.get("transcript_path", "") or "").strip()
+    if not transcript_path:
+        return ""
+    try:
+        tp = Path(transcript_path).expanduser()
+        candidate = tp.parent if tp.suffix else tp
+        normalized = str(candidate).replace("\\", "/")
+
+        # For subagent transcripts, resolve back to the session workspace root:
+        # .../<workspace>/subagent_outputs/<task>/transcript.md -> .../<workspace>
+        marker = "/subagent_outputs/"
+        if marker in normalized:
+            root = normalized.split(marker, 1)[0].strip()
+            if root:
+                return str(Path(root).resolve())
+
+        return str(candidate.resolve())
+    except Exception:
+        return ""
+
+
+def _resolve_guardrail_workspace(input_data: dict, context_workspace: str) -> str:
+    # Priority:
+    # 1) Transcript-derived workspace from hook payload (most specific to this event)
+    # 2) Context-bound workspace fallback
+    transcript_ws = _workspace_from_transcript_path(input_data)
+    if transcript_ws:
+        return transcript_ws
+    context_ws = str(context_workspace or "").strip()
+    if context_ws:
+        return context_ws
+    return ""
+
+
 def _looks_like_research_tool_discovery(command: str) -> bool:
     lowered = (command or "").strip().lower()
     if not lowered:
@@ -817,7 +852,7 @@ async def pre_tool_use_schema_guardrail(
 
     normalized_name = identity.tool_name.lower()
     from universal_agent.execution_context import get_current_workspace
-    workspace = get_current_workspace() or ""
+    workspace = _resolve_guardrail_workspace(input_data, get_current_workspace() or "")
     is_subagent_context = _is_subagent_context(input_data)
     run_key = str(run_id or input_data.get("run_id") or "").strip()
 
@@ -847,6 +882,7 @@ async def pre_tool_use_schema_guardrail(
             return {
                 "systemMessage": (
                     "⚠️ `run_research_phase` was called without collected search inputs.\n\n"
+                    f"Resolved workspace: {workspace or '<unset>'}\n\n"
                     "Happy path:\n"
                     "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
                     "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "

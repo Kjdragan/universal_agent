@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -245,6 +246,41 @@ async def test_schema_guardrail_blocks_primary_run_research_phase_without_inputs
     )
     assert result.get("decision") == "block"
     assert "Happy path" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_prefers_transcript_workspace_for_research_phase(monkeypatch, tmp_path):
+    # Simulate stale/global workspace context with no search inputs.
+    stale_workspace = tmp_path / "stale_workspace"
+    stale_workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(stale_workspace))
+
+    # Actual session workspace for this tool call has collected search JSON files.
+    session_workspace = tmp_path / "session_workspace"
+    search_dir = session_workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text(
+        json.dumps(
+            {
+                "tool": "COMPOSIO_SEARCH_WEB",
+                "results": [{"url": "https://example.com", "title": "Example"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    transcript_path = session_workspace / "transcript.md"
+    transcript_path.write_text("# transcript", encoding="utf-8")
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "transcript_path": str(transcript_path),
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
 
 
 @pytest.mark.anyio
