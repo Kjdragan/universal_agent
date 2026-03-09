@@ -1203,6 +1203,20 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
     return None
 
 
+def _format_tool_display_name(tool_name: str, tool_input: Any) -> str:
+    """Return a human-friendly tool label for execution summaries."""
+    name = str(tool_name or "")
+    if not isinstance(tool_input, dict):
+        return name
+
+    if name.strip().lower() == "skill":
+        skill_name = str(tool_input.get("skill", "") or "").strip()
+        if skill_name:
+            return f"{name}({skill_name})"
+
+    return name
+
+
 def _tool_read_path_from_input(tool_input: Any) -> str | None:
     if not isinstance(tool_input, dict):
         return None
@@ -8575,6 +8589,7 @@ async def process_turn(
             for tc in request_tool_calls:
                 name = tc.get("name", "")
                 input_payload = tc.get("input") or {}
+                display_name = _format_tool_display_name(name, input_payload)
                 bash_snippet = ""
                 if "BASH" in name.upper() and isinstance(input_payload, dict):
                     command = input_payload.get("command")
@@ -8594,11 +8609,12 @@ async def process_turn(
                     else "  "
                 )
                 print(
-                    f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}{bash_snippet}"
+                    f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {display_name}{bash_snippet}"
                 )
                 tool_breakdown.append(
                     {
                         "name": tc["name"],
+                        "display_name": display_name,
                         "time_offset": tc["time_offset_seconds"],
                         "iteration": tc["iteration"],
                         "marker": marker,
@@ -8651,7 +8667,9 @@ async def process_turn(
         if tool_breakdown:
             breakdown_lines = []
             for tb in tool_breakdown:
-                breakdown_lines.append(f"  {tb['marker']} +{tb['time_offset']:>5.1f}s {tb['name']}")
+                breakdown_lines.append(
+                    f"  {tb['marker']} +{tb['time_offset']:>5.1f}s {tb.get('display_name', tb['name'])}"
+                )
             hook_events.emit_status_event(
                 "Tool breakdown:\n" + "\n".join(breakdown_lines),
                 level="INFO",
