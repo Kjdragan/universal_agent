@@ -542,6 +542,46 @@ _TUTORIAL_CODE_EXTENSIONS = {
     ".json",
 }
 _TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
+_TUTORIAL_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
 
 
 def _tutorial_implementation_code_files(run_dir: Path) -> list[Path]:
@@ -559,6 +599,35 @@ def _tutorial_implementation_code_files(run_dir: Path) -> list[Path]:
         code_files.append(child)
     code_files.sort(key=lambda p: p.name.lower())
     return code_files
+
+
+def _tutorial_manifest_tokens(manifest: dict[str, Any]) -> str:
+    values = [
+        manifest.get("title"),
+        manifest.get("description"),
+        manifest.get("summary"),
+        manifest.get("channel"),
+        manifest.get("channel_name"),
+    ]
+    return " ".join(str(value or "") for value in values).strip().lower()
+
+
+def _tutorial_probably_code(manifest: dict[str, Any]) -> bool:
+    tokens = _tutorial_manifest_tokens(manifest)
+    if not tokens:
+        return False
+    has_code = any(keyword in tokens for keyword in _TUTORIAL_CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _TUTORIAL_NON_CODE_HINT_KEYWORDS)
+    return has_code and not (has_non_code and not has_code)
+
+
+def _tutorial_explicitly_non_code(manifest: dict[str, Any]) -> bool:
+    tokens = _tutorial_manifest_tokens(manifest)
+    if not tokens:
+        return False
+    has_code = any(keyword in tokens for keyword in _TUTORIAL_CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _TUTORIAL_NON_CODE_HINT_KEYWORDS)
+    return has_non_code and not has_code
 
 
 def _tutorial_key_files(
@@ -617,22 +686,29 @@ def _tutorial_has_code_implementation(run_dir: Path, manifest: dict) -> bool:
     Checks manifest field first (set by agent), falls back to heuristic
     checking for actual code files in implementation/ directory.
     """
+    code_files = _tutorial_implementation_code_files(run_dir)
+
     # Prefer explicit manifest field if the agent set it.
     manifest_flag = manifest.get("implementation_required")
     if isinstance(manifest_flag, bool):
-        return manifest_flag
+        if not manifest_flag:
+            return False
+        if code_files:
+            return True
+        # Keep explicit=true unless content is clearly non-code.
+        return not _tutorial_explicitly_non_code(manifest)
 
     learning_mode = str(manifest.get("learning_mode") or "").strip().lower()
     mode = str(manifest.get("mode") or "").strip().lower()
     if learning_mode in {"concept_only"} or mode in {"explainer_only"}:
         return False
     if learning_mode in {"concept_plus_implementation", "implementation", "code_only"}:
-        return True
+        return True if code_files else not _tutorial_explicitly_non_code(manifest)
     if mode in {"explainer_plus_code", "implementation", "code_only"}:
-        return True
+        return True if code_files else not _tutorial_explicitly_non_code(manifest)
 
     # Fallback heuristic: check for code files in implementation/
-    return bool(_tutorial_implementation_code_files(run_dir))
+    return bool(code_files)
 
 
 def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:

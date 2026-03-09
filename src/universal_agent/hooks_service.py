@@ -40,6 +40,46 @@ YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
+YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
 YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
 
@@ -585,6 +625,38 @@ class HooksService:
             return run_rel
         except Exception:
             return ""
+
+    @staticmethod
+    def _tutorial_manifest_probably_code(manifest_payload: dict[str, Any]) -> bool:
+        values = [
+            manifest_payload.get("title"),
+            manifest_payload.get("description"),
+            manifest_payload.get("summary"),
+            manifest_payload.get("channel"),
+            manifest_payload.get("channel_name"),
+        ]
+        tokens = " ".join(str(value or "") for value in values).strip().lower()
+        if not tokens:
+            return False
+        has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
+        has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
+        return has_code and not (has_non_code and not has_code)
+
+    @staticmethod
+    def _tutorial_manifest_explicitly_non_code(manifest_payload: dict[str, Any]) -> bool:
+        values = [
+            manifest_payload.get("title"),
+            manifest_payload.get("description"),
+            manifest_payload.get("summary"),
+            manifest_payload.get("channel"),
+            manifest_payload.get("channel_name"),
+        ]
+        tokens = " ".join(str(value or "") for value in values).strip().lower()
+        if not tokens:
+            return False
+        has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
+        has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
+        return has_non_code and not has_code
 
     def _tutorial_key_files_for_notification(
         self,
@@ -1367,9 +1439,41 @@ class HooksService:
         artifacts = manifest_payload.get("artifacts") if isinstance(manifest_payload, dict) else None
         artifacts_map = artifacts if isinstance(artifacts, dict) else {}
         implementation_dir_hint = str(artifacts_map.get("implementation_dir") or "").strip()
+        hinted_dir = run_dir / implementation_dir_hint if implementation_dir_hint else run_dir / "implementation"
+        has_substantive_code = False
+        if hinted_dir.exists() and hinted_dir.is_dir():
+            has_substantive_code = any(
+                node.is_file()
+                and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                and node.suffix.lower()
+                in {
+                    ".py",
+                    ".ts",
+                    ".tsx",
+                    ".js",
+                    ".jsx",
+                    ".sh",
+                    ".ipynb",
+                    ".gs",
+                    ".html",
+                    ".css",
+                    ".sql",
+                    ".java",
+                    ".go",
+                    ".rs",
+                }
+                for node in hinted_dir.rglob("*")
+            )
         manifest_flag = manifest_payload.get("implementation_required")
         if isinstance(manifest_flag, bool):
-            implementation_required = manifest_flag
+            if not manifest_flag:
+                implementation_required = False
+            elif has_substantive_code:
+                implementation_required = True
+            else:
+                implementation_required = not self._tutorial_manifest_explicitly_non_code(
+                    manifest_payload
+                )
         elif learning_mode in {"concept_only"} or mode in {"explainer_only"}:
             implementation_required = False
         elif learning_mode in {"concept_plus_implementation", "implementation", "code_only"} or mode in {
@@ -1377,34 +1481,11 @@ class HooksService:
             "implementation",
             "code_only",
         }:
-            implementation_required = True
+            implementation_required = has_substantive_code or not self._tutorial_manifest_explicitly_non_code(
+                manifest_payload
+            )
         else:
-            implementation_required = False
-            hinted_dir = run_dir / implementation_dir_hint if implementation_dir_hint else run_dir / "implementation"
-            if hinted_dir.exists() and hinted_dir.is_dir():
-                for node in hinted_dir.rglob("*"):
-                    if not node.is_file():
-                        continue
-                    if node.name.strip().lower() in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES:
-                        continue
-                    if node.suffix.lower() in {
-                        ".py",
-                        ".ts",
-                        ".tsx",
-                        ".js",
-                        ".jsx",
-                        ".sh",
-                        ".ipynb",
-                        ".gs",
-                        ".html",
-                        ".css",
-                        ".sql",
-                        ".java",
-                        ".go",
-                        ".rs",
-                    }:
-                        implementation_required = True
-                        break
+            implementation_required = has_substantive_code
 
         missing: list[str] = []
         required_files = ["README.md", "CONCEPT.md"]
