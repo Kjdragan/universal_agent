@@ -3538,13 +3538,11 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
 
 
 _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES = {
-    # Opportunity/proactive missions
+    # Opportunity/proactive missions for UA review.
     "opportunity_bundle_ready",
     "global_trend_brief_ready",
     "csi_global_brief_review_due",
-    # Operational anomalies requiring explicit intervention
-    "rss_quality_gate_alert",
-    "delivery_health_regression",
+    # Only escalated delivery incidents that failed internal CSI recovery.
     "delivery_reliability_slo_breached",
     "delivery_health_auto_remediation_failed",
 }
