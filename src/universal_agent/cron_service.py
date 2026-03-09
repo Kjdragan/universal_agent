@@ -671,7 +671,6 @@ class CronService:
                                 # Use asyncio.create_subprocess_exec
                                 import sys
                                 import subprocess
-                                import os
                                 
                                 env = os.environ.copy()
                                 cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else "/home/kjdragan/lrepos/universal_agent"
