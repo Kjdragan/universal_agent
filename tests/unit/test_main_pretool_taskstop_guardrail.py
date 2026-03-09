@@ -33,6 +33,17 @@ def test_main_blocks_taskstop_placeholder_id(tmp_path: Path):
     assert "Invalid TaskStop request blocked" in str(result.get("systemMessage", ""))
 
 
+def test_main_blocks_taskstop_with_session_id(tmp_path: Path):
+    token = set_ctx(SessionContext(run_id="run-main-taskstop-session", observer_workspace_dir=str(tmp_path)))
+    try:
+        result = _call_pre("TaskStop", {"task_id": "session_20260309_073910_8099458a"})
+    finally:
+        reset_ctx(token)
+
+    assert result.get("decision") == "block"
+    assert "session/run identifier" in str(result.get("systemMessage", "")).lower()
+
+
 def test_main_blocks_agent_for_pipeline_subagent(tmp_path: Path):
     token = set_ctx(SessionContext(run_id="run-main-agent", observer_workspace_dir=str(tmp_path)))
     try:

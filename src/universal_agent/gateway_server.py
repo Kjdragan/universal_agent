@@ -17447,6 +17447,20 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
     }
 
 
+def _should_inject_system_events_for_request(metadata: dict[str, Any]) -> bool:
+    source_hint = str(metadata.get("source") or "user").strip().lower()
+    include_system_events = bool(metadata.get("include_system_events"))
+    # Prevent cross-lane contamination in interactive user chat turns.
+    # System events are only injected for explicit system/heartbeat lanes
+    # (or when caller opts in via include_system_events).
+    return include_system_events or source_hint in {
+        "system",
+        "cron",
+        "heartbeat",
+        "autonomous",
+    }
+
+
 @app.websocket("/ws/agent")
 async def websocket_agent_compat(websocket: WebSocket):
     """Compatibility shim for the web-ui chat page.
@@ -17565,9 +17579,10 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     metadata = raw_data.get("metadata", {}) or {}
                     if not isinstance(metadata, dict):
                         metadata = {"raw": metadata}
-                    system_events = _drain_system_events(session_id)
-                    if system_events:
-                        metadata = {**metadata, "system_events": system_events}
+                    if _should_inject_system_events_for_request(metadata):
+                        system_events = _drain_system_events(session_id)
+                        if system_events:
+                            metadata = {**metadata, "system_events": system_events}
                     policy = _session_policy(session)
                     memory_policy = normalize_memory_policy(policy.get("memory"))
 

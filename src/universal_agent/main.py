@@ -1185,6 +1185,8 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
         return "Missing `task_id`."
 
     lowered = clean_id.lower()
+    if lowered.startswith("session_") or lowered.startswith("run_"):
+        return f"Invalid session/run identifier used as task_id ({clean_id!r})."
     if lowered in _TASK_STOP_PLACEHOLDER_IDS:
         return f"Invalid placeholder `task_id` ({clean_id!r})."
 

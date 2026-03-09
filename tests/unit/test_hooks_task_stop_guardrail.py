@@ -37,6 +37,13 @@ def test_blocks_task_stop_with_placeholder_id():
     assert "placeholder" in str(result.get("systemMessage", "")).lower()
 
 
+def test_blocks_task_stop_with_session_id():
+    hooks = AgentHookSet(run_id="unit-taskstop-session")
+    result = _pre_task_stop(hooks, "session_20260309_073910_8099458a")
+    assert result.get("decision") == "block"
+    assert "session/run identifier" in str(result.get("systemMessage", "")).lower()
+
+
 def test_blocks_task_stop_with_fabricated_id_prefix():
     hooks = AgentHookSet(run_id="unit-taskstop-fabricated")
     result = _pre_task_stop(hooks, "dummy-stop")
