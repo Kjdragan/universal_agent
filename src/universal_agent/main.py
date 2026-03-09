@@ -1140,6 +1140,72 @@ _READ_BLOCK_IMAGE_EXTS = {
     ".heif",
 }
 
+_TASK_STOP_PLACEHOLDER_IDS = {
+    "",
+    "*",
+    "all",
+    "any",
+    "every",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "unknown",
+    "task",
+    "taskstop",
+    "task-stop",
+    "dummy",
+    "dummy-stop",
+    "placeholder",
+    "example",
+    "test",
+    "all-tasks",
+    "stop-all",
+    "cancel-all",
+}
+
+_PIPELINE_TASK_SUBAGENTS = {
+    "research-specialist",
+    "report-writer",
+}
+
+
+def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
+    for key in ("task_id", "id", "target_task_id"):
+        value = tool_input.get(key)
+        if value is None:
+            continue
+        return str(value).strip()
+    return ""
+
+
+def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
+    clean_id = str(task_id or "").strip()
+    if not clean_id:
+        return "Missing `task_id`."
+
+    lowered = clean_id.lower()
+    if lowered in _TASK_STOP_PLACEHOLDER_IDS:
+        return f"Invalid placeholder `task_id` ({clean_id!r})."
+
+    if "," in clean_id:
+        return "Multiple task IDs are not supported in one TaskStop call."
+
+    if any(lowered.startswith(prefix) for prefix in ("dummy", "fake", "placeholder", "example", "test-")):
+        return f"Likely fabricated `task_id` ({clean_id!r})."
+
+    # Golden runs should use provider-generated IDs, not natural-language aliases.
+    if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
+        has_separator = ("_" in clean_id) or ("-" in clean_id)
+        has_digit = any(ch.isdigit() for ch in clean_id)
+        if not has_separator and not has_digit:
+            return (
+                f"Untrusted `task_id` ({clean_id!r}). Use an SDK-emitted task_id from "
+                "TaskStarted/TaskProgress/TaskNotification."
+            )
+
+    return None
+
 
 def _tool_read_path_from_input(tool_input: Any) -> str | None:
     if not isinstance(tool_input, dict):
@@ -1210,11 +1276,13 @@ async def on_pre_tool_use_ledger(
     PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
     """
     _ctx = _require_ctx()
-    if _ctx.tool_ledger is None or _ctx.run_id is None:
-        return {}
+    ledger_enabled = _ctx.tool_ledger is not None and bool(_ctx.run_id)
     # Prefer the ledger's connection for run state checks; this avoids cross-thread
     # SQLite usage issues in tests and keeps the hook self-contained.
-    conn_for_run = getattr(_ctx.tool_ledger, "conn", None) or _ctx.runtime_db_conn
+    conn_for_run = (
+        (getattr(_ctx.tool_ledger, "conn", None) if _ctx.tool_ledger is not None else None)
+        or _ctx.runtime_db_conn
+    )
     if conn_for_run and _ctx.run_id and is_cancel_requested(conn_for_run, _ctx.run_id):
         return {
             "systemMessage": (
@@ -1230,6 +1298,50 @@ async def on_pre_tool_use_ledger(
         }
 
     tool_name = input_data.get("tool_name", "")
+    guard_tool_input = input_data.get("tool_input", {}) or {}
+    if not isinstance(guard_tool_input, dict):
+        guard_tool_input = {}
+    try:
+        normalized_tool_name = parse_tool_identity(tool_name).tool_name.strip().lower()
+    except Exception:
+        normalized_tool_name = str(tool_name or "").strip().lower()
+
+    if normalized_tool_name in ("taskstop", "task_stop"):
+        task_id = _extract_task_stop_id(guard_tool_input)
+        reason = _task_stop_rejection_reason(task_id)
+        if reason:
+            return {
+                "systemMessage": (
+                    "⚠️ Invalid TaskStop request blocked.\n\n"
+                    f"{reason}\n"
+                    "Use a concrete task_id emitted by SDK task lifecycle messages."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                },
+            }
+
+    if normalized_tool_name == "agent":
+        delegated = str(guard_tool_input.get("subagent_type", "") or "").strip().lower()
+        if delegated in _PIPELINE_TASK_SUBAGENTS:
+            return {
+                "systemMessage": (
+                    "⚠️ Use `Task` for pipeline delegation, not `Agent`.\n\n"
+                    f"Blocked Agent(subagent_type={delegated!r}).\n"
+                    "For golden pipeline parity, delegate with:\n"
+                    f"`Task(subagent_type='{delegated}', description='...', prompt='...')`"
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Pipeline delegation must use Task tool.",
+                },
+            }
+
     tool_call_id = str(tool_use_id or uuid.uuid4())
     if _ctx.gateway_mode_active:
         tool_call_id = _get_gateway_tool_call_id(tool_use_id)
@@ -1853,6 +1965,11 @@ async def on_pre_tool_use_ledger(
             tool_input = updated_input
         else:
             return schema_guardrail
+
+    # Keep guardrails active even when ledger is unavailable (in-process gateway /
+    # fallback paths). We skip idempotency bookkeeping but still enforce tool safety.
+    if not ledger_enabled:
+        return _allow_with_updated_input()
 
     side_effect_class = "unknown"
     try:

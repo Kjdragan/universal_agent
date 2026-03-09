@@ -926,9 +926,9 @@ class AgentHookSet:
         requested_skill = ""
         delegated_subagent = ""
         try:
-            normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
+            normalized_tool_name = parse_tool_identity(tool_name).tool_name.strip().lower()
         except Exception:
-            normalized_tool_name = tool_name.lower()
+            normalized_tool_name = tool_name.strip().lower()
         if normalized_tool_name == "skill":
             requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
         elif normalized_tool_name in ("task", "agent"):
@@ -1136,6 +1136,22 @@ class AgentHookSet:
                 return {}
 
             if normalized_tool_name in ("task", "agent"):
+                if normalized_tool_name == "agent" and delegated_subagent == "research-specialist":
+                    return {
+                        "systemMessage": (
+                            "⚠️ Report-style research workflow detected.\n\n"
+                            "Use `Task(subagent_type='research-specialist', ...)` as the first delegation. "
+                            "Do not use `Agent(...)` for this pipeline lane."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": (
+                                "Research pipeline requires Task delegation, not Agent."
+                            ),
+                        },
+                    }
                 if delegated_subagent == "research-specialist":
                     self._research_delegate_seen_this_turn = True
                 else:
