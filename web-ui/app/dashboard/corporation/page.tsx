@@ -122,6 +122,11 @@ function missionStatusPill(status: string): string {
   return "border-amber-600/40 bg-amber-900/20 text-amber-200";
 }
 
+function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
+  if (status !== 502) return false;
+  return detail.toLowerCase().includes("gateway upstream unavailable");
+}
+
 export default function DashboardCorporationPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -140,14 +145,9 @@ export default function DashboardCorporationPage() {
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
-    setError("");
+    if (!silent) setError("");
     try {
-      const [capsRes, regsRes, histRes, timersRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/factory/capabilities`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/factory/registrations?limit=500`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/ops/delegation/history?limit=20`, { cache: "no-store" }).catch(() => null),
-        fetch(`${API_BASE}/api/v1/ops/timers`, { cache: "no-store" }).catch(() => null),
-      ]);
+      const capsRes = await fetch(`${API_BASE}/api/v1/factory/capabilities`, { cache: "no-store" });
 
       let nextCaps: FactoryCapabilities | null = null;
       let nextDelegation: DelegationMetrics | null = null;
@@ -157,8 +157,37 @@ export default function DashboardCorporationPage() {
         nextDelegation = (payload.delegation || null) as DelegationMetrics | null;
       } else {
         const detail = await capsRes.text().catch(() => "");
+        if (isGatewayUpstreamUnavailable(capsRes.status, detail)) {
+          if (!silent) {
+            setError("Gateway is temporarily unavailable. Please retry in a few seconds.");
+          }
+          return;
+        }
         throw new Error(`Failed to load factory capabilities (${capsRes.status}) ${detail}`.trim());
       }
+
+      const role = asText(nextCaps?.factory_role).toUpperCase();
+      const gatewayMode = asText(nextCaps?.gateway_mode).toLowerCase();
+      const headquartersMode = role === "HEADQUARTERS" && gatewayMode === "full";
+
+      setCapabilities(nextCaps);
+      setDelegation(nextDelegation);
+      setLastUpdatedAt(new Date().toISOString());
+
+      if (!headquartersMode) {
+        setRegistrationsForbidden(false);
+        setRegistrations([]);
+        setHeadquartersFactoryId("");
+        setDelegationHistory([]);
+        setSystemTimers([]);
+        return;
+      }
+
+      const [regsRes, histRes, timersRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/factory/registrations?limit=500`, { cache: "no-store" }),
+        fetch(`${API_BASE}/api/v1/ops/delegation/history?limit=20`, { cache: "no-store" }).catch(() => null),
+        fetch(`${API_BASE}/api/v1/ops/timers`, { cache: "no-store" }).catch(() => null),
+      ]);
 
       if (regsRes.status === 403) {
         setRegistrationsForbidden(true);
@@ -185,12 +214,10 @@ export default function DashboardCorporationPage() {
           setSystemTimers(Array.isArray(tp.timers) ? tp.timers : []);
         } catch { setSystemTimers([]); }
       }
-
-      setCapabilities(nextCaps);
-      setDelegation(nextDelegation);
-      setLastUpdatedAt(new Date().toISOString());
     } catch (err: any) {
-      setError(err?.message || "Failed to load corporation view.");
+      if (!silent) {
+        setError(err?.message || "Failed to load corporation view.");
+      }
     } finally {
       if (silent) setRefreshing(false);
       else setLoading(false);
@@ -550,4 +577,3 @@ export default function DashboardCorporationPage() {
     </div>
   );
 }
-
