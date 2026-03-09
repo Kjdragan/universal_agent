@@ -44,7 +44,7 @@ def test_main_blocks_taskstop_with_session_id(tmp_path: Path):
     assert "session/run identifier" in str(result.get("systemMessage", "")).lower()
 
 
-def test_main_blocks_agent_for_pipeline_subagent(tmp_path: Path):
+def test_main_allows_agent_for_pipeline_subagent(tmp_path: Path):
     token = set_ctx(SessionContext(run_id="run-main-agent", observer_workspace_dir=str(tmp_path)))
     try:
         result = _call_pre(
@@ -58,8 +58,7 @@ def test_main_blocks_agent_for_pipeline_subagent(tmp_path: Path):
     finally:
         reset_ctx(token)
 
-    assert result.get("decision") == "block"
-    assert "Use `Task` for pipeline delegation" in str(result.get("systemMessage", ""))
+    assert result == {}
 
 
 def test_main_allows_taskstop_with_plausible_id_when_ledger_missing(tmp_path: Path):

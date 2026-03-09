@@ -1138,28 +1138,13 @@ class AgentHookSet:
                 return {}
 
             if normalized_tool_name in ("task", "agent"):
-                if normalized_tool_name == "agent" and delegated_subagent == "research-specialist":
-                    return {
-                        "systemMessage": (
-                            "⚠️ Report-style research workflow detected.\n\n"
-                            "Use `Task(subagent_type='research-specialist', ...)` as the first delegation. "
-                            "Do not use `Agent(...)` for this pipeline lane."
-                        ),
-                        "decision": "block",
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": (
-                                "Research pipeline requires Task delegation, not Agent."
-                            ),
-                        },
-                    }
                 if delegated_subagent == "research-specialist":
                     self._research_delegate_seen_this_turn = True
                 else:
                     ordering_hint = (
-                        "\nFor mixed YouTube + research turns, run YouTube ingestion first with either "
-                        "`Task(subagent_type='youtube-expert', ...)` or "
+                        "\nFor mixed YouTube + research turns, run YouTube ingestion first with "
+                        "`Task(subagent_type='youtube-expert', ...)` / "
+                        "`Agent(subagent_type='youtube-expert', ...)` or "
                         "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
                         "then delegate to `research-specialist`."
                         if self._requires_youtube_skill_first
@@ -1169,7 +1154,8 @@ class AgentHookSet:
                         "systemMessage": (
                             "⚠️ Report-style research workflow detected.\n\n"
                             "First tool call in this turn must be "
-                            "`Task(subagent_type='research-specialist', ...)`.\n"
+                            "`Task(subagent_type='research-specialist', ...)` or "
+                            "`Agent(subagent_type='research-specialist', ...)`.\n"
                             "Do not delegate to another specialist before the research handoff."
                             + ordering_hint
                         ),
@@ -1184,8 +1170,9 @@ class AgentHookSet:
                     }
             else:
                 ordering_hint = (
-                    "\nFor mixed YouTube + research turns, run YouTube ingestion first with either "
-                    "`Task(subagent_type='youtube-expert', ...)` or "
+                    "\nFor mixed YouTube + research turns, run YouTube ingestion first with "
+                    "`Task(subagent_type='youtube-expert', ...)` / "
+                    "`Agent(subagent_type='youtube-expert', ...)` or "
                     "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
                     "then delegate to `research-specialist`."
                     if self._requires_youtube_skill_first
@@ -1195,7 +1182,8 @@ class AgentHookSet:
                     "systemMessage": (
                         "⚠️ Report-style research workflow detected.\n\n"
                         "First tool call in this turn must be "
-                        "`Task(subagent_type='research-specialist', ...)`.\n"
+                        "`Task(subagent_type='research-specialist', ...)` or "
+                        "`Agent(subagent_type='research-specialist', ...)`.\n"
                         "Direct search/tool execution is blocked until that delegation occurs."
                         + ordering_hint
                     ),

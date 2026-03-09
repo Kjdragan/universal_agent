@@ -7,8 +7,8 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_blocks_agent_tool_for_research_delegate_first_flow():
-    hooks = AgentHookSet(run_id="unit-research-agent-block")
+def test_allows_agent_tool_for_research_delegate_first_flow():
+    hooks = AgentHookSet(run_id="unit-research-agent-allow")
     _run(
         hooks.on_user_prompt_skill_awareness(
             {
@@ -33,8 +33,7 @@ def test_blocks_agent_tool_for_research_delegate_first_flow():
             {},
         )
     )
-    assert result.get("decision") == "block"
-    assert "Use `Task(subagent_type='research-specialist'" in str(result.get("systemMessage", ""))
+    assert result == {}
 
 
 def test_allows_task_tool_for_research_delegate_first_flow():

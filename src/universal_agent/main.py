@@ -1164,12 +1164,6 @@ _TASK_STOP_PLACEHOLDER_IDS = {
     "cancel-all",
 }
 
-_PIPELINE_TASK_SUBAGENTS = {
-    "research-specialist",
-    "report-writer",
-}
-
-
 def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
     for key in ("task_id", "id", "target_task_id"):
         value = tool_input.get(key)
@@ -1323,24 +1317,6 @@ async def on_pre_tool_use_ledger(
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
                     "permissionDecisionReason": reason,
-                },
-            }
-
-    if normalized_tool_name == "agent":
-        delegated = str(guard_tool_input.get("subagent_type", "") or "").strip().lower()
-        if delegated in _PIPELINE_TASK_SUBAGENTS:
-            return {
-                "systemMessage": (
-                    "⚠️ Use `Task` for pipeline delegation, not `Agent`.\n\n"
-                    f"Blocked Agent(subagent_type={delegated!r}).\n"
-                    "For golden pipeline parity, delegate with:\n"
-                    f"`Task(subagent_type='{delegated}', description='...', prompt='...')`"
-                ),
-                "decision": "block",
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "Pipeline delegation must use Task tool.",
                 },
             }
 
