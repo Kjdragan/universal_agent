@@ -17,13 +17,27 @@ const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
-function gatewayBaseUrl(): string {
-  const raw =
-    (process.env.UA_DASHBOARD_GATEWAY_URL || "").trim()
-    || (process.env.NEXT_PUBLIC_GATEWAY_URL || "").trim()
-    || (process.env.UA_GATEWAY_URL || "").trim()
-    || "http://localhost:8002";
-  return raw.replace(/\/$/, "");
+function gatewayBaseCandidates(): string[] {
+  const configured = [
+    (process.env.UA_DASHBOARD_GATEWAY_URL || "").trim(),
+    (process.env.NEXT_PUBLIC_GATEWAY_URL || "").trim(),
+    (process.env.UA_GATEWAY_URL || "").trim(),
+  ].filter(Boolean);
+  const fallback = ["http://127.0.0.1:8002", "http://localhost:8002"];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [...configured, ...fallback]) {
+    const normalized = raw.replace(/\/$/, "");
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function isLocalGateway(url: URL): boolean {
+  const host = (url.hostname || "").toLowerCase();
+  return host === "127.0.0.1" || host === "localhost";
 }
 
 function gatewayOpsToken(): string {
@@ -100,38 +114,79 @@ async function proxyRequest(request: NextRequest, path: string[]) {
 
   const safePath = path.map((segment) => encodeURIComponent(segment)).join("/");
   const upstreamPathname = `/${safePath}`;
-  const upstreamUrl = new URL(`${gatewayBaseUrl()}${upstreamPathname}`);
-  request.nextUrl.searchParams.forEach((value, key) => {
-    upstreamUrl.searchParams.set(key, value);
-  });
-  maybeApplyOwnerFilter(upstreamPathname, upstreamUrl.searchParams, session.ownerId);
+  const queryEntries = Array.from(request.nextUrl.searchParams.entries());
 
   const headers = buildUpstreamHeaders(request, session.ownerId);
   const method = request.method.toUpperCase();
   const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
 
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetchWithTransientRetry(
-      upstreamUrl,
-      {
+  const candidates = gatewayBaseCandidates();
+  let upstreamResponse: Response | null = null;
+  let upstreamUrl: URL | null = null;
+  let lastFetchError: unknown = null;
+  for (const base of candidates) {
+    const candidateUrl = new URL(`${base}${upstreamPathname}`);
+    for (const [key, value] of queryEntries) {
+      candidateUrl.searchParams.set(key, value);
+    }
+    maybeApplyOwnerFilter(upstreamPathname, candidateUrl.searchParams, session.ownerId);
+    try {
+      const response = await fetchWithTransientRetry(
+        candidateUrl,
+        {
+          method,
+          headers,
+          body,
+          cache: "no-store",
+          redirect: "manual",
+        },
         method,
-        headers,
-        body,
-        cache: "no-store",
-        redirect: "manual",
-      },
-      method,
-    );
-  } catch (err) {
-    // Most common local-dev failure: web UI started before gateway is reachable.
+      );
+      const contentType = (response.headers.get("content-type") || "").toLowerCase();
+      const shouldTryNext =
+        !isLocalGateway(candidateUrl)
+        && response.status >= 500
+        && response.status <= 504
+        && (
+          contentType.includes("text/html")
+          || response.status === 502
+          || response.status === 503
+          || response.status === 504
+        );
+      upstreamResponse = response;
+      upstreamUrl = candidateUrl;
+      if (shouldTryNext) {
+        continue;
+      }
+      break;
+    } catch (err) {
+      lastFetchError = err;
+      continue;
+    }
+  }
+
+  if (!upstreamResponse || !upstreamUrl) {
     return NextResponse.json(
       {
         detail: "Gateway upstream unavailable.",
-        upstream: upstreamUrl.toString(),
-        error: err instanceof Error ? err.message : String(err),
+        upstream: `${candidates[0] || "http://localhost:8002"}${upstreamPathname}`,
+        error: lastFetchError instanceof Error ? lastFetchError.message : String(lastFetchError),
       },
       { status: 502 },
+    );
+  }
+
+  const upstreamContentType = (upstreamResponse.headers.get("content-type") || "").toLowerCase();
+  if (upstreamResponse.status >= 500 && upstreamContentType.includes("text/html")) {
+    const htmlSnippet = (await upstreamResponse.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 180);
+    return NextResponse.json(
+      {
+        detail: "Gateway upstream returned an invalid HTML error response.",
+        upstream: upstreamUrl.toString(),
+        status: upstreamResponse.status,
+        error: htmlSnippet || "Upstream error",
+      },
+      { status: upstreamResponse.status },
     );
   }
 

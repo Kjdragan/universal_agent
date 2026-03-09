@@ -69,6 +69,24 @@ function severityIcon(severity: string) {
   return <Radio className="h-3.5 w-3.5 text-slate-400" />;
 }
 
+function normalizeErrorMessage(status: number, raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return `Failed (${status})`;
+  try {
+    const parsed = JSON.parse(trimmed) as { detail?: string; error?: string };
+    const detail = String(parsed?.detail || "").trim();
+    if (detail) return `Failed (${status}): ${detail}`;
+    const error = String(parsed?.error || "").trim();
+    if (error) return `Failed (${status}): ${error}`;
+  } catch {
+    // non-json
+  }
+  if (trimmed.includes("<html") || trimmed.includes("<!DOCTYPE")) {
+    return `Failed (${status}): Gateway upstream unavailable.`;
+  }
+  return `Failed (${status}): ${trimmed.slice(0, 200)}`;
+}
+
 export default function TelegramPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -85,7 +103,7 @@ export default function TelegramPage() {
         setData(await res.json());
       } else {
         const detail = await res.text().catch(() => "");
-        throw new Error(`Failed (${res.status}): ${detail.slice(0, 200)}`);
+        throw new Error(normalizeErrorMessage(res.status, detail));
       }
     } catch (err: unknown) {
       setError((err as Error)?.message || "Failed to load Telegram data.");
