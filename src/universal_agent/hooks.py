@@ -878,7 +878,7 @@ class AgentHookSet:
             normalized_tool_name = tool_name.lower()
         if normalized_tool_name == "skill":
             requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
-        elif normalized_tool_name == "task":
+        elif normalized_tool_name in ("task", "agent"):
             delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
 
         # Track transcript paths to detect sub-agent context.
@@ -1031,7 +1031,7 @@ class AgentHookSet:
                 self._requires_youtube_skill_first
                 and (
                     (normalized_tool_name == "skill" and requested_skill == "youtube-transcript-metadata")
-                    or (normalized_tool_name == "task" and delegated_subagent in _YOUTUBE_SUBAGENT_ALIASES)
+                    or (normalized_tool_name in ("task", "agent") and delegated_subagent in _YOUTUBE_SUBAGENT_ALIASES)
                 )
             )
             
@@ -1045,11 +1045,10 @@ class AgentHookSet:
                 "memory_search", "memory_get",
                 "mcp__internal__memory_search", "mcp__internal__memory_get"
             }
-
             if allows_youtube_ingestion_step or normalized_tool_name in ALLOWED_PRE_DELEGATION_TOOLS:
                 return {}
 
-            if normalized_tool_name == "task":
+            if normalized_tool_name in ("task", "agent"):
                 if delegated_subagent == "research-specialist":
                     self._research_delegate_seen_this_turn = True
                 else:
