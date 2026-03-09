@@ -128,6 +128,58 @@ _YOUTUBE_SUBAGENT_ALIASES = {
     "youtube-explainer-expert",
 }
 
+_TASK_STOP_PLACEHOLDER_IDS = {
+    "",
+    "*",
+    "all",
+    "any",
+    "every",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "unknown",
+    "task",
+    "taskstop",
+    "task-stop",
+    "dummy",
+    "dummy-stop",
+    "placeholder",
+    "example",
+    "test",
+}
+
+
+def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
+    for key in ("task_id", "id", "target_task_id"):
+        value = tool_input.get(key)
+        if value is None:
+            continue
+        return str(value).strip()
+    return ""
+
+
+def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
+    clean_id = str(task_id or "").strip()
+    if not clean_id:
+        return "Missing `task_id`."
+
+    lowered = clean_id.lower()
+    if lowered in _TASK_STOP_PLACEHOLDER_IDS:
+        return f"Invalid placeholder `task_id` ({clean_id!r})."
+
+    if "," in clean_id:
+        return "Multiple task IDs are not supported in one TaskStop call."
+
+    if any(lowered.startswith(prefix) for prefix in ("dummy", "fake", "placeholder", "example", "test-")):
+        return f"Likely fabricated `task_id` ({clean_id!r})."
+
+    # Common malformed placeholders from model retries.
+    if lowered in {"all-tasks", "stop-all", "cancel-all"}:
+        return f"Invalid bulk-stop token ({clean_id!r})."
+
+    return None
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -631,6 +683,7 @@ class AgentHookSet:
         self._research_delegate_seen_this_turn = False
         self._requires_youtube_skill_first = False
         self._youtube_skill_seen_this_turn = False
+        self._stopped_task_ids: set[str] = set()
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
             "/agent_run_workspaces/vp_" in workspace_norm
@@ -880,6 +933,40 @@ class AgentHookSet:
             requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
         elif normalized_tool_name in ("task", "agent"):
             delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
+
+        if normalized_tool_name in ("taskstop", "task_stop"):
+            task_id = _extract_task_stop_id(tool_input)
+            reason = _task_stop_rejection_reason(task_id)
+            if reason:
+                return {
+                    "systemMessage": (
+                        "⚠️ Invalid TaskStop request blocked.\n\n"
+                        f"{reason}\n"
+                        "Use a concrete task ID emitted by the SDK task lifecycle messages "
+                        "(TaskStarted/TaskProgress/TaskNotification)."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    },
+                }
+            if task_id in self._stopped_task_ids:
+                reason = f"TaskStop for task_id {task_id!r} is a duplicate request."
+                return {
+                    "systemMessage": (
+                        "⚠️ Duplicate TaskStop request blocked.\n\n"
+                        f"{reason}\n"
+                        "Do not stop the same task multiple times in one session."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    },
+                }
 
         # Track transcript paths to detect sub-agent context.
         # The first transcript_path seen is the primary agent's; subsequent
@@ -1669,6 +1756,28 @@ class AgentHookSet:
         return {}
 
     async def on_post_tool_use_ledger(self, *args) -> dict:
+        input_data = args[0] if len(args) > 0 and isinstance(args[0], dict) else {}
+        tool_name = str(input_data.get("tool_name", "") or "")
+        tool_input = input_data.get("tool_input", {}) or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+        try:
+            normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
+        except Exception:
+            normalized_tool_name = tool_name.lower()
+
+        if normalized_tool_name in ("taskstop", "task_stop"):
+            tool_result = input_data.get("tool_result")
+            if tool_result is None:
+                tool_result = input_data.get("tool_response")
+            is_error = bool(input_data.get("is_error"))
+            if isinstance(tool_result, dict):
+                is_error = bool(is_error or tool_result.get("is_error") or tool_result.get("error"))
+            if not is_error:
+                task_id = _extract_task_stop_id(tool_input)
+                if task_id:
+                    self._stopped_task_ids.add(task_id)
+
         if self.tool_ledger:
             pass # Ledger completion logic
         return {}
