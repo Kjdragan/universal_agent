@@ -76,6 +76,11 @@ def test_csi_task_enqueue_default_proactive_mode(monkeypatch):
     policy = {"has_anomaly": False, "requires_action": True}
     assert _should_enqueue_csi_task(event_type="opportunity_bundle_ready", policy=policy) is True
     assert _should_enqueue_csi_task(event_type="report_product_ready", policy=policy) is False
+    # Strict proactive mode should not enqueue unknown event types even when policy flags anomaly.
+    assert _should_enqueue_csi_task(
+        event_type="hourly_token_usage_report",
+        policy={"has_anomaly": True, "requires_action": True},
+    ) is False
 
 
 def test_csi_task_enqueue_actionable_mode(monkeypatch):

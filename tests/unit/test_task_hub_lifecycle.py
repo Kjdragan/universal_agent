@@ -142,3 +142,51 @@ def test_release_stale_assignments_abandons_old_heartbeat_claims() -> None:
         assert str(row["ended_at"] or "").strip() != ""
     finally:
         conn.close()
+
+
+def test_park_csi_items_not_matching_event_types() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-keep",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Keep me",
+            message="opportunity event",
+            project_key="mission",
+            labels=["CSI", "agent-ready"],
+            priority=3,
+            incident_key="incident-keep",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-park",
+            event_type="hourly_token_usage_report",
+            source="csi_analytics",
+            title="Park me",
+            message="routine event",
+            project_key="csi",
+            labels=["CSI", "agent-ready"],
+            priority=2,
+            incident_key="incident-park",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+
+        result = task_hub.park_csi_items_not_matching_event_types(
+            conn,
+            allowed_event_types={"opportunity_bundle_ready"},
+            park_reason="unit_test_policy",
+        )
+
+        assert result["parked"] == 1
+        keep = task_hub.get_item(conn, "csi:incident-keep")
+        park = task_hub.get_item(conn, "csi:incident-park")
+        assert keep is not None and keep["status"] == task_hub.TASK_STATUS_OPEN
+        assert park is not None and park["status"] == task_hub.TASK_STATUS_PARKED
+        assert str((park.get("metadata") or {}).get("auto_parked_reason")) == "unit_test_policy"
+    finally:
+        conn.close()

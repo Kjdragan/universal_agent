@@ -3571,10 +3571,29 @@ def _should_enqueue_csi_task(*, event_type: str, policy: dict[str, Any]) -> bool
         return bool(policy.get("has_anomaly"))
     if mode == "actionable":
         return bool(policy.get("requires_action"))
-    # Default "proactive": only mission/opportunity items and explicit anomalies.
-    return (
-        str(event_type or "").strip().lower() in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
-        or bool(policy.get("has_anomaly"))
+    # Default "proactive": strict allowlist of mission/opportunity + explicit anomaly event types.
+    return str(event_type or "").strip().lower() in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
+
+
+def _task_hub_apply_csi_routing_maintenance(conn: sqlite3.Connection) -> dict[str, int]:
+    """Auto-park legacy CSI queue items that do not match current strict routing policy."""
+    if str(os.getenv("UA_TASK_HUB_CSI_AUTO_PARK", "1")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return {"examined": 0, "parked": 0}
+    mode = _csi_task_hub_mode()
+    if mode == "off":
+        return task_hub.park_csi_items_not_matching_event_types(
+            conn,
+            allowed_event_types=set(),
+            park_reason="csi_mode_off",
+        )
+    if mode != "proactive":
+        # Non-strict modes (all/actionable/anomalies_only) are dynamic and may require
+        # policy fields beyond event_type; skip auto-park in those modes.
+        return {"examined": 0, "parked": 0}
+    return task_hub.park_csi_items_not_matching_event_types(
+        conn,
+        allowed_event_types=set(_CSI_TASK_HUB_PROACTIVE_EVENT_TYPES),
+        park_reason="csi_mode_proactive",
     )
 
 
@@ -12149,6 +12168,10 @@ def _task_hub_sync_pending_approvals(conn: sqlite3.Connection) -> int:
     for row in rows:
         task_hub.upsert_item(conn, row)
         count += 1
+    maintenance = _task_hub_apply_csi_routing_maintenance(conn)
+    parked = int(maintenance.get("parked") or 0)
+    if parked:
+        logger.info("Task hub CSI routing maintenance parked %s legacy CSI items", parked)
     return count
 
 

@@ -1437,6 +1437,49 @@ def upsert_csi_item(
     )
 
 
+def park_csi_items_not_matching_event_types(
+    conn: sqlite3.Connection,
+    *,
+    allowed_event_types: set[str],
+    park_reason: str = "csi_routing_policy_filtered",
+) -> dict[str, int]:
+    """Park open CSI items whose event_type is outside the allowed set."""
+    ensure_schema(conn)
+    allowed = {str(v or "").strip().lower() for v in allowed_event_types if str(v or "").strip()}
+    rows = conn.execute(
+        """
+        SELECT task_id, metadata_json
+        FROM task_hub_items
+        WHERE source_kind='csi'
+          AND status IN ('open', 'blocked', 'needs_review')
+        """
+    ).fetchall()
+    parked = 0
+    examined = 0
+    now_iso = _now_iso()
+    for row in rows:
+        examined += 1
+        metadata = _json_loads_obj(row["metadata_json"], default={})
+        event_type = str(metadata.get("event_type") or "").strip().lower()
+        if event_type in allowed:
+            continue
+        metadata["auto_parked_reason"] = str(park_reason or "csi_routing_policy_filtered")
+        metadata["auto_parked_at"] = now_iso
+        metadata["auto_parked_event_type"] = event_type or "unknown"
+        conn.execute(
+            """
+            UPDATE task_hub_items
+            SET status=?, stale_state=?, seizure_state=?, metadata_json=?, updated_at=?
+            WHERE task_id=?
+            """,
+            (TASK_STATUS_PARKED, "parked_policy", "unseized", _json_dumps(metadata), now_iso, str(row["task_id"] or "")),
+        )
+        parked += 1
+    if parked:
+        conn.commit()
+    return {"examined": examined, "parked": parked}
+
+
 def approvals_as_tasks(approvals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     now = _now_iso()
