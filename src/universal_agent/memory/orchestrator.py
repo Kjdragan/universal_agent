@@ -10,6 +10,7 @@ from universal_agent.feature_flags import (
     memory_backend,
     memory_enabled,
     memory_index_mode,
+    memory_rollover_mode,
     memory_retrieval_strategy,
     memory_scope,
     memory_session_delta_bytes,
@@ -294,29 +295,39 @@ class MemoryOrchestrator:
         This emulates OpenClaw's session-memory continuity behavior by creating
         a session-specific markdown slice in `memory/sessions/` and indexing it.
         """
+        if not memory_enabled(default=True):
+            return {"captured": False, "reason": "memory_disabled"}
+
         sid = (session_id or "").strip()
         if not sid:
             return {"captured": False, "reason": "missing_session_id"}
 
-        transcript_tail = _extract_transcript_tail(
-            transcript_path or "",
-            max_chars=max_chars,
-            max_lines=max_lines,
-        )
-        if transcript_tail:
-            source = "transcript"
-            excerpt = transcript_tail
+        note_summary = (summary or "").strip() or f"Session rollover capture ({trigger})"
+        mode = memory_rollover_mode(default="transcript")
+        if mode == "summary_only":
+            source = "summary"
+            excerpt = note_summary.strip()
+            if not excerpt:
+                return {"captured": False, "reason": "summary_missing"}
         else:
-            source = "run_log"
-            excerpt = _extract_transcript_tail(
-                run_log_path or "",
+            transcript_tail = _extract_transcript_tail(
+                transcript_path or "",
                 max_chars=max_chars,
                 max_lines=max_lines,
             )
-        if not excerpt:
-            return {"captured": False, "reason": "no_content"}
+            if transcript_tail:
+                source = "transcript"
+                excerpt = transcript_tail
+            else:
+                source = "run_log"
+                excerpt = _extract_transcript_tail(
+                    run_log_path or "",
+                    max_chars=max_chars,
+                    max_lines=max_lines,
+                )
+            if not excerpt:
+                return {"captured": False, "reason": "no_content"}
 
-        note_summary = (summary or "").strip() or f"Session rollover capture ({trigger})"
         slug_source = summary or (excerpt.splitlines()[0] if excerpt.splitlines() else sid)
         slug = self._slugify(slug_source)
         date_part = (self._now_date() or "unknown-date")

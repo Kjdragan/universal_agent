@@ -169,6 +169,16 @@ def memory_session_delta_messages(default: int = 50) -> int:
     return _read_int("UA_MEMORY_SESSION_DELTA_MESSAGES", default, minimum=0)
 
 
+def memory_rollover_mode(default: str = "transcript") -> str:
+    """
+    Control how session rollover captures are written.
+
+    - transcript: include transcript/run-log excerpts (legacy behavior)
+    - summary_only: only write explicit summaries (no transcript tail capture)
+    """
+    return _read_choice("UA_MEMORY_ROLLOVER_MODE", ("transcript", "summary_only"), default)
+
+
 def memory_scope(default: str = "direct_only") -> str:
     """Return memory retrieval scope."""
     return _read_choice("UA_MEMORY_SCOPE", ("direct_only", "all"), default)

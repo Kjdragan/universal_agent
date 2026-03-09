@@ -2,6 +2,10 @@
 
 Persistent context for the agent.
 
+## [OPERATIONAL_RULES]
+- 2026-03-09: VPS runtime configuration and secrets are Infisical-first. Do not treat repo `.env` as the source of truth for production/deployment behavior.
+- 2026-03-09: For memory quality in development, prefer curated rollover summaries over transcript-tail ingestion when available.
+
 ## [RECENT_CONTEXT]
 Recent context snapshots (most recent first):
 
@@ -10,4 +14,3 @@ Recent context snapshots (most recent first):
 - 2026-02-15T04:40:17.317313+00:00: **Daily Goals:** Test DB Fix. User skipped weekly/monthly goals and open floor. No pending context gaps to address. (tags: daily_interview, goals, profile:dev_standard)
 - 2026-02-15T04:38:57.340242+00:00: User's goal for today is **DB Test**. Weekly and monthly goals were skipped. No additional context was provided. No pending context gaps. (tags: daily_interview, goals, profile:dev_standard)
 - 2026-02-15T04:36:44.296435+00:00: **Daily Interview Summary (2026-02-14):** **Today's Goals:** Test Goal - Verification of memory persistence. **This Week's Goals:** Test Goal - This week is testing. **This Month's Goals:** Test Goal - This month is testing. **Pending Ga... (tags: daily_interview, goals, profile:dev_standard)
-

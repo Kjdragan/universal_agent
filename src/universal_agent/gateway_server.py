@@ -157,7 +157,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 ensure_runtime_path()
 
-# Feature flags (placeholders, no runtime behavior changes yet)
+# Feature flags (refreshed again after runtime bootstrap inside lifespan).
 HEARTBEAT_ENABLED = heartbeat_enabled()
 CRON_ENABLED = cron_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
@@ -8661,6 +8661,14 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _refresh_runtime_feature_flags_from_env() -> None:
+    """Re-evaluate feature flags after runtime secret bootstrap."""
+    global HEARTBEAT_ENABLED, CRON_ENABLED, MEMORY_INDEX_ENABLED
+    HEARTBEAT_ENABLED = heartbeat_enabled()
+    CRON_ENABLED = cron_enabled()
+    MEMORY_INDEX_ENABLED = memory_index_enabled()
+
+
 # =============================================================================
 # Lifespan
 # =============================================================================
@@ -8669,16 +8677,12 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _FACTORY_POLICY, _delegation_mission_bus
-    bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
-    _FACTORY_POLICY = bootstrap_state.policy
-    _refresh_ops_auth_config_from_env()
-    _maybe_instrument_logfire_fastapi()
-
     process_heartbeat.start()
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info("Lifespan: Resolving bootstrap state...")
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
     _FACTORY_POLICY = bootstrap_state.policy
+    _refresh_runtime_feature_flags_from_env()
     _refresh_ops_auth_config_from_env()
     _maybe_instrument_logfire_fastapi()
 
