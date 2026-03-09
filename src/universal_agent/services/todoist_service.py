@@ -388,17 +388,40 @@ class TodoService:
         if sub_agent:
             task_labels.add(f"sub-agent:{sub_agent}")
         api_priority = PRIORITY_TO_API.get(priority.lower(), 1)
-        task = self.api.add_task(
-            content=content,
-            description=description,
-            project_id=project_id,
-            section_id=section_id,
-            labels=sorted(task_labels),
-            priority=api_priority,
-            due_string=due_string,
-            parent_id=parent_id,
-        )
-        return self._task_to_dict(task)
+        task_payload: dict[str, Any] = {
+            "content": content,
+            "description": description,
+            "project_id": project_id,
+            "section_id": section_id,
+            "labels": sorted(task_labels),
+            "priority": api_priority,
+            "due_string": due_string,
+            "parent_id": parent_id,
+        }
+        try:
+            task = self.api.add_task(**task_payload)
+            return self._task_to_dict(task)
+        except Exception as exc:
+            # Some legacy/shared Todoist projects can be readable but not writable.
+            # If CSI (or another non-default project) rejects writes with 403, reroute
+            # safely to the immediate queue so ingestion continues.
+            if _is_forbidden_error(exc):
+                fallback_project_id = taxonomy.agent_project_id
+                if fallback_project_id and str(project_id) != str(fallback_project_id):
+                    fallback_sections = taxonomy.section_ids.get(UA_PROJECT_IMMEDIATE, {})
+                    fallback_section_id = (
+                        fallback_sections.get(section.lower())
+                        or fallback_sections.get("background")
+                    )
+                    fallback_payload = dict(task_payload)
+                    fallback_payload["project_id"] = fallback_project_id
+                    fallback_payload["section_id"] = fallback_section_id
+                    task = self.api.add_task(**fallback_payload)
+                    task_dict = self._task_to_dict(task)
+                    task_dict["project_rerouted_from"] = project_name
+                    task_dict["project_rerouted_reason"] = "forbidden"
+                    return task_dict
+            raise
 
     def create_personal_task(
         self,
@@ -933,3 +956,8 @@ def _safe_int(value: Any, *, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _is_forbidden_error(exc: Exception) -> bool:
+    exc_text = str(exc)
+    return "403" in exc_text or "Forbidden" in exc_text

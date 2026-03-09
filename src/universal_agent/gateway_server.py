@@ -9534,7 +9534,8 @@ async def signals_ingest_endpoint(request: Request):
                 exc_str = str(exc)
                 is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
                 is_rate_limited = "429" in exc_str or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
-                is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "403", "Forbidden", "Unauthorized", "UNAUTHORIZED"))
+                is_forbidden = not is_rate_limited and any(s in exc_str for s in ("403", "Forbidden"))
+                is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "Unauthorized", "UNAUTHORIZED"))
                 if is_limit:
                     logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
                     if not _has_recent_notification(
@@ -9573,7 +9574,7 @@ async def signals_ingest_endpoint(request: Request):
                             metadata={"integration": "todoist", "reason": "rate_limited", "source_domain": "system"},
                         )
                 elif is_auth:
-                    logger.warning("Todoist auth failure (401/403 — token may be invalid or revoked): %s", exc)
+                    logger.warning("Todoist auth failure (401 — token may be invalid or revoked): %s", exc)
                     if not _has_recent_notification(
                         kind="system_error",
                         metadata_match={"integration": "todoist", "reason": "auth_failure"},
@@ -9591,6 +9592,24 @@ async def signals_ingest_endpoint(request: Request):
                             ),
                             severity="error",
                             metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
+                        )
+                elif is_forbidden:
+                    logger.warning("Todoist project/permission failure (403): %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_notice",
+                        metadata_match={"integration": "todoist", "reason": "project_forbidden"},
+                        within_seconds=3600,
+                    ):
+                        _add_notification(
+                            kind="system_notice",
+                            title="Todoist Project Write Denied",
+                            message=(
+                                "Todoist returned HTTP 403 while writing to a configured UA project. "
+                                "The token is present, but the project may be read-only or inaccessible "
+                                "for writes. UA now routes writes to a writable fallback project."
+                            ),
+                            severity="warning",
+                            metadata={"integration": "todoist", "reason": "project_forbidden", "source_domain": "system"},
                         )
                 else:
                     logger.exception("Failed to create Todoist task for CSI signal")
