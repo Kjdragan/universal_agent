@@ -58,6 +58,9 @@ src/universal_agent/Memory_System_Data/
 AGENT_RUN_WORKSPACES/
 AGENT_RUN_WORKSPACES_ARCHIVE/
 Memory_System/ua_shared_workspace/memory/sessions/
+# Shared workspace runtime memory state (operational; host-local, not source).
+Memory_System/ua_shared_workspace/MEMORY.md
+Memory_System/ua_shared_workspace/memory/
 urw_sessions/
 urw_smoke_workspace*/
 urw_phase*_workspace*/
