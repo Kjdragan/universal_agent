@@ -1205,6 +1205,41 @@ def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
                 break
         return count
 
+    def _count_created_tasks(since_ts: float) -> int:
+        rows = conn.execute(
+            "SELECT created_at FROM task_hub_items ORDER BY created_at DESC LIMIT 50000"
+        ).fetchall()
+        count = 0
+        for row in rows:
+            dt = _parse_iso(row["created_at"])
+            if not dt:
+                continue
+            if dt.timestamp() >= since_ts:
+                count += 1
+            else:
+                break
+        return count
+
+    def _count_created_by_source(since_ts: float) -> dict[str, int]:
+        rows = conn.execute(
+            """
+            SELECT source_kind, created_at
+            FROM task_hub_items
+            ORDER BY created_at DESC
+            LIMIT 50000
+            """
+        ).fetchall()
+        counts: dict[str, int] = {}
+        for row in rows:
+            dt = _parse_iso(row["created_at"])
+            if not dt:
+                continue
+            if dt.timestamp() < since_ts:
+                break
+            source_kind = str(row["source_kind"] or "unknown")
+            counts[source_kind] = counts.get(source_kind, 0) + 1
+        return counts
+
     def _count_completed(since_ts: float) -> int:
         rows = conn.execute(
             "SELECT ended_at FROM task_hub_assignments WHERE state = 'completed' ORDER BY ended_at DESC LIMIT 20000"
@@ -1255,13 +1290,16 @@ def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
         ],
         "metrics": {
             "1h": {
-                "new": _count_eval("defer", window_1h),
+                # "new" should represent newly created tasks, not scorer defer events.
+                "new": _count_created_tasks(window_1h),
+                "new_by_source": _count_created_by_source(window_1h),
                 "seized": _count_eval("seize", window_1h),
                 "rejected": _count_eval("reject", window_1h),
                 "completed": _count_completed(window_1h),
             },
             "24h": {
-                "new": _count_eval("defer", window_24h),
+                "new": _count_created_tasks(window_24h),
+                "new_by_source": _count_created_by_source(window_24h),
                 "seized": _count_eval("seize", window_24h),
                 "rejected": _count_eval("reject", window_24h),
                 "completed": _count_completed(window_24h),

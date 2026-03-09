@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from universal_agent.gateway_server import (
     _csi_event_notification_policy,
+    _should_enqueue_csi_task,
     classify_csi_project_key,
 )
 
@@ -68,3 +69,34 @@ def test_csi_event_notification_policy_syncs_quality_gate_alert_only():
 
     assert alert_policy["todoist_sync"] is True
     assert ok_policy["todoist_sync"] is False
+
+
+def test_csi_task_enqueue_default_proactive_mode(monkeypatch):
+    monkeypatch.delenv("UA_TASK_HUB_CSI_MODE", raising=False)
+    policy = {"has_anomaly": False, "requires_action": True}
+    assert _should_enqueue_csi_task(event_type="opportunity_bundle_ready", policy=policy) is True
+    assert _should_enqueue_csi_task(event_type="report_product_ready", policy=policy) is False
+
+
+def test_csi_task_enqueue_actionable_mode(monkeypatch):
+    monkeypatch.setenv("UA_TASK_HUB_CSI_MODE", "actionable")
+    assert _should_enqueue_csi_task(
+        event_type="report_product_ready",
+        policy={"has_anomaly": False, "requires_action": True},
+    ) is True
+    assert _should_enqueue_csi_task(
+        event_type="report_product_ready",
+        policy={"has_anomaly": False, "requires_action": False},
+    ) is False
+
+
+def test_csi_task_enqueue_anomalies_only_mode(monkeypatch):
+    monkeypatch.setenv("UA_TASK_HUB_CSI_MODE", "anomalies_only")
+    assert _should_enqueue_csi_task(
+        event_type="delivery_health_regression",
+        policy={"has_anomaly": True, "requires_action": True},
+    ) is True
+    assert _should_enqueue_csi_task(
+        event_type="opportunity_bundle_ready",
+        policy={"has_anomaly": False, "requires_action": True},
+    ) is False

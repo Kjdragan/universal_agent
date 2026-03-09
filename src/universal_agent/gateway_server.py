@@ -3537,6 +3537,47 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     }
 
 
+_CSI_TASK_HUB_PROACTIVE_EVENT_TYPES = {
+    # Opportunity/proactive missions
+    "opportunity_bundle_ready",
+    "global_trend_brief_ready",
+    "csi_global_brief_review_due",
+    # Operational anomalies requiring explicit intervention
+    "rss_quality_gate_alert",
+    "delivery_health_regression",
+    "delivery_reliability_slo_breached",
+    "delivery_health_auto_remediation_failed",
+}
+
+
+def _csi_task_hub_mode() -> str:
+    raw = (
+        os.getenv("UA_TASK_HUB_CSI_MODE")
+        or os.getenv("UA_CSI_TASK_HUB_MODE")
+        or "proactive"
+    ).strip().lower()
+    if raw in {"all", "proactive", "actionable", "anomalies_only", "off"}:
+        return raw
+    return "proactive"
+
+
+def _should_enqueue_csi_task(*, event_type: str, policy: dict[str, Any]) -> bool:
+    mode = _csi_task_hub_mode()
+    if mode == "off":
+        return False
+    if mode == "all":
+        return True
+    if mode == "anomalies_only":
+        return bool(policy.get("has_anomaly"))
+    if mode == "actionable":
+        return bool(policy.get("requires_action"))
+    # Default "proactive": only mission/opportunity items and explicit anomalies.
+    return (
+        str(event_type or "").strip().lower() in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
+        or bool(policy.get("has_anomaly"))
+    )
+
+
 def _csi_incident_key(
     *,
     event_id: str,
@@ -9428,6 +9469,12 @@ async def signals_ingest_endpoint(request: Request):
             mirror_policy: dict[str, Any] = dict(task_hub.DEFAULT_MIRROR_POLICY)
             should_mirror = False
             hub_task_id = ""
+            should_enqueue_task = _task_hub_enabled() and _should_enqueue_csi_task(
+                event_type=event_type_norm,
+                policy=policy,
+            )
+            if not should_enqueue_task:
+                continue
             with _activity_store_lock:
                 hub_conn = _task_hub_open_conn()
                 try:

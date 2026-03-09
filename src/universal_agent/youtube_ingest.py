@@ -163,9 +163,27 @@ def _build_webshare_proxy_config() -> tuple[Optional[Any], str]:
         or ""
     )
     locations = _parse_proxy_locations(location_raw)
+    domain_name = (
+        os.getenv("WEBSHARE_PROXY_HOST")
+        or os.getenv("PROXY_HOST")
+        or "proxy.webshare.io"
+    ).strip() or "proxy.webshare.io"
+    proxy_port_raw = (
+        os.getenv("WEBSHARE_PROXY_PORT")
+        or os.getenv("PROXY_PORT")
+        or "80"
+    ).strip()
+    try:
+        proxy_port = int(proxy_port_raw)
+    except Exception:
+        proxy_port = 80
+    if proxy_port <= 0 or proxy_port > 65535:
+        proxy_port = 80
     kwargs: dict[str, Any] = {
         "proxy_username": username,
         "proxy_password": password,
+        "domain_name": domain_name,
+        "proxy_port": proxy_port,
     }
     if locations:
         kwargs["filter_ip_locations"] = locations
