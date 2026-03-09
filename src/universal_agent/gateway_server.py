@@ -3475,6 +3475,78 @@ def _csi_event_has_anomaly(event_type: str, subject: Any) -> bool:
     return False
 
 
+def _csi_subject_int(subject: Any, *keys: str) -> int:
+    subject_obj = subject if isinstance(subject, dict) else {}
+    for key in keys:
+        raw = subject_obj.get(key)
+        try:
+            return int(raw or 0)
+        except Exception:
+            continue
+    return 0
+
+
+def _csi_subject_bool(subject: Any, *keys: str) -> bool:
+    subject_obj = subject if isinstance(subject, dict) else {}
+    for key in keys:
+        raw = subject_obj.get(key)
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw or "").strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return False
+
+
+def _csi_escalation_policy(event_type: str, subject: Any) -> tuple[bool, str]:
+    """Return whether a CSI event should escalate to UA Task Hub.
+
+    Keeps routine CSI operations (quality/regression noise) inside CSI until
+    persistence/failure thresholds are crossed.
+    """
+    normalized = str(event_type or "").strip().lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+
+    if normalized in {"opportunity_bundle_ready", "global_trend_brief_ready", "csi_global_brief_review_due"}:
+        return True, "ua_decision_signal"
+
+    if normalized in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}:
+        return True, "delivery_exception_hard_failure"
+
+    if normalized == "delivery_health_regression":
+        threshold = max(
+            1,
+            int(os.getenv("UA_CSI_DELIVERY_REGRESSION_ESCALATION_THRESHOLD", "3") or 3),
+        )
+        streak = max(
+            0,
+            _csi_subject_int(subject_obj, "consecutive_failures", "failure_streak", "retry_count", "attempts"),
+        )
+        status = str(subject_obj.get("status") or "").strip().lower()
+        manual_required = _csi_subject_bool(subject_obj, "requires_manual_intervention", "manual_intervention_required")
+        if streak >= threshold or (manual_required and status in {"failing", "critical", "down"}):
+            return True, "delivery_regression_persistent"
+        return False, "delivery_regression_csi_owned"
+
+    if normalized == "rss_quality_gate_alert":
+        threshold = max(
+            1,
+            int(os.getenv("UA_CSI_RSS_QUALITY_ESCALATION_THRESHOLD", "3") or 3),
+        )
+        alert_streak = max(
+            0,
+            _csi_subject_int(subject_obj, "consecutive_alerts", "alert_streak", "quality_fail_streak", "rss_undelivered_recent"),
+        )
+        transcript_ok_recent = max(0, _csi_subject_int(subject_obj, "transcript_ok_recent"))
+        if alert_streak >= threshold and transcript_ok_recent <= 0:
+            return True, "rss_quality_persistent"
+        return False, "rss_quality_csi_owned"
+
+    return False, "default_csi_owned"
+
+
 def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     event_type = str(getattr(event, "event_type", "") or "").strip().lower()
     subject = getattr(event, "subject", None)
@@ -3500,16 +3572,8 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         severity = "error"
     elif "quality" in event_type and not is_digest:
         severity = "warning"
-    requires_action = bool(
-        has_anomaly
-        or high_value
-        or event_type
-        in {
-            "delivery_health_regression",
-            "delivery_health_auto_remediation_failed",
-            "delivery_reliability_slo_breached",
-        }
-    )
+    should_escalate, escalation_reason = _csi_escalation_policy(event_type, subject_obj)
+    requires_action = bool(should_escalate)
     if event_type in {"delivery_health_recovered", "delivery_reliability_slo_recovered"}:
         requires_action = False
     todoist_sync = bool(
@@ -3533,6 +3597,8 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         "has_anomaly": has_anomaly,
         "severity": severity,
         "requires_action": requires_action,
+        "escalates_to_ua": bool(should_escalate),
+        "escalation_reason": escalation_reason,
         "todoist_sync": todoist_sync,
     }
 
@@ -3565,6 +3631,10 @@ def _should_enqueue_csi_task(*, event_type: str, policy: dict[str, Any]) -> bool
         return False
     if mode == "all":
         return True
+    # Non-"all" modes always honor escalation policy to keep routine CSI work
+    # in CSI and prevent UA queue pollution.
+    if not bool(policy.get("escalates_to_ua")):
+        return False
     if mode == "anomalies_only":
         return bool(policy.get("has_anomaly"))
     if mode == "actionable":
@@ -3622,13 +3692,12 @@ def _task_hub_mirror_class_for_csi(
     high_value: bool,
     requires_action: bool,
 ) -> str:
-    if has_anomaly or event_type in {
-        "delivery_health_regression",
+    if event_type in {
         "delivery_reliability_slo_breached",
         "delivery_health_auto_remediation_failed",
     }:
         return "csi_incident_high"
-    if high_value and requires_action:
+    if event_type in {"delivery_health_regression", "rss_quality_gate_alert"} and has_anomaly and requires_action:
         return "csi_incident_high"
     return "internal_only"
 
@@ -9481,8 +9550,7 @@ async def signals_ingest_endpoint(request: Request):
             )
             csi_labels = ["CSI", f"csi-project:{project_key}", "agent-ready"]
             must_complete = bool(
-                event_type_norm in {"delivery_health_regression", "delivery_reliability_slo_breached"}
-                or mirror_class == "csi_incident_high"
+                event_type_norm in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}
             )
             if must_complete:
                 csi_labels.append("must-complete")
