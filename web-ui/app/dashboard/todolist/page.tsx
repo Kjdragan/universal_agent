@@ -175,6 +175,11 @@ function priorityText(priority?: number): string {
   return "Normal";
 }
 
+function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
+  if (status !== 502) return false;
+  return detail.toLowerCase().includes("gateway upstream unavailable");
+}
+
 export default function ToDoListDashboardPage() {
   const searchParams = useSearchParams();
   const modeParam = String(searchParams?.get("mode") || "").trim().toLowerCase();
@@ -201,6 +206,7 @@ export default function ToDoListDashboardPage() {
   const load = useCallback(async (background = false) => {
     if (background) setRefreshing(true);
     else setLoading(true);
+    if (!background) setError("");
     try {
       const agentQueueUrl = new URL(`${API_BASE}/api/v1/dashboard/todolist/agent-queue`, window.location.origin);
       agentQueueUrl.searchParams.set("limit", "120");
@@ -215,17 +221,43 @@ export default function ToDoListDashboardPage() {
         fetch(`${API_BASE}/api/v1/dashboard/todolist/agent-activity`, { cache: "no-store" }),
       ]);
 
-      const [overviewJson, approvalsJson, agentJson, personalJson, activityJson] = await Promise.all([
+      if (!overviewRes.ok || !agentRes.ok || !personalRes.ok || !activityRes.ok) {
+        const failures: Array<{ name: string; status: number; detail: string }> = [];
+        const required = [
+          { name: "overview", res: overviewRes },
+          { name: "agent_queue", res: agentRes },
+          { name: "personal_queue", res: personalRes },
+          { name: "agent_activity", res: activityRes },
+        ];
+        for (const item of required) {
+          if (item.res.ok) continue;
+          const detail = await item.res.text().catch(() => "");
+          failures.push({ name: item.name, status: item.res.status, detail });
+        }
+        if (
+          failures.length > 0
+          && failures.every((f) => isGatewayUpstreamUnavailable(f.status, f.detail))
+        ) {
+          throw new Error("Gateway is temporarily unavailable. Please retry in a few seconds.");
+        }
+        const compact = failures.map((f) => `${f.name}:${f.status}`).join(", ");
+        throw new Error(`To Do V2 endpoints failed to load (${compact})`);
+      }
+
+      const [overviewJson, agentJson, personalJson, activityJson] = await Promise.all([
         overviewRes.json(),
-        approvalsRes.json(),
         agentRes.json(),
         personalRes.json(),
         activityRes.json(),
       ]);
-
-      if (!overviewRes.ok || !agentRes.ok || !personalRes.ok || !activityRes.ok) {
-        throw new Error("To Do V2 endpoints failed to load");
-      }
+      const approvalsJson = approvalsRes.ok
+        ? await approvalsRes.json()
+        : ({
+            status: "degraded",
+            pending_count: 0,
+            approvals: [],
+            banner: { show: false, text: "", focus_href: "/dashboard/todolist?mode=personal&focus=approvals" },
+          } as ApprovalHighlightPayload);
 
       setOverview(overviewJson as OverviewPayload);
       setApprovalsHighlight(approvalsJson as ApprovalHighlightPayload);
@@ -242,7 +274,9 @@ export default function ToDoListDashboardPage() {
 
       setError("");
     } catch (err: any) {
-      setError(err?.message || "Failed to load To Do data.");
+      if (!background) {
+        setError(err?.message || "Failed to load To Do data.");
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
