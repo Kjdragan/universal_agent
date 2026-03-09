@@ -524,7 +524,49 @@ def _tutorial_manifest(run_dir: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[str, Any]]:
+_TUTORIAL_CODE_EXTENSIONS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".sh",
+    ".ipynb",
+    ".gs",
+    ".html",
+    ".css",
+    ".jsx",
+    ".sql",
+    ".java",
+    ".go",
+    ".rs",
+    ".json",
+}
+_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
+
+
+def _tutorial_implementation_code_files(run_dir: Path) -> list[Path]:
+    impl_dir = run_dir / "implementation"
+    if not impl_dir.exists() or not impl_dir.is_dir():
+        return []
+    code_files: list[Path] = []
+    for child in impl_dir.rglob("*"):
+        if not child.is_file():
+            continue
+        if child.suffix.lower() not in _TUTORIAL_CODE_EXTENSIONS:
+            continue
+        if child.name.strip().lower() in _TUTORIAL_BOOTSTRAP_SCRIPT_NAMES:
+            continue
+        code_files.append(child)
+    code_files.sort(key=lambda p: p.name.lower())
+    return code_files
+
+
+def _tutorial_key_files(
+    run_dir: Path,
+    *,
+    implementation_required: bool,
+    max_code_files: int = 4,
+) -> list[dict[str, Any]]:
     ordered: list[tuple[str, Path]] = []
     for label, rel in (
         ("README", "README.md"),
@@ -537,13 +579,21 @@ def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[
 
     impl_dir = run_dir / "implementation"
     if impl_dir.exists() and impl_dir.is_dir():
-        code: list[Path] = []
-        for pattern in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb", "*.gs", "*.html", "*.css", "*.jsx", "*.sql", "*.java", "*.go", "*.rs", "*.json"):
-            code.extend(impl_dir.glob(pattern))
-        code = [p for p in code if p.is_file()]
-        code.sort(key=lambda p: p.name.lower())
-        for path in code[: max(1, max_code_files)]:
-            ordered.append((f"Code: {path.name}", path))
+        if implementation_required:
+            code = _tutorial_implementation_code_files(run_dir)
+            for path in code[: max(1, max_code_files)]:
+                ordered.append((f"Code: {path.name}", path))
+        else:
+            procedure_files = sorted(
+                [
+                    p
+                    for p in impl_dir.rglob("*")
+                    if p.is_file() and p.suffix.lower() in {".md", ".txt"}
+                ],
+                key=lambda p: p.name.lower(),
+            )
+            for path in procedure_files[: max(1, max_code_files)]:
+                ordered.append((f"Procedure: {path.name}", path))
 
     files: list[dict[str, Any]] = []
     for label, path in ordered:
@@ -567,23 +617,22 @@ def _tutorial_has_code_implementation(run_dir: Path, manifest: dict) -> bool:
     Checks manifest field first (set by agent), falls back to heuristic
     checking for actual code files in implementation/ directory.
     """
-    # Prefer explicit manifest field if the agent set it
+    # Prefer explicit manifest field if the agent set it.
     manifest_flag = manifest.get("implementation_required")
-    if manifest_flag is not None:
-        return bool(manifest_flag)
-        
-    if (run_dir / "IMPLEMENTATION.md").exists() and (run_dir / "IMPLEMENTATION.md").is_file():
+    if isinstance(manifest_flag, bool):
+        return manifest_flag
+
+    learning_mode = str(manifest.get("learning_mode") or "").strip().lower()
+    mode = str(manifest.get("mode") or "").strip().lower()
+    if learning_mode in {"concept_only"} or mode in {"explainer_only"}:
+        return False
+    if learning_mode in {"concept_plus_implementation", "implementation", "code_only"}:
+        return True
+    if mode in {"explainer_plus_code", "implementation", "code_only"}:
         return True
 
     # Fallback heuristic: check for code files in implementation/
-    impl_dir = run_dir / "implementation"
-    if not impl_dir.exists() or not impl_dir.is_dir():
-        return False
-    code_extensions = {".py", ".ts", ".tsx", ".js", ".sh", ".ipynb", ".gs", ".html", ".css", ".jsx", ".sql", ".java", ".go", ".rs", ".json"}
-    for child in impl_dir.rglob("*"):
-        if child.is_file() and child.suffix.lower() in code_extensions:
-            return True
-    return False
+    return bool(_tutorial_implementation_code_files(run_dir))
 
 
 def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
@@ -619,7 +668,8 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
             run_rel = _artifact_rel_path(run_dir)
             if not run_rel:
                 continue
-            files = _tutorial_key_files(run_dir)
+            implementation_required = _tutorial_has_code_implementation(run_dir, manifest)
+            files = _tutorial_key_files(run_dir, implementation_required=implementation_required)
             title = str(manifest.get("title") or "").strip() or run_dir.name
             video_id = str(manifest.get("video_id") or "").strip()
             video_url = str(manifest.get("video_url") or "").strip()
@@ -639,7 +689,7 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
                 "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
                 "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
                 "files": files,
-                "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
+                "implementation_required": implementation_required,
             }
             runs.append((mtime, run_item))
 
@@ -13697,6 +13747,7 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         )
 
     manifest = _tutorial_manifest(run_dir)
+    implementation_required = _tutorial_has_code_implementation(run_dir, manifest)
     run_snapshot = {
         "run_path": run_rel,
         "run_dir": str(run_dir),
@@ -13705,7 +13756,8 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         "video_id": str(manifest.get("video_id") or ""),
         "video_url": str(manifest.get("video_url") or ""),
         "status": str(manifest.get("status") or "unknown"),
-        "files": _tutorial_key_files(run_dir),
+        "files": _tutorial_key_files(run_dir, implementation_required=implementation_required),
+        "implementation_required": implementation_required,
     }
 
     now = datetime.now(timezone.utc)
@@ -13778,6 +13830,13 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             detail="run_path must be under youtube-tutorial-creation/",
         )
 
+    manifest = _tutorial_manifest(run_dir)
+    if not _tutorial_has_code_implementation(run_dir, manifest):
+        raise HTTPException(
+            status_code=400,
+            detail="Tutorial run is concept-only; repo bootstrap is available only for code implementation runs",
+        )
+
     implementation_dir = run_dir / "implementation"
     script_path = implementation_dir / "create_new_repo.sh"
     if not implementation_dir.exists() or not implementation_dir.is_dir():
@@ -13785,7 +13844,6 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
     if not script_path.exists() or not script_path.is_file():
         raise HTTPException(status_code=400, detail="create_new_repo.sh not found for tutorial run")
 
-    manifest = _tutorial_manifest(run_dir)
     title = str(manifest.get("title") or run_dir.name).strip() or run_dir.name
     auto_repo_name = f"{_safe_slug_component(title)}__{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     repo_name = _sanitize_tutorial_repo_name(str(payload.repo_name or "").strip()) or auto_repo_name
@@ -14107,6 +14165,13 @@ async def ops_tutorial_bootstrap_bundle(request: Request, job_id: str):
         raise HTTPException(status_code=400, detail="tutorial_run_path must be under youtube-tutorial-creation/")
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail="Tutorial run directory not found")
+
+    manifest = _tutorial_manifest(run_dir)
+    if not _tutorial_has_code_implementation(run_dir, manifest):
+        raise HTTPException(
+            status_code=400,
+            detail="Tutorial run is concept-only; bootstrap bundle is unavailable",
+        )
 
     implementation_dir = run_dir / "implementation"
     script_path = implementation_dir / "create_new_repo.sh"

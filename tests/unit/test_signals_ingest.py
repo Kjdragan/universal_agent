@@ -149,6 +149,15 @@ def test_to_manual_youtube_payload_maps_youtube_event():
     mapped = to_manual_youtube_payload(event)
     assert mapped is not None
     assert mapped["video_id"] == "dQw4w9WgXcQ"
+    assert mapped["mode"] == "explainer_only"
+
+
+def test_to_manual_youtube_payload_infers_code_mode_from_title():
+    payload = _valid_payload()
+    payload["events"][0]["subject"]["title"] = "How to Build Your First MCP App with Claude Code"
+    event = extract_valid_events(payload)[0]
+    mapped = to_manual_youtube_payload(event)
+    assert mapped is not None
     assert mapped["mode"] == "explainer_plus_code"
 
 

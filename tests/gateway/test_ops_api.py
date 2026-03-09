@@ -1644,6 +1644,40 @@ def test_dashboard_tutorial_runs_lists_flat_and_dated_layouts(client, tmp_path, 
     assert "NAWKFRaR0Sk" in video_ids
 
 
+def test_dashboard_tutorial_runs_treats_bootstrap_only_impl_as_concept(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "2026-03-09" / "greek-souvlaki__153500"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "cook123abcd",
+                "title": "Greek Souvlaki on Charcoal - Traditional Juicy & Authentic",
+                "status": "full",
+                "learning_mode": "concept_only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "README.md").write_text("# README\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# Concept\n", encoding="utf-8")
+    (run_dir / "IMPLEMENTATION.md").write_text("# Recipe Procedure\n", encoding="utf-8")
+    (impl_dir / "create_new_repo.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (impl_dir / "deletethisrepo.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    resp = client.get("/api/v1/dashboard/tutorials/runs?limit=20")
+    assert resp.status_code == 200
+    runs = resp.json()["runs"]
+    row = next(item for item in runs if item["video_id"] == "cook123abcd")
+    assert row["implementation_required"] is False
+    labels = [str(file.get("label") or "") for file in (row.get("files") or [])]
+    assert "Implementation Guide" in labels
+    assert not any(label.startswith("Code:") for label in labels)
+
+
 def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     _create_dummy_session(tmp_path, "session_hook_csi_alpha", ["alpha"])
     _create_dummy_session(tmp_path, "session_hook_csi_bravo", ["bravo"])
@@ -1697,6 +1731,7 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
                 "title": "Demo Run",
                 "video_id": "demo123",
                 "status": "full",
+                "implementation_required": True,
             }
         ),
         encoding="utf-8",
@@ -1746,6 +1781,7 @@ def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, t
                 "title": "Demo Run",
                 "video_id": "demo123",
                 "status": "full",
+                "implementation_required": True,
             }
         ),
         encoding="utf-8",
@@ -1839,7 +1875,14 @@ def test_dashboard_tutorial_bootstrap_repo_local_queue_reuses_existing_active_jo
     impl_dir = run_dir / "implementation"
     impl_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "manifest.json").write_text(
-        json.dumps({"title": "Reuse Run", "video_id": "reuse123", "status": "full"}),
+        json.dumps(
+            {
+                "title": "Reuse Run",
+                "video_id": "reuse123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
         encoding="utf-8",
     )
     (impl_dir / "create_new_repo.sh").write_text(
@@ -1895,7 +1938,14 @@ def test_dashboard_tutorial_bootstrap_repo_failed_result_preserves_error_metadat
     impl_dir = run_dir / "implementation"
     impl_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "manifest.json").write_text(
-        json.dumps({"title": "Failed Run", "video_id": "failed123", "status": "full"}),
+        json.dumps(
+            {
+                "title": "Failed Run",
+                "video_id": "failed123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
         encoding="utf-8",
     )
     (impl_dir / "create_new_repo.sh").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
@@ -1986,7 +2036,14 @@ def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_missio
     impl_dir = run_dir / "implementation"
     impl_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "manifest.json").write_text(
-        json.dumps({"title": "Redis Run", "video_id": "redis123", "status": "full"}),
+        json.dumps(
+            {
+                "title": "Redis Run",
+                "video_id": "redis123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
         encoding="utf-8",
     )
     (impl_dir / "create_new_repo.sh").write_text(

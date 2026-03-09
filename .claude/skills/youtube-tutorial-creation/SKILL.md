@@ -2,8 +2,8 @@
 name: youtube-tutorial-creation
 description: >
   Convert a YouTube tutorial video into durable, referenceable learning artifacts stored
-  under UA_ARTIFACTS_DIR. Produces CONCEPT.md (standalone tutorial write-up), IMPLEMENTATION.md
-  (prerequisites + steps), runnable implementation/ code, and manifest.json (provenance).
+  under UA_ARTIFACTS_DIR. Always produces CONCEPT.md + manifest.json, and conditionally
+  produces runnable implementation artifacts when the content is truly software/coding.
   USE when a user provides a YouTube URL and wants to learn, understand, implement from,
   or deeply study a video. Also trigger when a webhook/hook payload contains a YouTube URL
   with a learning/tutorial intent. Trigger phrases: "create a tutorial from this video",
@@ -27,8 +27,8 @@ be understandable *without* watching the video.
 | `manifest.json` | ✅ Always | Provenance, status, retention map |
 | `README.md` | ✅ Always | One-page summary with metadata context block |
 | `CONCEPT.md` | ✅ Always | Standalone tutorial — understandable without watching the video |
-| `IMPLEMENTATION.md` | ✅ Always | Prerequisites, steps, expected outputs |
-| `implementation/` | ✅ Always | Runnable code/scripts (validated) |
+| `IMPLEMENTATION.md` | ✅ Usually | Prerequisites/steps; for concept-only this can be procedural (recipe/runbook) |
+| `implementation/` | ⬜ Conditional | Runnable code/scripts only for software/coding tutorials |
 | `visuals/gemini_video_analysis.md` | ⬜ Best-effort | Timestamped visual analysis from Gemini |
 | `research/sources.md` | ⬜ When gaps exist | Gap-filling sources and citations |
 | `transcript.clean.txt` | ⬜ Recommended | Deduplicated transcript (retention: temp) |
@@ -216,14 +216,14 @@ Write each artifact to the run directory. Quality bar for each:
 - Code snippets with provenance comments linking to source timestamps or `visuals/code-extractions/`
 - Must be readable by someone who has never seen the video
 
-**`IMPLEMENTATION.md`** — practical runbook
+**`IMPLEMENTATION.md`** — practical runbook (or procedural guide for concept-only)
 
 - Prerequisites (exact versions where known)
 - Step-by-step instructions with expected outputs at each step
 - Troubleshooting section for likely failure modes
 - References to `implementation/` scripts
 
-**`implementation/`** — runnable code
+**`implementation/`** — runnable code (only when `learning_mode=concept_plus_implementation`)
 
 - Use uv inline scripting (PEP 723) for all Python scripts (see Step 8)
 - Add comments with provenance (timestamp reference or visual extraction source)

@@ -39,6 +39,7 @@ YOUTUBE_AGENT_CANONICAL = "youtube-expert"
 YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
+YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
 YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
 
@@ -474,8 +475,8 @@ class HooksService:
                 f"video_url: {video_url}",
                 f"video_id: {video_id}",
                 f"channel_id: {channel_id}",
-                "mode: explainer_plus_code",
-                "learning_mode: concept_plus_implementation",
+                "mode: auto",
+                "learning_mode: auto",
                 "allow_degraded_transcript_only: true",
                 "Resume this tutorial run and complete artifact generation.",
             ]
@@ -590,6 +591,7 @@ class HooksService:
         *,
         run_dir: Path,
         run_rel_path: str,
+        implementation_required: bool = False,
     ) -> list[dict[str, str]]:
         files: list[dict[str, str]] = []
         primary_files = [
@@ -613,19 +615,32 @@ class HooksService:
             )
         implementation_dir = run_dir / "implementation"
         if implementation_dir.is_dir():
-            implementation_files = sorted(
-                [
-                    node
-                    for node in implementation_dir.rglob("*")
-                    if node.is_file() and node.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".sh"}
-                ]
-            )[:8]
+            if implementation_required:
+                implementation_files = sorted(
+                    [
+                        node
+                        for node in implementation_dir.rglob("*")
+                        if node.is_file()
+                        and node.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".sh", ".ipynb", ".sql"}
+                        and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                    ]
+                )[:8]
+            else:
+                implementation_files = sorted(
+                    [
+                        node
+                        for node in implementation_dir.rglob("*")
+                        if node.is_file()
+                        and node.suffix.lower() in {".md", ".txt"}
+                        and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                    ]
+                )[:8]
             for node in implementation_files:
                 rel_under_run = node.relative_to(run_dir).as_posix()
                 rel_path = f"{run_rel_path}/{rel_under_run}" if run_rel_path else ""
                 files.append(
                     {
-                        "label": f"Code: {node.name}",
+                        "label": (f"Code: {node.name}" if implementation_required else f"Procedure: {node.name}"),
                         "name": node.name,
                         "path": str(node),
                         "rel_path": rel_path,
@@ -1015,7 +1030,7 @@ class HooksService:
         payload = {
             "video_url": video_url,
             "video_id": video_id,
-            "mode": mode or "explainer_plus_code",
+            "mode": mode or "explainer_only",
             "allow_degraded_transcript_only": allow_degraded,
         }
 
@@ -1352,11 +1367,44 @@ class HooksService:
         artifacts = manifest_payload.get("artifacts") if isinstance(manifest_payload, dict) else None
         artifacts_map = artifacts if isinstance(artifacts, dict) else {}
         implementation_dir_hint = str(artifacts_map.get("implementation_dir") or "").strip()
-        implementation_required = bool(manifest_payload.get("implementation_required")) or (
-            learning_mode in {"concept_plus_implementation", "implementation", "code_only"}
-            or mode in {"explainer_plus_code", "implementation", "code_only"}
-            or bool(implementation_dir_hint)
-        )
+        manifest_flag = manifest_payload.get("implementation_required")
+        if isinstance(manifest_flag, bool):
+            implementation_required = manifest_flag
+        elif learning_mode in {"concept_only"} or mode in {"explainer_only"}:
+            implementation_required = False
+        elif learning_mode in {"concept_plus_implementation", "implementation", "code_only"} or mode in {
+            "explainer_plus_code",
+            "implementation",
+            "code_only",
+        }:
+            implementation_required = True
+        else:
+            implementation_required = False
+            hinted_dir = run_dir / implementation_dir_hint if implementation_dir_hint else run_dir / "implementation"
+            if hinted_dir.exists() and hinted_dir.is_dir():
+                for node in hinted_dir.rglob("*"):
+                    if not node.is_file():
+                        continue
+                    if node.name.strip().lower() in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES:
+                        continue
+                    if node.suffix.lower() in {
+                        ".py",
+                        ".ts",
+                        ".tsx",
+                        ".js",
+                        ".jsx",
+                        ".sh",
+                        ".ipynb",
+                        ".gs",
+                        ".html",
+                        ".css",
+                        ".sql",
+                        ".java",
+                        ".go",
+                        ".rs",
+                    }:
+                        implementation_required = True
+                        break
 
         missing: list[str] = []
         required_files = ["README.md", "CONCEPT.md"]
@@ -1370,7 +1418,10 @@ class HooksService:
             if not implementation_dir.is_dir():
                 missing.append("implementation/")
             else:
-                has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
+                has_impl_file = any(
+                    node.is_file() and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                    for node in implementation_dir.rglob("*")
+                )
                 if not has_impl_file:
                     missing.append("implementation/*")
         if missing:
@@ -1379,8 +1430,11 @@ class HooksService:
         bootstrap_scripts: list[str] = []
         implementation_dir = run_dir / "implementation"
         if implementation_dir.is_dir():
-            has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
-            if has_impl_file:
+            has_impl_file = any(
+                node.is_file() and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                for node in implementation_dir.rglob("*")
+            )
+            if implementation_required and has_impl_file:
                 bootstrap_scripts = self._ensure_tutorial_bootstrap_scripts(implementation_dir)
 
         run_rel_path = self._tutorial_run_rel_path(run_dir)
@@ -1397,6 +1451,7 @@ class HooksService:
             "key_files": self._tutorial_key_files_for_notification(
                 run_dir=run_dir,
                 run_rel_path=run_rel_path,
+                implementation_required=implementation_required,
             ),
         }
 
@@ -2654,7 +2709,8 @@ class HooksService:
                 "Path rule: never use a literal UA_ARTIFACTS_DIR folder name in paths.",
                 "Invalid examples: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
                 f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-creation/...",
-                "Create required artifacts first (manifest.json, README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/) before retrieval.",
+                "Create required baseline artifacts first (manifest.json, README.md, CONCEPT.md).",
+                "Only create runnable implementation artifacts when transcript+metadata confirm software/coding content.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
             ]
             if payload_video_id or payload_video_url:

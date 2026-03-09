@@ -794,7 +794,7 @@ export default function DashboardTutorialsPage() {
             const isNew = !seenRuns.has(runPath);
             const implRequired = run.implementation_required;
             const hasCreateRepoScript = files.some((file) => asText(file.name).toLowerCase() === "create_new_repo.sh");
-            const showCreateRepoAction = Boolean(implRequired || hasCreateRepoScript);
+            const showCreateRepoAction = implRequired === true || (implRequired === undefined && hasCreateRepoScript);
             return (
               <article key={runPath} className="group rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">

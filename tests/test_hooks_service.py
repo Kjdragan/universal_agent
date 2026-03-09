@@ -281,7 +281,7 @@ async def test_youtube_started_notification_includes_title_and_video_id(hooks_se
 
     started = next((n for n in notifications if n.get("kind") == "youtube_tutorial_started"), None)
     assert started is not None
-    assert started["message"] == "Processing: Building Better Pipelines (demo123abc4)"
+    assert "Processing: Building Better Pipelines (demo123abc4)" in str(started["message"])
     assert started["metadata"]["video_id"] == "demo123abc4"
     assert started["metadata"]["tutorial_title"] == "Building Better Pipelines"
 
@@ -1348,5 +1348,6 @@ def test_validate_youtube_tutorial_artifacts_generates_repo_scripts_for_implemen
     assert str(create_script) in bootstrap_scripts
     assert str(delete_script) in bootstrap_scripts
     key_file_names = {entry.get("name") for entry in result.get("key_files", [])}
-    assert "create_new_repo.sh" in key_file_names
-    assert "deletethisrepo.sh" in key_file_names
+    assert "create_new_repo.sh" not in key_file_names
+    assert "deletethisrepo.sh" not in key_file_names
+    assert "main.py" in key_file_names

@@ -11,6 +11,49 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+MODE_EXPLAINER_ONLY = "explainer_only"
+MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
+_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
+
 
 def _bool_env(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -39,6 +82,17 @@ def _split_csv_env(name: str) -> set[str]:
 
 def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+
+
+def _infer_youtube_learning_mode(*parts: Any) -> str:
+    tokens = " ".join(str(part or "") for part in parts).strip().lower()
+    if not tokens:
+        return MODE_EXPLAINER_ONLY
+    has_code = any(keyword in tokens for keyword in _CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _NON_CODE_HINT_KEYWORDS)
+    if has_non_code and not has_code:
+        return MODE_EXPLAINER_ONLY
+    return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
 
 
 def _extract_signature_hex(signature_header: str) -> str | None:
@@ -108,7 +162,13 @@ def to_manual_youtube_payload(event: CreatorSignalEvent) -> dict[str, Any] | Non
         video_url = f"https://www.youtube.com/watch?v={video_id}"
     if not video_url:
         return None
-    mode = "explainer_plus_code"
+    mode = _infer_youtube_learning_mode(
+        subject.get("title"),
+        subject.get("description"),
+        subject.get("channel_title"),
+        subject.get("channel_id"),
+        subject.get("url"),
+    )
     return {
         "video_url": video_url,
         "video_id": video_id,
