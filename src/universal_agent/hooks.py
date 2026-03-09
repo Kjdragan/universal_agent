@@ -1132,7 +1132,9 @@ class AgentHookSet:
                 "read", "read_file", "read_document", "view",
                 "mcp__composio__read_file",
                 "memory_search", "memory_get",
-                "mcp__internal__memory_search", "mcp__internal__memory_get"
+                "mcp__internal__memory_search", "mcp__internal__memory_get",
+                # SDK-native progress tracker; safe before first research delegation.
+                "todowrite",
             }
             if allows_youtube_ingestion_step or normalized_tool_name in ALLOWED_PRE_DELEGATION_TOOLS:
                 return {}
