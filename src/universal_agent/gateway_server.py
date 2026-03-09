@@ -18,6 +18,7 @@ import logging
 import mimetypes
 import os
 import re
+import socket
 import shutil
 import sqlite3
 import threading
@@ -207,11 +208,40 @@ if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
 
 _FACTORY_POLICY = build_factory_runtime_policy()
-_FACTORY_ID = (
-    str(os.getenv("UA_FACTORY_ID") or "").strip()
-    or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
-    or f"factory-{uuid.uuid4().hex[:8]}"
-)
+
+_LEGACY_RANDOM_FACTORY_ID_RE = re.compile(r"^factory-[0-9a-f]{8}$")
+
+
+def _normalized_factory_hostname() -> str:
+    raw = (
+        str(os.getenv("UA_FACTORY_HOSTNAME") or "").strip()
+        or str(os.getenv("HOSTNAME") or "").strip()
+        or socket.gethostname()
+    )
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("._-")
+    return slug[:80]
+
+
+def _derive_factory_id() -> str:
+    explicit = (
+        str(os.getenv("UA_FACTORY_ID") or "").strip()
+        or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
+    )
+    if explicit:
+        return explicit
+
+    host = _normalized_factory_hostname()
+    if host:
+        role = str(_FACTORY_POLICY.role or "").strip().upper()
+        if role == FactoryRole.HEADQUARTERS.value:
+            return f"{host}-hq"
+        if role == FactoryRole.LOCAL_WORKER.value:
+            return host
+        return f"{host}-node"
+    return f"factory-{uuid.uuid4().hex[:8]}"
+
+
+_FACTORY_ID = _derive_factory_id()
 
 
 def _redis_url_from_env() -> str:
@@ -910,11 +940,53 @@ def _register_local_factory_presence() -> dict[str, Any]:
         "capabilities": _factory_capability_labels(),
         "metadata": {
             "self_registration": True,
+            "hostname": _normalized_factory_hostname(),
             "capabilities_payload": capabilities_payload,
         },
         "registration_status": "online",
     }
     return _upsert_factory_registration(payload, source="gateway_startup")
+
+
+def _cleanup_legacy_factory_registrations() -> int:
+    """Remove legacy random self-registration rows after deterministic factory IDs."""
+    if _factory_registry is None:
+        return 0
+    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+        return 0
+
+    current_host = _normalized_factory_hostname().lower()
+    candidates: list[str] = []
+    for row in _factory_registry.list_all(limit=2000):
+        factory_id = str(row.get("factory_id") or "").strip()
+        if not factory_id or factory_id == _FACTORY_ID:
+            continue
+        if not _LEGACY_RANDOM_FACTORY_ID_RE.fullmatch(factory_id):
+            continue
+        if str(row.get("source") or "").strip().lower() != "gateway_startup":
+            continue
+        role = str(row.get("factory_role") or "").strip().upper()
+        if role != FactoryRole.HEADQUARTERS.value:
+            continue
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if not bool(meta.get("self_registration")):
+            continue
+        row_host = str(meta.get("hostname") or "").strip().lower()
+        # If hostname is known, only prune local-host legacy rows.
+        if current_host and row_host and row_host != current_host:
+            continue
+        candidates.append(factory_id)
+
+    if not candidates:
+        return 0
+    deleted = _factory_registry.delete_ids(candidates)
+    if deleted:
+        logger.info(
+            "Pruned %d legacy factory registration row(s): %s",
+            deleted,
+            ", ".join(candidates[:8]),
+        )
+    return deleted
 
 
 def _publish_tutorial_bootstrap_mission(
@@ -8629,6 +8701,7 @@ async def lifespan(app: FastAPI):
         _factory_registry = None
 
     _register_local_factory_presence()
+    _cleanup_legacy_factory_registrations()
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)

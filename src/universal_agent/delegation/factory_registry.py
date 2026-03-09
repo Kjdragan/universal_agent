@@ -170,6 +170,20 @@ class FactoryRegistry:
             row = self._conn.execute("SELECT COUNT(*) FROM factory_registrations").fetchone()
         return int(row[0]) if row else 0
 
+    def delete_ids(self, factory_ids: list[str]) -> int:
+        """Delete registry rows by factory_id. Returns deleted row count."""
+        normalized = [str(fid).strip() for fid in factory_ids if str(fid).strip()]
+        if not normalized:
+            return 0
+        placeholders = ",".join("?" for _ in normalized)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"DELETE FROM factory_registrations WHERE factory_id IN ({placeholders})",
+                tuple(normalized),
+            )
+            self._conn.commit()
+        return int(cursor.rowcount or 0)
+
     def enforce_staleness(self) -> dict[str, int]:
         """Mark stale/offline factories based on last_seen_at thresholds.
 

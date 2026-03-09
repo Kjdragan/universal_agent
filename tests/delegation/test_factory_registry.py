@@ -139,6 +139,16 @@ class TestGetAndList:
         reg.upsert(_base_payload(factory_id="f2"), source="test")
         assert reg.count() == 2
 
+    def test_delete_ids(self):
+        reg = _in_memory_registry()
+        reg.upsert(_base_payload(factory_id="f1"), source="test")
+        reg.upsert(_base_payload(factory_id="f2"), source="test")
+        reg.upsert(_base_payload(factory_id="f3"), source="test")
+        deleted = reg.delete_ids(["f1", "f3", "missing"])
+        assert deleted == 2
+        remaining = [row["factory_id"] for row in reg.list_all(limit=10)]
+        assert remaining == ["f2"]
+
     def test_list_returns_parsed_json(self):
         reg = _in_memory_registry()
         reg.upsert(
