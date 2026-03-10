@@ -30,3 +30,12 @@ def test_resolve_heartbeat_interval_falls_back_to_legacy_every(monkeypatch):
     )
     assert resolved == "15m"
 
+
+def test_resolve_min_interval_seconds_reads_current_env(monkeypatch):
+    import universal_agent.heartbeat_service as hb
+
+    monkeypatch.setenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", "600")
+    assert hb._resolve_min_interval_seconds(default=1800) == 600
+
+    monkeypatch.setenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", "900")
+    assert hb._resolve_min_interval_seconds(default=1800) == 900

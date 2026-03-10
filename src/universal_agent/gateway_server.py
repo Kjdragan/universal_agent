@@ -99,6 +99,7 @@ from universal_agent.heartbeat_service import (
     DEFAULT_INTERVAL_SECONDS as HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
     MIN_INTERVAL_SECONDS as HEARTBEAT_MIN_INTERVAL_SECONDS,
     HeartbeatService,
+    _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
     _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
 )
@@ -7277,12 +7278,13 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
 
 def _heartbeat_runtime_snapshot() -> dict[str, Any]:
     interval_raw = _resolve_hb_interval_env(prefer_interval=True) or ""
+    min_interval_seconds = _resolve_hb_min_interval_seconds(default=HEARTBEAT_MIN_INTERVAL_SECONDS)
     configured_every_seconds = _parse_heartbeat_duration_seconds(
         interval_raw or None,
         HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
     )
     effective_default_every_seconds = max(
-        HEARTBEAT_MIN_INTERVAL_SECONDS,
+        min_interval_seconds,
         int(configured_every_seconds or HEARTBEAT_DEFAULT_INTERVAL_SECONDS),
     )
     sessions = get_gateway().list_sessions()
@@ -7310,7 +7312,7 @@ def _heartbeat_runtime_snapshot() -> dict[str, Any]:
     return {
         "enabled": bool(HEARTBEAT_ENABLED),
         "configured_every_seconds": int(configured_every_seconds),
-        "min_interval_seconds": int(HEARTBEAT_MIN_INTERVAL_SECONDS),
+        "min_interval_seconds": int(min_interval_seconds),
         "effective_default_every_seconds": int(effective_default_every_seconds),
         "session_count": len(sessions),
         "session_state_count": active_state_count,

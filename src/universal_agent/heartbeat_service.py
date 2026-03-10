@@ -48,10 +48,16 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
-MIN_INTERVAL_SECONDS = max(
-    1,
-    int(os.getenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", str(30 * 60)) or str(30 * 60)),
-)  # Never run heartbeats more frequently than this minimum
+
+
+def _resolve_min_interval_seconds(default: int = 30 * 60) -> int:
+    return max(
+        1,
+        int(os.getenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", str(default)) or str(default)),
+    )
+
+
+MIN_INTERVAL_SECONDS = _resolve_min_interval_seconds()  # Import-time fallback; prefer runtime helper usage.
 BUSY_RETRY_DELAY = 10  # Seconds
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
@@ -586,7 +592,8 @@ class HeartbeatService:
         )
         if interval_raw is not None:
             schedule.every_seconds = _parse_duration_seconds(str(interval_raw), schedule.every_seconds)
-        schedule.every_seconds = max(MIN_INTERVAL_SECONDS, int(schedule.every_seconds or DEFAULT_INTERVAL_SECONDS))
+        min_interval_seconds = _resolve_min_interval_seconds(default=MIN_INTERVAL_SECONDS)
+        schedule.every_seconds = max(min_interval_seconds, int(schedule.every_seconds or DEFAULT_INTERVAL_SECONDS))
 
         active_start = schedule_data.get("active_start") or schedule_data.get("activeStart")
         active_end = schedule_data.get("active_end") or schedule_data.get("activeEnd")
