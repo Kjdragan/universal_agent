@@ -21,6 +21,44 @@ from universal_agent.durable.tool_gateway import parse_tool_identity
 _RESEARCH_PHASE_ATTEMPTED_RUNS: set[tuple[str, str]] = set()
 
 
+def _guardrail_policy_mode() -> str:
+    """Policy mode for intent/routing guardrails.
+
+    Modes:
+    - guide (default): prefer happy-path execution; avoid policy hard-blocks.
+    - strict: enforce policy guardrails with hard blocks.
+    - off: disable policy guardrail effects entirely.
+    """
+    raw = str(os.getenv("UA_GUARDRAIL_POLICY_MODE", "guide") or "").strip().lower()
+    if raw in {"guide", "strict", "off"}:
+        return raw
+    return "guide"
+
+
+def _guardrail_policy_is_strict() -> bool:
+    return _guardrail_policy_mode() == "strict"
+
+
+def _policy_guardrail_response(
+    *,
+    block_response: dict,
+    updated_input: Optional[dict] = None,
+) -> dict:
+    """Return strict block payload, or permissive guidance payload in guide/off mode."""
+    if _guardrail_policy_is_strict():
+        return block_response
+
+    hook_output: dict[str, object] = {"hookEventName": "PreToolUse"}
+    if isinstance(updated_input, dict):
+        hook_output["updatedInput"] = updated_input
+
+    message = str(block_response.get("systemMessage") or "").strip()
+    if message:
+        hook_output["additionalContext"] = message
+
+    return {"hookSpecificOutput": hook_output}
+
+
 @dataclass(frozen=True)
 class ToolSchema:
     required: Sequence[str] = field(default_factory=tuple)
@@ -861,41 +899,45 @@ async def pre_tool_use_schema_guardrail(
         _mark_research_phase_attempted(run_key, workspace)
         if not workspace:
             # Still block if workspace is completely missing - this is a config error
-            return {
-                "systemMessage": (
-                    "⚠️ Cannot run research phase: CURRENT_SESSION_WORKSPACE is not set. "
-                    "Bind the workspace for this phase before calling run_research_phase."
-                ),
-                "decision": "block",
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "Missing CURRENT_SESSION_WORKSPACE.",
-                },
-            }
+            return _policy_guardrail_response(
+                block_response={
+                    "systemMessage": (
+                        "⚠️ Cannot run research phase: CURRENT_SESSION_WORKSPACE is not set. "
+                        "Bind the workspace for this phase before calling run_research_phase."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Missing CURRENT_SESSION_WORKSPACE.",
+                    },
+                }
+            )
         # Allow run_research_phase when search_results already exist (research was done).
         # This covers both subagent context AND primary agent context after delegation.
         has_search_inputs = _has_search_results_inputs(workspace)
         if has_search_inputs:
             pass  # Allow: search results are present, processing is valid
         elif not is_subagent_context:
-            return {
-                "systemMessage": (
-                    "⚠️ `run_research_phase` was called without collected search inputs.\n\n"
-                    f"Resolved workspace: {workspace or '<unset>'}\n\n"
-                    "Happy path:\n"
-                    "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
-                    "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
-                    "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
-                    "Then continue with downstream analysis/delivery."
-                ),
-                "decision": "block",
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "No search_results inputs found in workspace.",
-                },
-            }
+            return _policy_guardrail_response(
+                block_response={
+                    "systemMessage": (
+                        "⚠️ `run_research_phase` was called without collected search inputs.\n\n"
+                        f"Resolved workspace: {workspace or '<unset>'}\n\n"
+                        "Happy path:\n"
+                        "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
+                        "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
+                        "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
+                        "Then continue with downstream analysis/delivery."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "No search_results inputs found in workspace.",
+                    },
+                }
+            )
     if isinstance(tool_input, dict):
         if (
             is_subagent_context
@@ -908,34 +950,38 @@ async def pre_tool_use_schema_guardrail(
                 if _looks_like_research_tool_discovery(
                     command
                 ) or _looks_like_workspace_scouting_command(command, workspace):
-                    return {
-                        "systemMessage": (
-                            "⚠️ Research pipeline guardrail: search inputs are ready in `search_results/` and "
-                            "the next required step is `mcp__internal__run_research_phase` before tool discovery/scouting. "
-                            "One explicit attempt is required before any fallback path."
-                        ),
-                        "decision": "block",
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": "Run research phase next before searching for tool/source paths.",
-                        },
-                    }
+                    return _policy_guardrail_response(
+                        block_response={
+                            "systemMessage": (
+                                "⚠️ Research pipeline guardrail: search inputs are ready in `search_results/` and "
+                                "the next required step is `mcp__internal__run_research_phase` before tool discovery/scouting. "
+                                "One explicit attempt is required before any fallback path."
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Run research phase next before searching for tool/source paths.",
+                            },
+                        }
+                    )
             if normalized_name.endswith("list_directory"):
                 target_path = str(tool_input.get("path", "") or "")
                 if _should_block_list_directory_research(target_path, workspace):
-                    return {
-                        "systemMessage": (
-                            "⚠️ Research pipeline guardrail: avoid workspace scouting after search collection. "
-                            "Call `mcp__internal__run_research_phase` next."
-                        ),
-                        "decision": "block",
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": "Run research phase next before listing workspace roots.",
-                        },
-                    }
+                    return _policy_guardrail_response(
+                        block_response={
+                            "systemMessage": (
+                                "⚠️ Research pipeline guardrail: avoid workspace scouting after search collection. "
+                                "Call `mcp__internal__run_research_phase` next."
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Run research phase next before listing workspace roots.",
+                            },
+                        }
+                    )
 
         if normalized_name == "task":
             subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
@@ -945,38 +991,45 @@ async def pre_tool_use_schema_guardrail(
                 and subagent_type != "system-configuration-agent"
                 and _looks_like_system_configuration_intent(prompt_text)
             ):
-                return {
-                    "systemMessage": (
-                        "⚠️ Misrouted delegation detected. This task looks like a system/runtime configuration request.\n"
-                        "Delegate to `Task(subagent_type='system-configuration-agent', ...)`."
-                    ),
-                    "decision": "block",
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": "System configuration intents must route to system-configuration-agent.",
+                rerouted = dict(tool_input)
+                rerouted["subagent_type"] = "system-configuration-agent"
+                return _policy_guardrail_response(
+                    block_response={
+                        "systemMessage": (
+                            "⚠️ Misrouted delegation detected. This task looks like a system/runtime configuration request.\n"
+                            "Delegate to `Task(subagent_type='system-configuration-agent', ...)`."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "System configuration intents must route to system-configuration-agent.",
+                        },
                     },
-                }
+                    updated_input=rerouted,
+                )
 
         # Enforce Chron APIs for scheduling changes; block OS-level crontab mutation.
         if normalized_name.endswith("bash"):
             command = str(tool_input.get("command", "") or "")
             if _is_blocked_crontab_mutation(command):
-                return {
-                    "systemMessage": (
-                        "⚠️ Blocked shell-level cron mutation. "
-                        "Use the system configuration path instead.\n\n"
-                        "Required routing:\n"
-                        "1) Delegate to `Task(subagent_type='system-configuration-agent', ... )`\n"
-                        "2) Apply scheduling through Universal Agent Chron APIs, not OS crontab."
-                    ),
-                    "decision": "block",
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": "OS crontab mutation blocked. Use system-configuration-agent and Chron APIs.",
-                    },
-                }
+                return _policy_guardrail_response(
+                    block_response={
+                        "systemMessage": (
+                            "⚠️ Blocked shell-level cron mutation. "
+                            "Use the system configuration path instead.\n\n"
+                            "Required routing:\n"
+                            "1) Delegate to `Task(subagent_type='system-configuration-agent', ... )`\n"
+                            "2) Apply scheduling through Universal Agent Chron APIs, not OS crontab."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "OS crontab mutation blocked. Use system-configuration-agent and Chron APIs.",
+                        },
+                    }
+                )
         normalized_input = _normalize_tool_input(identity.tool_name, tool_input)
         if normalized_input is not None:
             return {
@@ -1031,23 +1084,25 @@ async def pre_tool_use_schema_guardrail(
                 crawl_slugs = [slug for slug in tool_slugs if _is_composio_crawl_meta_slug(slug)]
                 if crawl_slugs:
                     unique_crawl_slugs = sorted(set(crawl_slugs))
-                    return {
-                        "systemMessage": (
-                            "⚠️ Composio crawl tools are DISABLED by policy.\n\n"
-                            "Use the internal deterministic research path instead:\n"
-                            "- Search via COMPOSIO_SEARCH_WEB/NEWS\n"
-                            "- Then call `mcp__internal__run_research_phase` (Crawl4AI-backed crawl/refine)\n\n"
-                            f"Blocked tool_slug(s): {', '.join(unique_crawl_slugs)}"
-                        ),
-                        "decision": "block",
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": (
-                                "Composio crawl tools are disabled; use internal Crawl4AI pipeline."
+                    return _policy_guardrail_response(
+                        block_response={
+                            "systemMessage": (
+                                "⚠️ Composio crawl tools are DISABLED by policy.\n\n"
+                                "Use the internal deterministic research path instead:\n"
+                                "- Search via COMPOSIO_SEARCH_WEB/NEWS\n"
+                                "- Then call `mcp__internal__run_research_phase` (Crawl4AI-backed crawl/refine)\n\n"
+                                f"Blocked tool_slug(s): {', '.join(unique_crawl_slugs)}"
                             ),
-                        },
-                    }
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": (
+                                    "Composio crawl tools are disabled; use internal Crawl4AI pipeline."
+                                ),
+                            },
+                        }
+                    )
                 
                 # [HIGH FAN-OUT TELEMETRY]
                 # This is intentionally NON-BLOCKING. We only log large multi-tool
@@ -1066,21 +1121,23 @@ async def pre_tool_use_schema_guardrail(
                         os.getenv("UA_COMPOSIO_MULTI_EXECUTE_HARD_CAP", "0") or "0"
                     ).strip().lower() in {"1", "true", "yes", "on"}
                     if hard_cap_enabled:
-                        return {
-                            "systemMessage": (
-                                "⚠️ COMPOSIO multi-execute hard cap enabled. "
-                                f"Requested {len(tools_value)} tools exceeds cap {high_fanout_threshold}.\n\n"
-                                "Split into sequential batches to stay within concurrent-session limits."
-                            ),
-                            "decision": "block",
-                            "hookSpecificOutput": {
-                                "hookEventName": "PreToolUse",
-                                "permissionDecision": "deny",
-                                "permissionDecisionReason": (
-                                    "COMPOSIO multi-execute hard cap exceeded."
+                        return _policy_guardrail_response(
+                            block_response={
+                                "systemMessage": (
+                                    "⚠️ COMPOSIO multi-execute hard cap enabled. "
+                                    f"Requested {len(tools_value)} tools exceeds cap {high_fanout_threshold}.\n\n"
+                                    "Split into sequential batches to stay within concurrent-session limits."
                                 ),
-                            },
-                        }
+                                "decision": "block",
+                                "hookSpecificOutput": {
+                                    "hookEventName": "PreToolUse",
+                                    "permissionDecision": "deny",
+                                    "permissionDecisionReason": (
+                                        "COMPOSIO multi-execute hard cap exceeded."
+                                    ),
+                                },
+                            }
+                        )
 
                     if logger and hasattr(logger, "warning"):
                         try:
@@ -1127,21 +1184,23 @@ async def pre_tool_use_schema_guardrail(
                     # Policy: Composio Twitter/X toolkit is disabled in this project.
                     # Use Grok/xAI evidence fetch via internal tools instead.
                     if isinstance(inner_slug, str) and inner_slug.upper().startswith("TWITTER_"):
-                        return {
-                            "systemMessage": (
-                                "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
-                                "Use X evidence via Grok/xAI instead:\n"
-                                "- Preferred: `mcp__internal__x_trends_posts` (structured JSON)\n"
-                                "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n\n"
-                                f"Blocked Composio tool_slug: {inner_slug}"
-                            ),
-                            "decision": "block",
-                            "hookSpecificOutput": {
-                                "hookEventName": "PreToolUse",
-                                "permissionDecision": "deny",
-                                "permissionDecisionReason": "Composio Twitter/X tools are disabled by policy.",
-                            },
-                        }
+                        return _policy_guardrail_response(
+                            block_response={
+                                "systemMessage": (
+                                    "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
+                                    "Use X evidence via Grok/xAI instead:\n"
+                                    "- Preferred: `mcp__internal__x_trends_posts` (structured JSON)\n"
+                                    "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n\n"
+                                    f"Blocked Composio tool_slug: {inner_slug}"
+                                ),
+                                "decision": "block",
+                                "hookSpecificOutput": {
+                                    "hookEventName": "PreToolUse",
+                                    "permissionDecision": "deny",
+                                    "permissionDecisionReason": "Composio Twitter/X tools are disabled by policy.",
+                                },
+                            }
+                        )
                     
                     # We can reuse the existing validation logic for the inner tool
                     # Note: validate_tool_input is available in this module scope
@@ -1200,36 +1259,40 @@ async def pre_tool_use_schema_guardrail(
                         known_fields = str(item.get("known_fields") or "")
                         combined = f"{use_case}\n{known_fields}".lower()
                         if any(token in combined for token in ("twitter", "x/twitter", "x.com", "tweet")):
-                            return {
-                                "systemMessage": (
-                                    "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
-                                    "Do not call `COMPOSIO_SEARCH_TOOLS` for X/Twitter. "
-                                    "Use Grok/xAI evidence fetch instead:\n"
-                                    "- Preferred: `mcp__internal__x_trends_posts`\n"
-                                    "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n"
-                                ),
-                                "decision": "block",
-                                "hookSpecificOutput": {
-                                    "hookEventName": "PreToolUse",
-                                    "permissionDecision": "deny",
-                                    "permissionDecisionReason": "Blocked Composio X/Twitter tool discovery by policy.",
-                                },
-                            }
+                            return _policy_guardrail_response(
+                                block_response={
+                                    "systemMessage": (
+                                        "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
+                                        "Do not call `COMPOSIO_SEARCH_TOOLS` for X/Twitter. "
+                                        "Use Grok/xAI evidence fetch instead:\n"
+                                        "- Preferred: `mcp__internal__x_trends_posts`\n"
+                                        "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n"
+                                    ),
+                                    "decision": "block",
+                                    "hookSpecificOutput": {
+                                        "hookEventName": "PreToolUse",
+                                        "permissionDecision": "deny",
+                                        "permissionDecisionReason": "Blocked Composio X/Twitter tool discovery by policy.",
+                                    },
+                                }
+                            )
                         if "reddit" in combined:
-                            return {
-                                "systemMessage": (
-                                    "⚠️ `COMPOSIO_SEARCH_TOOLS` is unnecessary for Reddit in this project.\n\n"
-                                    "Use direct tools instead:\n"
-                                    "- Preferred compact path: `mcp__internal__reddit_top_posts`\n"
-                                    "- Or direct Composio Reddit tools (`REDDIT_GET_R_TOP`, `REDDIT_SEARCH_ACROSS_SUBREDDITS`, etc.)."
-                                ),
-                                "decision": "block",
-                                "hookSpecificOutput": {
-                                    "hookEventName": "PreToolUse",
-                                    "permissionDecision": "deny",
-                                    "permissionDecisionReason": "Blocked unnecessary COMPOSIO_SEARCH_TOOLS discovery for Reddit intent.",
-                                },
-                            }
+                            return _policy_guardrail_response(
+                                block_response={
+                                    "systemMessage": (
+                                        "⚠️ `COMPOSIO_SEARCH_TOOLS` is unnecessary for Reddit in this project.\n\n"
+                                        "Use direct tools instead:\n"
+                                        "- Preferred compact path: `mcp__internal__reddit_top_posts`\n"
+                                        "- Or direct Composio Reddit tools (`REDDIT_GET_R_TOP`, `REDDIT_SEARCH_ACROSS_SUBREDDITS`, etc.)."
+                                    ),
+                                    "decision": "block",
+                                    "hookSpecificOutput": {
+                                        "hookEventName": "PreToolUse",
+                                        "permissionDecision": "deny",
+                                        "permissionDecisionReason": "Blocked unnecessary COMPOSIO_SEARCH_TOOLS discovery for Reddit intent.",
+                                    },
+                                }
+                            )
                 if invalid_indices:
                     return {
                         "systemMessage": (
@@ -1249,21 +1312,23 @@ async def pre_tool_use_schema_guardrail(
         if normalized_name.endswith("composio_manage_connections"):
             toolkits = tool_input.get("toolkits")
             if isinstance(toolkits, list) and any(str(t).strip().lower() == "twitter" for t in toolkits):
-                return {
-                    "systemMessage": (
-                        "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
-                        "Do not initiate a Composio Twitter/X connection. "
-                        "Use Grok/xAI evidence fetch instead:\n"
-                        "- Preferred: `mcp__internal__x_trends_posts`\n"
-                        "- Fallback: `grok-x-trends` skill\n"
-                    ),
-                    "decision": "block",
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": "Blocked Composio Twitter/X connection initiation by policy.",
-                    },
-                }
+                return _policy_guardrail_response(
+                    block_response={
+                        "systemMessage": (
+                            "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
+                            "Do not initiate a Composio Twitter/X connection. "
+                            "Use Grok/xAI evidence fetch instead:\n"
+                            "- Preferred: `mcp__internal__x_trends_posts`\n"
+                            "- Fallback: `grok-x-trends` skill\n"
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Blocked Composio Twitter/X connection initiation by policy.",
+                        },
+                    }
+                )
             
 
 

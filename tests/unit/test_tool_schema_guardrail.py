@@ -6,6 +6,12 @@ import pytest
 from universal_agent.guardrails.tool_schema import ToolSchema, pre_tool_use_schema_guardrail
 
 
+@pytest.fixture(autouse=True)
+def _enable_strict_policy_guardrails_for_legacy_contract(monkeypatch):
+    # Preserve existing strict-block expectations in this test module.
+    monkeypatch.setenv("UA_GUARDRAIL_POLICY_MODE", "strict")
+
+
 @pytest.mark.anyio
 async def test_schema_guardrail_allows_task_and_bash_case_insensitive():
     for tool_name in ("Task", "Bash", "task", "bash"):
@@ -31,6 +37,42 @@ async def test_schema_guardrail_blocks_crontab_mutation_for_bash():
     assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
     reason = result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
     assert "crontab" in reason.lower()
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_defaults_to_guide_mode(monkeypatch, tmp_path):
+    # New runtime default: guide mode should avoid hard-blocking policy-level flows.
+    monkeypatch.delenv("UA_GUARDRAIL_POLICY_MODE", raising=False)
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(tmp_path))
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test-guide-default",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_guide_mode_reroutes_system_config_task(monkeypatch):
+    monkeypatch.setenv("UA_GUARDRAIL_POLICY_MODE", "guide")
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": "Create a chron job that runs every 30 minutes and send heartbeat updates.",
+            },
+        },
+        run_id="run-test-guide-reroute",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
+    updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+    assert isinstance(updated, dict)
+    assert updated.get("subagent_type") == "system-configuration-agent"
 
 
 @pytest.mark.anyio
