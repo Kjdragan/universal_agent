@@ -131,3 +131,7 @@ src/universal_agent/prompt_assets/capabilities.last_good.md
 .claude/skills/excalidraw-diagram/references/uv.lock
 docs/ag-ui-protocol-streaming.excalidraw
 client_secret_*.json
+
+# === Generated security/memory artifacts ===
+security_evals/promptfoo_redteam_generated.yaml
+memory/research/index.json

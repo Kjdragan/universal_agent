@@ -159,6 +159,14 @@ from universal_agent.timeout_policy import (
     session_cancel_wait_seconds,
 )
 from universal_agent import task_hub
+from universal_agent.supervisors import (
+    build_csi_snapshot,
+    build_factory_snapshot,
+    find_supervisor,
+    list_snapshot_runs,
+    persist_snapshot,
+    supervisor_registry,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12434,6 +12442,275 @@ def _task_hub_open_conn() -> sqlite3.Connection:
     conn = _activity_connect()
     _ensure_activity_schema(conn)
     return conn
+
+
+def _supervisor_artifacts_payload(paths: dict[str, Any]) -> dict[str, Any]:
+    markdown_path = str(paths.get("markdown_path") or "").strip()
+    json_path = str(paths.get("json_path") or "").strip()
+    markdown_rel = _artifact_rel_path(markdown_path)
+    json_rel = _artifact_rel_path(json_path)
+    return {
+        "markdown_path": markdown_path,
+        "json_path": json_path,
+        "markdown_rel_path": markdown_rel,
+        "json_rel_path": json_rel,
+        "markdown_storage_href": (
+            _storage_explorer_href(scope="artifacts", path=markdown_rel, preview=markdown_rel)
+            if markdown_rel
+            else ""
+        ),
+        "json_storage_href": (
+            _storage_explorer_href(scope="artifacts", path=json_rel, preview=json_rel)
+            if json_rel
+            else ""
+        ),
+    }
+
+
+def _recent_delegation_history(limit: int = 50) -> list[dict[str, Any]]:
+    import universal_agent.main as main_module
+
+    rows_out: list[dict[str, Any]] = []
+    conn = getattr(main_module, "runtime_db_conn", None)
+    if conn is None:
+        return rows_out
+    try:
+        rows = conn.execute(
+            "SELECT mission_id, vp_id, mission_type, objective, status, source, "
+            "created_at, updated_at FROM vp_missions "
+            "ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+        for row in rows:
+            rows_out.append(dict(row))
+    except Exception as exc:
+        logger.warning("supervisor delegation history query failed: %s", exc)
+    return rows_out
+
+
+async def _system_timers_snapshot(limit: int = 200) -> list[dict[str, Any]]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl",
+            "list-timers",
+            "--all",
+            "--output=json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            return []
+        raw = (stdout or b"").decode(errors="replace")
+        parsed = json.loads(raw) if raw.strip() else []
+        if not isinstance(parsed, list):
+            return []
+        return [row for row in parsed if isinstance(row, dict)][: max(1, min(int(limit), 1000))]
+    except Exception:
+        return []
+
+
+def _task_hub_supervisor_snapshot() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    approvals_pending = list_approvals(status="pending")
+    pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            task_hub.rebuild_dispatch_queue(conn)
+            overview = task_hub.overview(conn, approvals_pending=pending_count)
+            overview["heartbeat"] = _heartbeat_runtime_snapshot()
+            agent_queue = task_hub.list_agent_queue(
+                conn,
+                offset=0,
+                limit=200,
+                include_csi=True,
+                collapse_csi=True,
+                project_key=None,
+            )
+            dispatch_queue = task_hub.get_dispatch_queue(conn, limit=200)
+            return (
+                overview if isinstance(overview, dict) else {},
+                (agent_queue.get("items") if isinstance(agent_queue, dict) else []) or [],
+                (dispatch_queue.get("items") if isinstance(dispatch_queue, dict) else []) or [],
+            )
+        finally:
+            conn.close()
+
+
+def _factory_registrations_snapshot(limit: int = 500) -> list[dict[str, Any]]:
+    clamped_limit = max(1, min(int(limit), 2000))
+    if _factory_registry is not None:
+        return _factory_registry.list_all(limit=clamped_limit)
+    with _factory_registration_lock:
+        rows = [dict(record) for record in _factory_registrations.values()]
+    rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+    return rows[:clamped_limit]
+
+
+def _record_supervisor_brief_event(
+    *,
+    supervisor_id: str,
+    snapshot: dict[str, Any],
+    reason: Optional[str] = None,
+) -> None:
+    event = {
+        "event_id": f"sup_{int(time.time() * 1000)}",
+        "type": "supervisor_brief_ready",
+        "payload": {
+            "supervisor_id": supervisor_id,
+            "severity": snapshot.get("severity"),
+            "summary": snapshot.get("summary"),
+            "generated_at": snapshot.get("generated_at"),
+            "artifacts": snapshot.get("artifacts") if isinstance(snapshot.get("artifacts"), dict) else {},
+            "reason": str(reason or "").strip() or None,
+        },
+        "created_at": _utc_now_iso(),
+    }
+    _persist_system_activity_event(event, session_id=None)
+
+
+async def _build_supervisor_snapshot(supervisor_id: str) -> dict[str, Any]:
+    record = find_supervisor(supervisor_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Unknown supervisor_id: {supervisor_id}")
+
+    normalized = str(record.get("id") or "").strip().lower()
+    todolist_overview, agent_queue, dispatch_queue = _task_hub_supervisor_snapshot()
+    base_events = _query_activity_events(limit=200, apply_default_window=False)
+
+    if normalized == "factory-supervisor":
+        capabilities = _factory_capabilities_payload()
+        registrations = _factory_registrations_snapshot(limit=500)
+        delegation_history = _recent_delegation_history(limit=50)
+        timers = await _system_timers_snapshot(limit=200)
+        return build_factory_snapshot(
+            capabilities=capabilities,
+            registrations=registrations,
+            delegation_history=delegation_history,
+            todolist_overview=todolist_overview,
+            agent_queue=agent_queue,
+            dispatch_queue=dispatch_queue,
+            events=base_events,
+            timers=timers,
+        )
+
+    if normalized == "csi-supervisor":
+        csi_health = await dashboard_csi_health()
+        csi_delivery_health = await dashboard_csi_delivery_health()
+        csi_reliability_slo = await dashboard_csi_reliability_slo()
+        loops_payload = await dashboard_csi_specialist_loops(limit=50, status=None)
+        csi_opportunities = await dashboard_csi_opportunities(limit=8)
+        csi_events = _query_activity_events(
+            limit=200,
+            source_domain="csi",
+            apply_default_window=False,
+        )
+        return build_csi_snapshot(
+            csi_health=csi_health if isinstance(csi_health, dict) else {},
+            csi_delivery_health=csi_delivery_health if isinstance(csi_delivery_health, dict) else {},
+            csi_reliability_slo=csi_reliability_slo if isinstance(csi_reliability_slo, dict) else {},
+            csi_specialist_loops=(
+                loops_payload.get("loops")
+                if isinstance(loops_payload, dict) and isinstance(loops_payload.get("loops"), list)
+                else []
+            ),
+            csi_opportunities=csi_opportunities if isinstance(csi_opportunities, dict) else {},
+            agent_queue=agent_queue,
+            todolist_overview=todolist_overview,
+            csi_events=csi_events,
+        )
+
+    raise HTTPException(status_code=404, detail=f"Unsupported supervisor_id: {supervisor_id}")
+
+
+def _latest_supervisor_artifacts(supervisor_id: str) -> dict[str, Any]:
+    runs = list_snapshot_runs(
+        supervisor_id=supervisor_id,
+        artifacts_root=ARTIFACTS_DIR,
+        limit=1,
+    )
+    if not runs:
+        return {
+            "markdown_path": "",
+            "json_path": "",
+            "markdown_rel_path": "",
+            "json_rel_path": "",
+            "markdown_storage_href": "",
+            "json_storage_href": "",
+        }
+    artifacts = runs[0].get("artifacts") if isinstance(runs[0], dict) else {}
+    return _supervisor_artifacts_payload(artifacts if isinstance(artifacts, dict) else {})
+
+
+class SupervisorRunRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+@app.get("/api/v1/dashboard/supervisors/registry")
+async def dashboard_supervisors_registry(request: Request):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    return {
+        "status": "ok",
+        "supervisors": supervisor_registry(),
+    }
+
+
+@app.get("/api/v1/dashboard/supervisors/{supervisor_id}/snapshot")
+async def dashboard_supervisor_snapshot(request: Request, supervisor_id: str):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    snapshot = await _build_supervisor_snapshot(supervisor_id)
+    snapshot["artifacts"] = _latest_supervisor_artifacts(supervisor_id)
+    return snapshot
+
+
+@app.post("/api/v1/dashboard/supervisors/{supervisor_id}/run")
+async def dashboard_supervisor_run(
+    request: Request,
+    supervisor_id: str,
+    payload: Optional[SupervisorRunRequest] = None,
+):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    snapshot = await _build_supervisor_snapshot(supervisor_id)
+    artifact_paths = persist_snapshot(
+        supervisor_id=supervisor_id,
+        snapshot=snapshot,
+        artifacts_root=ARTIFACTS_DIR,
+    )
+    snapshot["artifacts"] = _supervisor_artifacts_payload(artifact_paths)
+    _record_supervisor_brief_event(
+        supervisor_id=supervisor_id,
+        snapshot=snapshot,
+        reason=payload.reason if payload else None,
+    )
+    return snapshot
+
+
+@app.get("/api/v1/dashboard/supervisors/{supervisor_id}/runs")
+async def dashboard_supervisor_runs(request: Request, supervisor_id: str, limit: int = 25):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    if not find_supervisor(supervisor_id):
+        raise HTTPException(status_code=404, detail=f"Unknown supervisor_id: {supervisor_id}")
+    runs = list_snapshot_runs(
+        supervisor_id=supervisor_id,
+        artifacts_root=ARTIFACTS_DIR,
+        limit=max(1, min(int(limit), 200)),
+    )
+    normalized: list[dict[str, Any]] = []
+    for row in runs:
+        item = dict(row) if isinstance(row, dict) else {}
+        artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), dict) else {}
+        item["artifacts"] = _supervisor_artifacts_payload(artifacts)
+        normalized.append(item)
+    return {
+        "status": "ok",
+        "supervisor_id": supervisor_id,
+        "runs": normalized,
+    }
 
 
 def _approval_priority_value(record: dict[str, Any]) -> int:

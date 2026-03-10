@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import {
   LayoutDashboard,
   Building2,
+  ShieldCheck,
   CheckCircle,
   ListTodo,
   MessageSquare,
@@ -52,6 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/dashboard/corporation", label: "Corporation", icon: Building2, requiresHeadquarters: true },
+      { href: "/dashboard/supervisors", label: "Supervisor Agents", icon: ShieldCheck, requiresHeadquarters: true },
       { href: "/dashboard/approvals", label: "Approvals", icon: CheckCircle },
       { href: "/dashboard/todolist", label: "To Do List", icon: ListTodo },
       { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },
