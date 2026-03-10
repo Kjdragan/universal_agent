@@ -176,9 +176,34 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
     if any(lowered.startswith(prefix) for prefix in ("dummy", "fake", "placeholder", "example", "test-")):
         return f"Likely fabricated `task_id` ({clean_id!r})."
 
+    # Reject weak synthetic task IDs commonly hallucinated by the model
+    # (e.g., "task_1"), which are not real SDK-emitted task IDs.
+    if lowered.startswith("task_"):
+        suffix = clean_id[5:]
+        if len(suffix) < 6:
+            return (
+                f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+                "task_id from TaskStarted/TaskProgress/TaskNotification."
+            )
+        if suffix.isdigit() and len(suffix) < 10:
+            return (
+                f"Untrusted numeric `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+                "task_id from TaskStarted/TaskProgress/TaskNotification."
+            )
+
     # Common malformed placeholders from model retries.
     if lowered in {"all-tasks", "stop-all", "cancel-all"}:
         return f"Invalid bulk-stop token ({clean_id!r})."
+
+    # Golden runs should use provider-generated IDs, not natural-language aliases.
+    if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
+        has_separator = ("_" in clean_id) or ("-" in clean_id)
+        has_digit = any(ch.isdigit() for ch in clean_id)
+        if not has_separator and not has_digit:
+            return (
+                f"Untrusted `task_id` ({clean_id!r}). Use an SDK-emitted task_id from "
+                "TaskStarted/TaskProgress/TaskNotification."
+            )
 
     return None
 
@@ -938,6 +963,20 @@ class AgentHookSet:
             requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
         elif normalized_tool_name in ("task", "agent"):
             delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
+
+        # Ensure internal research pipeline tools receive an explicit workspace hint.
+        # This avoids dead-ends when ambient workspace env/context is absent.
+        if normalized_tool_name in {
+            "mcp__internal__run_research_phase",
+            "mcp__internal__run_research_pipeline",
+            "mcp__internal__run_report_generation",
+        } and isinstance(tool_input, dict):
+            workspace_hint = str(get_current_workspace() or self.workspace_dir or "").strip()
+            if workspace_hint and not str(tool_input.get("workspace_dir", "") or "").strip():
+                patched_tool_input = dict(tool_input)
+                patched_tool_input["workspace_dir"] = workspace_hint
+                input_data["tool_input"] = patched_tool_input
+                tool_input = patched_tool_input
 
         if normalized_tool_name in ("taskstop", "task_stop"):
             task_id = _extract_task_stop_id(tool_input)

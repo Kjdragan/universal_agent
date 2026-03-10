@@ -44,6 +44,17 @@ def test_main_blocks_taskstop_with_session_id(tmp_path: Path):
     assert "session/run identifier" in str(result.get("systemMessage", "")).lower()
 
 
+def test_main_blocks_taskstop_with_weak_synthetic_id(tmp_path: Path):
+    token = set_ctx(SessionContext(run_id="run-main-taskstop-weak", observer_workspace_dir=str(tmp_path)))
+    try:
+        result = _call_pre("TaskStop", {"task_id": "task_1"})
+    finally:
+        reset_ctx(token)
+
+    assert result.get("decision") == "block"
+    assert "untrusted `task_id`" in str(result.get("systemMessage", "")).lower()
+
+
 def test_main_allows_agent_for_pipeline_subagent(tmp_path: Path):
     token = set_ctx(SessionContext(run_id="run-main-agent", observer_workspace_dir=str(tmp_path)))
     try:

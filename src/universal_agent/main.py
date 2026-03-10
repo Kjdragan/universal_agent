@@ -1191,6 +1191,21 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
     if any(lowered.startswith(prefix) for prefix in ("dummy", "fake", "placeholder", "example", "test-")):
         return f"Likely fabricated `task_id` ({clean_id!r})."
 
+    # Reject weak synthetic task IDs commonly hallucinated by the model
+    # (e.g., "task_1"), which are not real SDK-emitted task IDs.
+    if lowered.startswith("task_"):
+        suffix = clean_id[5:]
+        if len(suffix) < 6:
+            return (
+                f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+                "task_id from TaskStarted/TaskProgress/TaskNotification."
+            )
+        if suffix.isdigit() and len(suffix) < 10:
+            return (
+                f"Untrusted numeric `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+                "task_id from TaskStarted/TaskProgress/TaskNotification."
+            )
+
     # Golden runs should use provider-generated IDs, not natural-language aliases.
     if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
         has_separator = ("_" in clean_id) or ("-" in clean_id)
@@ -1316,6 +1331,20 @@ async def on_pre_tool_use_ledger(
         normalized_tool_name = parse_tool_identity(tool_name).tool_name.strip().lower()
     except Exception:
         normalized_tool_name = str(tool_name or "").strip().lower()
+
+    if normalized_tool_name in {
+        "mcp__internal__run_research_phase",
+        "mcp__internal__run_research_pipeline",
+        "mcp__internal__run_report_generation",
+    } and isinstance(guard_tool_input, dict):
+        from universal_agent.execution_context import get_current_workspace as _get_ws
+
+        workspace_hint = str(_ctx.observer_workspace_dir or _get_ws() or "").strip()
+        if workspace_hint and not str(guard_tool_input.get("workspace_dir", "") or "").strip():
+            patched_input = dict(guard_tool_input)
+            patched_input["workspace_dir"] = workspace_hint
+            input_data["tool_input"] = patched_input
+            guard_tool_input = patched_input
 
     if normalized_tool_name in ("taskstop", "task_stop"):
         task_id = _extract_task_stop_id(guard_tool_input)

@@ -320,7 +320,9 @@ def build_system_prompt(
         "   - System/cron config? -> `system-configuration-agent`\n"
         "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
-        "need handoff for delivery (e.g., gws Gmail send, Slack post, or AgentMail)."
+        "need handoff for delivery (e.g., gws Gmail send, Slack post, or AgentMail).\n"
+        "5. **Task lifecycle discipline**: Do NOT call `TaskStop(...)` unless you received a concrete "
+        "SDK-emitted task_id in this run (TaskStarted/TaskProgress/TaskNotification). Never invent IDs like `task_1`."
     )
 
     # ── 7b. BROWSER LANE SELECTION ───────────────────────────────────

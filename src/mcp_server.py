@@ -4163,7 +4163,11 @@ def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 # @mcp.tool()
 @trace_tool_output
-async def _run_research_pipeline_legacy(query: str, task_name: str = "default") -> str:
+async def _run_research_pipeline_legacy(
+    query: str,
+    task_name: str = "default",
+    workspace_dir: str | None = None,
+) -> str:
     """
     Execute the Post-Search Research Pipeline: Crawl -> Refine -> Outline -> Draft -> Cleanup -> Compile.
     
@@ -4185,7 +4189,7 @@ async def _run_research_pipeline_legacy(query: str, task_name: str = "default") 
     Returns:
         Success message with report location, or error details.
     """
-    workspace = _resolve_workspace()
+    workspace = _resolve_workspace(preferred=workspace_dir)
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set."
 
@@ -4278,12 +4282,16 @@ async def _run_research_pipeline_legacy(query: str, task_name: str = "default") 
 
 @mcp.tool()
 @trace_tool_output
-async def _run_research_phase_legacy(query: str, task_name: str = "default") -> str:
+async def _run_research_phase_legacy(
+    query: str,
+    task_name: str = "default",
+    workspace_dir: str | None = None,
+) -> str:
     """
     Execute Phase 1 of the Research Pipeline: Crawl -> Refine.
     This creates the 'refined_corpus.md' needed for the report writer.
     """
-    workspace = _resolve_workspace()
+    workspace = _resolve_workspace(preferred=workspace_dir)
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set."
 
@@ -4333,7 +4341,12 @@ async def _run_research_phase_legacy(query: str, task_name: str = "default") -> 
 
 @mcp.tool()
 @trace_tool_output
-async def _run_report_generation_legacy(query: str, task_name: str = "default", corpus_data: str = None) -> str:
+async def _run_report_generation_legacy(
+    query: str,
+    task_name: str = "default",
+    corpus_data: str = None,
+    workspace_dir: str | None = None,
+) -> str:
     """
     Execute Phase 2 of the Research Pipeline: Outline -> Draft -> Cleanup -> Compile.
     This consumes 'refined_corpus.md' and generates 'report.html'.
@@ -4343,7 +4356,7 @@ async def _run_report_generation_legacy(query: str, task_name: str = "default", 
         task_name: Unique task identifier
         corpus_data: Optional text content to use as the corpus (auto-creates refined_corpus.md)
     """
-    workspace = _resolve_workspace()
+    workspace = _resolve_workspace(preferred=workspace_dir)
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set."
 
