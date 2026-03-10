@@ -14,7 +14,7 @@ _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|paym
 _EMAIL_RE = re.compile(r"\b(email|gmail|send mail|send an email)\b", re.IGNORECASE)
 _POST_RE = re.compile(r"\b(post|tweet|x\\.com|linkedin|facebook|publish)\b", re.IGNORECASE)
 _DESTRUCTIVE_RE = re.compile(
-    r"(rm\s+-rf|shutdown|reboot|format\s+disk|delete\s+all|wipe|sudo\s+rm)",
+    r"\b(rm\s+-rf|shutdown|reboot|format\s+disk|wipe|sudo\s+rm)\b",
     re.IGNORECASE,
 )
 _MEMORY_SCOPES = {"direct_only", "all"}
