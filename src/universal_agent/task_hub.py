@@ -491,6 +491,36 @@ def _historical_completion_bonus(conn: sqlite3.Connection, task: dict[str, Any])
     return 0.0
 
 
+def _task_intent(task: dict[str, Any]) -> str:
+    metadata = task.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("intent") or "").strip().lower()
+
+
+def _is_system_schedule_task(task: dict[str, Any]) -> bool:
+    source_kind = str(task.get("source_kind") or "").strip().lower()
+    return source_kind == "system_command" and _task_intent(task) == "schedule_task"
+
+
+def _dispatch_skip_reason(item: dict[str, Any], *, eligible: bool, threshold: float) -> Optional[str]:
+    if eligible:
+        return None
+    status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
+    if status == TASK_STATUS_BLOCKED:
+        return "blocked"
+    if status == TASK_STATUS_IN_PROGRESS:
+        return "in_progress"
+    if status == TASK_STATUS_REVIEW and not _is_system_schedule_task(item):
+        return "needs_review"
+    if not bool(item.get("agent_ready")):
+        return "agent_not_ready"
+    score = _safe_float(item.get("score"), 0.0)
+    if score < float(threshold):
+        return "below_threshold"
+    return "not_eligible"
+
+
 def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, float, dict[str, Any]]:
     labels = {str(v).strip().lower() for v in (task.get("labels") or [])}
     must_complete = bool(task.get("must_complete"))
@@ -521,6 +551,10 @@ def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, f
     elif project_key in {"memory", "proactive", "approval"}:
         score += 0.3
         details["project_bonus"] = 0.3
+
+    if _is_system_schedule_task(task):
+        score += 1.0
+        details["system_schedule_bonus"] = 1.0
 
     h_bonus = _historical_completion_bonus(conn, task)
     score += h_bonus
@@ -654,12 +688,20 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
             (score, confidence, stale_state, _json_dumps(metadata), _now_iso(), task_id),
         )
 
+        status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
+        is_system_schedule = _is_system_schedule_task(item)
         eligible = bool(item.get("agent_ready")) and score >= float(policy.agent_threshold)
-        status = str(item.get("status") or TASK_STATUS_OPEN)
-        if status in {TASK_STATUS_BLOCKED, TASK_STATUS_REVIEW, TASK_STATUS_IN_PROGRESS}:
+        if status in {TASK_STATUS_BLOCKED, TASK_STATUS_IN_PROGRESS}:
             eligible = False
-        if bool(item.get("must_complete")) and status == TASK_STATUS_OPEN:
-            eligible = True
+        elif status == TASK_STATUS_REVIEW:
+            # System command schedule instructions are explicit operator directives
+            # and should not be trapped behind manual review.
+            eligible = bool(item.get("agent_ready")) and is_system_schedule
+        if bool(item.get("must_complete")) and status in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
+            if status != TASK_STATUS_REVIEW or is_system_schedule:
+                eligible = bool(item.get("agent_ready"))
+        if is_system_schedule and status in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
+            eligible = bool(item.get("agent_ready"))
 
         _record_evaluation(
             conn,
@@ -680,12 +722,13 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
 
     def _sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
         must_complete = 1 if bool(row.get("must_complete")) else 0
+        system_schedule = 1 if _is_system_schedule_task(row) else 0
         approval = 1 if str(row.get("project_key") or "") == "approval" else 0
         score = _safe_float(row.get("score"), 0.0)
         priority = _safe_int(row.get("priority"), 1)
         due_sort = str(row.get("due_at") or "9999-12-31T23:59:59+00:00")
         updated_sort = str(row.get("updated_at") or "")
-        return (-must_complete, -approval, -score, -priority, due_sort, updated_sort)
+        return (-must_complete, -system_schedule, -approval, -score, -priority, due_sort, updated_sort)
 
     scored.sort(key=_sort_key)
 
@@ -707,7 +750,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
                 task_id,
                 rank,
                 1 if eligible else 0,
-                None if eligible else "not_eligible",
+                _dispatch_skip_reason(row, eligible=eligible, threshold=policy.agent_threshold),
                 built_at,
             ),
         )
@@ -983,7 +1026,16 @@ def list_agent_queue(
         FROM task_hub_items
         WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')
           AND agent_ready = 1
-        ORDER BY must_complete DESC, score DESC, priority DESC, updated_at DESC
+        ORDER BY
+          must_complete DESC,
+          CASE
+            WHEN source_kind = 'system_command'
+                 AND LOWER(COALESCE(json_extract(metadata_json, '$.intent'), '')) = 'schedule_task'
+            THEN 1 ELSE 0
+          END DESC,
+          score DESC,
+          priority DESC,
+          updated_at DESC
         """
     ).fetchall()
 

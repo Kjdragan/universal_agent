@@ -190,3 +190,66 @@ def test_park_csi_items_not_matching_event_types() -> None:
         assert str((park.get("metadata") or {}).get("auto_parked_reason")) == "unit_test_policy"
     finally:
         conn.close()
+
+
+def test_system_schedule_review_task_is_dispatch_eligible() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "scmd:schedule-heartbeat",
+                "source_kind": "system_command",
+                "source_ref": "ops",
+                "title": "Change heartbeat schedule",
+                "description": "Command block instruction",
+                "project_key": "immediate",
+                "priority": 2,
+                "labels": ["agent-ready", "schedule-command"],
+                "status": task_hub.TASK_STATUS_REVIEW,
+                "must_complete": False,
+                "agent_ready": True,
+                "metadata": {
+                    "intent": "schedule_task",
+                    "schedule_text": "every ten minutes",
+                    "repeat_schedule": True,
+                },
+            },
+        )
+        task_hub.rebuild_dispatch_queue(conn)
+        queue = task_hub.get_dispatch_queue(conn, limit=20)
+        rows = [row for row in (queue.get("items") or []) if row.get("task_id") == "scmd:schedule-heartbeat"]
+        assert len(rows) == 1
+        assert rows[0]["eligible"] is True
+        assert rows[0]["skip_reason"] is None
+    finally:
+        conn.close()
+
+
+def test_dispatch_queue_reports_below_threshold_reason() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:below-threshold",
+                "source_kind": "internal",
+                "source_ref": "ops",
+                "title": "Low score task",
+                "description": "Should be deferred",
+                "project_key": "immediate",
+                "priority": 1,
+                "labels": ["agent-ready"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": False,
+                "agent_ready": True,
+            },
+        )
+        task_hub.rebuild_dispatch_queue(conn)
+        queue = task_hub.get_dispatch_queue(conn, limit=20)
+        rows = [row for row in (queue.get("items") or []) if row.get("task_id") == "task:below-threshold"]
+        assert len(rows) == 1
+        assert rows[0]["eligible"] is False
+        assert rows[0]["skip_reason"] == "below_threshold"
+    finally:
+        conn.close()

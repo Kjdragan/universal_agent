@@ -95,7 +95,12 @@ from universal_agent.vp import (
     dispatch_mission_with_retry,
     is_sqlite_lock_error,
 )
-from universal_agent.heartbeat_service import HeartbeatService
+from universal_agent.heartbeat_service import (
+    DEFAULT_INTERVAL_SECONDS as HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
+    MIN_INTERVAL_SECONDS as HEARTBEAT_MIN_INTERVAL_SECONDS,
+    HeartbeatService,
+    _parse_duration_seconds as _parse_heartbeat_duration_seconds,
+)
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
 from universal_agent.ops_config import (
@@ -7269,6 +7274,51 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
         return None
 
 
+def _heartbeat_runtime_snapshot() -> dict[str, Any]:
+    interval_raw = (os.getenv("UA_HEARTBEAT_EVERY") or os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip()
+    configured_every_seconds = _parse_heartbeat_duration_seconds(
+        interval_raw or None,
+        HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
+    )
+    effective_default_every_seconds = max(
+        HEARTBEAT_MIN_INTERVAL_SECONDS,
+        int(configured_every_seconds or HEARTBEAT_DEFAULT_INTERVAL_SECONDS),
+    )
+    sessions = get_gateway().list_sessions()
+    latest_last_run = 0.0
+    nearest_next_run = 0.0
+    active_state_count = 0
+    for session in sessions:
+        state = _read_heartbeat_state(str(session.workspace_dir))
+        if not isinstance(state, dict):
+            continue
+        active_state_count += 1
+        try:
+            last_run = float(state.get("last_run") or 0.0)
+        except Exception:
+            last_run = 0.0
+        try:
+            next_run = float(state.get("next_run") or 0.0)
+        except Exception:
+            next_run = 0.0
+        if last_run > latest_last_run:
+            latest_last_run = last_run
+        if next_run > 0.0 and (nearest_next_run <= 0.0 or next_run < nearest_next_run):
+            nearest_next_run = next_run
+
+    return {
+        "enabled": bool(HEARTBEAT_ENABLED),
+        "configured_every_seconds": int(configured_every_seconds),
+        "min_interval_seconds": int(HEARTBEAT_MIN_INTERVAL_SECONDS),
+        "effective_default_every_seconds": int(effective_default_every_seconds),
+        "session_count": len(sessions),
+        "session_state_count": active_state_count,
+        "busy_sessions": int(len(_heartbeat_service.busy_sessions) if _heartbeat_service else 0),
+        "latest_last_run_epoch": latest_last_run if latest_last_run > 0 else None,
+        "nearest_next_run_epoch": nearest_next_run if nearest_next_run > 0 else None,
+    }
+
+
 def _calendar_timezone_or_default(value: Optional[str]) -> str:
     candidate = (value or os.getenv("USER_TIMEZONE") or "America/Chicago").strip()
     if not candidate:
@@ -12523,6 +12573,7 @@ async def dashboard_todolist_overview():
             data["sync"] = {"approvals_upserted": synced_approvals}
             data["mode_default"] = "agent"
             data["status"] = "ok"
+            data["heartbeat"] = _heartbeat_runtime_snapshot()
             return data
         finally:
             conn.close()
@@ -13517,6 +13568,10 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     schedule_section = "scheduled" if schedule_text else "background"
     is_personal = is_brainstorm or _system_command_is_personal_task(text)
     repeat_schedule = bool(schedule_text and _schedule_text_suggests_repeat(schedule_text))
+    is_schedule_instruction = bool(schedule_text and not is_personal)
+    if is_schedule_instruction:
+        priority_value = max(priority_value, 4)
+    must_complete = bool(is_schedule_instruction and not repeat_schedule)
     intent = "capture_idea" if is_brainstorm else ("schedule_task" if schedule_text else "capture_task")
 
     due_at_iso: Optional[str] = None
@@ -13533,6 +13588,10 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         labels.extend(["human", "personal-reminder"])
     else:
         labels.append("agent-ready")
+    if is_schedule_instruction:
+        labels.append("schedule-command")
+    if must_complete:
+        labels.append("must-complete")
 
     interpreted = {
         "content": content,
@@ -13577,7 +13636,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                     "due_at": due_at_iso,
                     "labels": labels,
                     "status": "open",
-                    "must_complete": False,
+                    "must_complete": must_complete,
                     "agent_ready": not is_personal,
                     "mirror_status": "mirror_eligible" if should_mirror else "internal_only",
                     "metadata": {
@@ -13587,6 +13646,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                         "schedule_text": schedule_text or "",
                         "repeat_schedule": repeat_schedule,
                         "intent": intent,
+                        "dispatch_hint": "system_schedule_instruction" if is_schedule_instruction else "",
                     },
                 },
             )
@@ -13705,6 +13765,15 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
             "source_context": source_context,
         },
     )
+    if is_schedule_instruction and _heartbeat_service:
+        target_sessions: list[str] = []
+        if source_session_id:
+            target_sessions = [source_session_id]
+        else:
+            target_sessions = [str(s.session_id) for s in get_gateway().list_sessions()[:5]]
+        for sid in target_sessions:
+            if sid:
+                _heartbeat_service.request_heartbeat_next(sid, reason="system_command_schedule")
     return {
         "ok": True,
         "lane": "system",

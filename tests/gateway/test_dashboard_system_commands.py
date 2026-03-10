@@ -116,6 +116,15 @@ class _CronBootstrapStub:
         )
 
 
+class _HeartbeatStub:
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+        self.busy_sessions: set[str] = set()
+
+    def request_heartbeat_next(self, session_id: str, reason: str = "wake_next"):
+        self.calls.append((session_id, reason))
+
+
 def test_extract_system_command_content_and_schedule():
     content, schedule = gateway_server._extract_system_command_content_and_schedule(
         "add to todoist review youtube artifacts tonight at 2am"
@@ -162,6 +171,45 @@ async def test_dashboard_system_command_schedules_cron_from_natural_text(monkeyp
     assert response["cron"]["job"]["job_id"].startswith("cron_job_")
     assert response["cron"]["status"] == "created"
     assert len(cron_stub.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_system_command_schedule_boosts_priority_and_wakes_heartbeat(monkeypatch, tmp_path):
+    monkeypatch.setattr("universal_agent.services.todoist_service.TodoService", _FakeTodoService)
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setenv("UA_SYSTEM_COMMAND_ENABLE_CRON_BRIDGE", "0")
+    hb_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", hb_stub)
+
+    response = await gateway_server.dashboard_system_command(
+        gateway_server.DashboardSystemCommandRequest(
+            text="change the heartbeat.md scheduled to run every ten minutes",
+            source_page="/dashboard/todolist",
+            source_context={"session_id": "ops-session-1"},
+            timezone="America/Chicago",
+        )
+    )
+
+    assert response["ok"] is True
+    task = response["task_hub"]["task"]
+    assert task["priority"] == 4
+    assert "schedule-command" in list(task.get("labels") or [])
+    assert hb_stub.calls == [("ops-session-1", "system_command_schedule")]
+
+
+@pytest.mark.asyncio
+async def test_todolist_overview_includes_heartbeat_runtime_snapshot(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+    monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "25m")
+
+    response = await gateway_server.dashboard_todolist_overview()
+
+    assert response["status"] == "ok"
+    heartbeat = response.get("heartbeat") or {}
+    assert heartbeat.get("enabled") in {True, False}
+    assert int(heartbeat.get("configured_every_seconds") or 0) == 1500
+    assert int(heartbeat.get("min_interval_seconds") or 0) >= 1
 
 
 @pytest.mark.asyncio

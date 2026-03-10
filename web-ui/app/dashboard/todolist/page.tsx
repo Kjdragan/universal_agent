@@ -93,6 +93,17 @@ type OverviewPayload = {
     active_assignments: number;
     backlog_open: number;
   };
+  heartbeat?: {
+    enabled: boolean;
+    configured_every_seconds: number;
+    min_interval_seconds: number;
+    effective_default_every_seconds: number;
+    session_count: number;
+    session_state_count: number;
+    busy_sessions: number;
+    latest_last_run_epoch?: number | null;
+    nearest_next_run_epoch?: number | null;
+  };
 };
 
 type ApprovalHighlightPayload = {
@@ -157,6 +168,24 @@ function formatTs(ts?: string | null): string {
   } catch {
     return ts;
   }
+}
+
+function formatEpochTs(epoch?: number | null): string {
+  const value = Number(epoch || 0);
+  if (!value || Number.isNaN(value)) return "n/a";
+  try {
+    return formatDistanceToNow(new Date(value * 1000), { addSuffix: true });
+  } catch {
+    return "n/a";
+  }
+}
+
+function formatEvery(seconds?: number): string {
+  const value = Number(seconds || 0);
+  if (!value || Number.isNaN(value)) return "n/a";
+  if (value % 3600 === 0) return `${value / 3600}h`;
+  if (value % 60 === 0) return `${value / 60}m`;
+  return `${value}s`;
 }
 
 function scoreBadge(score?: number): string {
@@ -594,6 +623,36 @@ export default function ToDoListDashboardPage() {
           <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active Agents</p>
           <p className="mt-1 text-2xl font-semibold text-cyan-200">{agentActivity?.active_agents || 0}</p>
         </article>
+      </section>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Heartbeat Runtime</h2>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
+            <div className="text-slate-500">Configured / Effective</div>
+            <div className="mt-1 text-slate-100">
+              {formatEvery(overview?.heartbeat?.configured_every_seconds)} / {formatEvery(overview?.heartbeat?.effective_default_every_seconds)}
+            </div>
+          </div>
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
+            <div className="text-slate-500">Min Interval / Busy</div>
+            <div className="mt-1 text-slate-100">
+              {formatEvery(overview?.heartbeat?.min_interval_seconds)} / {overview?.heartbeat?.busy_sessions ?? 0}
+            </div>
+          </div>
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
+            <div className="text-slate-500">Last Run / Next Run</div>
+            <div className="mt-1 text-slate-100">
+              {formatEpochTs(overview?.heartbeat?.latest_last_run_epoch)} / {formatEpochTs(overview?.heartbeat?.nearest_next_run_epoch)}
+            </div>
+          </div>
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
+            <div className="text-slate-500">Sessions / State Files</div>
+            <div className="mt-1 text-slate-100">
+              {overview?.heartbeat?.session_count ?? 0} / {overview?.heartbeat?.session_state_count ?? 0}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
