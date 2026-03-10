@@ -7,10 +7,14 @@
 		{
 			"path": "CSI_Ingester/development",
 			"name": "CSI_Ingester"
+		},
+		{
+			"path": "../notebooklm-mcp-cli"
 		}
 	],
 	"settings": {
 		"makefile.configureOnOpen": false,
-		"chatgpt.openOnStartup": true
+		"chatgpt.openOnStartup": true,
+		"liveServer.settings.multiRootWorkspaceName": "universal_agent"
 	}
 }

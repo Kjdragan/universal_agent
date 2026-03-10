@@ -1,0 +1,5 @@
+{
+  "notebooklm_mcp_tools_exposed_in_agent_runtime": false,
+  "observation": "No NotebookLM MCP server/resources were discoverable; only figma MCP resources were listed in this agent session.",
+  "fallback": "cli"
+}

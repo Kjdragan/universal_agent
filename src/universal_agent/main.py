@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
 
 from universal_agent.utils.message_history import (
     TRUNCATION_THRESHOLD,
@@ -7912,6 +7913,86 @@ async def setup_session(
     system_prompt_option, prompt_mode = _build_sdk_system_prompt(base_system_prompt)
     print(f"🧾 System prompt mode: {prompt_mode}")
 
+    mcp_servers_config = {
+        "composio": {
+            "type": "http",
+            "url": session.mcp.url,
+            "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
+        },
+        # local_toolkit subprocess disabled in favor of in-process tools
+        # External MCP: SEC Edgar Tools for financial research
+        "edgartools": {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "edgar.ai"],
+            "env": {
+                "EDGAR_IDENTITY": os.environ.get(
+                    "EDGAR_IDENTITY", "Agent agent@example.com"
+                )
+            },
+        },
+        # External MCP: Video & Audio editing via FFmpeg
+        "video_audio": {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": [
+                os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    "external_mcps",
+                    "video-audio-mcp",
+                    "server.py",
+                )
+            ],
+        },
+        # External MCP: YouTube/video downloader via yt-dlp
+        "youtube": {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "mcp_youtube"],
+        },
+        # External MCP: Z.AI Vision (GLM-4.6V) for image/video analysis
+        "zai_vision": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@z_ai/mcp-server"],
+            "env": {
+                "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
+                "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
+            },
+        },
+        "internal": create_sdk_mcp_server(
+            name="internal",
+            version="1.0.0",
+            tools=[
+                run_research_pipeline_wrapper,
+                run_research_phase_wrapper,
+                crawl_parallel_wrapper,
+                run_report_generation_wrapper,
+                generate_outline_wrapper,
+                draft_report_parallel_wrapper,
+                cleanup_report_wrapper,
+                compile_report_wrapper,
+                upload_to_composio_wrapper,
+                list_directory_wrapper,
+                append_to_file_wrapper,
+                write_text_file_wrapper,
+                finalize_research_wrapper,
+                generate_image_wrapper,
+                describe_image_wrapper,
+                preview_image_wrapper,
+                html_to_pdf_wrapper,
+                memory_search_wrapper,
+                memory_get_wrapper,
+                ask_user_questions_wrapper,
+                batch_tool_execute_wrapper,
+            ]
+        ),
+    }
+
+    notebooklm_mcp_config = build_notebooklm_mcp_server_config()
+    if notebooklm_mcp_config is not None:
+        mcp_servers_config["notebooklm-mcp"] = notebooklm_mcp_config
+
     options = ClaudeAgentOptions(
         model=resolve_claude_code_model(default="opus"),
         add_dirs=[os.path.join(src_dir, ".claude")],
@@ -7936,81 +8017,7 @@ async def setup_session(
             ),
         },
         system_prompt=system_prompt_option,
-        mcp_servers={
-            "composio": {
-                "type": "http",
-                "url": session.mcp.url,
-                "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
-            },
-            # local_toolkit subprocess disabled in favor of in-process tools
-            # External MCP: SEC Edgar Tools for financial research
-            "edgartools": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "edgar.ai"],
-                "env": {
-                    "EDGAR_IDENTITY": os.environ.get(
-                        "EDGAR_IDENTITY", "Agent agent@example.com"
-                    )
-                },
-            },
-            # External MCP: Video & Audio editing via FFmpeg
-            "video_audio": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [
-                    os.path.join(
-                        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                        "external_mcps",
-                        "video-audio-mcp",
-                        "server.py",
-                    )
-                ],
-            },
-            # External MCP: YouTube/video downloader via yt-dlp
-            "youtube": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "mcp_youtube"],
-            },
-            # External MCP: Z.AI Vision (GLM-4.6V) for image/video analysis
-            "zai_vision": {
-                "type": "stdio",
-                "command": "npx",
-                "args": ["-y", "@z_ai/mcp-server"],
-                "env": {
-                    "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
-                    "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
-                },
-            },
-            "internal": create_sdk_mcp_server(
-                name="internal",
-                version="1.0.0",
-                tools=[
-                    run_research_pipeline_wrapper,
-                    run_research_phase_wrapper,
-                    crawl_parallel_wrapper,
-                    run_report_generation_wrapper,
-                    generate_outline_wrapper,
-                    draft_report_parallel_wrapper,
-                    cleanup_report_wrapper,
-                    compile_report_wrapper,
-                    upload_to_composio_wrapper,
-                    list_directory_wrapper,
-                    append_to_file_wrapper,
-                    write_text_file_wrapper,
-                    finalize_research_wrapper,
-                    generate_image_wrapper,
-                    describe_image_wrapper,
-                    preview_image_wrapper,
-                    html_to_pdf_wrapper,
-                    memory_search_wrapper,
-                    memory_get_wrapper,
-                    ask_user_questions_wrapper,
-                    batch_tool_execute_wrapper,
-                ]
-            ),
-        },
+        mcp_servers=mcp_servers_config,
         # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
         # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
         # AND in-process tools (crawl_parallel, report generation, etc.)

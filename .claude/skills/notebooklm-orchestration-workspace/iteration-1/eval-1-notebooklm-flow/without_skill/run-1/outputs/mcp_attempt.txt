@@ -1,0 +1,1 @@
+list_mcp_resources(server="notebooklm-mcp") => unknown MCP server 'notebooklm-mcp'

@@ -60,6 +60,7 @@ from universal_agent.feature_flags import (
 from universal_agent.memory.paths import (
     resolve_shared_memory_workspace,
 )
+from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
 from universal_agent.sdk.runtime_info import emit_sdk_runtime_banner
 
 
@@ -545,6 +546,11 @@ class AgentSetup:
         gws_config = build_gws_mcp_server_config()
         if gws_config is not None:
             servers["gws"] = gws_config
+
+        # NotebookLM MCP server (feature-gated, default off for context budget)
+        notebooklm_config = build_notebooklm_mcp_server_config()
+        if notebooklm_config is not None:
+            servers["notebooklm-mcp"] = notebooklm_config
 
         return servers
 

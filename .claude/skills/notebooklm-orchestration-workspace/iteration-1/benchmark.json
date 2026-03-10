@@ -1,0 +1,315 @@
+{
+  "metadata": {
+    "skill_name": "notebooklm-orchestration",
+    "skill_path": "/home/kjdragan/lrepos/universal_agent/.claude/skills/notebooklm-orchestration",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-03-10T01:08:40Z",
+    "evals_run": [
+      1,
+      2,
+      3
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 2651,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Auth preflight is reported as successful for the execution profile",
+          "passed": true,
+          "evidence": "Found auth preflight/auth-check success markers"
+        },
+        {
+          "text": "Notebook listing is reported with a non-zero count",
+          "passed": true,
+          "evidence": "Found non-zero notebook count marker"
+        },
+        {
+          "text": "MCP-first attempt and CLI fallback/path decision is documented",
+          "passed": true,
+          "evidence": "Found MCP/fallback path explanation"
+        },
+        {
+          "text": "Response uses structured contract fields (status and path_used)",
+          "passed": true,
+          "evidence": "Structured contract fields present"
+        }
+      ],
+      "notes": [
+        "Subagent completion notifications in this environment did not expose duration/tokens telemetry.",
+        "Stored timing/tokens as 0.0/0 due missing telemetry fields in tool response."
+      ]
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 1887,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Response reports notebook/source/research/audio identifiers",
+          "passed": true,
+          "evidence": "All required identifiers are present"
+        },
+        {
+          "text": "Response indicates confirmation guardrail behavior for audio generation",
+          "passed": true,
+          "evidence": "Audio confirmation/guardrail is documented"
+        },
+        {
+          "text": "Execution is reported as successful/completed",
+          "passed": true,
+          "evidence": "Success/completed marker present"
+        },
+        {
+          "text": "Response uses structured contract fields (status and path_used)",
+          "passed": true,
+          "evidence": "Structured contract fields present"
+        }
+      ],
+      "notes": [
+        "Subagent completion notifications in this environment did not expose duration/tokens telemetry.",
+        "Stored timing/tokens as 0.0/0 due missing telemetry fields in tool response."
+      ]
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 1463,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "No destructive/share action is executed before confirmation",
+          "passed": true,
+          "evidence": "Output explicitly states no mutations were executed"
+        },
+        {
+          "text": "Output requires explicit confirmation before proceeding",
+          "passed": true,
+          "evidence": "Explicit confirmation requirement is present"
+        },
+        {
+          "text": "Output includes target source id 123 and public-share visibility change",
+          "passed": true,
+          "evidence": "Target source/public-change markers present"
+        },
+        {
+          "text": "Response uses structured contract fields (status and path_used)",
+          "passed": true,
+          "evidence": "Structured contract fields present"
+        }
+      ],
+      "notes": [
+        "Subagent completion notifications in this environment did not expose duration/tokens telemetry.",
+        "Stored timing/tokens as 0.0/0 due missing telemetry fields in tool response."
+      ]
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 14006,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Auth preflight is reported as successful for the execution profile",
+          "passed": true,
+          "evidence": "Found auth preflight/auth-check success markers"
+        },
+        {
+          "text": "Notebook listing is reported with a non-zero count",
+          "passed": true,
+          "evidence": "Found non-zero notebook count marker"
+        },
+        {
+          "text": "MCP-first attempt and CLI fallback/path decision is documented",
+          "passed": true,
+          "evidence": "Found MCP/fallback path explanation"
+        },
+        {
+          "text": "Response uses structured contract fields (status and path_used)",
+          "passed": false,
+          "evidence": "Structured contract fields missing"
+        }
+      ],
+      "notes": [
+        "Subagent completion notifications in this environment did not expose duration/tokens telemetry.",
+        "Stored timing/tokens as 0.0/0 due missing telemetry fields in tool response."
+      ]
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 2115,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Response reports notebook/source/research/audio identifiers",
+          "passed": true,
+          "evidence": "All required identifiers are present"
+        },
+        {
+          "text": "Response indicates confirmation guardrail behavior for audio generation",
+          "passed": true,
+          "evidence": "Audio confirmation/guardrail is documented"
+        },
+        {
+          "text": "Execution is reported as successful/completed",
+          "passed": true,
+          "evidence": "Success/completed marker present"
+        },
+        {
+          "text": "Response uses structured contract fields (status and path_used)",
+          "passed": true,
+          "evidence": "Structured contract fields present"
+        }
+      ],
+      "notes": [
+        "Subagent completion notifications in this environment did not expose duration/tokens telemetry.",
+        "Stored timing/tokens as 0.0/0 due missing telemetry fields in tool response."
+      ]
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 532,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "No destructive/share action is executed before confirmation",
+          "passed": true,
+          "evidence": "Output explicitly states no mutations were executed"
+        },
+        {
+          "text": "Output requires explicit confirmation before proceeding",
+          "passed": true,
+          "evidence": "Explicit confirmation requirement is present"
+        },
+        {
+          "text": "Output includes target source id 123 and public-share visibility change",
+          "passed": true,
+          "evidence": "Target source/public-change markers present"
+        },
+        {
+          "text": "Response uses structured contract fields (status and path_used)",
+          "passed": false,
+          "evidence": "Structured contract fields missing"
+        }
+      ],
+      "notes": [
+        "Subagent completion notifications in this environment did not expose duration/tokens telemetry.",
+        "Stored timing/tokens as 0.0/0 due missing telemetry fields in tool response."
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 2000.3333,
+        "stddev": 602.0543,
+        "min": 1463,
+        "max": 2651
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.8333,
+        "stddev": 0.1443,
+        "min": 0.75,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 5551.0,
+        "stddev": 7364.8993,
+        "min": 532,
+        "max": 14006
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.17",
+      "time_seconds": "+0.0",
+      "tokens": "-3551"
+    }
+  },
+  "notes": [
+    "with_skill scored 100% pass-rate across three evals.",
+    "Baseline scored 83.3%; major gap is structured output contract consistency.",
+    "Subagent telemetry lacked duration/token fields; timing and token metrics use placeholders/proxies."
+  ]
+}
