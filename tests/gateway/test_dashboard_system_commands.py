@@ -118,11 +118,19 @@ class _CronBootstrapStub:
 
 class _HeartbeatStub:
     def __init__(self):
-        self.calls: list[tuple[str, str]] = []
+        self.next_calls: list[tuple[str, str]] = []
+        self.now_calls: list[tuple[str, str]] = []
+        self.registered: list[str] = []
         self.busy_sessions: set[str] = set()
 
     def request_heartbeat_next(self, session_id: str, reason: str = "wake_next"):
-        self.calls.append((session_id, reason))
+        self.next_calls.append((session_id, reason))
+
+    def request_heartbeat_now(self, session_id: str, reason: str = "wake"):
+        self.now_calls.append((session_id, reason))
+
+    def register_session(self, session):
+        self.registered.append(str(getattr(session, "session_id", "")))
 
 
 def test_extract_system_command_content_and_schedule():
@@ -194,7 +202,7 @@ async def test_dashboard_system_command_schedule_boosts_priority_and_wakes_heart
     task = response["task_hub"]["task"]
     assert task["priority"] == 4
     assert "schedule-command" in list(task.get("labels") or [])
-    assert hb_stub.calls == [("ops-session-1", "system_command_schedule")]
+    assert hb_stub.next_calls == [("ops-session-1", "system_command_schedule")]
 
 
 @pytest.mark.asyncio
@@ -210,6 +218,31 @@ async def test_todolist_overview_includes_heartbeat_runtime_snapshot(monkeypatch
     assert heartbeat.get("enabled") in {True, False}
     assert int(heartbeat.get("configured_every_seconds") or 0) == 1500
     assert int(heartbeat.get("min_interval_seconds") or 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_wake_heartbeat_uses_gateway_sessions_when_runtime_sessions_empty(monkeypatch, tmp_path):
+    hb_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", hb_stub)
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    gateway_sessions = [
+        SimpleNamespace(session_id="sess-a", workspace_dir=str(tmp_path / "a")),
+        SimpleNamespace(session_id="sess-b", workspace_dir=str(tmp_path / "b")),
+    ]
+    monkeypatch.setattr(
+        gateway_server,
+        "get_gateway",
+        lambda: SimpleNamespace(list_sessions=lambda: gateway_sessions),
+    )
+
+    response = await gateway_server.wake_heartbeat(
+        gateway_server.HeartbeatWakeRequest(mode="now", reason="unit-test-wake")
+    )
+
+    assert response["status"] == "queued"
+    assert response["count"] == 2
+    assert hb_stub.registered == ["sess-a", "sess-b"]
+    assert hb_stub.now_calls == [("sess-a", "unit-test-wake"), ("sess-b", "unit-test-wake")]
 
 
 @pytest.mark.asyncio

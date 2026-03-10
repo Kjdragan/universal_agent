@@ -14467,12 +14467,23 @@ async def wake_heartbeat(request: HeartbeatWakeRequest):
             _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
         return {"status": "queued", "session_id": session_id, "reason": reason, "mode": mode}
 
-    for session_id in list(_sessions.keys()):
+    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during heartbeat wake sweep", sid)
+
+    for session_id in sorted(target_sessions):
         if mode == "next":
             _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
         else:
             _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
-    return {"status": "queued", "count": len(_sessions), "reason": reason, "mode": mode}
+    return {"status": "queued", "count": len(target_sessions), "reason": reason, "mode": mode}
 
 
 @app.get("/api/v1/heartbeat/last")
