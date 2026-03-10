@@ -408,15 +408,18 @@ def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
     has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
     has_delivery = any(marker in candidate for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
+    has_research_signal = has_search or has_report
     # Avoid false positives for media-only requests (e.g., "get transcript").
     # Mixed requests that include media plus broader research/report instructions
     # should still trigger research delegation.
     has_media_hint = any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS)
-    if has_media_hint and not (has_search or has_report or has_delivery):
+    if has_media_hint and not has_research_signal:
         return False
-    # Information-gathering requests should route through specialists, with
-    # report/delivery requests treated as a stronger signal.
-    return has_search or has_report or has_delivery
+    # Delivery hints (email/pdf/send) are not enough on their own; they should
+    # only reinforce an already-research/report-oriented request.
+    if has_delivery and not has_research_signal:
+        return False
+    return has_research_signal
 
 
 def _looks_like_youtube_transcript_intent(text: Any) -> bool:

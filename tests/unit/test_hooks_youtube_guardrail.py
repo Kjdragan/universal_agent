@@ -87,6 +87,14 @@ class TestResearchIntentDetection:
         )
         assert _looks_like_research_report_pipeline_intent(text) is True
 
+    def test_delivery_only_creative_request_does_not_trigger_research_delegate(self):
+        text = "Write a poem and then email it to me."
+        assert _looks_like_research_report_pipeline_intent(text) is False
+
+    def test_research_plus_delivery_request_triggers_research_delegate(self):
+        text = "Search for latest AI safety updates and email the report as a PDF."
+        assert _looks_like_research_report_pipeline_intent(text) is True
+
 
 # ---------------------------------------------------------------------------
 # 2. on_pre_tool_use_ledger YouTube guardrail
