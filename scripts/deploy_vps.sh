@@ -148,7 +148,7 @@ rsync -az \
 
   resolve_env_key_from_infisical() {
     key=\"\$1\"
-    KEY=\"\$key\" runuser -u ua -- bash -lc \"cd '$REMOTE_DIR' && set -a && source .env && set +a && export PYTHONPATH='$REMOTE_DIR/src' && python3 -c \\\"import os; from universal_agent.infisical_loader import initialize_runtime_secrets; initialize_runtime_secrets(profile='vps', force_reload=True); print(str(os.getenv(os.environ.get('KEY', '') or '') or ''))\\\"\"
+    KEY=\"\$key\" runuser -u ua -- bash -lc \"cd '$REMOTE_DIR' && set -a && source .env && set +a && export PYTHONPATH='$REMOTE_DIR/src' && '$REMOTE_DIR/.venv/bin/python3' -c \\\"import os; from universal_agent.infisical_loader import initialize_runtime_secrets; initialize_runtime_secrets(profile='vps', force_reload=True); print(str(os.getenv(os.environ.get('KEY', '') or '') or ''))\\\"\"
   }
 
   require_env_key() {
