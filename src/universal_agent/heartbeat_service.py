@@ -159,6 +159,25 @@ def _parse_duration_seconds(raw: str | None, default: int) -> int:
     return default
 
 
+def _resolve_heartbeat_interval_env(
+    *,
+    prefer_interval: bool = True,
+    warn_on_conflict: bool = False,
+) -> str | None:
+    interval_raw = (os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip()
+    every_raw = (os.getenv("UA_HEARTBEAT_EVERY") or "").strip()
+    if interval_raw and every_raw and interval_raw != every_raw and warn_on_conflict:
+        primary = "UA_HEARTBEAT_INTERVAL" if prefer_interval else "UA_HEARTBEAT_EVERY"
+        logger.warning(
+            "Conflicting heartbeat interval env vars detected; using %s. "
+            "Keep only UA_HEARTBEAT_INTERVAL for clarity.",
+            primary,
+        )
+    if prefer_interval:
+        return interval_raw or every_raw or None
+    return every_raw or interval_raw or None
+
+
 def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
     if not raw:
         return None, None
@@ -512,7 +531,10 @@ class HeartbeatService:
         if legacy_ok:
             ok_tokens = [legacy_ok] + [t for t in ok_tokens if t != legacy_ok]
 
-        interval_raw = os.getenv("UA_HEARTBEAT_EVERY") or os.getenv("UA_HEARTBEAT_INTERVAL")
+        interval_raw = _resolve_heartbeat_interval_env(
+            prefer_interval=True,
+            warn_on_conflict=True,
+        )
         self.default_schedule = HeartbeatScheduleConfig(
             every_seconds=_parse_duration_seconds(interval_raw, DEFAULT_INTERVAL_SECONDS),
             active_start=active_start or None,

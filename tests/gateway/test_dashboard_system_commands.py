@@ -221,6 +221,20 @@ async def test_todolist_overview_includes_heartbeat_runtime_snapshot(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_todolist_overview_prefers_interval_over_legacy_every(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+    monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "10m")
+    monkeypatch.setenv("UA_HEARTBEAT_EVERY", "25m")
+
+    response = await gateway_server.dashboard_todolist_overview()
+
+    assert response["status"] == "ok"
+    heartbeat = response.get("heartbeat") or {}
+    assert int(heartbeat.get("configured_every_seconds") or 0) == 600
+
+
+@pytest.mark.asyncio
 async def test_wake_heartbeat_uses_gateway_sessions_when_runtime_sessions_empty(monkeypatch, tmp_path):
     hb_stub = _HeartbeatStub()
     monkeypatch.setattr(gateway_server, "_heartbeat_service", hb_stub)

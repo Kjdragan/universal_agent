@@ -100,6 +100,7 @@ from universal_agent.heartbeat_service import (
     MIN_INTERVAL_SECONDS as HEARTBEAT_MIN_INTERVAL_SECONDS,
     HeartbeatService,
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
+    _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
 )
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
@@ -7275,7 +7276,7 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
 
 
 def _heartbeat_runtime_snapshot() -> dict[str, Any]:
-    interval_raw = (os.getenv("UA_HEARTBEAT_EVERY") or os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip()
+    interval_raw = _resolve_hb_interval_env(prefer_interval=True) or ""
     configured_every_seconds = _parse_heartbeat_duration_seconds(
         interval_raw or None,
         HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
