@@ -146,11 +146,16 @@ rsync -az \
   set -euo pipefail
   cd '$REMOTE_DIR'
 
+  resolve_env_key_from_infisical() {
+    key=\"\$1\"
+    KEY=\"\$key\" runuser -u ua -- bash -lc \"cd '$REMOTE_DIR' && export PYTHONPATH='$REMOTE_DIR/src' && python3 -c \\\"import os; from universal_agent.infisical_loader import initialize_runtime_secrets; initialize_runtime_secrets(force_reload=True); print(str(os.getenv(os.environ.get('KEY', '') or '') or ''))\\\"\"
+  }
+
   require_env_key() {
     key=\"\$1\"
     value=\$(grep -E \"^\${key}=\" .env | tail -n1 | cut -d= -f2- || true)
     if [ -z \"\$value\" ]; then
-      value=\$(KEY=\"\$key\" runuser -u ua -- bash -lc 'cd \"'"$REMOTE_DIR"'\" && export PYTHONPATH=\"'"$REMOTE_DIR"'/src\" && python3 - <<\"PY\"\nimport os\nfrom universal_agent.infisical_loader import initialize_runtime_secrets\ninitialize_runtime_secrets(force_reload=True)\nprint(str(os.getenv(os.environ.get(\"KEY\", \"\") or \"\") or \"\"))\nPY' || true)
+      value=\$(resolve_env_key_from_infisical \"\$key\" || true)
     fi
     if [ -z \"\$value\" ]; then
       echo \"ERROR: missing required env key \${key} in $REMOTE_DIR/.env\" >&2
@@ -397,7 +402,7 @@ rsync -az \
 
   token=\$(grep '^UA_OPS_TOKEN=' .env | tail -n1 | cut -d= -f2- || true)
   if [ -z \"\$token\" ]; then
-    token=\$(KEY='UA_OPS_TOKEN' runuser -u ua -- bash -lc 'cd \"'"$REMOTE_DIR"'\" && export PYTHONPATH=\"'"$REMOTE_DIR"'/src\" && python3 - <<\"PY\"\nimport os\nfrom universal_agent.infisical_loader import initialize_runtime_secrets\ninitialize_runtime_secrets(force_reload=True)\nprint(str(os.getenv(os.environ.get(\"KEY\", \"\") or \"\") or \"\"))\nPY' || true)
+    token=\$(resolve_env_key_from_infisical 'UA_OPS_TOKEN' || true)
   fi
   if [ -n \"\$token\" ]; then
     echo '== Ops auth check =='
