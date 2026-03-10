@@ -25,7 +25,7 @@ if [[ ! -f "$APP_ROOT/.env" ]]; then
 fi
 
 echo "Rendering $WEBUI_ENV_FILE from Infisical-backed runtime env..."
-tmp_env="$(mktemp /tmp/ua-webui-env.XXXXXX)"
+tmp_env="$(runuser -u "$APP_USER" -- mktemp /tmp/ua-webui-env.XXXXXX)"
 runuser -u "$APP_USER" -- env PYTHONPATH="$APP_ROOT/src" "$PY_BIN" \
   "$APP_ROOT/scripts/render_service_env_from_infisical.py" \
   --profile vps \
