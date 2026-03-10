@@ -238,6 +238,10 @@ rsync -az \
   echo '== Infisical SDK verification =='
   APP_ROOT='$REMOTE_DIR' APP_USER='ua' bash scripts/install_vps_infisical_sdk.sh --verify-only
 
+  echo '== Web UI service env synthesis =='
+  chmod 0755 scripts/install_vps_webui_env.sh scripts/render_service_env_from_infisical.py
+  APP_ROOT='$REMOTE_DIR' APP_USER='ua' bash scripts/install_vps_webui_env.sh
+
   echo '== Web UI build =='
   if [ -d web-ui ] && command -v npm >/dev/null 2>&1; then
     runuser -u ua -- bash -lc 'cd $REMOTE_DIR/web-ui && npm install && npm run build'
@@ -392,6 +396,9 @@ rsync -az \
   echo \"APP=\$app_code\"
 
   token=\$(grep '^UA_OPS_TOKEN=' .env | tail -n1 | cut -d= -f2- || true)
+  if [ -z \"\$token\" ]; then
+    token=\$(KEY='UA_OPS_TOKEN' runuser -u ua -- bash -lc 'cd \"'"$REMOTE_DIR"'\" && export PYTHONPATH=\"'"$REMOTE_DIR"'/src\" && python3 - <<\"PY\"\nimport os\nfrom universal_agent.infisical_loader import initialize_runtime_secrets\ninitialize_runtime_secrets(force_reload=True)\nprint(str(os.getenv(os.environ.get(\"KEY\", \"\") or \"\") or \"\"))\nPY' || true)
+  fi
   if [ -n \"\$token\" ]; then
     echo '== Ops auth check =='
     printf 'OPS_UNAUTH='
