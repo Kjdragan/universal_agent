@@ -25,18 +25,18 @@ if [[ ! -f "$APP_ROOT/.env" ]]; then
 fi
 
 echo "Rendering $WEBUI_ENV_FILE from Infisical-backed runtime env..."
+tmp_env="$(mktemp /tmp/ua-webui-env.XXXXXX)"
 runuser -u "$APP_USER" -- env PYTHONPATH="$APP_ROOT/src" "$PY_BIN" \
   "$APP_ROOT/scripts/render_service_env_from_infisical.py" \
   --profile vps \
-  --output "$WEBUI_ENV_FILE" \
+  --output "$tmp_env" \
   --entry "UA_DASHBOARD_OPS_TOKEN=UA_DASHBOARD_OPS_TOKEN,UA_OPS_TOKEN"
-
 if id -u "$APP_USER" >/dev/null 2>&1; then
-  chown "root:${APP_USER}" "$WEBUI_ENV_FILE"
+  install -o root -g "$APP_USER" -m 640 "$tmp_env" "$WEBUI_ENV_FILE"
 else
-  chown root:root "$WEBUI_ENV_FILE"
+  install -o root -g root -m 640 "$tmp_env" "$WEBUI_ENV_FILE"
 fi
-chmod 640 "$WEBUI_ENV_FILE"
+rm -f "$tmp_env"
 
 mkdir -p "$DROPIN_DIR"
 cat >"$DROPIN_FILE" <<EOF
@@ -49,4 +49,3 @@ systemctl restart "$WEBUI_SERVICE"
 
 echo "Installed webui env drop-in: $DROPIN_FILE"
 systemctl show "$WEBUI_SERVICE" -p EnvironmentFiles --no-pager || true
-
