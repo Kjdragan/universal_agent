@@ -150,6 +150,9 @@ rsync -az \
     key=\"\$1\"
     value=\$(grep -E \"^\${key}=\" .env | tail -n1 | cut -d= -f2- || true)
     if [ -z \"\$value\" ]; then
+      value=\$(KEY=\"\$key\" runuser -u ua -- bash -lc 'cd \"'"$REMOTE_DIR"'\" && export PYTHONPATH=\"'"$REMOTE_DIR"'/src\" && python3 - <<\"PY\"\nimport os\nfrom universal_agent.infisical_loader import initialize_runtime_secrets\ninitialize_runtime_secrets(force_reload=True)\nprint(str(os.getenv(os.environ.get(\"KEY\", \"\") or \"\") or \"\"))\nPY' || true)
+    fi
+    if [ -z \"\$value\" ]; then
       echo \"ERROR: missing required env key \${key} in $REMOTE_DIR/.env\" >&2
       exit 42
     fi
