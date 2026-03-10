@@ -179,6 +179,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Step 4b: Render local web-ui env from Infisical (optional, non-fatal)
+# ---------------------------------------------------------------------------
+if [[ -x "$FACTORY_DIR/scripts/install_local_webui_env.sh" ]]; then
+    log "Step 4b: Rendering web-ui/.env.local from Infisical..."
+    if APP_ROOT="$FACTORY_DIR" DEPLOY_PROFILE="local_workstation" \
+        "$FACTORY_DIR/scripts/install_local_webui_env.sh"; then
+        log "  web-ui env render succeeded."
+    else
+        log "  WARNING: web-ui env render failed. You can retry manually with:"
+        log "    APP_ROOT=$FACTORY_DIR DEPLOY_PROFILE=local_workstation $FACTORY_DIR/scripts/install_local_webui_env.sh"
+    fi
+else
+    log "Step 4b: Skipping web-ui env render (installer script missing)."
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5: Install systemd user service
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_SERVICE" == "false" ]]; then

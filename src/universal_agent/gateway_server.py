@@ -992,6 +992,10 @@ def _factory_capabilities_payload() -> dict[str, Any]:
         "gateway_mode": _FACTORY_POLICY.gateway_mode,
         "delegation_mode": _FACTORY_POLICY.delegation_mode,
         "heartbeat_scope": _FACTORY_POLICY.heartbeat_scope,
+        "can_publish_delegations": bool(_FACTORY_POLICY.can_publish_delegations),
+        "can_listen_delegations": bool(_FACTORY_POLICY.can_listen_delegations),
+        "enable_csi_ingest": bool(_FACTORY_POLICY.enable_csi_ingest),
+        "enable_agentmail": bool(_FACTORY_POLICY.enable_agentmail),
         "start_ui": bool(_FACTORY_POLICY.start_ui),
         "enable_telegram_poll": bool(_FACTORY_POLICY.enable_telegram_poll),
         "enable_vp_coder": coder_vp_enabled(),
@@ -1019,6 +1023,8 @@ def _factory_capability_labels() -> list[str]:
         labels.append("vp_coder")
     if payload.get("redis_delegation_enabled"):
         labels.append("delegation_redis")
+    labels.append("csi_ingest:on" if payload.get("enable_csi_ingest") else "csi_ingest:off")
+    labels.append("agentmail:on" if payload.get("enable_agentmail") else "agentmail:off")
     labels.append(f"delegation_mode:{payload.get('delegation_mode')}")
     labels.append(f"heartbeat_scope:{payload.get('heartbeat_scope')}")
     if payload.get("llm_provider_override"):

@@ -24,6 +24,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LinkifiedText, PathLink, linkify } from "@/components/LinkifiedText";
 import { formatTimeTz } from "@/lib/timezone";
+import { SecurityDashboardTab } from "@/components/dashboard/SecurityDashboardTab";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -1914,6 +1915,7 @@ export default function HomePage() {
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             {([
               { key: "sessions", label: "Sessions", icon: "📋", href: "/dashboard/sessions", iconOnly: false },
+              { key: "security", label: "Security", icon: "🛡️", href: "/dashboard/security", iconOnly: false },
               { key: "calendar", label: "Calendar", icon: "🗓️", href: "/dashboard/calendar", iconOnly: true },
               { key: "skills", label: "Skills", icon: "🧩", href: "/dashboard/skills", iconOnly: false },
               { key: "channels", label: "Channels", icon: "📡", href: "/dashboard/channels", iconOnly: false },
@@ -2038,6 +2040,7 @@ export default function HomePage() {
 
               {[
                 { key: "sessions", label: "Sessions", icon: "📋", href: "/dashboard/sessions" },
+                { key: "security", label: "Security", icon: "🛡️", href: "/dashboard/security" },
                 { key: "skills", label: "Skills", icon: "🧩", href: "/dashboard/skills" },
                 { key: "storage", label: "Storage", icon: "📁", href: "/storage" },
                 { key: "calendar", label: "Calendar", icon: "🗓️", href: "/dashboard/calendar" },

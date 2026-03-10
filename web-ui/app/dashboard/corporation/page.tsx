@@ -49,6 +49,21 @@ type FactoryRegistration = {
   updated_at?: string;
 };
 
+type PolicySnapshot = {
+  gateway_mode?: string;
+  delegation_mode?: string;
+  heartbeat_scope?: string;
+  enable_csi_ingest?: boolean;
+  enable_agentmail?: boolean;
+  can_publish_delegations?: boolean;
+  can_listen_delegations?: boolean;
+  ua_enable_gws_cli?: string;
+  ua_signals_ingest_enabled?: string;
+  ua_vp_external_dispatch_enabled?: string;
+  ua_enable_heartbeat?: string;
+  ua_enable_cron?: string;
+};
+
 type RegistrationsResponse = {
   registrations?: FactoryRegistration[];
   count?: number;
@@ -120,6 +135,16 @@ function missionStatusPill(status: string): string {
   if (s === "running" || s === "claimed") return "border-sky-600/40 bg-sky-900/20 text-sky-200";
   if (s === "queued") return "border-slate-600/40 bg-slate-800/20 text-slate-300";
   return "border-amber-600/40 bg-amber-900/20 text-amber-200";
+}
+
+function asPolicySnapshot(value: unknown): PolicySnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  return value as PolicySnapshot;
+}
+
+function isTruthyEnvLike(value: unknown): boolean {
+  const v = asText(value).toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
 }
 
 function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
@@ -391,6 +416,7 @@ export default function DashboardCorporationPage() {
                       const ageSeconds = secondsSince(asText(row.last_seen_at));
                       const isExpanded = expandedFactory === row.factory_id;
                       const meta = (row.metadata && typeof row.metadata === "object") ? row.metadata : {};
+                      const policy = asPolicySnapshot((meta as any).policy_snapshot);
 
                       return (
                         <tr
@@ -405,6 +431,23 @@ export default function DashboardCorporationPage() {
                               <div className="mt-2 space-y-1 text-xs text-slate-400">
                                 <div>Source: {asText(row.source) || "--"}</div>
                                 <div>First seen: {formatDateTimeTz(asText(row.first_seen_at) || undefined, { placeholder: "--" })}</div>
+                                {policy && (
+                                  <div className="mt-2 rounded border border-slate-800 bg-slate-900/60 p-2">
+                                    <div className="mb-1 text-slate-500">Operational posture</div>
+                                    <div>Gateway: {asText(policy.gateway_mode) || "--"}</div>
+                                    <div>Delegation: {asText(policy.delegation_mode) || "--"}</div>
+                                    <div>Heartbeat scope: {asText(policy.heartbeat_scope) || "--"}</div>
+                                    <div>CSI ingest: {policy.enable_csi_ingest ? "enabled" : "disabled"}</div>
+                                    <div>AgentMail: {policy.enable_agentmail ? "enabled" : "disabled"}</div>
+                                    <div>Can publish delegations: {policy.can_publish_delegations ? "yes" : "no"}</div>
+                                    <div>Can listen delegations: {policy.can_listen_delegations ? "yes" : "no"}</div>
+                                    <div>GWS CLI: {isTruthyEnvLike(policy.ua_enable_gws_cli) ? "on" : "off"}</div>
+                                    <div>Signals ingest: {isTruthyEnvLike(policy.ua_signals_ingest_enabled) ? "on" : "off"}</div>
+                                    <div>VP external dispatch: {isTruthyEnvLike(policy.ua_vp_external_dispatch_enabled) ? "on" : "off"}</div>
+                                    <div>Heartbeat: {isTruthyEnvLike(policy.ua_enable_heartbeat) ? "on" : "off"}</div>
+                                    <div>Cron: {isTruthyEnvLike(policy.ua_enable_cron) ? "on" : "off"}</div>
+                                  </div>
+                                )}
                                 {Object.keys(meta).length > 0 && (
                                   <div className="mt-1">
                                     <div className="text-slate-500 mb-1">Metadata:</div>

@@ -64,6 +64,7 @@ _HEADQUARTERS_OVERRIDES: dict[str, str] = {
     "UA_ENABLE_GWS_CLI": "1",
     "UA_HOOKS_ENABLED": "1",
     "UA_SIGNALS_INGEST_ENABLED": "1",
+    "UA_CAPABILITY_CSI_INGEST": "1",
     "UA_AGENTMAIL_ENABLED": "1",
     "UA_YT_PLAYLIST_WATCHER_ENABLED": "1",
 }
@@ -72,16 +73,19 @@ _LOCAL_WORKER_OVERRIDES: dict[str, str] = {
     "FACTORY_ROLE": "LOCAL_WORKER",
     "UA_DEPLOYMENT_PROFILE": "local_workstation",
     "UA_DELEGATION_REDIS_ENABLED": "1",
-    "UA_VP_EXTERNAL_DISPATCH_ENABLED": "0",
-    "UA_ENABLE_HEARTBEAT": "0",
-    "UA_ENABLE_CRON": "0",
+    # Keep local workers close to HQ operational behavior for dual-factory
+    # coordination, while explicitly disabling duplicate CSI ingestion.
+    "UA_VP_EXTERNAL_DISPATCH_ENABLED": "1",
+    "UA_ENABLE_HEARTBEAT": "1",
+    "UA_ENABLE_CRON": "1",
     "UA_INFISICAL_STRICT": "0",
     "UA_INFISICAL_ALLOW_DOTENV_FALLBACK": "1",
     "ENABLE_VP_CODER": "true",
-    "UA_ENABLE_GWS_CLI": "0",
+    "UA_ENABLE_GWS_CLI": "1",
     "UA_HOOKS_ENABLED": "0",
     "UA_SIGNALS_INGEST_ENABLED": "0",
-    "UA_AGENTMAIL_ENABLED": "0",
+    "UA_CAPABILITY_CSI_INGEST": "0",
+    "UA_AGENTMAIL_ENABLED": "1",
     "UA_YT_PLAYLIST_WATCHER_ENABLED": "0",
     "UA_ENABLE_GOOGLE_WORKSPACE_EVENTS": "0",
 }

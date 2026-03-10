@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from universal_agent.feature_flags import coder_vp_enabled, vp_enabled_ids
+from universal_agent.runtime_role import build_factory_runtime_policy
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class HeartbeatConfig:
     capabilities: list[str] = field(default_factory=list)
     interval_seconds: float = 60.0
     timeout_seconds: float = 15.0
+    policy_snapshot: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "HeartbeatConfig":
@@ -57,6 +59,7 @@ class HeartbeatConfig:
         ).strip()
         interval = float(os.getenv("UA_HEARTBEAT_INTERVAL_SECONDS", "60") or 60)
 
+        policy = build_factory_runtime_policy(factory_role)
         capabilities = []
         if os.getenv("UA_DELEGATION_REDIS_ENABLED", "").strip() == "1":
             capabilities.append("delegation_redis")
@@ -64,8 +67,39 @@ class HeartbeatConfig:
             capabilities.append("vp_coder")
         if "vp.general.primary" in vp_enabled_ids():
             capabilities.append("vp_general")
-        capabilities.append(f"delegation_mode:listen_only")
-        capabilities.append(f"heartbeat_scope:local")
+        capabilities.append(f"gateway_mode:{policy.gateway_mode}")
+        capabilities.append(f"delegation_mode:{policy.delegation_mode}")
+        capabilities.append(f"heartbeat_scope:{policy.heartbeat_scope}")
+        capabilities.append("csi_ingest:on" if policy.enable_csi_ingest else "csi_ingest:off")
+        if policy.start_ui:
+            capabilities.append("ui")
+        if policy.enable_telegram_poll:
+            capabilities.append("telegram_poll")
+
+        policy_snapshot = {
+            "factory_role": policy.role,
+            "gateway_mode": policy.gateway_mode,
+            "delegation_mode": policy.delegation_mode,
+            "heartbeat_scope": policy.heartbeat_scope,
+            "start_ui": bool(policy.start_ui),
+            "enable_telegram_poll": bool(policy.enable_telegram_poll),
+            "enable_csi_ingest": bool(policy.enable_csi_ingest),
+            "enable_agentmail": bool(policy.enable_agentmail),
+            "can_publish_delegations": bool(policy.can_publish_delegations),
+            "can_listen_delegations": bool(policy.can_listen_delegations),
+            "ua_signals_ingest_enabled": str(os.getenv("UA_SIGNALS_INGEST_ENABLED") or "").strip(),
+            "ua_enable_gws_cli": str(os.getenv("UA_ENABLE_GWS_CLI") or "").strip(),
+            "ua_hooks_enabled": str(os.getenv("UA_HOOKS_ENABLED") or "").strip(),
+            "ua_vp_external_dispatch_enabled": str(
+                os.getenv("UA_VP_EXTERNAL_DISPATCH_ENABLED") or ""
+            ).strip(),
+            "ua_agentmail_enabled": str(os.getenv("UA_AGENTMAIL_ENABLED") or "").strip(),
+            "ua_yt_playlist_watcher_enabled": str(
+                os.getenv("UA_YT_PLAYLIST_WATCHER_ENABLED") or ""
+            ).strip(),
+            "ua_enable_heartbeat": str(os.getenv("UA_ENABLE_HEARTBEAT") or "").strip(),
+            "ua_enable_cron": str(os.getenv("UA_ENABLE_CRON") or "").strip(),
+        }
 
         return cls(
             hq_base_url=hq_url,
@@ -75,6 +109,7 @@ class HeartbeatConfig:
             deployment_profile=deployment_profile,
             capabilities=capabilities,
             interval_seconds=max(10.0, interval),
+            policy_snapshot=policy_snapshot,
         )
 
 
@@ -130,6 +165,7 @@ class FactoryHeartbeat:
                 "platform": platform.system(),
                 "deployment_profile": self._config.deployment_profile,
                 "heartbeat_source": "bridge_heartbeat",
+                "policy_snapshot": dict(self._config.policy_snapshot),
             },
         }
 
