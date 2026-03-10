@@ -8672,6 +8672,7 @@ def is_user_allowed(user_id: str) -> bool:
         "webhook",
         "user_ui",
         "user_cli",
+        "owner_primary",
         "ops_tutorial_review",
         "cron_system",
         "ops:system-configuration-agent",
@@ -18228,6 +18229,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             },
                             session_id=session_id,
                         )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": False},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
                         continue
 
                     raw_data = msg.get("data", {}) or {}
@@ -18254,6 +18264,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "data": {
                                         "message": "Pending request is not approved yet. Approve it first, then resume."
                                     },
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": False},
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                                 session_id=session_id,
@@ -18319,6 +18338,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                                 session_id=session_id,
                             )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": False},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
                             continue
 
                         if decision == "require_approval":
@@ -18376,6 +18404,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                                 session_id=session_id,
                             )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": False},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
                             continue
 
                         force_complex = raw_data.get("force_complex", False)
@@ -18407,6 +18444,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             },
                             session_id=session_id,
                         )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": False, "turn_id": admitted_turn_id},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
                         continue
                     if decision == "duplicate_in_progress":
                         _increment_metric("turn_duplicate_in_progress")
@@ -18419,6 +18465,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "turn_id": admitted_turn_id,
                                     "message": "This turn is already in progress.",
                                 },
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": False, "turn_id": admitted_turn_id},
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
