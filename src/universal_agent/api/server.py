@@ -99,12 +99,17 @@ from universal_agent.api.events import (
     ApprovalResponse,
 )
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.timeout_policy import (
     gateway_owner_lookup_timeout_seconds,
     gateway_ws_send_timeout_seconds,
     gateway_ws_handshake_timeout_seconds,
 )
 ensure_runtime_path()
+
+_DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
+if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
+    _DEPLOYMENT_PROFILE = "local_workstation"
 
 
 
@@ -1104,6 +1109,7 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
+    bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
     logger.info("🚀 Universal Agent API Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
 
