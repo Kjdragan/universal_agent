@@ -555,14 +555,14 @@ def _should_block_list_directory_research(path_value: str, workspace: str) -> bo
     if resolved_path == search_results_path or search_results_path in resolved_path.parents:
         return False
 
-    if resolved_path == workspace_path:
-        return True
+    # Allow external read-only listings (skills/config/docs outside the session
+    # workspace). The strict research guardrail here is intended to prevent
+    # workspace scouting before run_research_phase, not block unrelated reads.
+    if workspace_path not in resolved_path.parents and resolved_path != workspace_path:
+        return False
 
-    # During strict phase transition, any listing outside session search_results/
-    # is considered workspace scouting and should be blocked.
-    if workspace_path not in resolved_path.parents:
-        return True
-
+    # Block listing workspace root (or any non-search_results path within
+    # workspace) until run_research_phase has been attempted.
     return True
 
 

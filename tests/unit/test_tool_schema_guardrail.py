@@ -522,6 +522,56 @@ async def test_schema_guardrail_allows_search_results_listing_before_research_ph
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_allows_external_list_directory_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    external_path = tmp_path / "shared_skills_dir"
+    external_path.mkdir(parents=True, exist_ok=True)
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__list_directory",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"path": str(external_path)},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result == {}
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_still_blocks_workspace_root_listing_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__list_directory",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"path": str(workspace)},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "run_research_phase" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_blocks_composio_search_tools_for_reddit():
     result = await pre_tool_use_schema_guardrail(
         {

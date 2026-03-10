@@ -3656,7 +3656,65 @@ def _csi_escalation_policy(event_type: str, subject: Any) -> tuple[bool, str]:
     normalized = str(event_type or "").strip().lower()
     subject_obj = subject if isinstance(subject, dict) else {}
 
-    if normalized in {"opportunity_bundle_ready", "global_trend_brief_ready", "csi_global_brief_review_due"}:
+    if normalized in {"global_trend_brief_ready", "csi_global_brief_review_due"}:
+        return True, "ua_decision_signal"
+
+    if normalized == "opportunity_bundle_ready":
+        quality_summary = (
+            subject_obj.get("quality_summary")
+            if isinstance(subject_obj.get("quality_summary"), dict)
+            else {}
+        )
+        opportunities_raw = subject_obj.get("opportunities")
+        opportunities = opportunities_raw if isinstance(opportunities_raw, list) else []
+        opportunity_count = len([entry for entry in opportunities if isinstance(entry, dict)])
+        signal_volume = max(
+            0,
+            _csi_subject_int(subject_obj, "signal_volume", "total_items"),
+        )
+        if signal_volume <= 0:
+            try:
+                signal_volume = max(0, int(quality_summary.get("signal_volume") or 0))
+            except Exception:
+                signal_volume = 0
+        freshness_minutes = 0
+        try:
+            freshness_minutes = max(0, int(quality_summary.get("freshness_minutes") or 0))
+        except Exception:
+            freshness_minutes = 0
+        coverage_score = 0.0
+        try:
+            coverage_score = float(quality_summary.get("coverage_score") or 0.0)
+        except Exception:
+            coverage_score = 0.0
+
+        min_opportunities = max(
+            1,
+            int(os.getenv("UA_CSI_OPPORTUNITY_MIN_COUNT", "1") or 1),
+        )
+        min_signal_volume = max(
+            1,
+            int(os.getenv("UA_CSI_OPPORTUNITY_MIN_SIGNAL_VOLUME", "5") or 5),
+        )
+        max_freshness_minutes = max(
+            30,
+            int(os.getenv("UA_CSI_OPPORTUNITY_MAX_FRESHNESS_MINUTES", "240") or 240),
+        )
+        min_coverage_score = max(
+            0.0,
+            min(float(os.getenv("UA_CSI_OPPORTUNITY_MIN_COVERAGE_SCORE", "0.5") or 0.5), 1.0),
+        )
+        force_escalation = _csi_subject_bool(subject_obj, "force_task_hub", "force_escalation")
+        if force_escalation:
+            return True, "opportunity_bundle_forced"
+        if opportunity_count < min_opportunities:
+            return False, "opportunity_bundle_low_opportunity_count"
+        if signal_volume < min_signal_volume:
+            return False, "opportunity_bundle_low_signal"
+        if freshness_minutes > max_freshness_minutes:
+            return False, "opportunity_bundle_stale"
+        if coverage_score > 0 and coverage_score < min_coverage_score:
+            return False, "opportunity_bundle_low_coverage"
         return True, "ua_decision_signal"
 
     if normalized in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}:
@@ -3821,10 +3879,16 @@ def _csi_incident_key(
 ) -> str:
     report_key = str(subject_obj.get("report_key") or "").strip()
     if report_key:
-        return report_key
+        return task_hub.normalize_csi_incident_key(
+            incident_key=report_key,
+            event_type=event_type,
+        )
     brief_key = str(subject_obj.get("brief_key") or "").strip()
     if brief_key:
-        return brief_key
+        return task_hub.normalize_csi_incident_key(
+            incident_key=brief_key,
+            event_type=event_type,
+        )
     if event_type in {"delivery_health_regression", "delivery_reliability_slo_breached"}:
         return f"{event_type}:{source or 'csi'}"
     if event_type in {"rss_quality_gate_alert", "rss_quality_gate_ok"}:

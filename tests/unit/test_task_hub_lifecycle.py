@@ -192,6 +192,117 @@ def test_park_csi_items_not_matching_event_types() -> None:
         conn.close()
 
 
+def test_list_agent_queue_collapses_time_suffixed_opportunity_incident_keys() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-bundle-1",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Bundle test 1",
+            message="bundle event 1",
+            project_key="csi",
+            labels=["CSI", "agent-ready"],
+            priority=3,
+            incident_key="opportunity_bundle:test:2026030101",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-bundle-2",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Bundle test 2",
+            message="bundle event 2",
+            project_key="csi",
+            labels=["CSI", "agent-ready"],
+            priority=3,
+            incident_key="opportunity_bundle:test:2026030102",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-bundle-3",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Bundle other",
+            message="bundle event 3",
+            project_key="csi",
+            labels=["CSI", "agent-ready"],
+            priority=3,
+            incident_key="opportunity_bundle:other:2026030103",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+
+        queue = task_hub.list_agent_queue(conn, include_csi=True, collapse_csi=True, limit=50)
+        csi_rows = [row for row in (queue.get("items") or []) if str(row.get("source_kind") or "") == "csi"]
+        collapsed_counts = sorted(int(row.get("collapsed_count") or 1) for row in csi_rows)
+
+        assert len(csi_rows) == 2
+        assert collapsed_counts == [1, 2]
+        normalized_values = {str(row.get("incident_key_normalized") or "") for row in csi_rows}
+        assert "opportunity_bundle:test" in normalized_values
+    finally:
+        conn.close()
+
+
+def test_overview_counts_normalized_csi_incidents() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-overview-1",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Bundle A",
+            message="overview bundle a",
+            project_key="csi",
+            labels=["CSI", "agent-ready"],
+            priority=3,
+            incident_key="opportunity_bundle:topic-a:202603011200",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-overview-2",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Bundle A refresh",
+            message="overview bundle a refresh",
+            project_key="csi",
+            labels=["CSI", "agent-ready"],
+            priority=3,
+            incident_key="opportunity_bundle:topic-a:202603011230",
+            must_complete=False,
+            mirror_status="internal_only",
+        )
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-overview-3",
+            event_type="delivery_reliability_slo_breached",
+            source="csi_analytics",
+            title="SLO breached",
+            message="hard failure",
+            project_key="immediate",
+            labels=["CSI", "agent-ready", "must-complete"],
+            priority=4,
+            incident_key="delivery_reliability_slo_breached:csi_analytics",
+            must_complete=True,
+            mirror_status="internal_only",
+        )
+
+        summary = task_hub.overview(conn)
+        csi_summary = summary.get("csi_incident_summary") if isinstance(summary.get("csi_incident_summary"), dict) else {}
+        assert int(csi_summary.get("open_incidents") or 0) == 2
+    finally:
+        conn.close()
+
+
 def test_system_schedule_review_task_is_dispatch_eligible() -> None:
     conn = _conn()
     try:

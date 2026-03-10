@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -20,6 +21,16 @@ TASK_STATUS_PARKED = "parked"
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED}
 ACTIVE_STATUSES = {TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED, TASK_STATUS_REVIEW}
 VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze"}
+
+_CSI_INCIDENT_TEMPORAL_SEGMENT_RE = re.compile(
+    r"^(?:\d{6,}|\d{4}-\d{2}-\d{2}(?:t[0-9:\-+.z]+)?|\d{8,14})$",
+    re.IGNORECASE,
+)
+_CSI_INCIDENT_NORMALIZED_EVENT_TYPES = {
+    "opportunity_bundle_ready",
+    "global_trend_brief_ready",
+    "csi_global_brief_review_due",
+}
 
 
 @dataclass
@@ -92,6 +103,36 @@ def _json_loads_list(raw: Any) -> list[Any]:
 
 def _json_dumps(raw: Any) -> str:
     return json.dumps(raw, ensure_ascii=True, separators=(",", ":"))
+
+
+def _looks_temporal_incident_segment(raw: Any) -> bool:
+    token = str(raw or "").strip().lower()
+    if not token:
+        return False
+    if _CSI_INCIDENT_TEMPORAL_SEGMENT_RE.match(token):
+        return True
+    # Defensive fallback for ISO-like fragments that include delimiters.
+    if "t" in token and "-" in token and any(ch.isdigit() for ch in token):
+        return True
+    return False
+
+
+def normalize_csi_incident_key(*, incident_key: Any, event_type: Any = None) -> str:
+    """Collapse timestamp/version suffixes for selected CSI report-style events."""
+    key = str(incident_key or "").strip()
+    if not key:
+        return ""
+    normalized_event_type = str(event_type or "").strip().lower()
+    if normalized_event_type not in _CSI_INCIDENT_NORMALIZED_EVENT_TYPES:
+        return key
+    parts = [segment.strip() for segment in key.split(":")]
+    if len(parts) < 3:
+        return key
+    tail = parts[-1]
+    if not _looks_temporal_incident_segment(tail):
+        return key
+    collapsed = ":".join(parts[:-1]).strip(":").strip()
+    return collapsed or key
 
 
 def _parse_iso(raw: Any) -> Optional[datetime]:
@@ -1047,24 +1088,39 @@ def list_agent_queue(
         items = [i for i in items if str(i.get("source_kind") or "") != "csi"]
 
     if collapse_csi:
+        csi_incident_counts: dict[str, int] = {}
+        for item in items:
+            if str(item.get("source_kind") or "").strip().lower() != "csi":
+                continue
+            incident_key = str(item.get("incident_key") or "").strip()
+            if not incident_key:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            event_type = str(metadata.get("event_type") or "").strip().lower()
+            collapse_key = normalize_csi_incident_key(incident_key=incident_key, event_type=event_type)
+            if not collapse_key:
+                continue
+            csi_incident_counts[collapse_key] = int(csi_incident_counts.get(collapse_key) or 0) + 1
+
         collapsed: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in items:
-            if str(item.get("source_kind") or "") != "csi":
+            if str(item.get("source_kind") or "").strip().lower() != "csi":
                 collapsed.append(item)
                 continue
             incident_key = str(item.get("incident_key") or "").strip()
             if not incident_key:
                 collapsed.append(item)
                 continue
-            if incident_key in seen:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            event_type = str(metadata.get("event_type") or "").strip().lower()
+            collapse_key = normalize_csi_incident_key(incident_key=incident_key, event_type=event_type) or incident_key
+            if collapse_key in seen:
                 continue
-            seen.add(incident_key)
-            c_row = conn.execute(
-                "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind='csi' AND incident_key=? AND status NOT IN (?, ?)",
-                (incident_key, TASK_STATUS_COMPLETED, TASK_STATUS_PARKED),
-            ).fetchone()
-            item["collapsed_count"] = int((c_row["c"] if c_row else 1) or 1)
+            seen.add(collapse_key)
+            item["collapsed_count"] = max(1, int(csi_incident_counts.get(collapse_key) or 1))
+            if collapse_key != incident_key:
+                item["incident_key_normalized"] = collapse_key
             collapsed.append(item)
         items = collapsed
 
@@ -1580,10 +1636,24 @@ def overview(conn: sqlite3.Connection, *, approvals_pending: int = 0) -> dict[st
     ).fetchall()
     source_counts = {str(r["source_kind"] or "unknown"): int(r["c"] or 0) for r in source_rows}
 
-    csi_row = conn.execute(
-        "SELECT COUNT(DISTINCT incident_key) AS c FROM task_hub_items WHERE source_kind='csi' AND incident_key IS NOT NULL AND status NOT IN (?, ?)",
+    csi_rows = conn.execute(
+        """
+        SELECT incident_key, metadata_json
+        FROM task_hub_items
+        WHERE source_kind='csi'
+          AND status NOT IN (?, ?)
+        """,
         (TASK_STATUS_COMPLETED, TASK_STATUS_PARKED),
-    ).fetchone()
+    ).fetchall()
+    open_csi_incident_keys: set[str] = set()
+    for row in csi_rows:
+        incident_key = str(row["incident_key"] or "").strip()
+        if not incident_key:
+            continue
+        metadata = _json_loads_obj(row["metadata_json"], default={})
+        event_type = str(metadata.get("event_type") or "").strip().lower()
+        normalized = normalize_csi_incident_key(incident_key=incident_key, event_type=event_type) or incident_key
+        open_csi_incident_keys.add(normalized)
 
     return {
         "default_mode": "agent",
@@ -1601,6 +1671,6 @@ def overview(conn: sqlite3.Connection, *, approvals_pending: int = 0) -> dict[st
             "metrics": activity.get("metrics") or {},
         },
         "csi_incident_summary": {
-            "open_incidents": int((csi_row["c"] if csi_row else 0) or 0),
+            "open_incidents": len(open_csi_incident_keys),
         },
     }

@@ -83,6 +83,48 @@ def test_csi_event_notification_policy_syncs_quality_gate_alert_only(monkeypatch
     assert ok_policy["todoist_sync"] is False
 
 
+def test_opportunity_bundle_escalates_only_with_actionable_evidence(monkeypatch):
+    monkeypatch.setenv("UA_CSI_OPPORTUNITY_MIN_COUNT", "1")
+    monkeypatch.setenv("UA_CSI_OPPORTUNITY_MIN_SIGNAL_VOLUME", "5")
+    monkeypatch.setenv("UA_CSI_OPPORTUNITY_MAX_FRESHNESS_MINUTES", "240")
+    monkeypatch.setenv("UA_CSI_OPPORTUNITY_MIN_COVERAGE_SCORE", "0.5")
+
+    actionable = _csi_event_notification_policy(
+        SimpleNamespace(
+            event_type="opportunity_bundle_ready",
+            subject={
+                "quality_summary": {"signal_volume": 21, "freshness_minutes": 30, "coverage_score": 0.86},
+                "opportunities": [{"opportunity_id": "opp-1"}, {"opportunity_id": "opp-2"}],
+            },
+        )
+    )
+    low_signal = _csi_event_notification_policy(
+        SimpleNamespace(
+            event_type="opportunity_bundle_ready",
+            subject={
+                "quality_summary": {"signal_volume": 1, "freshness_minutes": 20, "coverage_score": 0.42},
+                "opportunities": [],
+            },
+        )
+    )
+    stale = _csi_event_notification_policy(
+        SimpleNamespace(
+            event_type="opportunity_bundle_ready",
+            subject={
+                "quality_summary": {"signal_volume": 12, "freshness_minutes": 480, "coverage_score": 0.8},
+                "opportunities": [{"opportunity_id": "opp-1"}],
+            },
+        )
+    )
+
+    assert actionable["escalates_to_ua"] is True
+    assert actionable["requires_action"] is True
+    assert low_signal["escalates_to_ua"] is False
+    assert low_signal["requires_action"] is False
+    assert stale["escalates_to_ua"] is False
+    assert stale["requires_action"] is False
+
+
 def test_csi_task_enqueue_default_proactive_mode(monkeypatch):
     monkeypatch.delenv("UA_TASK_HUB_CSI_MODE", raising=False)
     policy = {"has_anomaly": False, "requires_action": True, "escalates_to_ua": True}
