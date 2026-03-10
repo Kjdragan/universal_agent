@@ -253,3 +253,51 @@ def test_dispatch_queue_reports_below_threshold_reason() -> None:
         assert rows[0]["skip_reason"] == "below_threshold"
     finally:
         conn.close()
+
+
+def test_system_schedule_task_ranks_ahead_of_must_complete_backlog() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:must-complete-csi",
+                "source_kind": "csi",
+                "source_ref": "evt-100",
+                "title": "CSI must complete",
+                "description": "Background incident",
+                "project_key": "immediate",
+                "priority": 4,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "scmd:urgent-schedule",
+                "source_kind": "system_command",
+                "source_ref": "ops",
+                "title": "Adjust heartbeat cadence",
+                "description": "Operator command",
+                "project_key": "immediate",
+                "priority": 2,
+                "labels": ["agent-ready", "schedule-command"],
+                "status": task_hub.TASK_STATUS_REVIEW,
+                "must_complete": False,
+                "agent_ready": True,
+                "metadata": {
+                    "intent": "schedule_task",
+                    "schedule_text": "every ten minutes",
+                    "repeat_schedule": True,
+                },
+            },
+        )
+        queue = task_hub.get_dispatch_queue(conn, limit=10)
+        items = queue.get("items") or []
+        assert len(items) >= 2
+        assert items[0]["task_id"] == "scmd:urgent-schedule"
+    finally:
+        conn.close()

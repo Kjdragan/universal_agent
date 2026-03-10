@@ -721,14 +721,14 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         scored.append(item)
 
     def _sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
-        must_complete = 1 if bool(row.get("must_complete")) else 0
         system_schedule = 1 if _is_system_schedule_task(row) else 0
+        must_complete = 1 if bool(row.get("must_complete")) else 0
         approval = 1 if str(row.get("project_key") or "") == "approval" else 0
         score = _safe_float(row.get("score"), 0.0)
         priority = _safe_int(row.get("priority"), 1)
         due_sort = str(row.get("due_at") or "9999-12-31T23:59:59+00:00")
         updated_sort = str(row.get("updated_at") or "")
-        return (-must_complete, -system_schedule, -approval, -score, -priority, due_sort, updated_sort)
+        return (-system_schedule, -must_complete, -approval, -score, -priority, due_sort, updated_sort)
 
     scored.sort(key=_sort_key)
 
@@ -1027,12 +1027,12 @@ def list_agent_queue(
         WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')
           AND agent_ready = 1
         ORDER BY
-          must_complete DESC,
           CASE
             WHEN source_kind = 'system_command'
                  AND LOWER(COALESCE(json_extract(metadata_json, '$.intent'), '')) = 'schedule_task'
             THEN 1 ELSE 0
           END DESC,
+          must_complete DESC,
           score DESC,
           priority DESC,
           updated_at DESC
