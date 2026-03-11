@@ -76,17 +76,13 @@ jobs:
             }
 
             echo "--> Ensuring Python build tooling (maturin)..."
-            run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; command -v maturin >/dev/null 2>&1 || uv tool install maturin"
+            run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; command -v maturin >/dev/null 2>&1 || uv tool install maturin"
 
             echo "--> Ensuring Rust build tooling (cargo/rustc)..."
-            if ! command -v cargo >/dev/null 2>&1; then
-              if command -v apt-get >/dev/null 2>&1; then
-                apt-get update
-                DEBIAN_FRONTEND=noninteractive apt-get install -y cargo rustc
-              else
-                echo "ERROR: cargo not found and apt-get unavailable for bootstrap."
-                exit 1
-              fi
+            run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; command -v cargo >/dev/null 2>&1 || (command -v curl >/dev/null 2>&1 && curl https://sh.rustup.rs -sSf | sh -s -- -y)"
+            if ! run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; command -v cargo >/dev/null 2>&1"; then
+              echo "ERROR: cargo bootstrap failed."
+              exit 1
             fi
             
             # 1. Pull latest code
@@ -98,7 +94,7 @@ jobs:
             
             # 2. Dependency Sync
             echo "--> Syncing dependencies with uv..."
-            run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync"
+            run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
