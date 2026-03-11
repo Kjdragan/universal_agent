@@ -81,6 +81,43 @@ jobs:
               fi
             }
 
+            run_as_root() {
+              if [ \"\$(id -u)\" -eq 0 ]; then
+                /bin/bash -lc \"\$1\"
+              elif command -v sudo >/dev/null 2>&1; then
+                sudo /bin/bash -lc \"\$1\"
+              else
+                /bin/bash -lc \"\$1\"
+              fi
+            }
+
+            ensure_native_build_deps() {
+              if command -v cc >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1; then
+                return 0
+              fi
+
+              echo '--> Installing native build prerequisites...'
+              if command -v apt-get >/dev/null 2>&1; then
+                run_as_root \"export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y build-essential pkg-config libcairo2-dev libpango1.0-dev\"
+              elif command -v dnf >/dev/null 2>&1; then
+                run_as_root \"dnf install -y gcc gcc-c++ make pkgconf-pkg-config cairo-devel pango-devel redhat-rpm-config\"
+              elif command -v yum >/dev/null 2>&1; then
+                run_as_root \"yum install -y gcc gcc-c++ make pkgconfig cairo-devel pango-devel redhat-rpm-config\"
+              elif command -v apk >/dev/null 2>&1; then
+                run_as_root \"apk add --no-cache build-base pkgconf cairo-dev pango-dev\"
+              else
+                echo 'ERROR: No supported package manager found to install C build dependencies.'
+                return 1
+              fi
+
+              if ! command -v cc >/dev/null 2>&1; then
+                echo 'ERROR: C compiler is still missing after dependency install.'
+                return 1
+              fi
+            }
+
+            ensure_native_build_deps
+
             echo '--> Ensuring Python build tooling (maturin)...'
             run_as_ua \"export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v maturin >/dev/null 2>&1 || uv tool install maturin\"
 
