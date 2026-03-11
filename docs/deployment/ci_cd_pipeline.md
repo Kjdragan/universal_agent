@@ -11,8 +11,7 @@ Our CI/CD pipeline is built on GitHub Actions and automates deployment to stagin
 
 ## Required GitHub Secrets
 
-- `TAILSCALE_OAUTH_CLIENT_ID`
-- `TAILSCALE_OAUTH_SECRET`
+- `TAILSCALE_AUTHKEY` (reusable + ephemeral + preauthorized, tag identity `tag:ci-gha`)
 - `VPS_SSH_HOST`
 - `VPS_SSH_USER`
 - `VPS_SSH_KEY`
@@ -81,8 +80,8 @@ then CI identity is not matching the required non-interactive SSH policy. Verify
 
 ### Tailscale Connection Issues
 
-- Ensure `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` are valid.
-- Ensure OAuth client is allowed to issue auth keys with `tag:ci-gha`.
+- Ensure `TAILSCALE_AUTHKEY` is valid and not expired/revoked.
+- Ensure the auth key was created with tag identity `tag:ci-gha` (reusable + ephemeral + preauthorized).
 - Check the [Tailscale Admin Console](https://login.tailscale.com/admin/machines) to see if the GitHub Runner is joining properly.
 - Verify ACL/grants permit runner-to-VPS traffic on SSH.
 
