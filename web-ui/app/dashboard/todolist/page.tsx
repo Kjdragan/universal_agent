@@ -300,6 +300,7 @@ export default function ToDoListDashboardPage() {
   const [wakePending, setWakePending] = useState(false);
   const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
   const [taskHistoryLoadingId, setTaskHistoryLoadingId] = useState("");
+  const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
 
   const approvalsRef = useRef<HTMLDivElement | null>(null);
 
@@ -538,6 +539,12 @@ export default function ToDoListDashboardPage() {
                 >
                   {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
                 </button>
+                <button
+                  onClick={() => setSelectedTaskDetails(item)}
+                  className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
+                >
+                  Inspect
+                </button>
               </div>
             ))}
           </div>
@@ -596,6 +603,12 @@ export default function ToDoListDashboardPage() {
                   className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
                 >
                   {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
+                </button>
+                <button
+                  onClick={() => setSelectedTaskDetails(item)}
+                  className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
+                >
+                  Inspect
                 </button>
                 <button
                   onClick={() => void handleTaskAction(item.task_id, "review")}
@@ -752,6 +765,12 @@ export default function ToDoListDashboardPage() {
                 >
                   {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
                 </button>
+                <button
+                  onClick={() => setSelectedTaskDetails(item)}
+                  className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
+                >
+                  Inspect
+                </button>
                 {item.links?.session_href ? (
                   <Link
                     href={String(item.links.session_href)}
@@ -872,8 +891,44 @@ export default function ToDoListDashboardPage() {
     return <div className="flex h-full items-center justify-center p-6 text-slate-400">Loading To Do Command Center V2...</div>;
   }
 
+  const renderTaskDetailsModal = () => {
+    if (!selectedTaskDetails) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/50 p-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-100">Task Details</h2>
+              <p className="text-xs text-slate-400">{selectedTaskDetails.task_id}</p>
+            </div>
+            <button
+              onClick={() => setSelectedTaskDetails(null)}
+              className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="overflow-y-auto p-4 text-sm text-slate-300">
+            <pre className="break-all rounded border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] text-emerald-300 whitespace-pre-wrap">
+              {JSON.stringify(selectedTaskDetails, null, 2)}
+            </pre>
+          </div>
+          <div className="flex-none flex justify-end border-t border-slate-800 bg-slate-950/50 p-4">
+            <button
+              onClick={() => setSelectedTaskDetails(null)}
+              className="rounded border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-700"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="relative flex h-full flex-col gap-4 pb-6">
+      {renderTaskDetailsModal()}
       {approvalsHighlight?.banner?.show ? (
         <div className="sticky top-0 z-20 rounded-lg border border-amber-700/50 bg-amber-950/90 px-3 py-2 text-xs text-amber-100 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
