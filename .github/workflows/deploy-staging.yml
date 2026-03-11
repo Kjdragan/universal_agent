@@ -31,7 +31,7 @@ jobs:
           echo "--> Checking connectivity to VPS ($SSH_HOST)..."
           ping -c 3 "$SSH_HOST" || echo "Ping failed, continuing..."
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$SSH_USER@$SSH_HOST" "
+          ssh -vvv -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" "
             set -euo pipefail
             STAGING_DIR='/opt/universal-agent-staging'
             echo '--> Pulling latest code...'
