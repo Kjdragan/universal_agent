@@ -44,7 +44,7 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 
 ## Pipeline Steps
 
-1. **Connect to Tailscale** using OAuth credentials and `tag:ci-gha`.
+1. **Connect to Tailscale** using `TAILSCALE_AUTHKEY` and `tag:ci-gha`.
 2. **Ping preflight** validates runner-to-VPS tailnet connectivity.
 3. **SSH preflight** runs `timeout 60s ssh ... "echo SSH_OK"` in batch mode.
 4. **Deploy over SSH** runs remote commands with a hard timeout (`timeout 15m`).
@@ -67,7 +67,7 @@ If stderr includes either:
 
 then CI identity is not matching the required non-interactive SSH policy. Verify:
 
-- GitHub Action uses OAuth credentials and `tags: tag:ci-gha`.
+- GitHub Action uses `TAILSCALE_AUTHKEY` with `tags: tag:ci-gha`.
 - Tailscale node(s) are tagged correctly (`tag:ci-gha` for runner identity, `tag:vps` on destination).
 - SSH rule is `action: "accept"` from `tag:ci-gha` to `tag:vps` for `root`/`ua`.
 - Network policy allows TCP/22 from `tag:ci-gha` to `tag:vps`.
