@@ -83,6 +83,17 @@ jobs:
 
             echo '--> Ensuring Python build tooling (maturin)...'
             run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v maturin >/dev/null 2>&1 || uv tool install maturin\"
+
+            echo '--> Ensuring Rust build tooling (cargo/rustc)...'
+            if ! command -v cargo >/dev/null 2>&1; then
+              if command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                DEBIAN_FRONTEND=noninteractive apt-get install -y cargo rustc
+              else
+                echo 'ERROR: cargo not found and apt-get unavailable for bootstrap.'
+                exit 1
+              fi
+            fi
             
             run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"
             

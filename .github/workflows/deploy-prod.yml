@@ -77,6 +77,17 @@ jobs:
 
             echo "--> Ensuring Python build tooling (maturin)..."
             run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; command -v maturin >/dev/null 2>&1 || uv tool install maturin"
+
+            echo "--> Ensuring Rust build tooling (cargo/rustc)..."
+            if ! command -v cargo >/dev/null 2>&1; then
+              if command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                DEBIAN_FRONTEND=noninteractive apt-get install -y cargo rustc
+              else
+                echo "ERROR: cargo not found and apt-get unavailable for bootstrap."
+                exit 1
+              fi
+            fi
             
             # 1. Pull latest code
             echo "--> Fetching and pulling latest main branch..."
