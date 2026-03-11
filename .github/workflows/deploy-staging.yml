@@ -101,10 +101,22 @@ jobs:
             run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
             
             echo '--> Restarting staging services...'
-            if command -v sudo >/dev/null 2>&1; then
-              sudo systemctl restart universal-agent-staging-gateway universal-agent-staging-api
+            if command -v systemctl >/dev/null 2>&1; then
+              if command -v sudo >/dev/null 2>&1; then
+                sudo systemctl restart universal-agent-staging-gateway universal-agent-staging-api
+              else
+                systemctl restart universal-agent-staging-gateway universal-agent-staging-api
+              fi
+            elif command -v service >/dev/null 2>&1; then
+              if command -v sudo >/dev/null 2>&1; then
+                sudo service universal-agent-staging-gateway restart
+                sudo service universal-agent-staging-api restart
+              else
+                service universal-agent-staging-gateway restart
+                service universal-agent-staging-api restart
+              fi
             else
-              systemctl restart universal-agent-staging-gateway universal-agent-staging-api
+              echo '--> WARNING: No supported service manager found (systemctl/service); skipping restart.'
             fi
             echo '--> Deployment complete!'
           "

@@ -91,11 +91,26 @@ jobs:
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
-            # Standard production service names
-            if command -v sudo >/dev/null 2>&1; then
-              sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+            if command -v systemctl >/dev/null 2>&1; then
+              if command -v sudo >/dev/null 2>&1; then
+                sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+              else
+                systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+              fi
+            elif command -v service >/dev/null 2>&1; then
+              if command -v sudo >/dev/null 2>&1; then
+                sudo service universal-agent-gateway restart
+                sudo service universal-agent-api restart
+                sudo service universal-agent-webui restart
+                sudo service universal-agent-telegram restart
+              else
+                service universal-agent-gateway restart
+                service universal-agent-api restart
+                service universal-agent-webui restart
+                service universal-agent-telegram restart
+              fi
             else
-              systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+              echo "WARNING: No supported service manager found (systemctl/service); skipping restart."
             fi
             
             echo "Deployment to Production complete!"
