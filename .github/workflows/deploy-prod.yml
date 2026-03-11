@@ -64,22 +64,36 @@ jobs:
             fi
             
             cd "$PROD_DIR"
+
+            run_as_ua() {
+              if command -v sudo >/dev/null 2>&1; then
+                sudo -u ua bash -lc "$1"
+              elif command -v runuser >/dev/null 2>&1; then
+                runuser -u ua -- bash -lc "$1"
+              else
+                su -s /bin/bash ua -c "$1"
+              fi
+            }
             
             # 1. Pull latest code
             echo "--> Fetching and pulling latest main branch..."
-            sudo -u ua bash -c "cd $PROD_DIR && git fetch origin && git checkout main && git pull origin main"
+            run_as_ua "cd $PROD_DIR && git fetch origin && git checkout main && git pull origin main"
             
             # Note: We do NOT auto-provision production secrets from dev. 
             # Production secrets (in prod-hq) should be curated manually or via an explicit sync script.
             
             # 2. Dependency Sync
             echo "--> Syncing dependencies with uv..."
-            sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync"
+            run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
             # Standard production service names
-            sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+            if command -v sudo >/dev/null 2>&1; then
+              sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+            else
+              systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+            fi
             
             echo "Deployment to Production complete!"
           EOF
