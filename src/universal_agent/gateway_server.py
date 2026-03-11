@@ -13808,6 +13808,67 @@ async def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRe
             conn.close()
 
 
+def _task_history_links_for_session(session_id: str) -> dict[str, str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"session_id": "", "session_href": "", "run_log_href": "", "run_log_path": ""}
+    session_href = f"/dashboard/sessions?session_id={urllib.parse.quote(sid, safe='')}"
+    run_log_rel = f"{sid}/run.log"
+    run_log_href = _storage_explorer_href(scope="workspaces", path=run_log_rel, preview=run_log_rel)
+    run_log_path = str((WORKSPACES_DIR / sid / "run.log").resolve())
+    return {
+        "session_id": sid,
+        "session_href": session_href,
+        "run_log_href": run_log_href,
+        "run_log_path": run_log_path,
+    }
+
+
+@app.get("/api/v1/dashboard/todolist/completed")
+async def dashboard_todolist_completed(limit: int = 60):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            rows = task_hub.list_completed_tasks(conn, limit=max(1, min(int(limit), 500)))
+        finally:
+            conn.close()
+
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row) if isinstance(row, dict) else {}
+        assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
+        links = _task_history_links_for_session(str(assignment.get("session_id") or ""))
+        item["links"] = links
+        enriched.append(item)
+    return {"status": "ok", "items": enriched}
+
+
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/history")
+async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            history = task_hub.get_task_history(
+                conn,
+                task_id=str(task_id or "").strip(),
+                limit=max(1, min(int(limit), 500)),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        finally:
+            conn.close()
+
+    assignments = history.get("assignments") if isinstance(history.get("assignments"), list) else []
+    enriched_assignments: list[dict[str, Any]] = []
+    for row in assignments:
+        record = dict(row) if isinstance(row, dict) else {}
+        links = _task_history_links_for_session(str(record.get("session_id") or ""))
+        record["links"] = links
+        enriched_assignments.append(record)
+    history["assignments"] = enriched_assignments
+    return {"status": "ok", **history}
+
+
 @app.get("/api/v1/dashboard/todolist/agent-activity")
 async def dashboard_todolist_agent_activity():
     with _activity_store_lock:
@@ -14762,6 +14823,15 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     mirror_policy: dict[str, Any] = {}
     mirror_class = "personal" if is_personal else "internal_only"
     should_mirror = False
+    task_id = _system_command_task_id(
+        content=content,
+        schedule_text=schedule_text,
+        source_page=source_page,
+        source_session_id=source_session_id,
+        intent=intent,
+        repeat_schedule=repeat_schedule,
+    )
+    duplicate_parked = 0
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -14770,7 +14840,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
             hub_task = task_hub.upsert_item(
                 conn,
                 {
-                    "task_id": f"scmd:{uuid.uuid4().hex[:16]}",
+                    "task_id": task_id,
                     "source_kind": "system_command",
                     "source_ref": source_session_id or "",
                     "title": content,
@@ -14794,7 +14864,18 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                     },
                 },
             )
+            duplicate_parked = _park_duplicate_system_command_tasks(
+                conn,
+                keep_task_id=str(hub_task.get("task_id") or ""),
+                content=content,
+                schedule_text=schedule_text,
+                source_page=source_page,
+                source_session_id=source_session_id,
+                intent=intent,
+                repeat_schedule=repeat_schedule,
+            )
             task_hub.rebuild_dispatch_queue(conn)
+            conn.commit()
         finally:
             conn.close()
 
@@ -14925,6 +15006,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         "interpreted": interpreted,
         "task_hub": {
             "task": hub_task,
+            "duplicates_parked": int(duplicate_parked),
             "mirror": {
                 "class": mirror_class,
                 "requested": should_mirror,
@@ -16375,6 +16457,95 @@ def _system_command_is_personal_task(text: str) -> bool:
 def _system_command_is_brainstorm_capture(text: str) -> bool:
     lowered = str(text or "").strip().lower()
     return bool(re.search(r"\b(idea|brainstorm|backlog|capture this)\b", lowered))
+
+
+def _system_command_task_id(
+    *,
+    content: str,
+    schedule_text: Optional[str],
+    source_page: str,
+    source_session_id: str,
+    intent: str,
+    repeat_schedule: bool,
+) -> str:
+    signature = {
+        "content": str(content or "").strip().lower(),
+        "schedule_text": str(schedule_text or "").strip().lower(),
+        "source_page": str(source_page or "").strip().lower(),
+        "source_session_id": str(source_session_id or "").strip().lower(),
+        "intent": str(intent or "").strip().lower(),
+        "repeat_schedule": bool(repeat_schedule),
+    }
+    raw = json.dumps(signature, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return f"scmd:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _park_duplicate_system_command_tasks(
+    conn: sqlite3.Connection,
+    *,
+    keep_task_id: str,
+    content: str,
+    schedule_text: Optional[str],
+    source_page: str,
+    source_session_id: str,
+    intent: str,
+    repeat_schedule: bool,
+) -> int:
+    rows = conn.execute(
+        """
+        SELECT task_id, metadata_json
+        FROM task_hub_items
+        WHERE source_kind = 'system_command'
+          AND task_id <> ?
+          AND title = ?
+          AND status IN ('open', 'in_progress', 'blocked', 'needs_review')
+        """,
+        (str(keep_task_id or ""), str(content or "").strip()),
+    ).fetchall()
+    parked = 0
+    now_iso = _utc_now_iso()
+    target_schedule = str(schedule_text or "").strip().lower()
+    target_source_page = str(source_page or "").strip().lower()
+    target_source_session = str(source_session_id or "").strip().lower()
+    target_intent = str(intent or "").strip().lower()
+    for row in rows:
+        metadata = {}
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except Exception:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if str(metadata.get("schedule_text") or "").strip().lower() != target_schedule:
+            continue
+        if str(metadata.get("source_page") or "").strip().lower() != target_source_page:
+            continue
+        if str(metadata.get("source_session_id") or "").strip().lower() != target_source_session:
+            continue
+        if str(metadata.get("intent") or "").strip().lower() != target_intent:
+            continue
+        if bool(metadata.get("repeat_schedule")) != bool(repeat_schedule):
+            continue
+        metadata["duplicate_of_task_id"] = str(keep_task_id or "")
+        metadata["duplicate_parked_at"] = now_iso
+        metadata["duplicate_reason"] = "system_command_signature"
+        conn.execute(
+            """
+            UPDATE task_hub_items
+            SET status = ?, stale_state = ?, seizure_state = ?, metadata_json = ?, updated_at = ?
+            WHERE task_id = ?
+            """,
+            (
+                task_hub.TASK_STATUS_PARKED,
+                "duplicate_parked",
+                "unseized",
+                json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+                now_iso,
+                str(row["task_id"] or ""),
+            ),
+        )
+        parked += 1
+    return parked
 
 
 def _build_task_hub_execution_cron_command(*, task_id: str, content: str) -> str:

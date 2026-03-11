@@ -727,9 +727,11 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
             )
             continue
 
+        # Keep `updated_at` for lifecycle transitions only (status/seizure/manual action).
+        # Re-scoring on every queue rebuild should not make tasks look "freshly updated".
         conn.execute(
-            "UPDATE task_hub_items SET score=?, score_confidence=?, stale_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            (score, confidence, stale_state, _json_dumps(metadata), _now_iso(), task_id),
+            "UPDATE task_hub_items SET score=?, score_confidence=?, stale_state=?, metadata_json=? WHERE task_id=?",
+            (score, confidence, stale_state, _json_dumps(metadata), task_id),
         )
 
         status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
@@ -739,13 +741,23 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
             eligible = False
         elif status == TASK_STATUS_REVIEW:
             # System command schedule instructions are explicit operator directives
-            # and should not be trapped behind manual review.
+            # and should not be trapped behind manual review, unless explicitly blocked.
             eligible = bool(item.get("agent_ready")) and is_system_schedule
+            
         if bool(item.get("must_complete")) and status in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
             if status != TASK_STATUS_REVIEW or is_system_schedule:
                 eligible = bool(item.get("agent_ready"))
+                
         if is_system_schedule and status in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
             eligible = bool(item.get("agent_ready"))
+
+        # Finally, prevent infinite starvation loops for items that auto-landed in review
+        # due to successive heartbeat failures or unhandled completion states.
+        if status == TASK_STATUS_REVIEW:
+            dispatch_meta = dict(dict(item.get("metadata") or {}).get("dispatch") or {})
+            reason = str(dispatch_meta.get("last_disposition_reason") or "")
+            if reason.startswith("heartbeat_"):
+                eligible = False
 
         _record_evaluation(
             conn,
@@ -857,15 +869,35 @@ def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[st
 
 def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent_id: str = "heartbeat") -> list[dict[str, Any]]:
     ensure_schema(conn)
-    rebuild_dispatch_queue(conn)
-    queue = get_dispatch_queue(conn, limit=max(1, int(limit)) * 6)
+    rebuild_summary = rebuild_dispatch_queue(conn)
+    queue_build_id = str(rebuild_summary.get("queue_build_id") or "")
+    if not queue_build_id:
+        latest = conn.execute(
+            "SELECT queue_build_id FROM task_hub_dispatch_queue ORDER BY built_at DESC LIMIT 1"
+        ).fetchone()
+        queue_build_id = str((latest["queue_build_id"] if latest else "") or "")
+    if not queue_build_id:
+        return []
+    claim_limit = max(1, int(limit))
+    rows = conn.execute(
+        """
+        SELECT q.task_id, q.rank, q.skip_reason, i.*
+        FROM task_hub_dispatch_queue q
+        JOIN task_hub_items i ON i.task_id = q.task_id
+        WHERE q.queue_build_id = ?
+          AND q.eligible = 1
+          AND i.status = ?
+        ORDER BY q.rank ASC
+        LIMIT ?
+        """,
+        (queue_build_id, TASK_STATUS_OPEN, claim_limit),
+    ).fetchall()
+    queue_items = [hydrate_item(dict(row)) for row in rows]
     claimed: list[dict[str, Any]] = []
 
-    for item in queue.get("items", []):
-        if len(claimed) >= max(1, int(limit)):
+    for item in queue_items:
+        if len(claimed) >= claim_limit:
             break
-        if not bool(item.get("eligible")):
-            continue
         task_id = str(item.get("task_id") or "")
         if not task_id:
             continue
@@ -898,10 +930,139 @@ def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent
         item["assignment_id"] = assignment_id
         item["status"] = TASK_STATUS_IN_PROGRESS
         item["seizure_state"] = "seized"
+        item["rank"] = _safe_int(item.get("rank"), 0)
+        item["eligible"] = True
+        item["skip_reason"] = None
         claimed.append(item)
 
     conn.commit()
     return claimed
+
+
+def _session_id_from_agent_id(agent_id: Any) -> str:
+    raw = str(agent_id or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("heartbeat:"):
+        return raw.split(":", 1)[1].strip()
+    return ""
+
+
+def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[dict[str, Any]]:
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM task_hub_items
+        WHERE status = ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (TASK_STATUS_COMPLETED, max(1, min(int(limit), 500))),
+    ).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = hydrate_item(dict(row))
+        task_id = str(item.get("task_id") or "")
+        assignment_row = conn.execute(
+            """
+            SELECT assignment_id, agent_id, state, started_at, ended_at, result_summary
+            FROM task_hub_assignments
+            WHERE task_id = ?
+            ORDER BY COALESCE(ended_at, started_at) DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        if assignment_row:
+            agent_id = str(assignment_row["agent_id"] or "")
+            item["last_assignment"] = {
+                "assignment_id": str(assignment_row["assignment_id"] or ""),
+                "agent_id": agent_id,
+                "state": str(assignment_row["state"] or ""),
+                "started_at": str(assignment_row["started_at"] or ""),
+                "ended_at": str(assignment_row["ended_at"] or ""),
+                "result_summary": str(assignment_row["result_summary"] or ""),
+                "session_id": _session_id_from_agent_id(agent_id),
+            }
+        else:
+            item["last_assignment"] = None
+
+        item["completed_at"] = str(
+            ((item.get("last_assignment") or {}).get("ended_at") if isinstance(item.get("last_assignment"), dict) else "")
+            or item.get("updated_at")
+            or ""
+        )
+        out.append(item)
+    return out
+
+
+def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80) -> dict[str, Any]:
+    ensure_schema(conn)
+    item = get_item(conn, task_id)
+    if not item:
+        raise ValueError("task not found")
+
+    cap = max(1, min(int(limit), 500))
+    assignments_rows = conn.execute(
+        """
+        SELECT assignment_id, task_id, agent_id, state, started_at, ended_at, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT ?
+        """,
+        (task_id, cap),
+    ).fetchall()
+    eval_rows = conn.execute(
+        """
+        SELECT id, task_id, evaluated_at, agent_id, decision, reason, score, score_confidence, judge_payload_json
+        FROM task_hub_evaluations
+        WHERE task_id = ?
+        ORDER BY evaluated_at DESC
+        LIMIT ?
+        """,
+        (task_id, cap),
+    ).fetchall()
+
+    assignments: list[dict[str, Any]] = []
+    for row in assignments_rows:
+        agent_id = str(row["agent_id"] or "")
+        assignments.append(
+            {
+                "assignment_id": str(row["assignment_id"] or ""),
+                "task_id": str(row["task_id"] or ""),
+                "agent_id": agent_id,
+                "session_id": _session_id_from_agent_id(agent_id),
+                "state": str(row["state"] or ""),
+                "started_at": str(row["started_at"] or ""),
+                "ended_at": str(row["ended_at"] or ""),
+                "result_summary": str(row["result_summary"] or ""),
+            }
+        )
+
+    evaluations: list[dict[str, Any]] = []
+    for row in eval_rows:
+        evaluations.append(
+            {
+                "id": str(row["id"] or ""),
+                "task_id": str(row["task_id"] or ""),
+                "evaluated_at": str(row["evaluated_at"] or ""),
+                "agent_id": str(row["agent_id"] or ""),
+                "decision": str(row["decision"] or ""),
+                "reason": str(row["reason"] or ""),
+                "score": _safe_float(row["score"], 0.0),
+                "score_confidence": _safe_float(row["score_confidence"], 0.0),
+                "judge_payload": _json_loads_obj(row["judge_payload_json"], default={}),
+            }
+        )
+
+    return {
+        "task": item,
+        "assignments": assignments,
+        "evaluations": evaluations,
+    }
 
 
 def finalize_assignments(

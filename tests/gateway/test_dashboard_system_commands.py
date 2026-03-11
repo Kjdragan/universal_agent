@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from universal_agent import gateway_server
+from universal_agent import task_hub
 
 
 class _FakeTodoService:
@@ -207,6 +208,83 @@ async def test_dashboard_system_command_schedule_boosts_priority_and_wakes_heart
 
 
 @pytest.mark.asyncio
+async def test_dashboard_system_command_uses_deterministic_task_id(monkeypatch, tmp_path):
+    monkeypatch.setattr("universal_agent.services.todoist_service.TodoService", _FakeTodoService)
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setenv("UA_SYSTEM_COMMAND_ENABLE_CRON_BRIDGE", "0")
+
+    payload = gateway_server.DashboardSystemCommandRequest(
+        text="change the heartbeat.md scheduled to run every ten minutes",
+        source_page="/dashboard/todolist",
+        source_context={"session_id": "ops-session-1"},
+        timezone="America/Chicago",
+    )
+    first = await gateway_server.dashboard_system_command(payload)
+    second = await gateway_server.dashboard_system_command(payload)
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert first["task_hub"]["task"]["task_id"] == second["task_hub"]["task"]["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_system_command_parks_duplicate_signature_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr("universal_agent.services.todoist_service.TodoService", _FakeTodoService)
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setenv("UA_SYSTEM_COMMAND_ENABLE_CRON_BRIDGE", "0")
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": "scmd:manual-dup",
+                    "source_kind": "system_command",
+                    "source_ref": "ops-session-1",
+                    "title": "change the heartbeat.md scheduled to run",
+                    "description": "manual duplicate",
+                    "project_key": "immediate",
+                    "priority": 2,
+                    "labels": ["agent-ready", "schedule-command"],
+                    "status": task_hub.TASK_STATUS_OPEN,
+                    "must_complete": False,
+                    "agent_ready": True,
+                    "metadata": {
+                        "intent": "schedule_task",
+                        "schedule_text": "every ten minutes",
+                        "source_page": "/dashboard/todolist",
+                        "source_session_id": "ops-session-1",
+                        "repeat_schedule": True,
+                    },
+                },
+            )
+        finally:
+            conn.close()
+
+    response = await gateway_server.dashboard_system_command(
+        gateway_server.DashboardSystemCommandRequest(
+            text="change the heartbeat.md scheduled to run every ten minutes",
+            source_page="/dashboard/todolist",
+            source_context={"session_id": "ops-session-1"},
+            timezone="America/Chicago",
+        )
+    )
+    assert response["ok"] is True
+    assert int(response["task_hub"].get("duplicates_parked") or 0) >= 1
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            dup = task_hub.get_item(conn, "scmd:manual-dup")
+        finally:
+            conn.close()
+    assert dup is not None
+    assert dup["status"] == task_hub.TASK_STATUS_PARKED
+
+
+@pytest.mark.asyncio
 async def test_todolist_overview_includes_heartbeat_runtime_snapshot(monkeypatch):
     monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
     monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
@@ -277,6 +355,67 @@ async def test_wake_heartbeat_uses_gateway_sessions_when_runtime_sessions_empty(
     assert response["count"] == 2
     assert hb_stub.registered == ["sess-a", "sess-b"]
     assert hb_stub.now_calls == [("sess-a", "unit-test-wake"), ("sess-b", "unit-test-wake")]
+
+
+@pytest.mark.asyncio
+async def test_todolist_completed_and_history_endpoints_include_links(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    sid = "ops-history-session"
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": "task:history-endpoint",
+                    "source_kind": "internal",
+                    "source_ref": sid,
+                    "title": "History endpoint task",
+                    "description": "completed row",
+                    "project_key": "immediate",
+                    "priority": 4,
+                    "labels": ["agent-ready", "must-complete"],
+                    "status": task_hub.TASK_STATUS_OPEN,
+                    "must_complete": True,
+                    "agent_ready": True,
+                },
+            )
+            claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id=f"heartbeat:{sid}")
+            assignment_id = str(claimed[0]["assignment_id"])
+            task_hub.perform_task_action(
+                conn,
+                task_id="task:history-endpoint",
+                action="complete",
+                reason="done",
+                agent_id=f"heartbeat:{sid}",
+            )
+            task_hub.finalize_assignments(
+                conn,
+                assignment_ids=[assignment_id],
+                state="completed",
+                result_summary="done",
+                reopen_in_progress=False,
+                policy="heartbeat",
+            )
+        finally:
+            conn.close()
+
+    completed = await gateway_server.dashboard_todolist_completed(limit=20)
+    items = completed.get("items") or []
+    row = next((item for item in items if item.get("task_id") == "task:history-endpoint"), None)
+    assert row is not None
+    links = row.get("links") or {}
+    assert str(links.get("session_href") or "").startswith("/dashboard/sessions")
+    assert "run.log" in str(links.get("run_log_path") or "")
+
+    history = await gateway_server.dashboard_todolist_task_history("task:history-endpoint", limit=20)
+    assignments = history.get("assignments") or []
+    assert len(assignments) >= 1
+    first_links = assignments[0].get("links") or {}
+    assert str(first_links.get("session_href") or "").startswith("/dashboard/sessions")
+    assert str(first_links.get("run_log_href") or "")
 
 
 @pytest.mark.asyncio

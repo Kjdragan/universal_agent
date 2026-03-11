@@ -9,23 +9,21 @@ _PAGE = Path("web-ui/app/dashboard/todolist/page.tsx")
 def test_todolist_dashboard_uses_gateway_api_path():
     content = _PAGE.read_text(encoding="utf-8")
     assert 'const API_BASE = "/api/dashboard/gateway";' in content
-    assert "ENDPOINTS.pipeline" in content
-    assert "ENDPOINTS.actionable" in content
-    assert "ENDPOINTS.heartbeat" in content
+    assert "/api/v1/dashboard/todolist/overview" in content
+    assert "/api/v1/dashboard/todolist/agent-queue" in content
+    assert "/api/v1/dashboard/todolist/completed" in content
 
 
-def test_todolist_dashboard_includes_api_diagnostics_and_mismatch_warning():
+def test_todolist_dashboard_includes_history_and_completed_sections():
     content = _PAGE.read_text(encoding="utf-8")
-    assert "API Diagnostics" in content
-    assert "Pipeline task count is" in content
-    assert "@agent-ready" in content
+    assert "Completed Agent Jobs" in content
+    assert "Task History" in content
+    assert "/api/v1/dashboard/todolist/tasks/" in content
+    assert "/history?limit=120" in content
 
 
-def test_todolist_dashboard_includes_csi_clickthrough_actions():
+def test_todolist_dashboard_includes_heartbeat_force_controls():
     content = _PAGE.read_text(encoding="utf-8")
-    assert "Open Report" in content
-    assert "Open CSI Event" in content
-    assert "Open Artifact" in content
-    assert "CSI Feed" in content
-    assert "/dashboard/csi?event_id=" in content
-    assert "/dashboard/csi?report_key=" in content
+    assert "Run Next Heartbeat" in content
+    assert "Force Next Heartbeat" in content
+    assert "/api/v1/heartbeat/wake" in content

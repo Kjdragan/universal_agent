@@ -138,6 +138,70 @@ type PersonalQueuePayload = {
   approval_priority_rows: ApprovalRow[];
 };
 
+type TaskHistoryLinks = {
+  session_id?: string;
+  session_href?: string;
+  run_log_href?: string;
+  run_log_path?: string;
+};
+
+type CompletedTaskItem = {
+  task_id: string;
+  title: string;
+  description?: string;
+  project_key?: string;
+  priority?: number;
+  status?: string;
+  updated_at?: string;
+  completed_at?: string;
+  source_kind?: string;
+  last_assignment?: {
+    assignment_id?: string;
+    agent_id?: string;
+    state?: string;
+    started_at?: string;
+    ended_at?: string;
+    result_summary?: string;
+    session_id?: string;
+  } | null;
+  links?: TaskHistoryLinks;
+};
+
+type CompletedTasksPayload = {
+  status: string;
+  items: CompletedTaskItem[];
+};
+
+type TaskAssignmentHistory = {
+  assignment_id: string;
+  task_id: string;
+  agent_id: string;
+  session_id?: string;
+  state: string;
+  started_at?: string;
+  ended_at?: string;
+  result_summary?: string;
+  links?: TaskHistoryLinks;
+};
+
+type TaskEvaluationHistory = {
+  id: string;
+  task_id: string;
+  evaluated_at?: string;
+  agent_id?: string;
+  decision?: string;
+  reason?: string;
+  score?: number;
+  score_confidence?: number;
+};
+
+type TaskHistoryPayload = {
+  status: string;
+  task: AgentQueueItem;
+  assignments: TaskAssignmentHistory[];
+  evaluations: TaskEvaluationHistory[];
+};
+
 function usePersistedMode(defaultMode: Mode): [Mode, (next: Mode) => void] {
   const [mode, setMode] = useState<Mode>(() => {
     if (typeof window === "undefined") return defaultMode;
@@ -226,12 +290,16 @@ export default function ToDoListDashboardPage() {
   const [agentQueue, setAgentQueue] = useState<AgentQueuePayload | null>(null);
   const [personalQueue, setPersonalQueue] = useState<PersonalQueuePayload | null>(null);
   const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null);
+  const [completedTasks, setCompletedTasks] = useState<CompletedTasksPayload | null>(null);
 
   const [mode, setMode] = usePersistedMode("agent");
   const [includeCsi, setIncludeCsi] = useState(true);
   const [collapseCsi, setCollapseCsi] = useState(true);
   const [showNonCsiOnly, setShowNonCsiOnly] = useState(false);
   const [actionPendingTaskId, setActionPendingTaskId] = useState("");
+  const [wakePending, setWakePending] = useState(false);
+  const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
+  const [taskHistoryLoadingId, setTaskHistoryLoadingId] = useState("");
 
   const approvalsRef = useRef<HTMLDivElement | null>(null);
 
@@ -245,21 +313,23 @@ export default function ToDoListDashboardPage() {
       agentQueueUrl.searchParams.set("include_csi", includeCsi ? "1" : "0");
       agentQueueUrl.searchParams.set("collapse_csi", collapseCsi ? "1" : "0");
 
-      const [overviewRes, approvalsRes, agentRes, personalRes, activityRes] = await Promise.all([
+      const [overviewRes, approvalsRes, agentRes, personalRes, activityRes, completedRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/todolist/overview`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/approvals/highlight`, { cache: "no-store" }),
         fetch(`${agentQueueUrl.pathname}${agentQueueUrl.search}`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/todolist/personal-queue?limit=200`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/todolist/agent-activity`, { cache: "no-store" }),
+        fetch(`${API_BASE}/api/v1/dashboard/todolist/completed?limit=80`, { cache: "no-store" }),
       ]);
 
-      if (!overviewRes.ok || !agentRes.ok || !personalRes.ok || !activityRes.ok) {
+      if (!overviewRes.ok || !agentRes.ok || !personalRes.ok || !activityRes.ok || !completedRes.ok) {
         const failures: Array<{ name: string; status: number; detail: string }> = [];
         const required = [
           { name: "overview", res: overviewRes },
           { name: "agent_queue", res: agentRes },
           { name: "personal_queue", res: personalRes },
           { name: "agent_activity", res: activityRes },
+          { name: "completed_tasks", res: completedRes },
         ];
         for (const item of required) {
           if (item.res.ok) continue;
@@ -276,11 +346,12 @@ export default function ToDoListDashboardPage() {
         throw new Error(`To Do V2 endpoints failed to load (${compact})`);
       }
 
-      const [overviewJson, agentJson, personalJson, activityJson] = await Promise.all([
+      const [overviewJson, agentJson, personalJson, activityJson, completedJson] = await Promise.all([
         overviewRes.json(),
         agentRes.json(),
         personalRes.json(),
         activityRes.json(),
+        completedRes.json(),
       ]);
       const approvalsJson = approvalsRes.ok
         ? await approvalsRes.json()
@@ -296,6 +367,7 @@ export default function ToDoListDashboardPage() {
       setAgentQueue(agentJson as AgentQueuePayload);
       setPersonalQueue(personalJson as PersonalQueuePayload);
       setAgentActivity(activityJson as AgentActivity);
+      setCompletedTasks(completedJson as CompletedTasksPayload);
 
       if (!background && (!localStorage.getItem(MODE_STORAGE_KEY))) {
         const defaultMode = (overviewJson?.mode_default || "agent") as Mode;
@@ -352,6 +424,49 @@ export default function ToDoListDashboardPage() {
     }
   }, [load]);
 
+  const handleOpenTaskHistory = useCallback(async (taskId: string) => {
+    setTaskHistoryLoadingId(taskId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(taskId)}/history?limit=120`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(String(payload?.detail || `History failed (${res.status})`));
+      }
+      const payload = await res.json();
+      setTaskHistory(payload as TaskHistoryPayload);
+      setError("");
+    } catch (err: any) {
+      setError(err?.message || "Failed to load task history.");
+    } finally {
+      setTaskHistoryLoadingId("");
+    }
+  }, []);
+
+  const handleWakeHeartbeat = useCallback(async (taskId?: string) => {
+    setWakePending(true);
+    try {
+      const reason = taskId ? `todolist_force:${taskId}` : "todolist_force_next";
+      const res = await fetch(`${API_BASE}/api/v1/heartbeat/wake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "next", reason }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(String(payload?.detail || `Wake failed (${res.status})`));
+      }
+      await load(true);
+      setError("");
+    } catch (err: any) {
+      setError(err?.message || "Failed to queue next heartbeat.");
+    } finally {
+      setWakePending(false);
+    }
+  }, [load]);
+
   const filteredAgentItems = useMemo(() => {
     const rows = Array.isArray(agentQueue?.items) ? agentQueue!.items : [];
     if (!showNonCsiOnly) return rows;
@@ -385,6 +500,13 @@ export default function ToDoListDashboardPage() {
           >
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
+          <button
+            onClick={() => { void handleWakeHeartbeat(); }}
+            disabled={wakePending}
+            className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+          >
+            {wakePending ? "Queueing..." : "Run Next Heartbeat"}
+          </button>
         </div>
       </div>
 
@@ -408,6 +530,13 @@ export default function ToDoListDashboardPage() {
                   className="rounded border border-emerald-700/60 bg-emerald-800/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-800/30 disabled:opacity-50"
                 >
                   Seize
+                </button>
+                <button
+                  onClick={() => void handleOpenTaskHistory(item.task_id)}
+                  disabled={taskHistoryLoadingId === item.task_id}
+                  className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
+                >
+                  {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
                 </button>
               </div>
             ))}
@@ -462,11 +591,18 @@ export default function ToDoListDashboardPage() {
                   </button>
                 ) : null}
                 <button
-                  onClick={() => void handleTaskAction(item.task_id, "review")}
-                  disabled={actionPendingTaskId === item.task_id}
+                  onClick={() => void handleOpenTaskHistory(item.task_id)}
+                  disabled={taskHistoryLoadingId === item.task_id}
                   className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
                 >
-                  Review
+                  {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
+                </button>
+                <button
+                  onClick={() => void handleTaskAction(item.task_id, "review")}
+                  disabled={actionPendingTaskId === item.task_id}
+                  className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                >
+                  Mark Review
                 </button>
                 <button
                   onClick={() => void handleTaskAction(item.task_id, "block")}
@@ -495,6 +631,13 @@ export default function ToDoListDashboardPage() {
                   className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
                 >
                   Park
+                </button>
+                <button
+                  onClick={() => void handleWakeHeartbeat(item.task_id)}
+                  disabled={wakePending}
+                  className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                >
+                  Force Next Heartbeat
                 </button>
               </div>
             </article>
@@ -556,6 +699,169 @@ export default function ToDoListDashboardPage() {
           ))
         )}
       </div>
+    </section>
+  );
+
+  const completedRows = useMemo(
+    () => (Array.isArray(completedTasks?.items) ? completedTasks!.items : []),
+    [completedTasks],
+  );
+
+  const renderCompletedPanel = (compact = false) => (
+    <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-300">
+            Completed Agent Jobs ({completedRows.length})
+          </h2>
+          <p className="text-xs text-slate-400">Most recent finished tasks with session and run-log links.</p>
+        </div>
+      </div>
+      <div className="space-y-2 max-h-[42vh] overflow-y-auto pr-1">
+        {completedRows.length === 0 ? (
+          <p className="text-sm text-slate-500 italic">No completed agent jobs yet.</p>
+        ) : (
+          completedRows.slice(0, compact ? 8 : 20).map((item) => (
+            <article key={`completed-${item.task_id}`} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="truncate font-semibold text-slate-200">{item.title}</h3>
+                  {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
+                </div>
+                <div className="text-right text-[10px] text-slate-400">
+                  <div>{priorityText(item.priority)}</div>
+                  <div>{item.status || "completed"}</div>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                <span>{item.project_key || "immediate"}</span>
+                <span>•</span>
+                <span>Completed {formatTs(item.completed_at || item.updated_at)}</span>
+                {item.last_assignment?.agent_id ? (
+                  <>
+                    <span>•</span>
+                    <span>{item.last_assignment.agent_id}</span>
+                  </>
+                ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => void handleOpenTaskHistory(item.task_id)}
+                  disabled={taskHistoryLoadingId === item.task_id}
+                  className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
+                >
+                  {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
+                </button>
+                {item.links?.session_href ? (
+                  <Link
+                    href={String(item.links.session_href)}
+                    className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35"
+                  >
+                    Session
+                  </Link>
+                ) : null}
+                {item.links?.run_log_href ? (
+                  <a
+                    href={String(item.links.run_log_href)}
+                    className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35"
+                  >
+                    Run Log
+                  </a>
+                ) : null}
+              </div>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  );
+
+  const renderTaskHistoryPanel = () => (
+    <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">Task History</h2>
+          <p className="text-xs text-slate-400">Assignment/evaluation trail and links to session artifacts.</p>
+        </div>
+        {taskHistory ? (
+          <button
+            onClick={() => setTaskHistory(null)}
+            className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      {!taskHistory ? (
+        <p className="text-xs text-slate-500">Select Review on any task to load run history.</p>
+      ) : (
+        <div className="space-y-3 text-xs">
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
+            <div className="font-semibold text-slate-100">{taskHistory.task?.title || taskHistory.task?.task_id || "Task"}</div>
+            <div className="mt-1 text-slate-400">{taskHistory.task?.task_id}</div>
+          </div>
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              Assignments ({taskHistory.assignments?.length || 0})
+            </div>
+            {(taskHistory.assignments || []).length === 0 ? (
+              <p className="text-slate-500">No assignment history.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {(taskHistory.assignments || []).slice(0, 10).map((row) => (
+                  <div key={row.assignment_id} className="rounded border border-slate-800 bg-slate-900/50 px-2 py-1.5">
+                    <div className="text-slate-200">
+                      <span className="font-semibold">{row.agent_id || "unknown-agent"}</span> · {row.state}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      started {formatTs(row.started_at)} · ended {formatTs(row.ended_at)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {row.links?.session_href ? (
+                        <Link
+                          href={String(row.links.session_href)}
+                          className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35"
+                        >
+                          Session
+                        </Link>
+                      ) : null}
+                      {row.links?.run_log_href ? (
+                        <a
+                          href={String(row.links.run_log_href)}
+                          className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35"
+                        >
+                          Run Log
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              Evaluations ({taskHistory.evaluations?.length || 0})
+            </div>
+            {(taskHistory.evaluations || []).length === 0 ? (
+              <p className="text-slate-500">No evaluation records.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {(taskHistory.evaluations || []).slice(0, 12).map((row) => (
+                  <div key={row.id} className="rounded border border-slate-800 bg-slate-900/50 px-2 py-1.5">
+                    <div className="text-slate-200">
+                      <span className="font-semibold">{row.decision || "n/a"}</span> · {row.reason || "n/a"}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      score {row.score ?? 0} ({row.score_confidence ?? 0}) · {formatTs(row.evaluated_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 
@@ -706,6 +1012,18 @@ export default function ToDoListDashboardPage() {
           {renderPersonalPanel(true)}
         </div>
       ) : null}
+
+      {mode === "split" ? (
+        <div className="grid gap-3 xl:grid-cols-2">
+          {renderCompletedPanel(true)}
+          {renderTaskHistoryPanel()}
+        </div>
+      ) : (
+        <>
+          {renderCompletedPanel(false)}
+          {renderTaskHistoryPanel()}
+        </>
+      )}
     </div>
   );
 }

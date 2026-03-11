@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from datetime import datetime, timedelta, timezone
 
 from universal_agent import task_hub
@@ -561,5 +562,112 @@ def test_system_schedule_task_ranks_ahead_of_must_complete_backlog() -> None:
         items = queue.get("items") or []
         assert len(items) >= 2
         assert items[0]["task_id"] == "scmd:urgent-schedule"
+    finally:
+        conn.close()
+
+
+def test_claim_next_dispatch_tasks_skips_ineligible_front_rows() -> None:
+    conn = _conn()
+    previous_threshold = os.environ.get("UA_TASK_HUB_AGENT_THRESHOLD")
+    os.environ["UA_TASK_HUB_AGENT_THRESHOLD"] = "1"
+    try:
+        for idx in range(7):
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": f"task:review-front-{idx}",
+                    "source_kind": "internal",
+                    "source_ref": "ops",
+                    "title": f"Front review {idx}",
+                    "description": "Non-dispatchable review item",
+                    "project_key": "immediate",
+                    "priority": 4,
+                    "labels": ["agent-ready", "must-complete"],
+                    "status": task_hub.TASK_STATUS_REVIEW,
+                    "must_complete": True,
+                    "agent_ready": True,
+                },
+            )
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:eligible-open",
+                "source_kind": "internal",
+                "source_ref": "ops",
+                "title": "Eligible open task",
+                "description": "Should still be claimable",
+                "project_key": "immediate",
+                "priority": 1,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+
+        queue = task_hub.get_dispatch_queue(conn, limit=8)
+        assert queue["items"][0]["task_id"].startswith("task:review-front-")
+        assert queue["items"][0]["eligible"] is False
+
+        claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:claim-scan")
+        assert len(claimed) == 1
+        assert claimed[0]["task_id"] == "task:eligible-open"
+        assert claimed[0]["status"] == task_hub.TASK_STATUS_IN_PROGRESS
+    finally:
+        if previous_threshold is None:
+            os.environ.pop("UA_TASK_HUB_AGENT_THRESHOLD", None)
+        else:
+            os.environ["UA_TASK_HUB_AGENT_THRESHOLD"] = previous_threshold
+        conn.close()
+
+
+def test_completed_list_and_task_history_include_session_links() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:completed-history",
+                "source_kind": "internal",
+                "source_ref": "ops",
+                "title": "Completed history task",
+                "description": "Track this in history",
+                "project_key": "immediate",
+                "priority": 4,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+        claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:sess-history")
+        assert len(claimed) == 1
+        assignment_id = str(claimed[0]["assignment_id"])
+        task_hub.perform_task_action(
+            conn,
+            task_id="task:completed-history",
+            action="complete",
+            reason="done",
+            agent_id="heartbeat:sess-history",
+        )
+        task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[assignment_id],
+            state="completed",
+            result_summary="completed",
+            reopen_in_progress=False,
+            policy="heartbeat",
+        )
+
+        completed = task_hub.list_completed_tasks(conn, limit=20)
+        target = next((row for row in completed if row.get("task_id") == "task:completed-history"), None)
+        assert target is not None
+        assignment = target.get("last_assignment") if isinstance(target.get("last_assignment"), dict) else {}
+        assert assignment.get("session_id") == "sess-history"
+
+        history = task_hub.get_task_history(conn, task_id="task:completed-history", limit=20)
+        assignments = history.get("assignments") if isinstance(history.get("assignments"), list) else []
+        assert len(assignments) >= 1
+        assert assignments[0]["session_id"] == "sess-history"
     finally:
         conn.close()
