@@ -45,3 +45,5 @@ If deployment hangs at the SSH step, ensure that 'Check-in' is disabled in the T
 - Verification of Git safe.directory for root operations.
 
 - Verification of Tailscale SSH non-interactive login (accept rule).
+
+- Verification of final Tailscale SSH ACL (autogroup:member access).
