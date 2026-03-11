@@ -1,5 +1,14 @@
 # 76. Sandbox Permissioning And Exception Profile (2026-02-23)
 
+## Deployment Note
+
+This document contains older operational references to `scripts/vpsctl.sh` and `scripts/deploy_vps.sh`.
+
+Those tools are not the primary deployment path anymore. The current supported application deploy flow is GitHub Actions:
+
+1. `develop` -> staging
+2. `main` -> production
+
 ## Objective
 Define a practical operating profile that keeps sandbox safety while eliminating repetitive permission friction during normal development/deploy/debug loops.
 
@@ -72,4 +81,3 @@ This profile is considered healthy when:
    1. `PLAYLIST_TUTORIAL_NEW_COUNT=1`
    2. `PLAYLIST_TUTORIAL_SENT=1`
 3. Telegram middleware patched to ignore channel updates without `effective_user` and stop repeated error traces.
-

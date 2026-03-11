@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# DEPRECATED: This script is no longer the primary deployment path.
+# Canonical deploy flow is branch-driven GitHub Actions:
+#   develop -> staging
+#   main    -> production
+# See docs/deployment/ci_cd_pipeline.md and AGENTS.md.
+
 # VPS deployment script (local workspace -> remote app dir).
 # Usage: ./scripts/deploy_vps.sh
 

@@ -1,5 +1,16 @@
 # 31. VPS Deployment Decision Tree (2026-02-14)
 
+## Deprecated For Primary Deployment
+
+This decision tree is historical. It documents older manual VPS deployment choices.
+
+Current supported application deployment path:
+
+1. `develop` auto-deploys to staging.
+2. `main` auto-deploys to production.
+
+Do not treat `scripts/vpsctl.sh` or `scripts/deploy_vps.sh` as the default deploy mechanism.
+
 ## Purpose
 
 Single reference for deploying local changes to the production VPS. Replaces the need to cross-reference Docs 22 and 27.

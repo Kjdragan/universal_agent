@@ -1,5 +1,14 @@
 # 87. Tailscale Architecture and Operations Source of Truth (2026-03-06)
 
+## Deployment Status Note
+
+For application deployment, the canonical path is now GitHub Actions branch-driven CI/CD:
+
+1. `develop` -> staging
+2. `main` -> production
+
+References in this document to `scripts/deploy_vps.sh` or `scripts/vpsctl.sh` should be read as legacy or break-glass operational tooling, not the primary deployment contract.
+
 ## Purpose
 
 This document is the canonical source of truth for current Tailscale usage in Universal Agent.

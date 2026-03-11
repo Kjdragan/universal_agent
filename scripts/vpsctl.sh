@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# DEPRECATED FOR PRIMARY DEPLOYMENT: use only as a break-glass helper.
+# Canonical deploy flow is branch-driven GitHub Actions:
+#   develop -> staging
+#   main    -> production
+# See docs/deployment/ci_cd_pipeline.md and AGENTS.md.
+
 set -euo pipefail
 
 # Minimal, agent-safe VPS helper (scp/ssh only).

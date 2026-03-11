@@ -2,12 +2,29 @@
 
 Our CI/CD pipeline is built on GitHub Actions and automates deployment to staging and production over Tailscale.
 
+## Canonical Rule
+
+This is the only supported app deployment path in this repository.
+
+- Push or merge to `develop` to deploy to staging automatically.
+- Push or merge to `main` to deploy to production automatically.
+- Do not treat `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, or manual SSH deploy steps as the primary deployment path.
+
 ## Workflows
 
 | Name | Trigger | Target |
 |------|---------|--------|
 | `Deploy Staging` | Push to `develop` | Staging Service |
 | `Deploy Production` | Push to `main` | Production Service |
+
+## Current Targets
+
+| Area | Staging | Production |
+|------|---------|------------|
+| Git branch | `develop` | `main` |
+| VPS checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
+| Legacy/fallback checkout | n/a | `/opt/universal_agent_repo` if `/opt/universal_agent` is occupied by a non-git legacy directory |
+| Runtime secrets | `staging-hq` when provisioning succeeds, otherwise temporary fallback to `dev` | production-managed secrets only; no auto-clone from `dev` |
 
 ## Required GitHub Secrets
 
@@ -51,6 +68,12 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 5. **Staging only** provisions Infisical environment and bootstraps `.env`.
 6. **Dependency sync** runs `uv sync`.
 7. **Service restart** restarts target systemd units.
+
+## Operational Meaning
+
+- While you code, `develop` is the automated VPS-backed dev/staging lane.
+- `main` is a separately deployable production lane and is currently deployable.
+- Production and staging both have passing workflow runs as of March 11, 2026.
 
 ## Troubleshooting
 

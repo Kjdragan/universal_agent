@@ -1,5 +1,16 @@
 # 22. VPS Remote Dev, Deploy, and File Transfer Runbook (2026-02-11)
 
+## Deprecated For Primary Deployment
+
+This runbook describes older manual VPS helper flows.
+
+Current supported application deployment path:
+
+1. Push or merge to `develop` for staging deploy via GitHub Actions.
+2. Push or merge to `main` for production deploy via GitHub Actions.
+
+Use `scripts/vpsctl.sh` only for break-glass diagnostics or narrowly targeted remote intervention.
+
 ## Why this exists
 This document is the shared playbook for working with the production VPS from local development.
 

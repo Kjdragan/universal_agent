@@ -2,6 +2,14 @@
 
 Welcome to the official technical documentation for the **Universal Agent**. This documentation is designed for junior developers to quickly understand the project's architecture, core logic, and operational workflows.
 
+## Deployment Notice
+
+The canonical deployment contract is maintained in `docs/deployment/`, not in older VPS runbooks under `03_Operations/`.
+
+- `docs/deployment/architecture_overview.md`
+- `docs/deployment/ci_cd_pipeline.md`
+- `docs/deployment/infisical_factories.md`
+
 ## 📚 Table of Contents
 
 ### 1. [Architecture](01_Architecture)
