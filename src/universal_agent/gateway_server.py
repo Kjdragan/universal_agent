@@ -9947,6 +9947,7 @@ async def signals_ingest_endpoint(request: Request):
         recommendation_task_count = 0
         recommendation_agent_task_count = 0
         recommendation_human_task_count = 0
+        recommendation_human_notice_count = 0
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
             if manual_payload:
@@ -10268,6 +10269,8 @@ async def signals_ingest_endpoint(request: Request):
             mirror_policy: dict[str, Any] = dict(task_hub.DEFAULT_MIRROR_POLICY)
             should_mirror = False
             hub_task_id = ""
+            human_recommendation_task_ids: list[str] = []
+            human_recommendation_preview: list[str] = []
             should_enqueue_task = _task_hub_enabled() and _should_enqueue_csi_task(
                 event_type=event_type_norm,
                 policy=policy,
@@ -10306,12 +10309,20 @@ async def signals_ingest_endpoint(request: Request):
                     recommendation_ids: list[str] = []
                     for recommendation_item in recommendation_items:
                         task_hub.upsert_item(hub_conn, recommendation_item)
-                        recommendation_ids.append(str(recommendation_item.get("task_id") or ""))
+                        recommendation_task_id = str(recommendation_item.get("task_id") or "")
+                        recommendation_ids.append(recommendation_task_id)
                         recommendation_task_count += 1
                         if bool(recommendation_item.get("agent_ready")):
                             recommendation_agent_task_count += 1
                         else:
                             recommendation_human_task_count += 1
+                            if recommendation_task_id:
+                                human_recommendation_task_ids.append(recommendation_task_id)
+                            recommendation_meta = recommendation_item.get("metadata")
+                            if isinstance(recommendation_meta, dict):
+                                recommendation_text = str(recommendation_meta.get("recommendation_text") or "").strip()
+                                if recommendation_text:
+                                    human_recommendation_preview.append(recommendation_text)
 
                     if recommendation_ids:
                         task_hub.upsert_item(
@@ -10356,6 +10367,38 @@ async def signals_ingest_endpoint(request: Request):
                             hub_conn.commit()
                 finally:
                     hub_conn.close()
+
+            if human_recommendation_task_ids:
+                preview_lines = []
+                for text in human_recommendation_preview[:5]:
+                    preview_lines.append(f"- {text}")
+                preview_block = "\n".join(preview_lines)
+                if len(human_recommendation_preview) > len(preview_lines):
+                    preview_block += (
+                        f"\n- (+{len(human_recommendation_preview) - len(preview_lines)} more)"
+                    )
+                _add_notification(
+                    kind="csi_human_action_required",
+                    title="CSI Human Action Required",
+                    message=(
+                        f"CSI surfaced {len(human_recommendation_task_ids)} recommendation task(s) "
+                        "that require human attention.\n\n"
+                        f"{preview_block}\n\n"
+                        "Open Personal Queue: /dashboard/todolist?mode=personal&focus=human-tasks"
+                    ),
+                    severity="warning",
+                    requires_action=True,
+                    metadata={
+                        "event_id": str(getattr(event, "event_id", "") or ""),
+                        "event_type": event_type_norm,
+                        "source": _source,
+                        "task_hub_parent_task_id": hub_task_id,
+                        "task_hub_human_task_ids": human_recommendation_task_ids,
+                        "focus_href": "/dashboard/todolist?mode=personal&focus=human-tasks",
+                    },
+                    created_at=event.occurred_at or event.received_at,
+                )
+                recommendation_human_notice_count += 1
 
             # Mirror to Todoist only when both event and mirror policy allow it.
             if (not bool(policy.get("todoist_sync"))) or (not should_mirror):
@@ -10560,6 +10603,7 @@ async def signals_ingest_endpoint(request: Request):
             body["recommendation_tasks_enqueued"] = recommendation_task_count
             body["recommendation_tasks_agent_ready"] = recommendation_agent_task_count
             body["recommendation_tasks_human_queue"] = recommendation_human_task_count
+            body["recommendation_tasks_human_notices"] = recommendation_human_notice_count
             wake_enabled = str(
                 os.getenv("UA_CSI_WAKE_HEARTBEAT_ON_ACTIONABLE_TASK", "1")
             ).strip().lower() in {"1", "true", "yes", "on"}
@@ -13508,13 +13552,138 @@ async def dashboard_todolist_personal_queue(limit: int = 120):
                     }
                 )
             approval_rows.sort(key=lambda row: int(row.get("priority") or 0), reverse=True)
+            human_rows = [item for item in items if _is_human_personal_queue_item(item)]
             return {
                 "status": "ok",
                 "items": items,
                 "approval_priority_rows": approval_rows,
+                "banner": {
+                    "show": len(human_rows) > 0,
+                    "text": (
+                        f"{len(human_rows)} human task{'s' if len(human_rows) != 1 else ''} pending"
+                        if human_rows
+                        else ""
+                    ),
+                    "focus_href": "/dashboard/todolist?mode=personal&focus=human-tasks" if human_rows else "",
+                },
             }
         finally:
             conn.close()
+
+
+def _is_human_personal_queue_item(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    source_kind = str(item.get("source_kind") or "").strip().lower()
+    if source_kind in {"csi_recommendation", "approval"}:
+        return True
+    labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+    normalized_labels = {str(label).strip().lower() for label in labels}
+    if "needs-human" in normalized_labels or "human-task" in normalized_labels:
+        return True
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    if bool(metadata.get("requires_human")):
+        return True
+    owner = str(metadata.get("owner") or "").strip().lower()
+    return owner in {"human", "human_in_loop", "human-in-loop"}
+
+
+@app.get("/api/v1/dashboard/human-actions/highlight")
+async def dashboard_human_actions_highlight(task_limit: int = 120, notification_limit: int = 60):
+    _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            personal_items = task_hub.list_personal_queue(conn, limit=max(1, min(int(task_limit), 500)))
+        finally:
+            conn.close()
+
+    human_tasks = [item for item in personal_items if _is_human_personal_queue_item(item)]
+    actionable_notifications: list[dict[str, Any]] = []
+    try:
+        events = _query_activity_events(
+            limit=max(1, min(int(notification_limit), 500)),
+            requires_action=True,
+            apply_default_window=False,
+        )
+        for item in events:
+            if str(item.get("event_class") or "") != "notification":
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            focus_href = str(metadata.get("focus_href") or "").strip()
+            actionable_notifications.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "kind": str(item.get("kind") or ""),
+                    "title": str(item.get("title") or ""),
+                    "summary": str(item.get("summary") or ""),
+                    "severity": str(item.get("severity") or "info"),
+                    "status": str(item.get("status") or "new"),
+                    "requires_action": bool(item.get("requires_action")),
+                    "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
+                    "focus_href": (
+                        focus_href
+                        if focus_href
+                        else "/dashboard/todolist?mode=personal&focus=human-tasks"
+                    ),
+                    "metadata": metadata,
+                }
+            )
+    except Exception as exc:
+        logger.debug("Failed querying actionable notifications: %s", exc)
+        fallback_rows = [item for item in list(_notifications) if bool(item.get("requires_action"))]
+        for item in fallback_rows[-max(1, min(int(notification_limit), 500)):][::-1]:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            focus_href = str(metadata.get("focus_href") or "").strip()
+            actionable_notifications.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "kind": str(item.get("kind") or ""),
+                    "title": str(item.get("title") or ""),
+                    "summary": str(item.get("summary") or ""),
+                    "severity": str(item.get("severity") or "info"),
+                    "status": str(item.get("status") or "new"),
+                    "requires_action": True,
+                    "created_at": str(item.get("created_at") or _utc_now_iso()),
+                    "focus_href": (
+                        focus_href
+                        if focus_href
+                        else "/dashboard/todolist?mode=personal&focus=human-tasks"
+                    ),
+                    "metadata": metadata,
+                }
+            )
+
+    banner_show = len(human_tasks) > 0 or len(actionable_notifications) > 0
+    if human_tasks:
+        banner_text = f"{len(human_tasks)} human task{'s' if len(human_tasks) != 1 else ''} pending"
+        banner_focus = "/dashboard/todolist?mode=personal&focus=human-tasks"
+    elif actionable_notifications:
+        banner_text = (
+            f"{len(actionable_notifications)} actionable notification"
+            f"{'s' if len(actionable_notifications) != 1 else ''} pending"
+        )
+        banner_focus = str(actionable_notifications[0].get("focus_href") or "/dashboard/notifications")
+    else:
+        banner_text = ""
+        banner_focus = ""
+
+    return {
+        "status": "ok",
+        "pending_count": len(human_tasks),
+        "actionable_notifications_count": len(actionable_notifications),
+        "human_tasks": human_tasks,
+        "actionable_notifications": actionable_notifications,
+        "banner": {
+            "show": banner_show,
+            "text": banner_text,
+            "focus_href": banner_focus,
+        },
+    }
 
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/action")

@@ -135,3 +135,10 @@ client_secret_*.json
 # === Generated security/memory artifacts ===
 security_evals/promptfoo_redteam_generated.yaml
 memory/research/index.json
+
+# === Local runtime locks and scratch scripts ===
+.claude/scheduled_tasks.lock
+test_bridge.py
+test_bridge_2.py
+memory/CSIR_Remediation.md
+memory/CSI_AutoRemediation_Fix.md

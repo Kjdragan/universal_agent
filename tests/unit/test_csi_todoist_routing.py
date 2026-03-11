@@ -3,6 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from universal_agent.gateway_server import (
+    _build_csi_recommendation_task_items,
+    _classify_csi_recommendation_owner,
+    _extract_csi_recommendations,
     _csi_event_notification_policy,
     _should_enqueue_csi_task,
     classify_csi_project_key,
@@ -171,3 +174,60 @@ def test_csi_task_enqueue_anomalies_only_mode(monkeypatch):
         event_type="delivery_health_regression",
         policy={"has_anomaly": True, "requires_action": True, "escalates_to_ua": False},
     ) is False
+
+
+def test_extract_csi_recommendations_includes_subject_and_root_cause_sources():
+    subject = {
+        "recommendations": [
+            "Install pydantic in CSI_Ingester env for auto-remediation",
+            {"action": "Fix hook signature mismatch in AgentHookSet.on_pre_compact_capture()"},
+        ],
+        "top_root_causes": [
+            {
+                "title": "Replay DLQ after remediation",
+                "runbook_command": "python3 scripts/csi_replay_dlq.py --limit 100",
+            }
+        ],
+    }
+
+    items = _extract_csi_recommendations(subject)
+    texts = {str(item.get("text") or "") for item in items}
+    assert any("Install pydantic" in text for text in texts)
+    assert any("Fix hook signature mismatch" in text for text in texts)
+    assert any("csi_replay_dlq.py" in text for text in texts)
+
+
+def test_classify_csi_recommendation_owner_routes_agent_vs_human():
+    agent = _classify_csi_recommendation_owner(
+        "Install pydantic in CSI_Ingester env for auto-remediation"
+    )
+    human = _classify_csi_recommendation_owner(
+        "Ask Kevin to approve the budget and sign off on remediation"
+    )
+
+    assert agent["owner_lane"] == "agent"
+    assert human["owner_lane"] == "human"
+
+
+def test_build_csi_recommendation_task_items_assigns_human_and_agent_queues():
+    subject = {
+        "recommendations": [
+            "Install pydantic in CSI_Ingester env for auto-remediation",
+            "Ask Kevin to approve budget before production rollout",
+        ]
+    }
+    items = _build_csi_recommendation_task_items(
+        subject=subject,
+        event_type="delivery_reliability_slo_breached",
+        parent_task_id="csi:delivery_reliability_slo_breached:csi_analytics",
+        parent_title="CSI Reliability SLO Breached",
+        project_key="immediate",
+        must_complete=True,
+    )
+    assert len(items) == 2
+    agent_items = [item for item in items if bool(item.get("agent_ready"))]
+    human_items = [item for item in items if not bool(item.get("agent_ready"))]
+    assert len(agent_items) == 1
+    assert len(human_items) == 1
+    assert "agent-ready" in set(agent_items[0].get("labels") or [])
+    assert "needs-human" in set(human_items[0].get("labels") or [])
