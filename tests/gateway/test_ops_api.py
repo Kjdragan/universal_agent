@@ -43,7 +43,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str((tmp_path / "coder_vp_state.db").resolve()))
     monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
-    
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity.db").resolve()))
+
     # We must reset the global singletons to force re-init with new path
     monkeypatch.setattr(gateway_server, "_gateway", None)
     monkeypatch.setattr(gateway_server, "_ops_service", None)
@@ -1643,6 +1644,40 @@ def test_dashboard_tutorial_runs_lists_flat_and_dated_layouts(client, tmp_path, 
     assert "NAWKFRaR0Sk" in video_ids
 
 
+def test_dashboard_tutorial_runs_treats_bootstrap_only_impl_as_concept(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "2026-03-09" / "greek-souvlaki__153500"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "cook123abcd",
+                "title": "Greek Souvlaki on Charcoal - Traditional Juicy & Authentic",
+                "status": "full",
+                "learning_mode": "concept_only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "README.md").write_text("# README\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# Concept\n", encoding="utf-8")
+    (run_dir / "IMPLEMENTATION.md").write_text("# Recipe Procedure\n", encoding="utf-8")
+    (impl_dir / "create_new_repo.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (impl_dir / "deletethisrepo.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    resp = client.get("/api/v1/dashboard/tutorials/runs?limit=20")
+    assert resp.status_code == 200
+    runs = resp.json()["runs"]
+    row = next(item for item in runs if item["video_id"] == "cook123abcd")
+    assert row["implementation_required"] is False
+    labels = [str(file.get("label") or "") for file in (row.get("files") or [])]
+    assert "Implementation Guide" in labels
+    assert not any(label.startswith("Code:") for label in labels)
+
+
 def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     _create_dummy_session(tmp_path, "session_hook_csi_alpha", ["alpha"])
     _create_dummy_session(tmp_path, "session_hook_csi_bravo", ["bravo"])
@@ -1696,6 +1731,7 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
                 "title": "Demo Run",
                 "video_id": "demo123",
                 "status": "full",
+                "implementation_required": True,
             }
         ),
         encoding="utf-8",
@@ -1745,6 +1781,7 @@ def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, t
                 "title": "Demo Run",
                 "video_id": "demo123",
                 "status": "full",
+                "implementation_required": True,
             }
         ),
         encoding="utf-8",
@@ -1838,7 +1875,14 @@ def test_dashboard_tutorial_bootstrap_repo_local_queue_reuses_existing_active_jo
     impl_dir = run_dir / "implementation"
     impl_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "manifest.json").write_text(
-        json.dumps({"title": "Reuse Run", "video_id": "reuse123", "status": "full"}),
+        json.dumps(
+            {
+                "title": "Reuse Run",
+                "video_id": "reuse123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
         encoding="utf-8",
     )
     (impl_dir / "create_new_repo.sh").write_text(
@@ -1894,7 +1938,14 @@ def test_dashboard_tutorial_bootstrap_repo_failed_result_preserves_error_metadat
     impl_dir = run_dir / "implementation"
     impl_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "manifest.json").write_text(
-        json.dumps({"title": "Failed Run", "video_id": "failed123", "status": "full"}),
+        json.dumps(
+            {
+                "title": "Failed Run",
+                "video_id": "failed123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
         encoding="utf-8",
     )
     (impl_dir / "create_new_repo.sh").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
@@ -1954,7 +2005,7 @@ def test_dashboard_tutorial_notifications_hide_dismissed_by_default(client):
         metadata={"tutorial_run_path": "youtube-tutorial-creation/test-run"},
     )
     assert isinstance(notif, dict)
-    notif["status"] = "dismissed"
+    gateway_server._apply_notification_status(notif, status_value="dismissed")
 
     default_resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50")
     assert default_resp.status_code == 200
@@ -1965,6 +2016,108 @@ def test_dashboard_tutorial_notifications_hide_dismissed_by_default(client):
     assert include_resp.status_code == 200
     include_ids = {str(item.get("id") or "") for item in include_resp.json().get("notifications") or []}
     assert str(notif.get("id") or "") in include_ids
+
+
+def test_dashboard_tutorial_notifications_include_playlist_and_proxy_alert_kinds(client):
+    created = []
+    created.append(
+        gateway_server._add_notification(
+            kind="youtube_playlist_new_video",
+            title="New Tutorial Video Detected",
+            message="Demo video queued",
+            severity="info",
+            metadata={"video_id": "demo123"},
+        )
+    )
+    created.append(
+        gateway_server._add_notification(
+            kind="youtube_playlist_dispatch_failed",
+            title="Tutorial Dispatch Rejected",
+            message="demo123: no_match",
+            severity="warning",
+            metadata={"video_id": "demo123"},
+        )
+    )
+    created.append(
+        gateway_server._add_notification(
+            kind="youtube_ingest_proxy_alert",
+            title="YouTube Proxy Alert",
+            message="Proxy credentials missing",
+            severity="error",
+            metadata={"failure_class": "proxy_not_configured"},
+        )
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50&include_dismissed=true")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    for notif in created:
+        assert str((notif or {}).get("id") or "") in ids
+
+
+def test_dashboard_tutorial_notifications_include_interrupted_kind(client):
+    interrupted = gateway_server._add_notification(
+        kind="youtube_tutorial_interrupted",
+        title="YouTube Tutorial Interrupted",
+        message="Run interrupted and queued for recovery.",
+        severity="warning",
+        requires_action=True,
+        metadata={"video_id": "interrupt123", "reason": "hook_dispatch_interrupted"},
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50&include_dismissed=true")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    assert str((interrupted or {}).get("id") or "") in ids
+
+
+def test_ops_telegram_status_includes_pipeline_slices(client):
+    gateway_server._add_notification(
+        kind="youtube_playlist_new_video",
+        title="New Tutorial Video Detected",
+        message="Demo video queued",
+        severity="info",
+        metadata={"video_id": "demo123"},
+    )
+    gateway_server._add_notification(
+        kind="youtube_tutorial_interrupted",
+        title="YouTube Tutorial Interrupted",
+        message="Run interrupted and queued for recovery.",
+        severity="warning",
+        requires_action=True,
+        metadata={"video_id": "demo123", "reason": "hook_dispatch_interrupted"},
+    )
+    gateway_server._add_notification(
+        kind="youtube_hook_recovery_queued",
+        title="Recovered Interrupted YouTube Dispatch",
+        message="Queued recovery run for session session_hook_demo",
+        severity="warning",
+        metadata={"reason": "startup_dispatch_interrupted_backfill"},
+    )
+
+    resp = client.get("/api/v1/ops/telegram")
+    assert resp.status_code == 200
+    payload = resp.json()
+
+    assert isinstance(payload.get("pipeline_activity"), list)
+    assert isinstance(payload.get("recent_failures"), list)
+    assert isinstance(payload.get("actionable_alerts"), list)
+    assert isinstance(payload.get("recovery_events"), list)
+    assert isinstance(payload.get("active_tutorial_runs"), list)
+    assert isinstance(payload.get("counts"), dict)
+
+    failure_kinds = {str(item.get("kind") or "") for item in payload.get("recent_failures") or []}
+    assert "youtube_tutorial_interrupted" in failure_kinds
+
+    actionable_kinds = {str(item.get("kind") or "") for item in payload.get("actionable_alerts") or []}
+    assert "youtube_tutorial_interrupted" in actionable_kinds
+
+    recovery_kinds = {str(item.get("kind") or "") for item in payload.get("recovery_events") or []}
+    assert "youtube_hook_recovery_queued" in recovery_kinds
+
+    active_kinds = {str(item.get("kind") or "") for item in payload.get("active_tutorial_runs") or []}
+    assert active_kinds.intersection({"youtube_playlist_new_video", "youtube_tutorial_interrupted"})
+    assert int((payload.get("counts") or {}).get("recent_failures") or 0) >= 1
 
 
 def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_mission(client, tmp_path, monkeypatch):
@@ -1985,7 +2138,14 @@ def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_missio
     impl_dir = run_dir / "implementation"
     impl_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "manifest.json").write_text(
-        json.dumps({"title": "Redis Run", "video_id": "redis123", "status": "full"}),
+        json.dumps(
+            {
+                "title": "Redis Run",
+                "video_id": "redis123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
         encoding="utf-8",
     )
     (impl_dir / "create_new_repo.sh").write_text(
@@ -3878,7 +4038,7 @@ def test_ops_work_thread_decision_roundtrip(client):
 
 def test_ops_session_detail_rehydrate_with_checkpoint(client, tmp_path):
     """Packet 15: session with checkpoint -> rehydrate_ready=True."""
-    session_id = "session_hook_csi_trend_specialist"
+    session_id = "session_hook_csi_trend_analyst"
     ws = tmp_path / session_id
     ws.mkdir()
     checkpoint_data = {

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Threads token refresh + Infisical sync daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=csi-threads-token-refresh-sync.service
+
+[Install]
+WantedBy=timers.target

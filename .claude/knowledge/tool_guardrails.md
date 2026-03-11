@@ -9,60 +9,35 @@
 > It should only be used by specialists (research-specialist, etc.) for browsing or code execution.
 > If the Primary Agent needs to execute code, it should use local Python/Bash tools unless absolute isolation is required.
 
-## GMAIL_SEND_EMAIL
+## Gmail (via gws MCP — Primary Path)
 
 ### HOW TO CALL (CRITICAL - READ FIRST)
-🚨 **NEVER use Python code or Bash to call Composio SDK directly.**
-🚨 **NEVER try `from composio import ...` or `composio_client.tools.execute(...)`**
+🚨 **NEVER use Python code or Bash to call Gmail APIs or Composio SDK directly.**
+🚨 **NEVER try `from composio import ...` or `gws` CLI via Bash**
 
-**Use ONE of these MCP tools:**
-1. `mcp__composio__GMAIL_SEND_EMAIL` - Direct MCP call (preferred)
-2. `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` - Wrapper with `tool_slug: "GMAIL_SEND_EMAIL"`
+**Use gws MCP tools:**
+- `mcp__gws__gmail.+send` — Helper for quick send (preferred)
+- `mcp__gws__gmail.users.messages.send` — Full API send
+- `mcp__gws__gmail.+triage` — Inbox triage summary
+- `mcp__gws__gmail.users.messages.list` / `.get` — List/read messages
+- `mcp__gws__gmail.users.drafts.create` / `.send` — Draft management
 
-**Full Call Example (via COMPOSIO_MULTI_EXECUTE_TOOL):**
-```json
-{
-  "tools": [
-    {
-      "tool_slug": "GMAIL_SEND_EMAIL",
-      "arguments": {
-        "recipient_email": "user@example.com",
-        "subject": "Your Report",
-        "body": "Please find the report attached.",
-        "attachment": {
-          "name": "report.pdf",
-          "mimetype": "application/pdf",
-          "s3key": "<from upload_to_composio>"
-        }
-      }
-    }
-  ]
-}
-```
-
-### Argument Names (CRITICAL)
-- Use `recipient_email` (or `to`), NOT `recipient`.
-- `recipient` is NOT a valid parameter and will cause a schema validation error.
-
-### Attachment format (CRITICAL)
-- `attachment` must be a **DICT**, not a list
-- Format: `{"name": str, "mimetype": str, "s3key": str}`
-- Get `s3key` from `mcp__internal__upload_to_composio` first
+### Attachments (SIMPLIFIED)
+- Pass **local file paths** directly to the gws Gmail send tool
+- No `upload_to_composio` step needed for Gmail attachments
+- Multiple files can be attached in a single send call
 
 ### Common Mistakes (WRONG)
-```json
-{
-  "recipient": "user@example.com",              // ❌ Wrong parameter name!
-  "attachment": [{"name": "report.pdf", ...}]  // ❌ List format fails!
-}
-```
-
 🚫 **NEVER DO THIS:**
 ```python
-# ❌ WRONG - This will fail! The agent cannot call Composio SDK directly.
+# ❌ WRONG - This will fail! The agent cannot call APIs directly.
 from composio import Composio
 client = Composio()
 client.tools.execute(slug="GMAIL_SEND_EMAIL", ...)  # FAILS!
+```
+```bash
+# ❌ WRONG - Do not call gws CLI from Bash
+gws gmail send --to user@example.com  # FAILS! Use MCP tools.
 ```
 
 ## ⚠️ CRITICAL: DO NOT CONCATENATE ARGUMENTS INTO TOOL NAMES
@@ -90,9 +65,8 @@ mcp__composio__COMPOSIO_SEARCH_NEWSquery</arg_key><arg_value>Russia Ukraine
 
 ## upload_to_composio
 
-- Returns the `s3key` needed for `GMAIL_SEND_EMAIL` attachments
-- Always call this BEFORE attempting to send email with attachments
-- The returned `s3key` is used directly in the attachment dict
+- Returns the `s3key` needed for **non-Gmail Composio tool** attachments (e.g., Slack)
+- **NOT needed for Gmail** — gws Gmail tools accept local file paths directly
 - Preferred tool: `mcp__internal__upload_to_composio`
 
 ## COMPOSIO_MULTI_EXECUTE_TOOL
@@ -139,7 +113,8 @@ Use this to discover the best Composio search tools and get recommended steps.
 
 **⚠️ WHEN NOT TO USE:**
 - Do **NOT** use this to "find" standard tools like Gmail, Google Calendar, or Web Search.
-- If you know the tool exists (e.g. `GMAIL_SEND_EMAIL`), **JUST USE IT DIRECTLY**.
+- For Gmail/Calendar/Drive/Sheets: use `mcp__gws__*` tools directly.
+- If you know a Composio tool exists (e.g. `SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`), **JUST USE IT DIRECTLY**.
 - Using this tool unnecessarily wastes time and tokens.
 
 

@@ -10,7 +10,7 @@ CSI_ENV="CSI_Ingester/development/deployment/systemd/csi-ingester.env"
 pick_video_id() {
   python3 - <<'PY'
 import sqlite3
-conn=sqlite3.connect('/opt/universal_agent/CSI_Ingester/development/var/csi.db')
+conn=sqlite3.connect('/var/lib/universal-agent/csi/csi.db')
 row=conn.execute(
     "select video_id from rss_event_analysis where transcript_status='failed' and video_id<>'' order by id desc limit 1"
 ).fetchone()

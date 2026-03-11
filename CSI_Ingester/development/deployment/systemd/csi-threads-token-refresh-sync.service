@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Threads token and sync Threads secrets to Infisical
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=-/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_threads_token_refresh_sync.sh
+
+[Install]
+WantedBy=multi-user.target

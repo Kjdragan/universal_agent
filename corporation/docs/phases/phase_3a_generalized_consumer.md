@@ -1,215 +1,195 @@
-# Phase 3a: Generalized Mission Consumer
+# Phase 3a: Redis→SQLite Bridge Adapter
 
-**Status:** Not Started
-**Priority:** Critical Path — unlocks all downstream phases
-**Depends on:** Phase 2 (complete), Redis bus (deployed)
+**Status:** Done (implemented 2026-03-06)
+**Priority:** Critical Path — unlocks cross-machine delegation
+**Depends on:** Phase 2 (complete), Redis bus (deployed), VP worker system (complete — Track B)
 
 ---
 
+## Context: Why This Was Reframed
+
+The original Phase 3a spec called for building a "generalized mission consumer" from scratch. A **2026-03-06 audit** discovered that the VP external worker system (`src/universal_agent/vp/`) — built as Track B HQ improvements — already provides a complete local mission consumer with:
+- `VpWorkerLoop` — polls SQLite `vp_missions`, claims with leases, executes, heartbeats, finalizes
+- `ClaudeCodeClient` (CODIE) + `ClaudeGeneralistClient` — execute missions via `ProcessTurnAdapter`
+- Full mission lifecycle in `durable/state.py` — queue/claim/heartbeat/finalize/events
+
+What's **missing** is a bridge between the cross-machine transport (Redis Streams) and the local execution engine (VP SQLite). Phase 3a is therefore reframed to building this thin bridge only.
+
+**Architecture Decision (D-006):** Option B — Redis→SQLite bridge. Redis Streams for cross-machine, local VP SQLite for execution.
+
 ## Objective
 
-Replace the bespoke tutorial bootstrap worker with a generalized mission consumer that can receive **any** delegation mission type from the Redis bus, route it to the appropriate handler, execute it, and return results. This consumer becomes the core runtime loop for every LOCAL_WORKER factory.
+Build a thin bridge adapter that consumes `MissionEnvelope` messages from the Redis bus and inserts them into the local VP SQLite `vp_missions` table, where the existing `VpWorkerLoop` picks them up and executes them. Results are bridged back from VP SQLite to a Redis results stream.
 
-## Reference Implementation
+## Reference Implementations
 
-The existing tutorial worker (`scripts/tutorial_local_bootstrap_worker.py`) is the reference pattern. Key patterns to preserve:
+**Redis consuming pattern** — tutorial worker (`scripts/tutorial_local_bootstrap_worker.py`):
 - Redis consumer group polling via `RedisMissionBus.consume()`
-- Mission kind routing via `context.mission_kind`
 - Retry/DLQ escalation via `fail_and_maybe_dlq()` + `_republish_retry_mission()`
-- Registration heartbeat loop interleaved with mission polling
-- Graceful shutdown on `KeyboardInterrupt`
-- `--once` mode for testing
+- Graceful shutdown
+
+**VP mission insertion pattern** — gateway VP dispatch (`src/universal_agent/gateway.py`):
+- `_dispatch_external_vp_mission()` — inserts into SQLite via `dispatch_mission_with_retry()`
+- Maps mission metadata to VP fields (constraints, budget, priority, idempotency_key)
+
+**VP mission execution** — worker loop (`src/universal_agent/vp/worker_loop.py`):
+- `VpWorkerLoop.run_forever()` — polls SQLite, claims, executes, finalizes
+- Already handles heartbeats, lease management, error recovery
 
 ## Files to Create
 
-### 1. `src/universal_agent/delegation/consumer.py` — Core Consumer Loop
+### 1. `src/universal_agent/delegation/redis_vp_bridge.py` — Core Bridge
 
 ```python
 # Key classes and functions to implement:
 
-class MissionHandler(Protocol):
-    """Protocol for mission handlers."""
-    mission_kind: str
-    async def handle(self, envelope: MissionEnvelope, context: ConsumerContext) -> MissionResult: ...
-
 @dataclass
-class MissionResult:
-    status: Literal["SUCCESS", "FAILED"]
-    result: Any = None
-    error: str | None = None
+class BridgeConfig:
+    """Configuration for the Redis→VP SQLite bridge."""
+    poll_seconds: float = 5.0
+    vp_id_map: dict[str, str]  # mission_kind → vp_id
+    default_vp_id: str = "vp.general.primary"
+    workspace_base: Path = Path("/opt/universal_agent/vp_workspaces")
 
-@dataclass
-class ConsumerContext:
-    factory_id: str
-    factory_role: str
-    worker_id: str
-    workspace_dir: Path
-    ops_token: str
-    hq_base_url: str
+MISSION_KIND_TO_VP: dict[str, str] = {
+    "coding_task": "vp.coder.primary",
+    "general_task": "vp.general.primary",
+    "research_task": "vp.general.primary",
+    # tutorial_bootstrap_repo still handled by tutorial worker directly
+}
 
-class MissionConsumer:
-    """Generalized mission consumer that polls Redis and dispatches to handlers."""
+class RedisVpBridge:
+    """Thin bridge: consumes Redis missions → inserts into VP SQLite."""
     
     def __init__(
         self,
         bus: RedisMissionBus,
-        consumer_name: str,
-        handlers: dict[str, MissionHandler],
-        context: ConsumerContext,
-        *,
-        poll_seconds: float = 5.0,
-        registration_interval_seconds: float = 60.0,
+        vp_db_conn: sqlite3.Connection,
+        config: BridgeConfig,
     ) -> None: ...
     
-    def register_handler(self, handler: MissionHandler) -> None: ...
-    
     async def run(self, *, once: bool = False) -> int:
-        """Main consumer loop. Returns processed count."""
+        """Main bridge loop. Polls Redis, inserts into VP SQLite."""
+        # 1. RedisMissionBus.consume() → get MissionEnvelope
+        # 2. Map mission_kind → vp_id via MISSION_KIND_TO_VP
+        # 3. queue_vp_mission() into local SQLite
+        # 4. Ack the Redis message
+        # 5. On failure: retry/DLQ via RedisMissionBus patterns
         ...
     
-    async def _process_mission(self, consumed: ConsumedMission) -> MissionResult:
-        """Dispatch to handler, handle retries/DLQ."""
-        ...
-    
-    def _send_heartbeat(self) -> None:
-        """POST registration to HQ factory/registrations endpoint."""
+    def _envelope_to_vp_mission(self, envelope: MissionEnvelope) -> MissionDispatchRequest:
+        """Transform Redis MissionEnvelope → VP mission dispatch request."""
+        # Maps: envelope.payload.task → mission_type
+        #       envelope.payload.context → constraints/budget/metadata
+        #       envelope.job_id → idempotency_key
         ...
 ```
 
 **Routing logic:**
-- Extract `mission_kind` from `envelope.payload.context.get("mission_kind")`
-- Look up handler in `self.handlers[mission_kind]`
-- If no handler found, ack the message and log a warning (don't DLQ unknown kinds — they may be for other consumers)
-- Execute handler, publish `MissionResultEnvelope` to results stream
-- On failure: retry/DLQ using existing `RedisMissionBus` patterns
+- Extract `mission_kind` from `envelope.payload.context.get("mission_kind")` or `envelope.payload.task` prefix
+- Map to VP ID via `MISSION_KIND_TO_VP` (CODIE for coding, Generalist for everything else)
+- If `mission_kind` is `tutorial_bootstrap_repo`, skip (handled by existing tutorial worker)
+- Insert into VP SQLite via `queue_vp_mission()` from `durable/state.py`
+- `VpWorkerLoop` (already running) will claim and execute
 
-### 2. `src/universal_agent/delegation/handlers/__init__.py`
-
-Empty init to establish the handlers sub-package.
-
-### 3. `src/universal_agent/delegation/handlers/tutorial_bootstrap.py`
-
-Refactor the core `_process_job()` logic from `scripts/tutorial_local_bootstrap_worker.py` into a `MissionHandler` implementation:
+### 2. `src/universal_agent/delegation/redis_vp_result_bridge.py` — Result Bridge
 
 ```python
-class TutorialBootstrapHandler:
-    mission_kind = "tutorial_bootstrap_repo"
+class RedisVpResultBridge:
+    """Monitors VP mission finalization → publishes results back to Redis."""
     
-    def __init__(self, target_root: str = "/home/kjdragan/YoutubeCodeExamples") -> None: ...
+    def __init__(
+        self,
+        bus: RedisMissionBus,
+        vp_db_conn: sqlite3.Connection,
+        poll_seconds: float = 5.0,
+    ) -> None: ...
     
-    async def handle(self, envelope: MissionEnvelope, context: ConsumerContext) -> MissionResult:
-        # Extract job params from envelope.payload.context
-        # Download bundle from HQ
-        # Execute create_new_repo.sh
-        # Report result back to HQ
+    async def run(self) -> None:
+        # Poll vp_missions for status IN ('completed', 'failed')
+        # WHERE source = 'redis_bridge' AND result_published = 0
+        # Transform to MissionResultEnvelope
+        # Publish to Redis results stream
+        # Mark result_published = 1
         ...
 ```
 
-### 4. `src/universal_agent/delegation/handlers/coding_task.py`
-
-Stub handler for future VP Coder delegation:
+### 3. Entry point: `src/universal_agent/delegation/bridge_main.py`
 
 ```python
-class CodingTaskHandler:
-    mission_kind = "coding_task"
-    
-    async def handle(self, envelope: MissionEnvelope, context: ConsumerContext) -> MissionResult:
-        # Future: delegate to local VP Coder agent
-        return MissionResult(status="FAILED", error="coding_task handler not yet implemented")
-```
-
-### 5. `src/universal_agent/delegation/handlers/system_update.py`
-
-Stub handler for Phase 3d self-update:
-
-```python
-class SystemUpdateHandler:
-    mission_kind = "system:update_factory"
-    
-    async def handle(self, envelope: MissionEnvelope, context: ConsumerContext) -> MissionResult:
-        # Future: git pull, uv install, restart
-        return MissionResult(status="FAILED", error="system:update_factory not yet implemented")
-```
-
-### 6. Entry point: `src/universal_agent/delegation/__main__.py`
-
-```python
-"""Run the generalized mission consumer as a standalone process."""
-# python -m universal_agent.delegation
-# Parses args, builds handlers, creates MissionConsumer, runs loop
-```
-
-### 7. Refactor `scripts/tutorial_local_bootstrap_worker.py`
-
-After the generalized consumer works, refactor the tutorial worker to be a thin wrapper:
-```python
-# scripts/tutorial_local_bootstrap_worker.py
-# Now just: instantiate MissionConsumer with TutorialBootstrapHandler + args, run
+"""Run the Redis→VP SQLite bridge as a standalone process."""
+# python -m universal_agent.delegation.bridge_main
+# Or integrated as background task in LOCAL_WORKER gateway
 ```
 
 ## Files to Modify
 
 ### `src/universal_agent/delegation/schema.py`
-- Add `mission_kind` as an optional top-level field on `MissionEnvelope` (currently buried in `payload.context`)
-- Keep backward compat: if `mission_kind` not set at top level, fall back to `payload.context.get("mission_kind")`
+- Add `mission_kind` as an optional top-level field on `MissionEnvelope` (backward compat: fall back to `payload.context.get("mission_kind")`)
+
+### `src/universal_agent/durable/state.py`
+- Add `source` column to `vp_missions` (value: `"redis_bridge"` or `"gateway"`) to distinguish bridge-inserted missions
+- Add `result_published` flag for result bridge tracking
 
 ### `src/universal_agent/delegation/__init__.py`
-- Export `MissionConsumer`, `MissionHandler`, `MissionResult`, `ConsumerContext`
+- Export `RedisVpBridge`, `RedisVpResultBridge`, `BridgeConfig`
 
 ## Tests to Create
 
-### `tests/delegation/test_consumer.py`
+### `tests/delegation/test_redis_vp_bridge.py`
 
 ```python
 # Test cases:
-# 1. Consumer dispatches to correct handler based on mission_kind
-# 2. Unknown mission_kind is acked and logged (not DLQ'd)
-# 3. Handler failure triggers retry republish
-# 4. Handler failure exceeding max_retries sends to DLQ
-# 5. Consumer --once mode processes exactly one mission and exits
-# 6. Registration heartbeat fires at configured interval
-# 7. Graceful shutdown on signal
+# 1. Bridge transforms MissionEnvelope → queue_vp_mission() call correctly
+# 2. Mission kind routes to correct VP ID (coding_task → vp.coder.primary)
+# 3. Unknown mission_kind defaults to vp.general.primary
+# 4. tutorial_bootstrap_repo kind is skipped (handled by tutorial worker)
+# 5. Redis message is acked after successful VP SQLite insertion
+# 6. Redis message retry/DLQ on VP SQLite insertion failure
+# 7. Bridge --once mode processes exactly one mission and exits
 ```
 
-### `tests/delegation/test_tutorial_bootstrap_handler.py`
+### `tests/delegation/test_redis_vp_result_bridge.py`
 
 ```python
 # Test cases:
-# 1. Handler extracts job params from envelope correctly
-# 2. Handler returns SUCCESS on successful execution
-# 3. Handler returns FAILED with error on script failure
-# 4. Handler respects timeout_seconds
+# 1. Completed VP mission → MissionResultEnvelope published to Redis
+# 2. Failed VP mission → MissionResultEnvelope with error published
+# 3. result_published flag prevents double-publish
+# 4. Only redis_bridge-sourced missions are published (not gateway-local ones)
 ```
 
 ## Validation Commands
 
 ```bash
 # Unit tests
-uv run pytest tests/delegation/test_consumer.py -q
-uv run pytest tests/delegation/test_tutorial_bootstrap_handler.py -q
+uv run pytest tests/delegation/test_redis_vp_bridge.py -q
+uv run pytest tests/delegation/test_redis_vp_result_bridge.py -q
 
-# Integration: standalone consumer with --once
+# Integration: standalone bridge with --once
 FACTORY_ROLE=LOCAL_WORKER UA_DELEGATION_REDIS_ENABLED=1 \
-  python -m universal_agent.delegation --once --transport redis
+  python -m universal_agent.delegation.bridge_main --once
 
-# End-to-end: HQ publishes → consumer picks up → result back
-# (requires Redis running + HQ gateway)
+# End-to-end: HQ publishes → Redis → bridge → VP SQLite → VpWorkerLoop → result back on Redis
+# (requires Redis running + HQ gateway + VpWorkerLoop running)
 ```
 
 ## Acceptance Criteria
 
-- [ ] `MissionConsumer` class exists and routes missions by `mission_kind`
-- [ ] `TutorialBootstrapHandler` passes existing tutorial bootstrap e2e flow
-- [ ] Consumer runs as `python -m universal_agent.delegation`
-- [ ] Unit tests pass: `uv run pytest tests/delegation/ -q`
-- [ ] Consumer registers with HQ on startup and sends periodic heartbeats
-- [ ] DLQ escalation works for missions exceeding `max_retries`
-- [ ] `--once` mode works for scripted testing
-- [ ] Existing tutorial worker still works (backward compat or refactored to use consumer)
+- [x] `RedisVpBridge` class consumes Redis missions and inserts into VP SQLite
+- [x] Mission kind routing maps to correct VP ID
+- [x] `RedisVpResultBridge` publishes results back to Redis
+- [x] Bridge runs as `python -m universal_agent.delegation.bridge_main`
+- [x] Unit tests pass: `uv run pytest tests/delegation/ -q` — **20 passed**
+- [x] DLQ escalation works for missions that fail to insert
+- [x] `--once` mode works for scripted testing
+- [x] Existing tutorial worker still works (unchanged — handles `tutorial_bootstrap_repo` directly)
+- [ ] VP worker system picks up bridge-inserted missions and executes them (requires live integration test)
 
 ## Design Decisions
 
-- **Async handlers:** Use `async def handle()` to allow future handlers to run async agent sessions.
-- **Handler registry:** Simple `dict[str, MissionHandler]` — no dynamic discovery needed at this scale.
-- **Unknown mission kinds:** Ack and skip (not DLQ) — another consumer in the group may handle different kinds.
-- **Result publishing:** Consumer publishes `MissionResultEnvelope` to `ua:missions:delegation:results` stream (already supported by `RedisMissionBus.publish_result()`).
+- **Bridge, not replace:** The bridge inserts into existing VP SQLite — no new execution engine needed.
+- **Two bridges:** Inbound (Redis → SQLite) and outbound (SQLite → Redis results) are separate concerns.
+- **Mission kind skip:** `tutorial_bootstrap_repo` is skipped by the bridge (existing tutorial worker handles it via its own Redis consumer in the same consumer group).
+- **Source tracking:** `vp_missions.source = 'redis_bridge'` distinguishes bridge-inserted missions from gateway-local ones, so the result bridge only publishes results for cross-machine missions.
+- **VpWorkerLoop unchanged:** The worker loop doesn't know or care where missions came from — it just polls SQLite.

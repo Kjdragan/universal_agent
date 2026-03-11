@@ -25,6 +25,73 @@ sources:
     seed_on_first_run: true
     max_seen_cache_per_subreddit: 2000
     subreddits: []
+  threads_owned:
+    enabled: true
+    poll_interval_seconds: 900
+    timeout_seconds: 20
+    user_agent: "CSIIngester/threads-owned-v1"
+    limit: 10
+    replies_limit: 10
+    include_mentions: true
+    include_replies: true
+    include_insights: true
+    max_seen_cache: 4000
+    quota_budgets:
+      user_threads:
+        max_requests: 1200
+        window_seconds: 86400
+      mentions:
+        max_requests: 1200
+        window_seconds: 86400
+      replies:
+        max_requests: 1200
+        window_seconds: 86400
+      insights:
+        max_requests: 1200
+        window_seconds: 86400
+  threads_trends_seeded:
+    enabled: true
+    poll_interval_seconds: 900
+    timeout_seconds: 20
+    user_agent: "CSIIngester/threads-seeded-v1"
+    per_query_limit: 15
+    search_types: ["TOP", "RECENT"]
+    media_types: []
+    trend_windows_minutes: [15, 60, 1440]
+    trend_top_k: 6
+    max_seen_cache: 6000
+    query_packs:
+      - name: "ai-domain"
+        terms: ["ai agents", "workflow automation", "private credit", "interest rates"]
+    seed_terms: ["market structure"]
+    quota_budgets:
+      keyword_search:
+        max_requests: 500
+        window_seconds: 86400
+  threads_trends_broad:
+    enabled: true
+    poll_interval_seconds: 1800
+    timeout_seconds: 20
+    user_agent: "CSIIngester/threads-broad-v1"
+    per_query_limit: 15
+    search_types: ["TOP"]
+    media_types: []
+    trend_windows_minutes: [15, 60, 1440]
+    trend_top_k: 8
+    max_seen_cache: 8000
+    query_pool: ["ai", "economy", "markets", "creator"]
+    max_queries_per_cycle: 6
+    adaptive_enabled: true
+    adaptive_max_terms: 6
+    adaptive_max_candidates: 50
+    adaptive_discovery_limit: 25
+    adaptive_term_bonus: 0.25
+    adaptive_decay: 0.9
+    adaptive_min_score: 0.025
+    quota_budgets:
+      keyword_search:
+        max_requests: 400
+        window_seconds: 86400
 
 delivery:
   ua_endpoint: "${CSI_UA_ENDPOINT}"

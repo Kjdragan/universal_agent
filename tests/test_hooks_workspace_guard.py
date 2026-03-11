@@ -260,6 +260,25 @@ async def test_heartbeat_investigation_blocks_bash_in_ledger(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_investigation_default_is_off(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws_default_off"
+    workspace.mkdir()
+    monkeypatch.setenv("UA_RUN_SOURCE", "heartbeat")
+    monkeypatch.delenv("UA_HEARTBEAT_INVESTIGATION_ONLY", raising=False)
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo ok"},
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_tool_use_ledger(input_data, tool_use_id="hb-default", context={})
+
+    assert out == {}
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_investigation_write_path_policy(tmp_path, monkeypatch):
     workspace = tmp_path / "ws"
     workspace.mkdir()

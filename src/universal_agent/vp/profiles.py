@@ -20,6 +20,7 @@ class VpProfile:
     runtime_id: str
     client_kind: str
     workspace_root: Path
+    cli_capable: bool = True
 
 
 def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str, VpProfile]:

@@ -1,0 +1,3 @@
+✗ Authentication failed: Profile not found: vps
+Run 'nlm login' to create a profile, or use '--profile <name>' to specify a 
+different profile.

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 async def register():
+    print("⚠️  Legacy Telegram webhook helper. Current runtime uses polling via src/universal_agent/bot/main.py")
     # Try args first, then env vars
     token = sys.argv[1] if len(sys.argv) > 1 else os.getenv("TELEGRAM_BOT_TOKEN")
     url = sys.argv[2] if len(sys.argv) > 2 else os.getenv("WEBHOOK_URL")

@@ -11,13 +11,13 @@ Goal:
 ---
 
 ## Environment
-- VPS host: `root@100.106.113.93` (Tailscale)
+- VPS host: `root@srv1360701.taildcc090.ts.net` (Tailscale)
 - App root: `/opt/universal_agent`
 - Core services covered by recovery:
   - `universal-agent-gateway`
   - `universal-agent-api`
   - `universal-agent-webui`
-  - `universal-agent-telegram` (process-state only by default)
+  - `universal-agent-telegram` (heartbeat-file monitored)
 
 ---
 
@@ -104,7 +104,7 @@ What this installer does:
 Run from local machine:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net '
   systemctl is-enabled universal-agent-service-watchdog.timer
   systemctl is-active universal-agent-service-watchdog.timer
   systemctl status universal-agent-service-watchdog.timer --no-pager -n 20
@@ -115,13 +115,13 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 Tail recent watchdog logs:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "journalctl -u universal-agent-service-watchdog --since '20 minutes ago' --no-pager"
 ```
 
 Expected healthy cycle log examples:
 - `service=... health=ok status_code=200`
-- `service=universal-agent-telegram state=active health=not_configured`
+- `service=universal-agent-telegram heartbeat=ok path=/var/lib/universal-agent/heartbeat/telegram.heartbeat`
 - `watchdog cycle complete`
 
 ---
@@ -131,14 +131,14 @@ Use one core service (gateway shown here):
 
 1. Stop service intentionally:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'systemctl stop universal-agent-gateway'
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net 'systemctl stop universal-agent-gateway'
 ```
 
 2. Wait up to one watchdog interval (`~30s`) plus settle time.
 
 3. Verify restart happened:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net '
   systemctl is-active universal-agent-gateway
   journalctl -u universal-agent-service-watchdog --since "10 minutes ago" --no-pager | \
     grep -E "service=universal-agent-gateway action=restart|restart_result"
@@ -147,7 +147,7 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 
 4. Verify gateway health:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net \
   "curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8002/api/v1/health"
 ```
 
@@ -170,7 +170,7 @@ Observed restart evidence from watchdog logs on `2026-02-12`:
 ## Known limits
 - This watchdog is service/process and endpoint-health recovery, not full business-level SLA validation.
 - If a service appears `active` but is logically stuck while still returning "healthy", watchdog will not restart it.
-- `universal-agent-telegram` has no default HTTP health URL, so only active-state recovery is applied unless configured.
+- `universal-agent-telegram` now uses a process heartbeat file by default rather than an HTTP health URL.
 
 ---
 
@@ -178,7 +178,7 @@ Observed restart evidence from watchdog logs on `2026-02-12`:
 To disable automatic recovery:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net '
   systemctl disable --now universal-agent-service-watchdog.timer
   systemctl stop universal-agent-service-watchdog.service
 '
@@ -187,7 +187,7 @@ ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 To re-enable:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net '
   systemctl daemon-reload
   systemctl enable --now universal-agent-service-watchdog.timer
 '

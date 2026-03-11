@@ -1,0 +1,46 @@
+{
+    "skill_name": "youtube-tutorial-creation",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "Create a learning artifact from this YouTube tutorial: https://www.youtube.com/watch?v=dQw4w9WgXcQ — I want to understand what it covers and get a runnable implementation if applicable. Save the artifact package to the standard artifacts directory.",
+            "expected_output": "A complete artifact package under UA_ARTIFACTS_DIR/youtube-tutorial-creation/{date}/{slug}__HHMMSS/ containing manifest.json, README.md, CONCEPT.md, IMPLEMENTATION.md, and implementation/ directory. The CONCEPT.md should be readable without watching the video.",
+            "files": [],
+            "expectations": [
+                "The youtube-transcript-metadata skill script is invoked (uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py)",
+                "The artifacts root is resolved using `resolve_artifacts_dir()` before writing any outputs",
+                "A run directory is created under the resolved artifacts root following the YYYY-MM-DD/slug__HHMMSS convention",
+                "manifest.json is created and contains a valid status field (full, degraded_transcript_only, or failed)",
+                "CONCEPT.md is created and is non-empty",
+                "IMPLEMENTATION.md is created and is non-empty",
+                "No outputs are written directly to CURRENT_SESSION_WORKSPACE/artifacts/ as the durable artifact location"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "I want to learn from this video but only need the concept writeup, not runnable code: https://www.youtube.com/watch?v=dQw4w9WgXcQ — create a concept-only artifact.",
+            "expected_output": "A concept-only artifact package. manifest.json shows learning_mode=concept_only. CONCEPT.md is produced. implementation/ directory may be minimal or absent.",
+            "files": [],
+            "expectations": [
+                "The youtube-transcript-metadata skill script is invoked for ingestion",
+                "manifest.json contains learning_mode set to 'concept_only'",
+                "CONCEPT.md exists and is non-empty",
+                "README.md exists and references the video URL and title",
+                "manifest.json exists with a valid status field"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "Create a tutorial artifact from this YouTube video, but it fails to extract the transcript. Handle the degraded case gracefully: https://www.youtube.com/watch?v=INVALID_ID_OR_BLOCKED — still produce a manifest and README explaining what happened.",
+            "expected_output": "Even with transcript failure, the agent produces manifest.json (status=failed or degraded), README.md with the error context, and does NOT crash without leaving any artifacts. The manifest documents the failure_class.",
+            "files": [],
+            "expectations": [
+                "The youtube-transcript-metadata skill script is invoked",
+                "manifest.json is created even when transcript extraction fails",
+                "manifest.json contains an extraction.transcript field that is not 'attempted_succeeded'",
+                "README.md is created (even if minimal) explaining the failure",
+                "The agent does not write durable outputs under CURRENT_SESSION_WORKSPACE only"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,46 @@
+{
+    "skill_name": "vp-orchestration",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "Send this task to the general VP: research the top 5 Python async frameworks and write a comparison summary. Save to artifacts.",
+            "expected_output": "Mission dispatched to vp.general.primary. User is informed of the mission_id and status. Agent waits for result via vp_wait_mission, then reads artifacts.",
+            "files": [],
+            "expectations": [
+                "The first tool call in the turn is vp_dispatch_mission (not a preflight search or discovery call)",
+                "vp_dispatch_mission is called with vp_id='vp.general.primary'",
+                "The objective field is a non-empty string describing the research task",
+                "The mission_id from the dispatch response is reported to the user",
+                "vp_wait_mission is called with the mission_id from dispatch",
+                "If the mission completes, vp_read_result_artifacts is called to surface output files"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "Have the coder VP refactor the authentication module in /opt/projects/myapp to use async/await throughout.",
+            "expected_output": "Mission dispatched to vp.coder.primary. Agent includes the external path constraint and waits for completion.",
+            "files": [],
+            "expectations": [
+                "The first tool call in the turn is vp_dispatch_mission",
+                "vp_dispatch_mission is called with vp_id='vp.coder.primary'",
+                "The objective describes the refactor task with the external path",
+                "The mission is NOT targeted at UA internal repo paths",
+                "An idempotency_key is included or the tool auto-generates one",
+                "vp_wait_mission is called after dispatch with a bounded timeout_seconds"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "Dispatch a VP mission then cancel it before it completes.",
+            "expected_output": "Mission dispatched, then vp_cancel_mission called with a descriptive reason. User informed of cancellation status.",
+            "files": [],
+            "expectations": [
+                "vp_dispatch_mission is called first",
+                "vp_cancel_mission is called with the mission_id from dispatch",
+                "A non-empty reason is provided to vp_cancel_mission",
+                "The cancel response ok=true is confirmed before reporting to user",
+                "If cancel returns ok=false, the error code and message are surfaced"
+            ]
+        }
+    ]
+}

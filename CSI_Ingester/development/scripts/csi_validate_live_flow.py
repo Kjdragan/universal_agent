@@ -182,7 +182,7 @@ async def _emit_smoke_events(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate CSI RSS/Reddit data-plane and optional live smoke flow.")
-    parser.add_argument("--csi-db", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--csi-db", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--ua-runtime-db", default=os.getenv("UA_RUNTIME_DB_PATH", "/opt/universal_agent/runtime_state.db"))
     parser.add_argument("--lookback-hours", type=int, default=24)
     parser.add_argument("--min-rss-events", type=int, default=1)

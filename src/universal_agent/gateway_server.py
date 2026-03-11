@@ -18,6 +18,7 @@ import logging
 import mimetypes
 import os
 import re
+import socket
 import shutil
 import sqlite3
 import threading
@@ -49,6 +50,7 @@ from universal_agent.delegation.redis_bus import (
     MISSION_STREAM,
     RedisMissionBus,
 )
+from universal_agent.delegation.factory_registry import FactoryRegistry, connect_registry_db
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 
 from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
@@ -63,7 +65,15 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled
+from universal_agent.feature_flags import (
+    heartbeat_enabled,
+    memory_index_enabled,
+    cron_enabled,
+    coder_vp_enabled,
+    dynamic_mcp_enabled,
+    sdk_session_history_enabled,
+)
+from universal_agent.sdk import session_history_adapter
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_activity_db_path
 from universal_agent.durable.migrations import ensure_schema
@@ -85,7 +95,14 @@ from universal_agent.vp import (
     dispatch_mission_with_retry,
     is_sqlite_lock_error,
 )
-from universal_agent.heartbeat_service import HeartbeatService
+from universal_agent.heartbeat_service import (
+    DEFAULT_INTERVAL_SECONDS as HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
+    MIN_INTERVAL_SECONDS as HEARTBEAT_MIN_INTERVAL_SECONDS,
+    HeartbeatService,
+    _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
+    _parse_duration_seconds as _parse_heartbeat_duration_seconds,
+    _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
+)
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
 from universal_agent.ops_config import (
@@ -105,6 +122,8 @@ from universal_agent.work_threads import (
 )
 from universal_agent.hooks_service import HooksService
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.services.gws_event_listener import GwsEventListener
+from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services import tutorial_telegram_notifier
 from universal_agent import process_heartbeat
 from universal_agent.security_paths import (
@@ -131,6 +150,7 @@ from universal_agent.signals_ingest import (
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.memory.memory_index import load_index
 from universal_agent.csi_confidence import confidence_baseline as _csi_confidence_baseline_model
 from universal_agent.csi_confidence import score_event_confidence as _csi_score_event_confidence
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
@@ -138,20 +158,24 @@ from universal_agent.timeout_policy import (
     gateway_ws_send_timeout_seconds,
     session_cancel_wait_seconds,
 )
+from universal_agent import task_hub
+from universal_agent.supervisors import (
+    build_csi_snapshot,
+    build_factory_snapshot,
+    find_supervisor,
+    list_snapshot_runs,
+    persist_snapshot,
+    supervisor_registry,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 ensure_runtime_path()
 
-# Feature flags (placeholders, no runtime behavior changes yet)
+# Feature flags (refreshed again after runtime bootstrap inside lifespan).
 HEARTBEAT_ENABLED = heartbeat_enabled()
 CRON_ENABLED = cron_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
-MIN_HEARTBEAT_INTERVAL_SECONDS = 30 * 60
-HEARTBEAT_INTERVAL_SECONDS = max(
-    MIN_HEARTBEAT_INTERVAL_SECONDS,
-    int(os.getenv("UA_HEARTBEAT_INTERVAL_SECONDS", str(MIN_HEARTBEAT_INTERVAL_SECONDS)) or MIN_HEARTBEAT_INTERVAL_SECONDS),
-)
 CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS = max(
     3600,
     int(os.getenv("UA_CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS", str(72 * 3600)) or (72 * 3600)),
@@ -194,11 +218,40 @@ if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
 
 _FACTORY_POLICY = build_factory_runtime_policy()
-_FACTORY_ID = (
-    str(os.getenv("UA_FACTORY_ID") or "").strip()
-    or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
-    or f"factory-{uuid.uuid4().hex[:8]}"
-)
+
+_LEGACY_RANDOM_FACTORY_ID_RE = re.compile(r"^factory-[0-9a-f]{8}$")
+
+
+def _normalized_factory_hostname() -> str:
+    raw = (
+        str(os.getenv("UA_FACTORY_HOSTNAME") or "").strip()
+        or str(os.getenv("HOSTNAME") or "").strip()
+        or socket.gethostname()
+    )
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("._-")
+    return slug[:80]
+
+
+def _derive_factory_id() -> str:
+    explicit = (
+        str(os.getenv("UA_FACTORY_ID") or "").strip()
+        or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
+    )
+    if explicit:
+        return explicit
+
+    host = _normalized_factory_hostname()
+    if host:
+        role = str(_FACTORY_POLICY.role or "").strip().upper()
+        if role == FactoryRole.HEADQUARTERS.value:
+            return f"{host}-hq"
+        if role == FactoryRole.LOCAL_WORKER.value:
+            return host
+        return f"{host}-node"
+    return f"factory-{uuid.uuid4().hex[:8]}"
+
+
+_FACTORY_ID = _derive_factory_id()
 
 
 def _redis_url_from_env() -> str:
@@ -222,6 +275,7 @@ def _delegation_redis_enabled() -> bool:
 _LOCAL_WORKER_ALLOWED_PATHS = {
     "/api/v1/health",
     "/api/v1/hooks/readyz",
+    "/api/v1/youtube/ingest",
 }
 
 AUTONOMOUS_DAILY_BRIEFING_JOB_KEY = "autonomous_daily_briefing"
@@ -481,7 +535,118 @@ def _tutorial_manifest(run_dir: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[str, Any]]:
+_TUTORIAL_CODE_EXTENSIONS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".sh",
+    ".ipynb",
+    ".gs",
+    ".html",
+    ".css",
+    ".jsx",
+    ".sql",
+    ".java",
+    ".go",
+    ".rs",
+    ".json",
+}
+_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
+_TUTORIAL_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
+
+
+def _tutorial_implementation_code_files(run_dir: Path) -> list[Path]:
+    impl_dir = run_dir / "implementation"
+    if not impl_dir.exists() or not impl_dir.is_dir():
+        return []
+    code_files: list[Path] = []
+    for child in impl_dir.rglob("*"):
+        if not child.is_file():
+            continue
+        if child.suffix.lower() not in _TUTORIAL_CODE_EXTENSIONS:
+            continue
+        if child.name.strip().lower() in _TUTORIAL_BOOTSTRAP_SCRIPT_NAMES:
+            continue
+        code_files.append(child)
+    code_files.sort(key=lambda p: p.name.lower())
+    return code_files
+
+
+def _tutorial_manifest_tokens(manifest: dict[str, Any]) -> str:
+    values = [
+        manifest.get("title"),
+        manifest.get("description"),
+        manifest.get("summary"),
+        manifest.get("channel"),
+        manifest.get("channel_name"),
+    ]
+    return " ".join(str(value or "") for value in values).strip().lower()
+
+
+def _tutorial_probably_code(manifest: dict[str, Any]) -> bool:
+    tokens = _tutorial_manifest_tokens(manifest)
+    if not tokens:
+        return False
+    has_code = any(keyword in tokens for keyword in _TUTORIAL_CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _TUTORIAL_NON_CODE_HINT_KEYWORDS)
+    return has_code and not (has_non_code and not has_code)
+
+
+def _tutorial_explicitly_non_code(manifest: dict[str, Any]) -> bool:
+    tokens = _tutorial_manifest_tokens(manifest)
+    if not tokens:
+        return False
+    has_code = any(keyword in tokens for keyword in _TUTORIAL_CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _TUTORIAL_NON_CODE_HINT_KEYWORDS)
+    return has_non_code and not has_code
+
+
+def _tutorial_key_files(
+    run_dir: Path,
+    *,
+    implementation_required: bool,
+    max_code_files: int = 4,
+) -> list[dict[str, Any]]:
     ordered: list[tuple[str, Path]] = []
     for label, rel in (
         ("README", "README.md"),
@@ -494,13 +659,21 @@ def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[
 
     impl_dir = run_dir / "implementation"
     if impl_dir.exists() and impl_dir.is_dir():
-        code: list[Path] = []
-        for pattern in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb", "*.gs", "*.html", "*.css", "*.jsx", "*.sql", "*.java", "*.go", "*.rs", "*.json"):
-            code.extend(impl_dir.glob(pattern))
-        code = [p for p in code if p.is_file()]
-        code.sort(key=lambda p: p.name.lower())
-        for path in code[: max(1, max_code_files)]:
-            ordered.append((f"Code: {path.name}", path))
+        if implementation_required:
+            code = _tutorial_implementation_code_files(run_dir)
+            for path in code[: max(1, max_code_files)]:
+                ordered.append((f"Code: {path.name}", path))
+        else:
+            procedure_files = sorted(
+                [
+                    p
+                    for p in impl_dir.rglob("*")
+                    if p.is_file() and p.suffix.lower() in {".md", ".txt"}
+                ],
+                key=lambda p: p.name.lower(),
+            )
+            for path in procedure_files[: max(1, max_code_files)]:
+                ordered.append((f"Procedure: {path.name}", path))
 
     files: list[dict[str, Any]] = []
     for label, path in ordered:
@@ -524,23 +697,29 @@ def _tutorial_has_code_implementation(run_dir: Path, manifest: dict) -> bool:
     Checks manifest field first (set by agent), falls back to heuristic
     checking for actual code files in implementation/ directory.
     """
-    # Prefer explicit manifest field if the agent set it
+    code_files = _tutorial_implementation_code_files(run_dir)
+
+    # Prefer explicit manifest field if the agent set it.
     manifest_flag = manifest.get("implementation_required")
-    if manifest_flag is not None:
-        return bool(manifest_flag)
-        
-    if (run_dir / "IMPLEMENTATION.md").exists() and (run_dir / "IMPLEMENTATION.md").is_file():
-        return True
+    if isinstance(manifest_flag, bool):
+        if not manifest_flag:
+            return False
+        if code_files:
+            return True
+        # Keep explicit=true unless content is clearly non-code.
+        return not _tutorial_explicitly_non_code(manifest)
+
+    learning_mode = str(manifest.get("learning_mode") or "").strip().lower()
+    mode = str(manifest.get("mode") or "").strip().lower()
+    if learning_mode in {"concept_only"} or mode in {"explainer_only"}:
+        return False
+    if learning_mode in {"concept_plus_implementation", "implementation", "code_only"}:
+        return True if code_files else not _tutorial_explicitly_non_code(manifest)
+    if mode in {"explainer_plus_code", "implementation", "code_only"}:
+        return True if code_files else not _tutorial_explicitly_non_code(manifest)
 
     # Fallback heuristic: check for code files in implementation/
-    impl_dir = run_dir / "implementation"
-    if not impl_dir.exists() or not impl_dir.is_dir():
-        return False
-    code_extensions = {".py", ".ts", ".tsx", ".js", ".sh", ".ipynb", ".gs", ".html", ".css", ".jsx", ".sql", ".java", ".go", ".rs", ".json"}
-    for child in impl_dir.rglob("*"):
-        if child.is_file() and child.suffix.lower() in code_extensions:
-            return True
-    return False
+    return bool(code_files)
 
 
 def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
@@ -576,7 +755,8 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
             run_rel = _artifact_rel_path(run_dir)
             if not run_rel:
                 continue
-            files = _tutorial_key_files(run_dir)
+            implementation_required = _tutorial_has_code_implementation(run_dir, manifest)
+            files = _tutorial_key_files(run_dir, implementation_required=implementation_required)
             title = str(manifest.get("title") or "").strip() or run_dir.name
             video_id = str(manifest.get("video_id") or "").strip()
             video_url = str(manifest.get("video_url") or "").strip()
@@ -596,7 +776,7 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
                 "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
                 "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
                 "files": files,
-                "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
+                "implementation_required": implementation_required,
             }
             runs.append((mtime, run_item))
 
@@ -816,9 +996,13 @@ def _factory_capabilities_payload() -> dict[str, Any]:
         "gateway_mode": _FACTORY_POLICY.gateway_mode,
         "delegation_mode": _FACTORY_POLICY.delegation_mode,
         "heartbeat_scope": _FACTORY_POLICY.heartbeat_scope,
+        "can_publish_delegations": bool(_FACTORY_POLICY.can_publish_delegations),
+        "can_listen_delegations": bool(_FACTORY_POLICY.can_listen_delegations),
+        "enable_csi_ingest": bool(_FACTORY_POLICY.enable_csi_ingest),
+        "enable_agentmail": bool(_FACTORY_POLICY.enable_agentmail),
         "start_ui": bool(_FACTORY_POLICY.start_ui),
         "enable_telegram_poll": bool(_FACTORY_POLICY.enable_telegram_poll),
-        "enable_vp_coder": str(os.getenv("ENABLE_VP_CODER", "true")).strip().lower() == "true",
+        "enable_vp_coder": coder_vp_enabled(),
         "llm_provider_override": provider_override or None,
         "redis_delegation_enabled": bool(_delegation_bus_enabled and _delegation_mission_bus is not None),
         "redis_stream_name": _delegation_bus_stream if _delegation_bus_enabled else None,
@@ -843,6 +1027,8 @@ def _factory_capability_labels() -> list[str]:
         labels.append("vp_coder")
     if payload.get("redis_delegation_enabled"):
         labels.append("delegation_redis")
+    labels.append("csi_ingest:on" if payload.get("enable_csi_ingest") else "csi_ingest:off")
+    labels.append("agentmail:on" if payload.get("enable_agentmail") else "agentmail:off")
     labels.append(f"delegation_mode:{payload.get('delegation_mode')}")
     labels.append(f"heartbeat_scope:{payload.get('heartbeat_scope')}")
     if payload.get("llm_provider_override"):
@@ -851,18 +1037,30 @@ def _factory_capability_labels() -> list[str]:
 
 
 def _upsert_factory_registration(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    # Fill in defaults from gateway's own identity when fields are missing
+    enriched = dict(payload)
+    enriched.setdefault("factory_id", _FACTORY_ID)
+    if not str(enriched.get("factory_id") or "").strip():
+        enriched["factory_id"] = _FACTORY_ID
+    enriched.setdefault("factory_role", _FACTORY_POLICY.role)
+    enriched.setdefault("deployment_profile", _DEPLOYMENT_PROFILE)
+
+    # Use SQLite-backed registry if available, else fall back to in-memory dict
+    if _factory_registry is not None:
+        return _factory_registry.upsert(enriched, source=source)
+
+    # Legacy in-memory fallback (only before lifespan init)
     now_iso = datetime.now(timezone.utc).isoformat()
-    factory_id = str(payload.get("factory_id") or "").strip() or _FACTORY_ID
-    role = str(payload.get("factory_role") or payload.get("role") or _FACTORY_POLICY.role).strip() or _FACTORY_POLICY.role
+    factory_id = str(enriched["factory_id"]).strip()
     record = {
         "factory_id": factory_id,
-        "factory_role": role,
-        "deployment_profile": str(payload.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip() or _DEPLOYMENT_PROFILE,
+        "factory_role": str(enriched.get("factory_role") or "UNKNOWN").strip(),
+        "deployment_profile": str(enriched.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip(),
         "source": source,
-        "registration_status": str(payload.get("registration_status") or "online").strip() or "online",
-        "heartbeat_latency_ms": payload.get("heartbeat_latency_ms"),
-        "capabilities": payload.get("capabilities") if isinstance(payload.get("capabilities"), list) else [],
-        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "registration_status": str(enriched.get("registration_status") or "online").strip() or "online",
+        "heartbeat_latency_ms": enriched.get("heartbeat_latency_ms"),
+        "capabilities": enriched.get("capabilities") if isinstance(enriched.get("capabilities"), list) else [],
+        "metadata": enriched.get("metadata") if isinstance(enriched.get("metadata"), dict) else {},
         "last_seen_at": now_iso,
         "updated_at": now_iso,
     }
@@ -885,11 +1083,53 @@ def _register_local_factory_presence() -> dict[str, Any]:
         "capabilities": _factory_capability_labels(),
         "metadata": {
             "self_registration": True,
+            "hostname": _normalized_factory_hostname(),
             "capabilities_payload": capabilities_payload,
         },
         "registration_status": "online",
     }
     return _upsert_factory_registration(payload, source="gateway_startup")
+
+
+def _cleanup_legacy_factory_registrations() -> int:
+    """Remove legacy random self-registration rows after deterministic factory IDs."""
+    if _factory_registry is None:
+        return 0
+    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+        return 0
+
+    current_host = _normalized_factory_hostname().lower()
+    candidates: list[str] = []
+    for row in _factory_registry.list_all(limit=2000):
+        factory_id = str(row.get("factory_id") or "").strip()
+        if not factory_id or factory_id == _FACTORY_ID:
+            continue
+        if not _LEGACY_RANDOM_FACTORY_ID_RE.fullmatch(factory_id):
+            continue
+        if str(row.get("source") or "").strip().lower() != "gateway_startup":
+            continue
+        role = str(row.get("factory_role") or "").strip().upper()
+        if role != FactoryRole.HEADQUARTERS.value:
+            continue
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if not bool(meta.get("self_registration")):
+            continue
+        row_host = str(meta.get("hostname") or "").strip().lower()
+        # If hostname is known, only prune local-host legacy rows.
+        if current_host and row_host and row_host != current_host:
+            continue
+        candidates.append(factory_id)
+
+    if not candidates:
+        return 0
+    deleted = _factory_registry.delete_ids(candidates)
+    if deleted:
+        logger.info(
+            "Pruned %d legacy factory registration row(s): %s",
+            deleted,
+            ", ".join(candidates[:8]),
+        )
+    return deleted
 
 
 def _publish_tutorial_bootstrap_mission(
@@ -1086,6 +1326,17 @@ async def _run_tutorial_review_job(
             },
         )
 
+
+def _telegram_allowed_user_ids_raw() -> str:
+    primary = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if primary:
+        return primary
+    legacy = (os.getenv("ALLOWED_USER_IDS") or "").strip()
+    if legacy:
+        logger.warning("ALLOWED_USER_IDS is deprecated; use TELEGRAM_ALLOWED_USER_IDS instead")
+    return legacy
+
+
 # 2. Allowlist Configuration
 ALLOWED_USERS = set()
 _allowed_users_str = os.getenv("UA_ALLOWED_USERS", "").strip()
@@ -1098,7 +1349,7 @@ if _allowed_users_str:
         (os.getenv("DEFAULT_USER_ID") or "").strip(),
         (os.getenv("UA_DASHBOARD_OWNER_ID") or "").strip(),
     }
-    _telegram_allowed = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    _telegram_allowed = _telegram_allowed_user_ids_raw()
     if _telegram_allowed:
         _runtime_identity_candidates.update(
             {item.strip() for item in _telegram_allowed.split(",") if item.strip()}
@@ -1194,6 +1445,7 @@ class VpMissionDispatchRequest(BaseModel):
     objective: str
     constraints: dict = {}
     budget: dict = {}
+    execution_mode: str = "sdk"  # "sdk" (default) or "cli" (Claude Code CLI)
     idempotency_key: Optional[str] = None
     source_session_id: Optional[str] = None
     source_turn_id: Optional[str] = None
@@ -1367,6 +1619,15 @@ class OpsCsiSessionPurgeRequest(BaseModel):
     include_active: bool = False
 
 
+class OpsMcpAddServerRequest(BaseModel):
+    server_name: str
+    server_config: dict[str, Any]
+
+
+class OpsMcpRemoveServerRequest(BaseModel):
+    server_name: str
+
+
 class CalendarEventActionRequest(BaseModel):
     action: str
     run_at: Optional[str] = None
@@ -1416,6 +1677,25 @@ class ActivityEventActionRequest(BaseModel):
     action: str
     note: Optional[str] = None
     snooze_minutes: Optional[int] = None
+
+
+class ToDoTaskActionRequest(BaseModel):
+    action: str
+    reason: Optional[str] = None
+    note: Optional[str] = None
+    agent_id: Optional[str] = None
+
+
+class TodoistMirrorPolicyPatchRequest(BaseModel):
+    mode: Optional[str] = None
+    classes: Optional[list[str]] = None
+    reverse_sync_fields: Optional[list[str]] = None
+    enabled: Optional[bool] = None
+
+
+class MemoryTaskCompactRequest(BaseModel):
+    dry_run: bool = True
+    apply: Optional[bool] = None
 
 
 class CSISpecialistLoopActionRequest(BaseModel):
@@ -1531,6 +1811,8 @@ _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
 _yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
+_gws_event_listener: Optional[GwsEventListener] = None
+_agentmail_service: Optional[AgentMailService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -1657,8 +1939,13 @@ _delegation_metrics: dict[str, Any] = {
     "last_publish_at": None,
     "published_total": 0,
 }
-_factory_registration_lock = threading.Lock()
-_factory_registrations: dict[str, dict[str, Any]] = {}
+_factory_registration_lock = threading.Lock()  # kept for backward compat; registry is thread-safe internally
+_factory_registrations: dict[str, dict[str, Any]] = {}  # legacy fallback if registry not yet initialized
+_factory_registry: Optional[FactoryRegistry] = None  # SQLite-backed; initialized in lifespan
+_factory_staleness_task: Optional[asyncio.Task] = None
+_factory_staleness_stop: Optional[asyncio.Event] = None
+_hq_self_heartbeat_task: Optional[asyncio.Task] = None
+_hq_self_heartbeat_stop: Optional[asyncio.Event] = None
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -2931,6 +3218,15 @@ def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
         except Exception:
             session = None
     if not session:
+        # Disk fallback: if workspace directory exists under WORKSPACES_DIR, use it.
+        try:
+            from universal_agent.security_paths import validate_session_id as _vsid
+            safe_id = _vsid(session_id)
+            candidate = WORKSPACES_DIR / safe_id
+            if candidate.is_dir():
+                return candidate
+        except Exception:
+            pass
         return None
     workspace = Path(str(session.workspace_dir or "")).expanduser()
     if not str(workspace):
@@ -3293,8 +3589,12 @@ def _csi_is_high_value_event(event_type: str) -> bool:
     return lowered in {
         "rss_trend_report",
         "reddit_trend_report",
+        "threads_trend_report",
         "rss_insight_emerging",
         "rss_insight_daily",
+        "global_trend_brief_ready",
+        "csi_global_brief_review_due",
+        "rss_quality_gate_alert",
         "report_product_ready",
         "opportunity_bundle_ready",
         "delivery_health_auto_remediation_failed",
@@ -3316,6 +3616,136 @@ def _csi_event_has_anomaly(event_type: str, subject: Any) -> bool:
         if action and action not in {"no_change", "ok", "healthy"}:
             return True
     return False
+
+
+def _csi_subject_int(subject: Any, *keys: str) -> int:
+    subject_obj = subject if isinstance(subject, dict) else {}
+    for key in keys:
+        raw = subject_obj.get(key)
+        try:
+            return int(raw or 0)
+        except Exception:
+            continue
+    return 0
+
+
+def _csi_subject_bool(subject: Any, *keys: str) -> bool:
+    subject_obj = subject if isinstance(subject, dict) else {}
+    for key in keys:
+        raw = subject_obj.get(key)
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw or "").strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return False
+
+
+def _csi_escalation_policy(event_type: str, subject: Any) -> tuple[bool, str]:
+    """Return whether a CSI event should escalate to UA Task Hub.
+
+    Keeps routine CSI operations (quality/regression noise) inside CSI until
+    persistence/failure thresholds are crossed.
+    """
+    normalized = str(event_type or "").strip().lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+
+    if normalized in {"global_trend_brief_ready", "csi_global_brief_review_due"}:
+        return True, "ua_decision_signal"
+
+    if normalized == "opportunity_bundle_ready":
+        quality_summary = (
+            subject_obj.get("quality_summary")
+            if isinstance(subject_obj.get("quality_summary"), dict)
+            else {}
+        )
+        opportunities_raw = subject_obj.get("opportunities")
+        opportunities = opportunities_raw if isinstance(opportunities_raw, list) else []
+        opportunity_count = len([entry for entry in opportunities if isinstance(entry, dict)])
+        signal_volume = max(
+            0,
+            _csi_subject_int(subject_obj, "signal_volume", "total_items"),
+        )
+        if signal_volume <= 0:
+            try:
+                signal_volume = max(0, int(quality_summary.get("signal_volume") or 0))
+            except Exception:
+                signal_volume = 0
+        freshness_minutes = 0
+        try:
+            freshness_minutes = max(0, int(quality_summary.get("freshness_minutes") or 0))
+        except Exception:
+            freshness_minutes = 0
+        coverage_score = 0.0
+        try:
+            coverage_score = float(quality_summary.get("coverage_score") or 0.0)
+        except Exception:
+            coverage_score = 0.0
+
+        min_opportunities = max(
+            1,
+            int(os.getenv("UA_CSI_OPPORTUNITY_MIN_COUNT", "1") or 1),
+        )
+        min_signal_volume = max(
+            1,
+            int(os.getenv("UA_CSI_OPPORTUNITY_MIN_SIGNAL_VOLUME", "5") or 5),
+        )
+        max_freshness_minutes = max(
+            30,
+            int(os.getenv("UA_CSI_OPPORTUNITY_MAX_FRESHNESS_MINUTES", "240") or 240),
+        )
+        min_coverage_score = max(
+            0.0,
+            min(float(os.getenv("UA_CSI_OPPORTUNITY_MIN_COVERAGE_SCORE", "0.5") or 0.5), 1.0),
+        )
+        force_escalation = _csi_subject_bool(subject_obj, "force_task_hub", "force_escalation")
+        if force_escalation:
+            return True, "opportunity_bundle_forced"
+        if opportunity_count < min_opportunities:
+            return False, "opportunity_bundle_low_opportunity_count"
+        if signal_volume < min_signal_volume:
+            return False, "opportunity_bundle_low_signal"
+        if freshness_minutes > max_freshness_minutes:
+            return False, "opportunity_bundle_stale"
+        if coverage_score > 0 and coverage_score < min_coverage_score:
+            return False, "opportunity_bundle_low_coverage"
+        return True, "ua_decision_signal"
+
+    if normalized in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}:
+        return True, "delivery_exception_hard_failure"
+
+    if normalized == "delivery_health_regression":
+        threshold = max(
+            1,
+            int(os.getenv("UA_CSI_DELIVERY_REGRESSION_ESCALATION_THRESHOLD", "3") or 3),
+        )
+        streak = max(
+            0,
+            _csi_subject_int(subject_obj, "consecutive_failures", "failure_streak", "retry_count", "attempts"),
+        )
+        status = str(subject_obj.get("status") or "").strip().lower()
+        manual_required = _csi_subject_bool(subject_obj, "requires_manual_intervention", "manual_intervention_required")
+        if streak >= threshold or (manual_required and status in {"failing", "critical", "down"}):
+            return True, "delivery_regression_persistent"
+        return False, "delivery_regression_csi_owned"
+
+    if normalized == "rss_quality_gate_alert":
+        threshold = max(
+            1,
+            int(os.getenv("UA_CSI_RSS_QUALITY_ESCALATION_THRESHOLD", "3") or 3),
+        )
+        alert_streak = max(
+            0,
+            _csi_subject_int(subject_obj, "consecutive_alerts", "alert_streak", "quality_fail_streak", "rss_undelivered_recent"),
+        )
+        transcript_ok_recent = max(0, _csi_subject_int(subject_obj, "transcript_ok_recent"))
+        if alert_streak >= threshold and transcript_ok_recent <= 0:
+            return True, "rss_quality_persistent"
+        return False, "rss_quality_csi_owned"
+
+    return False, "default_csi_owned"
 
 
 def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
@@ -3343,26 +3773,20 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         severity = "error"
     elif "quality" in event_type and not is_digest:
         severity = "warning"
-    requires_action = bool(
-        has_anomaly
-        or high_value
-        or event_type
-        in {
-            "delivery_health_regression",
-            "delivery_health_auto_remediation_failed",
-            "delivery_reliability_slo_breached",
-        }
-    )
+    should_escalate, escalation_reason = _csi_escalation_policy(event_type, subject_obj)
+    requires_action = bool(should_escalate)
     if event_type in {"delivery_health_recovered", "delivery_reliability_slo_recovered"}:
         requires_action = False
     todoist_sync = bool(
         (has_anomaly and event_type != "delivery_health_recovered")
         or event_type in {
             "rss_insight_daily",
+            "rss_quality_gate_alert",
             "report_product_ready",
             "opportunity_bundle_ready",
             "rss_trend_report",
             "reddit_trend_report",
+            "threads_trend_report",
             "delivery_health_regression",
             "delivery_reliability_slo_breached",
         }
@@ -3374,8 +3798,520 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         "has_anomaly": has_anomaly,
         "severity": severity,
         "requires_action": requires_action,
+        "escalates_to_ua": bool(should_escalate),
+        "escalation_reason": escalation_reason,
         "todoist_sync": todoist_sync,
     }
+
+
+_CSI_TASK_HUB_PROACTIVE_EVENT_TYPES = {
+    # Opportunity/proactive missions for UA review.
+    "opportunity_bundle_ready",
+    "global_trend_brief_ready",
+    "csi_global_brief_review_due",
+    # Only escalated delivery incidents that failed internal CSI recovery.
+    "delivery_reliability_slo_breached",
+    "delivery_health_auto_remediation_failed",
+}
+
+
+def _csi_task_hub_mode() -> str:
+    raw = (
+        os.getenv("UA_TASK_HUB_CSI_MODE")
+        or os.getenv("UA_CSI_TASK_HUB_MODE")
+        or "proactive"
+    ).strip().lower()
+    if raw in {"all", "proactive", "actionable", "anomalies_only", "off"}:
+        return raw
+    return "proactive"
+
+
+def _should_enqueue_csi_task(*, event_type: str, policy: dict[str, Any]) -> bool:
+    mode = _csi_task_hub_mode()
+    if mode == "off":
+        return False
+    if mode == "all":
+        return True
+    # Non-"all" modes always honor escalation policy to keep routine CSI work
+    # in CSI and prevent UA queue pollution.
+    if not bool(policy.get("escalates_to_ua")):
+        return False
+    if mode == "anomalies_only":
+        return bool(policy.get("has_anomaly"))
+    if mode == "actionable":
+        return bool(policy.get("requires_action"))
+    # Default "proactive": strict allowlist of mission/opportunity + explicit anomaly event types.
+    return str(event_type or "").strip().lower() in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
+
+
+def _task_hub_apply_csi_routing_maintenance(conn: sqlite3.Connection) -> dict[str, int]:
+    """Auto-park legacy CSI queue items that do not match current strict routing policy."""
+    if str(os.getenv("UA_TASK_HUB_CSI_AUTO_PARK", "1")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return {"examined": 0, "parked": 0}
+    mode = _csi_task_hub_mode()
+    if mode == "off":
+        return task_hub.park_csi_items_not_matching_event_types(
+            conn,
+            allowed_event_types=set(),
+            park_reason="csi_mode_off",
+        )
+    if mode != "proactive":
+        # Non-strict modes (all/actionable/anomalies_only) are dynamic and may require
+        # policy fields beyond event_type; skip auto-park in those modes.
+        return {"examined": 0, "parked": 0}
+    return task_hub.park_csi_items_not_matching_event_types(
+        conn,
+        allowed_event_types=set(_CSI_TASK_HUB_PROACTIVE_EVENT_TYPES),
+        park_reason="csi_mode_proactive",
+    )
+
+
+def _csi_incident_key(
+    *,
+    event_id: str,
+    event_type: str,
+    source: str,
+    subject_obj: dict[str, Any],
+) -> str:
+    report_key = str(subject_obj.get("report_key") or "").strip()
+    if report_key:
+        return task_hub.normalize_csi_incident_key(
+            incident_key=report_key,
+            event_type=event_type,
+        )
+    brief_key = str(subject_obj.get("brief_key") or "").strip()
+    if brief_key:
+        return task_hub.normalize_csi_incident_key(
+            incident_key=brief_key,
+            event_type=event_type,
+        )
+    if event_type in {"delivery_health_regression", "delivery_reliability_slo_breached"}:
+        return f"{event_type}:{source or 'csi'}"
+    if event_type in {"rss_quality_gate_alert", "rss_quality_gate_ok"}:
+        return f"{event_type}:{source or 'csi'}"
+    return str(event_id or f"{event_type}:{source}").strip()
+
+
+def _task_hub_mirror_class_for_csi(
+    *,
+    event_type: str,
+    has_anomaly: bool,
+    high_value: bool,
+    requires_action: bool,
+) -> str:
+    if event_type in {
+        "delivery_reliability_slo_breached",
+        "delivery_health_auto_remediation_failed",
+    }:
+        return "csi_incident_high"
+    if event_type in {"delivery_health_regression", "rss_quality_gate_alert"} and has_anomaly and requires_action:
+        return "csi_incident_high"
+    return "internal_only"
+
+
+def _task_hub_should_mirror(policy: dict[str, Any], mirror_class: str) -> bool:
+    if not bool(policy.get("enabled", True)):
+        return False
+    mode = str(policy.get("mode") or "selective").strip().lower()
+    if mode == "all":
+        return True
+    if mode == "off":
+        return False
+    classes = policy.get("classes")
+    if not isinstance(classes, list):
+        return False
+    normalized = {str(item).strip().lower() for item in classes if str(item).strip()}
+    return str(mirror_class or "").strip().lower() in normalized
+
+
+def classify_csi_project_key(
+    event_type: str,
+    subject: Any,
+    quality: Any,
+    source_mix: Any,
+) -> str:
+    """Classify CSI-driven Todoist tasks into one of the 5 UA project keys."""
+    event_type_l = str(event_type or "").strip().lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+    quality_obj = quality if isinstance(quality, dict) else {}
+    mix_obj = source_mix if isinstance(source_mix, dict) else {}
+
+    text_parts: list[str] = [event_type_l]
+    for key in (
+        "report_type",
+        "report_key",
+        "title",
+        "summary",
+        "recommendation",
+        "action",
+    ):
+        value = subject_obj.get(key)
+        if isinstance(value, str) and value.strip():
+            text_parts.append(value.strip().lower())
+    tags = subject_obj.get("tags")
+    if isinstance(tags, list):
+        text_parts.extend(str(item).strip().lower() for item in tags if str(item).strip())
+    full_text = " ".join(text_parts)
+
+    if event_type_l in {
+        "delivery_health_regression",
+        "delivery_reliability_slo_breached",
+        "delivery_health_auto_remediation_failed",
+    } or any(token in full_text for token in ("outage", "regression", "failing", "incident", "breach", "degraded")):
+        return "immediate"
+
+    if any(token in full_text for token in ("memory", "profile", "knowledge gap", "knowledge_gap")):
+        return "memory"
+
+    mission_score = float(subject_obj.get("mission_relevance_score") or 0.0)
+    if mission_score < 0.0:
+        mission_score = 0.0
+    if mission_score > 1.0:
+        mission_score = 1.0
+    if bool(subject_obj.get("mission_aligned")) or mission_score >= 0.75:
+        return "mission"
+    if any(token in full_text for token in ("mission", "identity", "values", "north star", "strategy", "strategic")):
+        return "mission"
+
+    if event_type_l in {
+        "rss_insight_emerging",
+        "analysis_task_requested",
+        "analysis_task_completed",
+        "rss_quality_gate_alert",
+        "category_quality_report",
+    }:
+        return "proactive"
+    if quality_obj.get("status") in {"warning", "needs_followup"}:
+        return "proactive"
+    if float(quality_obj.get("score") or 0.0) > 0 and float(quality_obj.get("score") or 0.0) < 0.6:
+        return "proactive"
+    if any(
+        key in mix_obj
+        for key in (
+            "youtube_channel_rss",
+            "reddit_discovery",
+            "threads_owned",
+            "threads_trends_seeded",
+            "threads_trends_broad",
+        )
+    ) and event_type_l in {
+        "opportunity_bundle_ready",
+        "report_product_ready",
+    }:
+        # Normal CSI research/refinement work lands here unless promoted to mission.
+        return "csi"
+
+    return "csi"
+
+
+_CSI_RECOMMENDATION_TEXT_KEYS = (
+    "action",
+    "recommendation",
+    "title",
+    "summary",
+    "description",
+    "text",
+    "name",
+)
+_CSI_AGENT_RECOMMENDATION_HINTS = {
+    "install",
+    "pip",
+    "fix",
+    "add",
+    "update",
+    "create",
+    "implement",
+    "patch",
+    "refactor",
+    "detect",
+    "signature",
+    "hook",
+    "retry",
+    "timeout",
+    "script",
+    "runbook",
+    "automation",
+    "cron",
+    "pydantic",
+    "env",
+    "python",
+    "code",
+    "adapter",
+}
+_CSI_HUMAN_RECOMMENDATION_HINTS = {
+    "manual",
+    "human",
+    "approval",
+    "approve",
+    "legal",
+    "compliance",
+    "budget",
+    "meeting",
+    "call",
+    "email",
+    "stakeholder",
+    "sign-off",
+    "sign off",
+    "exec review",
+    "kevin",
+}
+
+
+def _normalize_csi_recommendation_text(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"^(?:[-*]+|\d+[.)])\s+", "", text)
+    return text.strip()
+
+
+def _extract_csi_recommendations(subject: Any) -> list[dict[str, Any]]:
+    subject_obj = subject if isinstance(subject, dict) else {}
+    if not subject_obj:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    max_items = max(
+        0,
+        min(
+            20,
+            int(os.getenv("UA_CSI_RECOMMENDATION_MAX_ITEMS", "8") or 8),
+        ),
+    )
+    if max_items <= 0:
+        return out
+
+    def _append(text: Any, *, source: str, runbook_command: str = "") -> None:
+        cleaned = _normalize_csi_recommendation_text(text)
+        if len(cleaned) < 8:
+            return
+        norm_key = cleaned.lower()
+        if norm_key in seen:
+            return
+        seen.add(norm_key)
+        out.append(
+            {
+                "text": cleaned,
+                "source": source,
+                "runbook_command": str(runbook_command or "").strip(),
+            }
+        )
+
+    def _consume_mixed(value: Any, *, source: str) -> None:
+        if isinstance(value, str):
+            _append(value, source=source)
+            return
+        if isinstance(value, dict):
+            runbook_command = str(
+                value.get("runbook_command")
+                or value.get("command")
+                or ""
+            ).strip()
+            for key in _CSI_RECOMMENDATION_TEXT_KEYS:
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    _append(candidate, source=source, runbook_command=runbook_command)
+                    return
+            if runbook_command:
+                _append(
+                    f"Execute runbook command: {runbook_command}",
+                    source=source,
+                    runbook_command=runbook_command,
+                )
+            return
+        if isinstance(value, list):
+            for idx, row in enumerate(value):
+                if len(out) >= max_items:
+                    return
+                _consume_mixed(row, source=f"{source}[{idx}]")
+
+    for key in (
+        "recommendations",
+        "recommended_actions",
+        "action_items",
+        "next_actions",
+        "next_steps",
+    ):
+        if len(out) >= max_items:
+            break
+        _consume_mixed(subject_obj.get(key), source=key)
+
+    remediation = subject_obj.get("remediation")
+    if isinstance(remediation, dict) and len(out) < max_items:
+        steps = remediation.get("steps")
+        if isinstance(steps, list):
+            for idx, step in enumerate(steps):
+                if len(out) >= max_items:
+                    break
+                if not isinstance(step, dict):
+                    continue
+                runbook_command = str(step.get("runbook_command") or "").strip()
+                code = str(step.get("code") or "").strip()
+                source_name = str(step.get("source") or "").strip()
+                if runbook_command:
+                    detail = f"Run remediation step"
+                    if code:
+                        detail += f" '{code}'"
+                    if source_name:
+                        detail += f" for {source_name}"
+                    detail += f": {runbook_command}"
+                    _append(detail, source=f"remediation.steps[{idx}]", runbook_command=runbook_command)
+
+    top_root_causes = subject_obj.get("top_root_causes")
+    if isinstance(top_root_causes, list) and len(out) < max_items:
+        for idx, cause in enumerate(top_root_causes):
+            if len(out) >= max_items:
+                break
+            if not isinstance(cause, dict):
+                continue
+            title = str(cause.get("title") or cause.get("code") or "").strip()
+            runbook_command = str(cause.get("runbook_command") or "").strip()
+            if title and runbook_command:
+                _append(
+                    f"{title}. Runbook: {runbook_command}",
+                    source=f"top_root_causes[{idx}]",
+                    runbook_command=runbook_command,
+                )
+            elif title:
+                _append(title, source=f"top_root_causes[{idx}]")
+            elif runbook_command:
+                _append(
+                    f"Execute runbook command: {runbook_command}",
+                    source=f"top_root_causes[{idx}]",
+                    runbook_command=runbook_command,
+                )
+
+    return out[:max_items]
+
+
+def _classify_csi_recommendation_owner(
+    recommendation_text: str,
+    *,
+    subject: Any = None,
+) -> dict[str, Any]:
+    text = str(recommendation_text or "").strip()
+    lowered = text.lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+    manual_required = _csi_subject_bool(
+        subject_obj,
+        "requires_manual_intervention",
+        "manual_intervention_required",
+        "requires_human_approval",
+        "human_approval_required",
+    )
+
+    has_agent_hint = any(token in lowered for token in _CSI_AGENT_RECOMMENDATION_HINTS)
+    has_human_hint = any(token in lowered for token in _CSI_HUMAN_RECOMMENDATION_HINTS)
+    owner_lane = "agent"
+    reason = "default_agent"
+    confidence = 0.65
+    if manual_required and not has_agent_hint:
+        owner_lane = "human"
+        reason = "subject_manual_required"
+        confidence = 0.9
+    elif has_human_hint and not has_agent_hint:
+        owner_lane = "human"
+        reason = "human_keyword_match"
+        confidence = 0.8
+    elif has_agent_hint:
+        owner_lane = "agent"
+        reason = "automation_keyword_match"
+        confidence = 0.85
+
+    subtask_role = "general"
+    if any(token in lowered for token in ("install", "fix", "patch", "signature", "hook", "code", "pydantic", "env")):
+        subtask_role = "code"
+    elif any(token in lowered for token in ("analyze", "investigate", "review", "assess")):
+        subtask_role = "research"
+    elif any(token in lowered for token in ("write", "draft", "publish", "message")):
+        subtask_role = "writer"
+
+    return {
+        "owner_lane": owner_lane,
+        "reason": reason,
+        "confidence": confidence,
+        "subtask_role": subtask_role,
+    }
+
+
+def _build_csi_recommendation_task_items(
+    *,
+    subject: Any,
+    event_type: str,
+    parent_task_id: str,
+    parent_title: str,
+    project_key: str,
+    must_complete: bool,
+) -> list[dict[str, Any]]:
+    parent_id = str(parent_task_id or "").strip()
+    if not parent_id:
+        return []
+
+    recommendations = _extract_csi_recommendations(subject)
+    out: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        recommendation_text = str(recommendation.get("text") or "").strip()
+        if not recommendation_text:
+            continue
+        triage = _classify_csi_recommendation_owner(recommendation_text, subject=subject)
+        owner_lane = str(triage.get("owner_lane") or "agent").strip().lower()
+        subtask_role = str(triage.get("subtask_role") or "general").strip().lower() or "general"
+        short_hash = hashlib.sha1(recommendation_text.lower().encode("utf-8")).hexdigest()[:12]
+        task_id = f"{parent_id}:rec:{short_hash}"
+        labels = [
+            "CSI",
+            "csi-recommendation",
+            f"csi-project:{project_key}",
+        ]
+        agent_ready = owner_lane == "agent"
+        if agent_ready:
+            labels.append("agent-ready")
+            labels.append(f"sub-agent:{subtask_role}")
+        else:
+            labels.append("needs-human")
+        if must_complete and agent_ready:
+            labels.append("must-complete")
+
+        recommendation_source = str(recommendation.get("source") or "recommendations").strip()
+        runbook_command = str(recommendation.get("runbook_command") or "").strip()
+        recommendation_description = (
+            f"Parent CSI incident: {parent_title}\n"
+            f"Event type: {event_type}\n"
+            f"Recommendation source: {recommendation_source}\n\n"
+            f"Recommendation:\n{recommendation_text}\n"
+        )
+        if runbook_command:
+            recommendation_description += f"\nSuggested command:\n{runbook_command}\n"
+
+        out.append(
+            {
+                "task_id": task_id,
+                "source_kind": "csi_recommendation",
+                "source_ref": parent_id,
+                "title": f"CSI recommendation: {recommendation_text[:160]}",
+                "description": recommendation_description.strip(),
+                "project_key": project_key,
+                "priority": 4 if must_complete and agent_ready else (3 if agent_ready else 2),
+                "labels": sorted({label for label in labels if label}),
+                "status": "open",
+                "must_complete": bool(must_complete and agent_ready),
+                "incident_key": parent_id,
+                "parent_task_id": parent_id,
+                "subtask_role": subtask_role,
+                "agent_ready": agent_ready,
+                "mirror_status": "internal_only",
+                "metadata": {
+                    "event_type": event_type,
+                    "recommendation_text": recommendation_text,
+                    "recommendation_source": recommendation_source,
+                    "runbook_command": runbook_command or None,
+                    "triage": triage,
+                },
+            }
+        )
+    return out
 
 
 def _csi_source_bucket(event: Any) -> str:
@@ -3385,6 +4321,8 @@ def _csi_source_bucket(event: Any) -> str:
     subject_obj = subject if isinstance(subject, dict) else {}
     report_type = str(subject_obj.get("report_type") or event_type).strip().lower()
     text = " ".join([event_type, source, report_type])
+    if "threads" in text:
+        return "threads"
     if "reddit" in text:
         return "reddit"
     if "rss" in text:
@@ -4124,23 +5062,8 @@ def _emit_cron_event(payload: dict) -> None:
                 ).strip()
         is_autonomous = bool(job_metadata.get("autonomous"))
         system_job = str(job_metadata.get("system_job") or "").strip()
-        is_daily_briefing_job = system_job == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY
-        briefing_payload: dict[str, Any] = {}
-        if is_daily_briefing_job:
-            try:
-                briefing_payload = _generate_autonomous_daily_briefing_artifact(
-                    now_ts=float(run_data.get("finished_at") or time.time()),
-                )
-            except Exception:
-                logger.exception("Failed generating deterministic autonomous daily briefing artifact")
-                briefing_payload = {}
 
-        if run_status == "success" and is_daily_briefing_job and briefing_payload:
-            title = "Daily Autonomous Briefing Ready"
-            severity = "info"
-            kind = "autonomous_daily_briefing_ready"
-            message = str(briefing_payload.get("summary_line") or command)
-        elif run_status == "success":
+        if run_status == "success":
             title = "Autonomous Task Completed" if is_autonomous else "Chron Run Succeeded"
             severity = "info"
             kind = "autonomous_run_completed" if is_autonomous else "cron_run_success"
@@ -4153,14 +5076,6 @@ def _emit_cron_event(payload: dict) -> None:
             message = f"{command}"
             if error_text:
                 message = f"{message} | {error_text[:240]}"
-            if is_daily_briefing_job and briefing_payload:
-                message = (
-                    f"{message} | fallback briefing summary: "
-                    f"{str(briefing_payload.get('summary_line') or '').strip()[:180]}"
-                )
-
-        markdown_payload = briefing_payload.get("markdown") if isinstance(briefing_payload, dict) else None
-        json_payload = briefing_payload.get("json") if isinstance(briefing_payload, dict) else None
 
         _add_notification(
             kind=kind,
@@ -4180,16 +5095,12 @@ def _emit_cron_event(payload: dict) -> None:
                 "autonomous": is_autonomous,
                 "system_job": system_job,
                 "todoist_task_id": str(job_metadata.get("todoist_task_id") or ""),
-                "report_api_url": str((markdown_payload or {}).get("api_url") or ""),
-                "report_storage_href": str((markdown_payload or {}).get("storage_href") or ""),
-                "report_json_api_url": str((json_payload or {}).get("api_url") or ""),
-                "report_relative_path": str((markdown_payload or {}).get("relative_path") or ""),
-                "report_counts": (
-                    dict(briefing_payload.get("counts") or {})
-                    if isinstance(briefing_payload.get("counts"), dict)
-                    else {}
-                ),
             },
+        )
+        _maybe_wake_heartbeat_after_autonomous_cron(
+            run_status=run_status,
+            is_autonomous=is_autonomous,
+            reason=f"cron_autonomous_run:{job_id or run_id or 'unknown'}",
         )
     event = {
         "type": event_type,
@@ -4224,10 +5135,93 @@ def _emit_heartbeat_event(payload: dict) -> None:
                     "sent": bool(payload.get("sent")),
                     "guard_reason": str(payload.get("guard_reason") or ""),
                     "guard": payload.get("guard") if isinstance(payload.get("guard"), dict) else {},
+                    "heartbeat_interval_source": str(payload.get("heartbeat_interval_source") or ""),
+                    "heartbeat_effective_interval_seconds": int(
+                        payload.get("heartbeat_effective_interval_seconds") or 0
+                    ),
+                    "task_hub_claimed_count": int(payload.get("task_hub_claimed_count") or 0),
+                    "task_hub_completed_count": int(payload.get("task_hub_completed_count") or 0),
+                    "task_hub_review_count": int(payload.get("task_hub_review_count") or 0),
+                    "task_hub_reopened_count": int(payload.get("task_hub_reopened_count") or 0),
+                    "task_hub_retry_exhausted_count": int(payload.get("task_hub_retry_exhausted_count") or 0),
                     "heartbeat_artifacts": heartbeat_artifact_links,
                     "heartbeat_artifact_count": len(heartbeat_artifact_links),
                 },
             )
+
+
+def _autonomous_cron_to_heartbeat_enabled() -> bool:
+    return str(os.getenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _task_hub_has_dispatch_eligible_items() -> bool:
+    if not _task_hub_enabled():
+        return False
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            task_hub.rebuild_dispatch_queue(conn)
+            queue = task_hub.get_dispatch_queue(conn, limit=1)
+            return int(queue.get("eligible_total") or 0) > 0
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+
+def _maybe_wake_heartbeat_after_autonomous_cron(*, run_status: str, is_autonomous: bool, reason: str) -> None:
+    if not _heartbeat_service:
+        return
+    if not is_autonomous:
+        return
+    if str(run_status or "").strip().lower() != "success":
+        return
+    if not _autonomous_cron_to_heartbeat_enabled():
+        return
+    if not _task_hub_has_dispatch_eligible_items():
+        return
+
+    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during autonomous cron wake sweep", sid)
+
+    for session_id in sorted(target_sessions):
+        _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
+    if target_sessions:
+        logger.info(
+            "Autonomous cron coupling queued heartbeat-next for %s sessions (dispatch eligible).",
+            len(target_sessions),
+        )
+
+
+def _queue_heartbeat_next_for_all_sessions(*, reason: str) -> int:
+    if not _heartbeat_service:
+        return 0
+    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during heartbeat queue sweep", sid)
+    for session_id in sorted(target_sessions):
+        _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
+    return len(target_sessions)
 
 
 def _cron_wake_callback(session_id: str, mode: str, reason: str) -> None:
@@ -4488,6 +5482,39 @@ async def _vp_event_bridge_loop() -> None:
             continue
 
 
+async def _factory_staleness_enforcement_loop(stop_event: asyncio.Event) -> None:
+    """Periodically mark stale/offline factory registrations."""
+    _staleness_interval = 60.0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_staleness_interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        if _factory_registry is not None:
+            try:
+                _factory_registry.enforce_staleness()
+            except Exception as exc:
+                logger.warning("Factory staleness enforcement failed: %s", exc)
+
+
+async def _hq_self_heartbeat_loop(stop_event: asyncio.Event) -> None:
+    """Periodically refresh HQ's own factory registration so it stays 'online'."""
+    _hq_heartbeat_interval = 60.0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_hq_heartbeat_interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            _register_local_factory_presence()
+        except Exception as exc:
+            logger.warning("HQ self-heartbeat failed: %s", exc)
+
+
 def _activity_json_dumps(value: Any, *, fallback: str = "{}") -> str:
     try:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -4516,6 +5543,27 @@ def _activity_summary_text(text: str, *, max_chars: int = 240) -> str:
     if len(compact) <= max_chars:
         return compact
     return f"{compact[: max_chars - 3]}..."
+
+
+def _compact_csi_notification_message(text: str, *, max_chars: int = 1800) -> str:
+    """Trim high-volume CSI payload sections for dashboard readability."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    trimmed = raw
+    cut_idx: Optional[int] = None
+    for marker in ("\nspecialist_followup_policy:", "\nsubject_json:"):
+        idx = trimmed.find(marker)
+        if idx < 0:
+            continue
+        if cut_idx is None or idx < cut_idx:
+            cut_idx = idx
+    if cut_idx is not None:
+        trimmed = trimmed[:cut_idx].rstrip()
+    trimmed = re.sub(r"\n{3,}", "\n\n", trimmed).strip()
+    if len(trimmed) <= max_chars:
+        return trimmed
+    return f"{trimmed[: max_chars - 3]}..."
 
 
 def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None) -> str:
@@ -4755,6 +5803,8 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE csi_specialist_loops ADD COLUMN suppressed_until TEXT"
         )
+    # Task hub tables share the activity DB operational plane.
+    task_hub.ensure_schema(conn)
     conn.commit()
 
 
@@ -5732,8 +6782,8 @@ async def _csi_dispatch_specialist_followup(
         {
             "kind": "agent",
             "name": "CSITrendFollowUpRequest",
-            "session_key": "csi_trend_specialist",
-            "to": "trend-specialist",
+            "session_key": "csi_trend_analyst",
+            "to": "csi-trend-analyst",
             "message": message,
             "timeout_seconds": int(max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))),
         }
@@ -6311,8 +7361,11 @@ def _activity_digest_should_compact(
     if event_type in {
         "rss_trend_report",
         "reddit_trend_report",
+        "threads_trend_report",
         "rss_insight_daily",
         "rss_insight_emerging",
+        "global_trend_brief_ready",
+        "csi_global_brief_review_due",
         "report_product_ready",
         "opportunity_bundle_ready",
     }:
@@ -6413,6 +7466,37 @@ def _add_notification(
     summary_text = summary
     full_message_text = full_message if full_message is not None else message
     timestamp = _normalize_notification_timestamp(created_at)
+
+    # Idempotency for repeated ingest/replay of the same source event.
+    event_id = str(metadata_obj.get("event_id") or "").strip()
+    if event_id:
+        kind_norm = str(kind or "").strip().lower()
+        for existing in reversed(_notifications):
+            if str(existing.get("kind") or "").strip().lower() != kind_norm:
+                continue
+            existing_meta = existing.get("metadata")
+            if not isinstance(existing_meta, dict):
+                continue
+            if str(existing_meta.get("event_id") or "").strip() != event_id:
+                continue
+            existing["title"] = title
+            existing["summary"] = summary_text if summary_text is not None else _activity_summary_text(message)
+            existing["full_message"] = full_message_text
+            existing["message"] = full_message_text
+            existing["session_id"] = session_id
+            existing["severity"] = severity
+            existing["requires_action"] = requires_action
+            existing["status"] = "new"
+            existing["updated_at"] = _utc_now_iso()
+            existing["metadata"] = {
+                **existing_meta,
+                **metadata_obj,
+                "source_domain": _activity_source_domain(str(kind or ""), metadata_obj),
+            }
+            _replace_notification_cache_record(existing)
+            _persist_notification_activity(existing)
+            return existing
+
     source_domain = _activity_source_domain(str(kind or ""), metadata_obj)
     should_compact = _activity_digest_should_compact(
         kind=str(kind or ""),
@@ -6661,6 +7745,100 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
     except Exception as exc:
         logger.warning("Failed to read heartbeat_state.json: %s", exc)
         return None
+
+
+def _heartbeat_interval_source_label() -> str:
+    if str(os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip():
+        return "UA_HEARTBEAT_INTERVAL"
+    if str(os.getenv("UA_HEARTBEAT_EVERY") or "").strip():
+        return "UA_HEARTBEAT_EVERY"
+    return "default"
+
+
+def _heartbeat_runtime_interval_config() -> dict[str, Any]:
+    interval_raw = _resolve_hb_interval_env(prefer_interval=True) or ""
+    min_interval_seconds = _resolve_hb_min_interval_seconds(default=HEARTBEAT_MIN_INTERVAL_SECONDS)
+    configured_every_seconds = _parse_heartbeat_duration_seconds(
+        interval_raw or None,
+        HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
+    )
+    effective_default_every_seconds = max(
+        min_interval_seconds,
+        int(configured_every_seconds or HEARTBEAT_DEFAULT_INTERVAL_SECONDS),
+    )
+    return {
+        "configured_every_seconds": int(configured_every_seconds),
+        "min_interval_seconds": int(min_interval_seconds),
+        "effective_default_every_seconds": int(effective_default_every_seconds),
+        "interval_source": _heartbeat_interval_source_label(),
+    }
+
+
+def _cron_interval_seconds() -> Optional[int]:
+    if not _cron_service:
+        return None
+    try:
+        jobs = _cron_service.list_jobs()
+    except Exception:
+        return None
+    autonomous_intervals = [
+        int(getattr(job, "every_seconds", 0) or 0)
+        for job in jobs
+        if int(getattr(job, "every_seconds", 0) or 0) > 0
+        and isinstance(getattr(job, "metadata", None), dict)
+        and bool((getattr(job, "metadata", {}) or {}).get("autonomous"))
+    ]
+    if autonomous_intervals:
+        return min(autonomous_intervals)
+    all_intervals = [int(getattr(job, "every_seconds", 0) or 0) for job in jobs if int(getattr(job, "every_seconds", 0) or 0) > 0]
+    if all_intervals:
+        return min(all_intervals)
+    return None
+
+
+def _heartbeat_runtime_snapshot() -> dict[str, Any]:
+    interval_cfg = _heartbeat_runtime_interval_config()
+    configured_every_seconds = int(interval_cfg.get("configured_every_seconds") or HEARTBEAT_DEFAULT_INTERVAL_SECONDS)
+    min_interval_seconds = int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS)
+    effective_default_every_seconds = int(
+        interval_cfg.get("effective_default_every_seconds") or HEARTBEAT_DEFAULT_INTERVAL_SECONDS
+    )
+    sessions = get_gateway().list_sessions()
+    latest_last_run = 0.0
+    nearest_next_run = 0.0
+    active_state_count = 0
+    for session in sessions:
+        state = _read_heartbeat_state(str(session.workspace_dir))
+        if not isinstance(state, dict):
+            continue
+        active_state_count += 1
+        try:
+            last_run = float(state.get("last_run") or 0.0)
+        except Exception:
+            last_run = 0.0
+        try:
+            next_run = float(state.get("next_run") or 0.0)
+        except Exception:
+            next_run = 0.0
+        if last_run > latest_last_run:
+            latest_last_run = last_run
+        if next_run > 0.0 and (nearest_next_run <= 0.0 or next_run < nearest_next_run):
+            nearest_next_run = next_run
+
+    return {
+        "enabled": bool(HEARTBEAT_ENABLED),
+        "configured_every_seconds": int(configured_every_seconds),
+        "min_interval_seconds": int(min_interval_seconds),
+        "effective_default_every_seconds": int(effective_default_every_seconds),
+        "cron_interval_seconds": _cron_interval_seconds(),
+        "heartbeat_effective_interval_seconds": int(effective_default_every_seconds),
+        "heartbeat_interval_source": str(interval_cfg.get("interval_source") or "default"),
+        "session_count": len(sessions),
+        "session_state_count": active_state_count,
+        "busy_sessions": int(len(_heartbeat_service.busy_sessions) if _heartbeat_service else 0),
+        "latest_last_run_epoch": latest_last_run if latest_last_run > 0 else None,
+        "nearest_next_run_epoch": nearest_next_run if nearest_next_run > 0 else None,
+    }
 
 
 def _calendar_timezone_or_default(value: Optional[str]) -> str:
@@ -7140,7 +8318,7 @@ def _calendar_project_cron_events(
                 "source": "cron",
                 "source_ref": str(job.job_id),
                 "owner_id": str(job.user_id),
-                "session_id": str(metadata.get("session_id") or workspace_session_id or ""),
+                "session_id": str(workspace_session_id or metadata.get("session_id") or ""),
                 "channel": str(metadata.get("channel") or "cron"),
                 "title": str(metadata.get("title") or f"Chron: {str(job.command)[:40]}"),
                 "description": str(job.command),
@@ -7163,6 +8341,8 @@ def _calendar_project_cron_events(
             if matched_run:
                 event["run_status"] = matched_run.get("status")
                 event["run_id"] = matched_run.get("run_id")
+                if matched_run.get("session_id"):
+                    event["session_id"] = str(matched_run["session_id"])
             if status_value == "missed":
                 if scheduled_at < (now_ts - 48 * 3600):
                     continue
@@ -7274,6 +8454,11 @@ def _calendar_project_heartbeat_events(
     if not _ops_service:
         return [], []
     now_ts = time.time()
+    interval_cfg = _heartbeat_runtime_interval_config()
+    heartbeat_min_seconds = int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS)
+    heartbeat_default_seconds = int(
+        interval_cfg.get("effective_default_every_seconds") or HEARTBEAT_DEFAULT_INTERVAL_SECONDS
+    )
     events: list[dict[str, Any]] = []
     always_running: list[dict[str, Any]] = []
     for summary in _ops_service.list_sessions(status_filter="all"):
@@ -7295,12 +8480,12 @@ def _calendar_project_heartbeat_events(
         if _heartbeat_service:
             schedule = _heartbeat_service._resolve_schedule(overrides)  # type: ignore[attr-defined]
             delivery = _heartbeat_service._resolve_delivery(overrides, session_id)  # type: ignore[attr-defined]
-            every_seconds = int(getattr(schedule, "every_seconds", HEARTBEAT_INTERVAL_SECONDS) or HEARTBEAT_INTERVAL_SECONDS)
+            every_seconds = int(getattr(schedule, "every_seconds", heartbeat_default_seconds) or heartbeat_default_seconds)
             delivery_mode = str(getattr(delivery, "mode", "last") or "last")
         else:
-            every_seconds = HEARTBEAT_INTERVAL_SECONDS
+            every_seconds = heartbeat_default_seconds
             delivery_mode = "last"
-        every_seconds = max(HEARTBEAT_INTERVAL_SECONDS, every_seconds)
+        every_seconds = max(heartbeat_min_seconds, every_seconds)
 
         hb_state = _read_heartbeat_state(workspace_dir) or {}
         last_run = float(hb_state.get("last_run") or 0.0)
@@ -7456,7 +8641,8 @@ def _calendar_apply_heartbeat_interval(session_id: str, every_seconds: int) -> d
     workspace = WORKSPACES_DIR / session_id
     if not workspace.exists():
         raise HTTPException(status_code=404, detail="Session not found")
-    normalized_seconds = max(HEARTBEAT_INTERVAL_SECONDS, int(every_seconds))
+    interval_cfg = _heartbeat_runtime_interval_config()
+    normalized_seconds = max(int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS), int(every_seconds))
     existing = _calendar_read_heartbeat_overrides(str(workspace))
     merged = _calendar_merge_dict(existing, {"heartbeat": {"every_seconds": normalized_seconds}})
     path = _calendar_write_heartbeat_overrides(session_id, merged)
@@ -7540,10 +8726,12 @@ def _calendar_create_change_proposal(
         else:
             every_seconds = _calendar_interval_seconds_from_text(lower)
             if every_seconds is not None:
-                normalized_seconds = max(HEARTBEAT_INTERVAL_SECONDS, int(every_seconds))
+                interval_cfg = _heartbeat_runtime_interval_config()
+                min_interval_seconds = int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS)
+                normalized_seconds = max(min_interval_seconds, int(every_seconds))
                 if normalized_seconds != int(every_seconds):
                     warnings.append(
-                        f"Heartbeat interval is capped to >= {HEARTBEAT_INTERVAL_SECONDS} seconds (30 minutes) to prevent runaway scheduling."
+                        f"Heartbeat interval is capped to >= {min_interval_seconds} seconds based on runtime policy."
                     )
                 operation = {"type": "heartbeat_set_interval", "every_seconds": normalized_seconds}
                 summary = f"Set heartbeat interval to every {normalized_seconds} seconds"
@@ -7650,7 +8838,19 @@ async def _calendar_apply_event_action(
                 "path": f"/api/v1/ops/logs/tail?path=cron_runs.jsonl",
             }
         if action_norm == "open_session":
-            session_id = str((job.metadata or {}).get("session_id") or "")
+            _source, _ref, scheduled_at_int = _calendar_parse_event_id(event_id)
+            runs = _cron_service.list_runs(limit=2000)
+            matched = _calendar_match_cron_run(
+                [r for r in runs if str(r.get("job_id") or "") == source_ref], float(scheduled_at_int)
+            )
+            ws_dir = str(getattr(job, "workspace_dir", "") or "")
+            ws_session_id = Path(ws_dir).name if ws_dir else ""
+            session_id = str(
+                (matched or {}).get("session_id")
+                or ws_session_id
+                or (job.metadata or {}).get("session_id")
+                or ""
+            )
             return {"status": "ok", "action": action_norm, "session_id": session_id}
 
     if source == "heartbeat":
@@ -7985,6 +9185,7 @@ def is_user_allowed(user_id: str) -> bool:
         "webhook",
         "user_ui",
         "user_cli",
+        "owner_primary",
         "ops_tutorial_review",
         "cron_system",
         "ops:system-configuration-agent",
@@ -8061,12 +9262,12 @@ def _require_delegation_consume_allowed() -> None:
 
 
 def _require_headquarters_role_for_fleet() -> None:
-    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+    if not _FACTORY_POLICY.is_headquarters:
         raise HTTPException(
             status_code=403,
             detail=(
                 "Factory registration endpoints are only available for "
-                f"FACTORY_ROLE={FactoryRole.HEADQUARTERS.value}"
+                f"FACTORY_ROLE={_FACTORY_POLICY.role}"
             ),
         )
 
@@ -8234,6 +9435,14 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _refresh_runtime_feature_flags_from_env() -> None:
+    """Re-evaluate feature flags after runtime secret bootstrap."""
+    global HEARTBEAT_ENABLED, CRON_ENABLED, MEMORY_INDEX_ENABLED
+    HEARTBEAT_ENABLED = heartbeat_enabled()
+    CRON_ENABLED = cron_enabled()
+    MEMORY_INDEX_ENABLED = memory_index_enabled()
+
+
 # =============================================================================
 # Lifespan
 # =============================================================================
@@ -8242,15 +9451,52 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _FACTORY_POLICY, _delegation_mission_bus
+    process_heartbeat.start()
+    logger.info("🚀 Universal Agent Gateway Server starting...")
+    logger.info("Lifespan: Resolving bootstrap state...")
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
     _FACTORY_POLICY = bootstrap_state.policy
+    _refresh_runtime_feature_flags_from_env()
     _refresh_ops_auth_config_from_env()
     _maybe_instrument_logfire_fastapi()
 
-    process_heartbeat.start()
-    logger.info("🚀 Universal Agent Gateway Server starting...")
-    logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
-    logger.info("🏭 Factory role resolved: %s (gateway_mode=%s)", _FACTORY_POLICY.role, _FACTORY_POLICY.gateway_mode)
+    logger.info("Lifespan: Probing Todoist token health...")
+    # Probe Todoist token health at startup so failures are discovered immediately.
+    _todoist_startup_token = (
+        (os.getenv("TODOIST_API_TOKEN") or "").strip()
+        or (os.getenv("TODOIST_API_KEY") or "").strip()
+    )
+    if _todoist_startup_token:
+        try:
+            from universal_agent.services.todoist_service import TodoService
+            _td_ok, _td_err = TodoService(api_token=_todoist_startup_token).verify_token()
+            if _td_ok:
+                logger.info("✅ Todoist token verified successfully at startup")
+            else:
+                logger.warning("⚠️ Todoist token probe failed at startup: %s", _td_err)
+                if "auth_failure" in _td_err:
+                    _add_notification(
+                        kind="system_error",
+                        title="Todoist Auth Failed — Token Invalid at Startup",
+                        message=(
+                            "The Todoist API token (TODOIST_API_TOKEN) was rejected with 401/403 "
+                            "at gateway startup. Regenerate the token at "
+                            "https://app.todoist.com/app/settings/integrations/developer "
+                            "and update TODOIST_API_TOKEN in Infisical, then restart the gateway."
+                        ),
+                        severity="error",
+                        metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
+                    )
+                elif "rate_limited" in _td_err:
+                    logger.info("Todoist rate-limited at startup probe; will retry normally on first CSI write")
+        except Exception as _td_exc:
+            logger.debug("Todoist startup probe skipped (service unavailable): %s", _td_exc)
+    else:
+        logger.info("ℹ️ TODOIST_API_TOKEN/TODOIST_API_KEY not set — Todoist sync will be skipped")
+
+    logger.info("Lifespan: Initializing Redis delegation bus...")
+
+
 
     _delegation_mission_bus = None
     _delegation_metrics["connected"] = False
@@ -8276,7 +9522,24 @@ async def lifespan(app: FastAPI):
             _delegation_metrics["last_error"] = str(exc)
             logger.warning("Delegation Redis bus unavailable; falling back to http queue: %s", exc)
 
+    # Initialize SQLite-backed factory registry (survives gateway restarts)
+    global _factory_registry, _factory_staleness_task, _factory_staleness_stop
+    global _hq_self_heartbeat_task, _hq_self_heartbeat_stop
+    try:
+        _registry_conn = connect_registry_db()
+        _factory_registry = FactoryRegistry(_registry_conn)
+        # Migrate any registrations that were inserted before lifespan (unlikely but safe)
+        with _factory_registration_lock:
+            for _fid, _frec in _factory_registrations.items():
+                _factory_registry.upsert(_frec, source=str(_frec.get("source", "migrated")))
+            _factory_registrations.clear()
+        logger.info("🗄️ Factory registry initialized (SQLite-backed, persistent)")
+    except Exception as exc:
+        logger.warning("Factory registry SQLite init failed, using in-memory fallback: %s", exc)
+        _factory_registry = None
+
     _register_local_factory_presence()
+    _cleanup_legacy_factory_registrations()
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
@@ -8300,7 +9563,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher
+    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     global _todoist_chron_reconcile_task, _todoist_chron_reconcile_stop_event
     if HEARTBEAT_ENABLED:
@@ -8312,6 +9575,15 @@ async def lifespan(app: FastAPI):
             event_sink=_emit_heartbeat_event,
         )
         await _heartbeat_service.start()
+        try:
+            seeded = 0
+            for existing_session in get_gateway().list_sessions():
+                _heartbeat_service.register_session(existing_session)
+                seeded += 1
+            if seeded > 0:
+                logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
+        except Exception as exc:
+            logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
@@ -8384,6 +9656,37 @@ async def lifespan(app: FastAPI):
     )
     await _yt_playlist_watcher.start()
 
+    # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
+    async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_payload(
+            subpath=subpath, payload=payload, headers={"x-ua-source": "gws_event_listener"}
+        )
+
+    _gws_event_listener = GwsEventListener(
+        dispatch_fn=_gws_event_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    await _gws_event_listener.start()
+
+    # --- AgentMail Service (Simone's native inbox) ---
+    global _agentmail_service
+
+    async def _agentmail_dispatch_fn(action_payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_action(action_payload)
+
+    _agentmail_service = AgentMailService(
+        dispatch_fn=_agentmail_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    try:
+        await _agentmail_service.startup()
+    except Exception:
+        logger.exception("Failed starting AgentMail service")
+
     try:
         recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
     except Exception:
@@ -8424,6 +9727,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("⏸️ VP event bridge disabled (UA_VP_EVENT_BRIDGE_ENABLED)")
 
+    # --- Factory staleness enforcement (marks stale/offline registrations) ---
+    if _factory_registry is not None:
+        _factory_staleness_stop = asyncio.Event()
+        _factory_staleness_task = asyncio.create_task(
+            _factory_staleness_enforcement_loop(_factory_staleness_stop)
+        )
+        logger.info("🏭 Factory staleness enforcement enabled (interval=60s)")
+
+    # --- HQ self-heartbeat (keeps HQ's own registration fresh) ---
+    _hq_self_heartbeat_stop = asyncio.Event()
+    _hq_self_heartbeat_task = asyncio.create_task(
+        _hq_self_heartbeat_loop(_hq_self_heartbeat_stop)
+    )
+    logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
+
     yield
     
     # Cleanup
@@ -8445,8 +9763,26 @@ async def lifespan(app: FastAPI):
             pass
         _todoist_chron_reconcile_task = None
     _todoist_chron_reconcile_stop_event = None
+    if _factory_staleness_stop is not None:
+        _factory_staleness_stop.set()
+    if _factory_staleness_task is not None:
+        try:
+            await _factory_staleness_task
+        except Exception:
+            pass
+    if _hq_self_heartbeat_stop is not None:
+        _hq_self_heartbeat_stop.set()
+    if _hq_self_heartbeat_task is not None:
+        try:
+            await _hq_self_heartbeat_task
+        except Exception:
+            pass
     if _yt_playlist_watcher:
         await _yt_playlist_watcher.stop()
+    if _gws_event_listener:
+        await _gws_event_listener.stop()
+    if _agentmail_service:
+        await _agentmail_service.shutdown()
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:
@@ -8567,10 +9903,10 @@ async def hooks_readyz():
 
 @app.post("/auth/ops-token", response_model=OpsTokenIssueResponse)
 async def issue_ops_token_endpoint(request: Request, payload: OpsTokenIssueRequest):
-    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+    if not _FACTORY_POLICY.is_headquarters:
         raise HTTPException(
             status_code=403,
-            detail=f"/auth/ops-token is only available for FACTORY_ROLE={FactoryRole.HEADQUARTERS.value}",
+            detail=f"/auth/ops-token is only available for FACTORY_ROLE={_FACTORY_POLICY.role}",
         )
     _require_ops_token_issuance_auth(request)
     if not OPS_JWT_SECRET:
@@ -8608,6 +9944,10 @@ async def signals_ingest_endpoint(request: Request):
         dispatch_count = 0
         analytics_dispatch_count = 0
         analytics_throttled_count = 0
+        recommendation_task_count = 0
+        recommendation_agent_task_count = 0
+        recommendation_human_task_count = 0
+        recommendation_human_notice_count = 0
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
             if manual_payload:
@@ -8663,12 +10003,12 @@ async def signals_ingest_endpoint(request: Request):
             _report_key = str(subject_obj.get("report_key") or "").strip()
             _artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else None
             _source = str(event.source or "").strip()
+            _source_mix: dict[str, int] = {}
 
             # Packet 16: compute report quality score
             _quality_result: dict[str, Any] | None = None
             try:
                 from universal_agent.csi_quality_score import score_report_quality
-                _source_mix: dict[str, int] = {}
                 for opp in (subject_obj.get("opportunities") or []):
                     if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
                         for k, v in opp["source_mix"].items():
@@ -8690,6 +10030,7 @@ async def signals_ingest_endpoint(request: Request):
                 "report_key": _report_key or None,
                 "artifact_paths": _artifact_paths,
                 "quality": _quality_result,
+                "source_mix": _source_mix,
                 "notification_policy": {
                     "high_value": bool(policy.get("high_value")),
                     "has_anomaly": bool(policy.get("has_anomaly")),
@@ -8759,7 +10100,12 @@ async def signals_ingest_endpoint(request: Request):
                         if first_command:
                             metadata["primary_runbook_command"] = first_command
 
+            notification_detail = _compact_csi_notification_message(message)
             full_signal_message = (
+                "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
+                f"{notification_detail}"
+            )
+            full_signal_message_raw = (
                 "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
                 f"{message}"
             )
@@ -8777,8 +10123,8 @@ async def signals_ingest_endpoint(request: Request):
                     metadata=metadata,
                     created_at=event.occurred_at or event.received_at,
                 )
-            _csi_emit_specialist_synthesis(event, full_signal_message)
-            loop_state = _csi_update_specialist_loop(event, full_signal_message)
+            _csi_emit_specialist_synthesis(event, full_signal_message_raw)
+            loop_state = _csi_update_specialist_loop(event, full_signal_message_raw)
             if loop_state.get("updated"):
                 for alert in loop_state.get("quality_alerts", []) if isinstance(loop_state.get("quality_alerts"), list) else []:
                     if not isinstance(alert, dict):
@@ -8861,8 +10207,8 @@ async def signals_ingest_endpoint(request: Request):
                     followup_payload = {
                         "kind": "agent",
                         "name": "CSITrendFollowUpRequest",
-                        "session_key": "csi_trend_specialist",
-                        "to": "trend-specialist",
+                        "session_key": "csi_trend_analyst",
+                        "to": "csi-trend-analyst",
                         "message": str(loop_state.get("followup_message") or ""),
                         "timeout_seconds": int(
                             max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))
@@ -8894,10 +10240,170 @@ async def signals_ingest_endpoint(request: Request):
                         created_at=event.occurred_at or event.received_at,
                     )
 
-            # Create Todoist task when credentials are configured. Missing credentials
-            # are treated as a sync skip, not a system error.
-            if not bool(policy.get("todoist_sync")):
+            # Internal-first task hub write (source of truth).
+            project_key = classify_csi_project_key(
+                event_type=event_type_norm,
+                subject=subject_obj,
+                quality=_quality_result,
+                source_mix=_source_mix,
+            )
+            incident_key = _csi_incident_key(
+                event_id=str(getattr(event, "event_id", "") or ""),
+                event_type=event_type_norm,
+                source=_source,
+                subject_obj=subject_obj if isinstance(subject_obj, dict) else {},
+            )
+            mirror_class = _task_hub_mirror_class_for_csi(
+                event_type=event_type_norm,
+                has_anomaly=bool(policy.get("has_anomaly")),
+                high_value=bool(policy.get("high_value")),
+                requires_action=bool(policy.get("requires_action")),
+            )
+            csi_labels = ["CSI", f"csi-project:{project_key}", "agent-ready"]
+            must_complete = bool(
+                event_type_norm in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}
+            )
+            if must_complete:
+                csi_labels.append("must-complete")
+
+            mirror_policy: dict[str, Any] = dict(task_hub.DEFAULT_MIRROR_POLICY)
+            should_mirror = False
+            hub_task_id = ""
+            human_recommendation_task_ids: list[str] = []
+            human_recommendation_preview: list[str] = []
+            should_enqueue_task = _task_hub_enabled() and _should_enqueue_csi_task(
+                event_type=event_type_norm,
+                policy=policy,
+            )
+            if not should_enqueue_task:
                 continue
+            with _activity_store_lock:
+                hub_conn = _task_hub_open_conn()
+                try:
+                    mirror_policy = task_hub.get_mirror_policy(hub_conn)
+                    should_mirror = _task_hub_should_mirror(mirror_policy, mirror_class)
+                    hub_item = task_hub.upsert_csi_item(
+                        hub_conn,
+                        event_id=str(getattr(event, "event_id", "") or ""),
+                        event_type=event_type_norm,
+                        source=_source,
+                        title=title,
+                        message=message,
+                        project_key=project_key,
+                        labels=csi_labels,
+                        priority=4 if must_complete else 3,
+                        incident_key=incident_key,
+                        must_complete=must_complete,
+                        mirror_status="mirror_eligible" if should_mirror else "internal_only",
+                    )
+                    hub_task_id = str(hub_item.get("task_id") or "")
+
+                    recommendation_items = _build_csi_recommendation_task_items(
+                        subject=subject_obj,
+                        event_type=event_type_norm,
+                        parent_task_id=hub_task_id,
+                        parent_title=title,
+                        project_key=project_key,
+                        must_complete=must_complete,
+                    )
+                    recommendation_ids: list[str] = []
+                    for recommendation_item in recommendation_items:
+                        task_hub.upsert_item(hub_conn, recommendation_item)
+                        recommendation_task_id = str(recommendation_item.get("task_id") or "")
+                        recommendation_ids.append(recommendation_task_id)
+                        recommendation_task_count += 1
+                        if bool(recommendation_item.get("agent_ready")):
+                            recommendation_agent_task_count += 1
+                        else:
+                            recommendation_human_task_count += 1
+                            if recommendation_task_id:
+                                human_recommendation_task_ids.append(recommendation_task_id)
+                            recommendation_meta = recommendation_item.get("metadata")
+                            if isinstance(recommendation_meta, dict):
+                                recommendation_text = str(recommendation_meta.get("recommendation_text") or "").strip()
+                                if recommendation_text:
+                                    human_recommendation_preview.append(recommendation_text)
+
+                    if recommendation_ids:
+                        task_hub.upsert_item(
+                            hub_conn,
+                            {
+                                "task_id": hub_task_id,
+                                "metadata": {
+                                    "recommendation_task_ids": recommendation_ids,
+                                    "recommendation_count": len(recommendation_ids),
+                                    "recommendation_agent_count": sum(
+                                        1 for item in recommendation_items if bool(item.get("agent_ready"))
+                                    ),
+                                    "recommendation_human_count": sum(
+                                        1 for item in recommendation_items if not bool(item.get("agent_ready"))
+                                    ),
+                                },
+                            },
+                        )
+                        if str(os.getenv("UA_CSI_RECOMMENDATION_AUTO_PARK_REMOVED", "1")).strip().lower() in {
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                        }:
+                            placeholders = ",".join("?" for _ in recommendation_ids)
+                            park_sql = (
+                                "UPDATE task_hub_items "
+                                "SET status=?, stale_state=?, seizure_state='unseized', updated_at=? "
+                                "WHERE source_kind='csi_recommendation' "
+                                "AND parent_task_id=? "
+                                "AND status IN ('open', 'blocked', 'needs_review') "
+                                f"AND task_id NOT IN ({placeholders})"
+                            )
+                            params: list[Any] = [
+                                task_hub.TASK_STATUS_PARKED,
+                                "superseded_recommendation",
+                                datetime.now(timezone.utc).isoformat(),
+                                hub_task_id,
+                                *recommendation_ids,
+                            ]
+                            hub_conn.execute(park_sql, tuple(params))
+                            hub_conn.commit()
+                finally:
+                    hub_conn.close()
+
+            if human_recommendation_task_ids:
+                preview_lines = []
+                for text in human_recommendation_preview[:5]:
+                    preview_lines.append(f"- {text}")
+                preview_block = "\n".join(preview_lines)
+                if len(human_recommendation_preview) > len(preview_lines):
+                    preview_block += (
+                        f"\n- (+{len(human_recommendation_preview) - len(preview_lines)} more)"
+                    )
+                _add_notification(
+                    kind="csi_human_action_required",
+                    title="CSI Human Action Required",
+                    message=(
+                        f"CSI surfaced {len(human_recommendation_task_ids)} recommendation task(s) "
+                        "that require human attention.\n\n"
+                        f"{preview_block}\n\n"
+                        "Open Personal Queue: /dashboard/todolist?mode=personal&focus=human-tasks"
+                    ),
+                    severity="warning",
+                    requires_action=True,
+                    metadata={
+                        "event_id": str(getattr(event, "event_id", "") or ""),
+                        "event_type": event_type_norm,
+                        "source": _source,
+                        "task_hub_parent_task_id": hub_task_id,
+                        "task_hub_human_task_ids": human_recommendation_task_ids,
+                        "focus_href": "/dashboard/todolist?mode=personal&focus=human-tasks",
+                    },
+                    created_at=event.occurred_at or event.received_at,
+                )
+                recommendation_human_notice_count += 1
+
+            # Mirror to Todoist only when both event and mirror policy allow it.
+            if (not bool(policy.get("todoist_sync"))) or (not should_mirror):
+                continue
+
             has_api_key = bool((os.getenv("TODOIST_API_KEY") or "").strip())
             has_api_token = bool((os.getenv("TODOIST_API_TOKEN") or "").strip())
             if not (has_api_key or has_api_token):
@@ -8920,41 +10426,156 @@ async def signals_ingest_endpoint(request: Request):
                         severity="info",
                         metadata={"integration": "todoist", "reason": "credentials_missing"},
                     )
-            else:
-                try:
-                    from universal_agent.services.todoist_service import TodoService
+                continue
 
-                    todoist = TodoService()
-                    todoist.create_task(
-                        content=title,
-                        description=f"{message}\n\nReview in CSI Dashboard Tab.",
-                        labels=["CSI"],
-                        priority="high",
-                        project_key="csi",
-                    )
-                except Exception as exc:
-                    exc_str = str(exc)
-                    is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
-                    if is_limit:
-                        logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
-                        if not _has_recent_notification(
-                            kind="system_notice",
-                            metadata_match={"integration": "todoist", "reason": "items_limit_reached"},
-                            within_seconds=3600,
-                        ):
-                            _add_notification(
-                                kind="system_notice",
-                                title="Todoist CSI Project Full",
-                                message=(
-                                    "The 'UA: CSI Actions' Todoist project has reached its item limit. "
-                                    "Complete or delete old tasks to resume syncing. "
-                                    "New CSI signals are still visible in the CSI Feed tab."
-                                ),
-                                severity="warning",
-                                metadata={"integration": "todoist", "reason": "items_limit_reached"},
+            try:
+                from universal_agent.services.todoist_service import TodoService
+
+                existing_todoist_task_id = ""
+                if hub_task_id:
+                    with _activity_store_lock:
+                        hub_conn = _task_hub_open_conn()
+                        try:
+                            row = hub_conn.execute(
+                                "SELECT todoist_task_id FROM task_hub_mirror_map WHERE task_id = ? LIMIT 1",
+                                (hub_task_id,),
+                            ).fetchone()
+                            existing_todoist_task_id = str((row["todoist_task_id"] if row else "") or "").strip()
+                        finally:
+                            hub_conn.close()
+
+                if existing_todoist_task_id:
+                    continue
+
+                todoist = TodoService()
+                section_by_project = {
+                    "immediate": "immediate",
+                    "proactive": "inbox",
+                }
+                created = todoist.create_task(
+                    content=title,
+                    description=f"{message}\n\nReview in CSI Dashboard Tab.",
+                    labels=["CSI", f"csi-project:{project_key}"],
+                    priority="high",
+                    section=section_by_project.get(project_key, "background"),
+                    project_key=project_key,
+                )
+                if hub_task_id:
+                    todoist_task_id = str((created or {}).get("id") or "").strip()
+                    with _activity_store_lock:
+                        hub_conn = _task_hub_open_conn()
+                        try:
+                            task_hub.upsert_mirror_map(
+                                hub_conn,
+                                task_id=hub_task_id,
+                                todoist_task_id=todoist_task_id or None,
+                                mirror_class=mirror_class,
+                                mirror_state="synced" if todoist_task_id else "sync_unknown",
                             )
-                    else:
-                        logger.exception("Failed to create Todoist task for CSI signal")
+                        finally:
+                            hub_conn.close()
+            except Exception as exc:
+                if hub_task_id:
+                    with _activity_store_lock:
+                        hub_conn = _task_hub_open_conn()
+                        try:
+                            task_hub.upsert_mirror_map(
+                                hub_conn,
+                                task_id=hub_task_id,
+                                todoist_task_id=None,
+                                mirror_class=mirror_class,
+                                mirror_state="sync_failed",
+                                last_error=str(exc),
+                            )
+                        finally:
+                            hub_conn.close()
+                exc_str = str(exc)
+                is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
+                is_rate_limited = "429" in exc_str or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
+                is_forbidden = not is_rate_limited and any(s in exc_str for s in ("403", "Forbidden"))
+                is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "Unauthorized", "UNAUTHORIZED"))
+                if is_limit:
+                    logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_notice",
+                        metadata_match={"integration": "todoist", "reason": "items_limit_reached"},
+                        within_seconds=3600,
+                    ):
+                        _add_notification(
+                            kind="system_notice",
+                            title="Todoist CSI Project Full",
+                            message=(
+                                "The 'UA: CSI Actions' Todoist project has reached its item limit. "
+                                "Complete or delete old tasks to resume syncing. "
+                                "New CSI signals are still visible in the CSI Feed tab."
+                            ),
+                            severity="warning",
+                            metadata={"integration": "todoist", "reason": "items_limit_reached"},
+                        )
+                elif is_rate_limited:
+                    logger.warning("Todoist rate limit hit (429); backing off: %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_notice",
+                        metadata_match={"integration": "todoist", "reason": "rate_limited"},
+                        within_seconds=900,
+                    ):
+                        _add_notification(
+                            kind="system_notice",
+                            title="Todoist Rate Limit Hit",
+                            message=(
+                                "Todoist returned HTTP 429 (Too Many Requests). The CSI pipeline "
+                                "is generating more than 1000 Todoist API calls within a 15-minute "
+                                "window. Task sync will resume automatically. No action needed — "
+                                "CSI signals are still visible in the CSI Feed tab."
+                            ),
+                            severity="warning",
+                            metadata={"integration": "todoist", "reason": "rate_limited", "source_domain": "system"},
+                        )
+                elif is_auth:
+                    logger.warning("Todoist auth failure (401 — token may be invalid or revoked): %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_error",
+                        metadata_match={"integration": "todoist", "reason": "auth_failure"},
+                        within_seconds=3600,
+                    ):
+                        _add_notification(
+                            kind="system_error",
+                            title="Todoist Auth Failed — Token Needs Regeneration",
+                            message=(
+                                "Todoist API returned 401/403. The API token stored in Infisical "
+                                "is invalid or has been revoked. Personal API tokens can be "
+                                "regenerated at https://app.todoist.com/app/settings/integrations/developer "
+                                "— update TODOIST_API_TOKEN in Infisical and restart the gateway. "
+                                "CSI signals are still visible in the CSI Feed tab; only Todoist sync is affected."
+                            ),
+                            severity="error",
+                            metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
+                        )
+                elif is_forbidden:
+                    logger.warning("Todoist project/permission failure (403): %s", exc)
+                    if not _has_recent_notification(
+                        kind="system_notice",
+                        metadata_match={"integration": "todoist", "reason": "project_forbidden"},
+                        within_seconds=3600,
+                    ):
+                        _add_notification(
+                            kind="system_notice",
+                            title="Todoist Project Write Denied",
+                            message=(
+                                "Todoist returned HTTP 403 while writing to a configured UA project. "
+                                "The token is present, but the project may be read-only or inaccessible "
+                                "for writes. UA now routes writes to a writable fallback project."
+                            ),
+                            severity="warning",
+                            metadata={"integration": "todoist", "reason": "project_forbidden", "source_domain": "system"},
+                        )
+                else:
+                    logger.exception("Failed to create Todoist task for CSI signal")
+                    if not _has_recent_notification(
+                        kind="system_error",
+                        metadata_match={"integration": "todoist", "reason": "task_sync_failed"},
+                        within_seconds=1800,
+                    ):
                         debug_info = (
                             f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
                             f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
@@ -8971,29 +10592,45 @@ async def signals_ingest_endpoint(request: Request):
                             metadata={"integration": "todoist", "reason": "task_sync_failed"},
                         )
 
+
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
         if analytics_dispatch_count > 0:
             body["analytics_internal_dispatches"] = analytics_dispatch_count
         if analytics_throttled_count > 0:
             body["analytics_throttled"] = analytics_throttled_count
+        if recommendation_task_count > 0:
+            body["recommendation_tasks_enqueued"] = recommendation_task_count
+            body["recommendation_tasks_agent_ready"] = recommendation_agent_task_count
+            body["recommendation_tasks_human_queue"] = recommendation_human_task_count
+            body["recommendation_tasks_human_notices"] = recommendation_human_notice_count
+            wake_enabled = str(
+                os.getenv("UA_CSI_WAKE_HEARTBEAT_ON_ACTIONABLE_TASK", "1")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if wake_enabled and _task_hub_has_dispatch_eligible_items():
+                queued_sessions = _queue_heartbeat_next_for_all_sessions(
+                    reason="csi_actionable_recommendations",
+                )
+                if queued_sessions > 0:
+                    body["heartbeat_wake_queued_sessions"] = queued_sessions
     return JSONResponse(status_code=status_code, content=body)
 
 
 @app.post("/api/v1/youtube/ingest")
 async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
     """
-    Local worker endpoint for transcript ingestion.
+    YouTube transcript ingestion endpoint.
 
-    Intended usage:
-    - VPS control-plane forwards ingestion requests over Tailscale/reverse tunnel.
-    - Local worker performs YouTube transcript extraction from a residential IP.
+    Uses Webshare residential proxy by default to avoid datacenter IP bans.
+    Set UA_YOUTUBE_INGEST_REQUIRE_PROXY=0 only for local workstation development.
     """
     _require_youtube_ingest_auth(request)
 
     video_url, video_id = normalize_video_target(payload.video_url, payload.video_id)
     if not video_url:
         raise HTTPException(status_code=400, detail="video_url or valid video_id is required")
+
+    _require_proxy = os.getenv("UA_YOUTUBE_INGEST_REQUIRE_PROXY", "1").strip().lower() not in {"0", "false", "no", "off"}
 
     result = await asyncio.to_thread(
         ingest_youtube_transcript,
@@ -9003,6 +10640,7 @@ async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestReques
         timeout_seconds=max(5, min(int(payload.timeout_seconds or 120), 600)),
         max_chars=max(5_000, min(int(payload.max_chars or 180_000), 800_000)),
         min_chars=max(20, min(int(payload.min_chars or 160), 5000)),
+        require_proxy=_require_proxy,
     )
     result["request_id"] = (payload.request_id or "").strip() or None
     result["worker_profile"] = _DEPLOYMENT_PROFILE
@@ -9049,13 +10687,50 @@ async def health(response: Response):
     }
 
 
+def _csi_delivery_health_summary() -> dict[str, Any] | None:
+    """Read CSI delivery health canary state from the CSI SQLite DB.
+
+    Returns None if the DB is unavailable or canary has never run.
+    """
+    csi_db_path_raw = (os.getenv("CSI_DB_PATH") or "").strip()
+    if not csi_db_path_raw:
+        return None
+    csi_db = Path(csi_db_path_raw)
+    if not csi_db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(csi_db), timeout=3)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT state_json FROM source_state WHERE key = ? LIMIT 1",
+            ("delivery_health_canary",),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        state = json.loads(row["state_json"]) if isinstance(row["state_json"], str) else row["state_json"]
+        return {
+            "status": str(state.get("status") or "unknown"),
+            "last_checked_at": str(state.get("last_checked_at") or ""),
+            "failing_sources": list(state.get("failing_sources") or []),
+            "degraded_sources": list(state.get("degraded_sources") or []),
+        }
+    except Exception as exc:
+        logger.debug("CSI delivery health read failed: %s", exc)
+        return None
+
+
 @app.get("/api/v1/factory/capabilities")
 async def factory_capabilities(request: Request):
     _require_ops_auth(request)
-    return {
+    result: dict[str, Any] = {
         "factory": _factory_capabilities_payload(),
         "delegation": dict(_delegation_metrics),
     }
+    csi_health = _csi_delivery_health_summary()
+    if csi_health is not None:
+        result["csi_delivery_health"] = csi_health
+    return result
 
 
 @app.post("/api/v1/factory/registrations")
@@ -9081,20 +10756,445 @@ async def list_factory_registrations(
     _require_headquarters_role_for_fleet()
     clamped_limit = max(1, min(int(limit), 1000))
     status_filter = str(registration_status or "").strip().lower()
-    with _factory_registration_lock:
-        rows = [dict(record) for record in _factory_registrations.values()]
-    if status_filter:
-        rows = [
-            row
-            for row in rows
-            if str(row.get("registration_status") or "").strip().lower() == status_filter
-        ]
-    rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+
+    if _factory_registry is not None:
+        rows = _factory_registry.list_all(limit=clamped_limit, status_filter=status_filter)
+        total = _factory_registry.count()
+    else:
+        with _factory_registration_lock:
+            rows = [dict(record) for record in _factory_registrations.values()]
+        if status_filter:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("registration_status") or "").strip().lower() == status_filter
+            ]
+        rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+        total = len(rows)
+        rows = rows[:clamped_limit]
+
     return {
-        "registrations": rows[:clamped_limit],
-        "count": len(rows),
+        "registrations": rows,
+        "count": total,
         "headquarters_factory_id": _FACTORY_ID,
     }
+
+
+@app.get("/api/v1/ops/delegation/history")
+async def delegation_history(request: Request, limit: int = 20):
+    """Return recent VP missions sourced from the Redis bridge (delegation history)."""
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    import universal_agent.main as main_module
+    clamped = max(1, min(int(limit), 100))
+    missions: list[dict[str, Any]] = []
+    if main_module.runtime_db_conn:
+        try:
+            rows = main_module.runtime_db_conn.execute(
+                "SELECT mission_id, vp_id, mission_type, objective, status, source, "
+                "created_at, updated_at FROM vp_missions "
+                "ORDER BY created_at DESC LIMIT ?",
+                (clamped,),
+            ).fetchall()
+            for r in rows:
+                missions.append(dict(r))
+        except Exception as exc:
+            logger.warning("delegation_history query failed: %s", exc)
+    return {"missions": missions, "total": len(missions)}
+
+
+class FactoryUpdateRequest(BaseModel):
+    """Request to trigger a factory self-update via delegation bus."""
+    target_factory_id: Optional[str] = None  # None = broadcast to all workers
+    branch: str = "main"
+
+
+@app.post("/api/v1/ops/factory/update")
+async def trigger_factory_update(request: Request, payload: FactoryUpdateRequest):
+    """Publish a system:update_factory mission to the delegation bus.
+
+    HQ-only endpoint.  The target factory's bridge will execute the update
+    script, then exit for systemd to restart it with the new code.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    if _delegation_mission_bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Delegation Redis bus not connected; cannot publish update mission.",
+        )
+
+    job_id = f"update-{uuid.uuid4().hex[:12]}"
+    envelope = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=job_id,
+        priority=10,  # high priority
+        timeout_seconds=300,
+        max_retries=0,  # no retry for update missions
+        payload=MissionPayload(
+            task="Update factory to latest code",
+            context={
+                "mission_kind": "system:update_factory",
+                "branch": payload.branch or "main",
+                "target_factory_id": payload.target_factory_id or "",
+            },
+        ),
+    )
+    _delegation_mission_bus.publish_mission(envelope)
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+    logger.info(
+        "Factory update mission published job_id=%s branch=%s target=%s",
+        job_id,
+        payload.branch,
+        payload.target_factory_id or "(all)",
+    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "branch": payload.branch,
+        "target_factory_id": payload.target_factory_id,
+    }
+
+
+class FactoryControlRequest(BaseModel):
+    """Request to control a factory (pause/resume)."""
+    target_factory_id: str
+    action: str  # "pause" or "resume"
+
+
+@app.post("/api/v1/ops/factory/control")
+async def control_factory(request: Request, payload: FactoryControlRequest):
+    """Publish a system:pause_factory or system:resume_factory mission.
+
+    HQ-only endpoint.  The target factory's bridge will pause or resume
+    mission consumption while keeping the heartbeat alive.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    action = (payload.action or "").strip().lower()
+    if action not in ("pause", "resume"):
+        raise HTTPException(status_code=400, detail=f"Invalid action: {action}. Must be 'pause' or 'resume'.")
+
+    if _delegation_mission_bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Delegation Redis bus not connected; cannot publish control mission.",
+        )
+
+    mission_kind = f"system:{action}_factory"
+    job_id = f"{action}-{uuid.uuid4().hex[:12]}"
+    envelope = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=job_id,
+        priority=5,  # highest priority — control messages
+        timeout_seconds=30,
+        max_retries=0,
+        payload=MissionPayload(
+            task=f"{action.capitalize()} factory mission consumption",
+            context={
+                "mission_kind": mission_kind,
+                "target_factory_id": payload.target_factory_id,
+            },
+        ),
+    )
+    _delegation_mission_bus.publish_mission(envelope)
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Optimistically update registry status so UI reflects immediately
+    if _factory_registry is not None:
+        try:
+            existing = _factory_registry.get(payload.target_factory_id)
+            if existing:
+                new_status = "paused" if action == "pause" else "online"
+                _factory_registry.upsert({**existing, "registration_status": new_status})
+        except Exception as exc:
+            logger.warning("Failed to update registry for %s: %s", payload.target_factory_id, exc)
+
+    logger.info(
+        "Factory control mission published job_id=%s action=%s target=%s",
+        job_id, action, payload.target_factory_id,
+    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "action": action,
+        "target_factory_id": payload.target_factory_id,
+    }
+
+
+async def _systemd_unit_active(
+    unit_name: str,
+    *,
+    user_scope: bool = False,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    cmd = ["systemctl"]
+    if user_scope:
+        cmd.append("--user")
+    cmd.extend(["is-active", unit_name])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        return (stdout or b"").decode().strip() == "active"
+    except Exception:
+        return False
+
+
+async def _resolve_telegram_service_status() -> dict[str, Any]:
+    unit = "universal-agent-telegram"
+    if await _systemd_unit_active(unit, user_scope=False):
+        return {"active": True, "scope": "system", "unit": unit}
+    if await _systemd_unit_active(unit, user_scope=True):
+        return {"active": True, "scope": "user", "unit": unit}
+    return {"active": False, "scope": "none", "unit": unit}
+
+
+@app.get("/api/v1/ops/telegram")
+async def ops_telegram_status(request: Request):
+    """Aggregate Telegram integration status: bot, channels, notifications, sessions."""
+    _require_ops_auth(request)
+
+    # Tutorial notifier config
+    notifier_status = tutorial_telegram_notifier.configured_status()
+
+    bot_status = await _resolve_telegram_service_status()
+
+    def _event_row(item: dict[str, Any]) -> dict[str, Any]:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        created_at = str(item.get("created_at_utc") or _utc_now_iso())
+        updated_at = str(item.get("updated_at_utc") or created_at)
+        return {
+            "id": str(item.get("id") or ""),
+            "kind": str(item.get("kind") or ""),
+            "title": str(item.get("title") or ""),
+            "message": str(item.get("summary") or item.get("full_message") or ""),
+            "severity": str(item.get("severity") or "info"),
+            "status": str(item.get("status") or "new"),
+            "requires_action": bool(item.get("requires_action")),
+            "session_id": str(item.get("session_id") or ""),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "metadata": metadata,
+        }
+
+    def _is_telegram_relevant_event(item: dict[str, Any]) -> bool:
+        kind = str(item.get("kind") or "").strip().lower()
+        source_domain = str(item.get("source_domain") or "").strip().lower()
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if source_domain in {"tutorial", "csi"}:
+            return True
+        if kind.startswith(("telegram_", "youtube_", "csi_", "rss_", "reddit_")):
+            return True
+        if any(token in kind for token in ("tutorial", "playlist", "delivery", "ingest", "recovery")):
+            return True
+        pipeline = str(metadata.get("pipeline") or "").strip().lower()
+        if pipeline.startswith("csi_") or pipeline.startswith("youtube_"):
+            return True
+        return False
+
+    tutorial_active_kinds = {
+        "youtube_playlist_new_video",
+        "youtube_tutorial_started",
+        "youtube_tutorial_progress",
+        "youtube_tutorial_interrupted",
+        "youtube_hook_recovery_queued",
+    }
+    failure_kinds = {
+        "youtube_playlist_dispatch_failed",
+        "youtube_tutorial_failed",
+        "youtube_tutorial_interrupted",
+        "youtube_ingest_failed",
+        "youtube_ingest_proxy_alert",
+        "hook_dispatch_queue_overflow",
+    }
+    recovery_kinds = {"youtube_hook_recovery_queued"}
+
+    recent_notifications: list[dict[str, Any]] = []
+    pipeline_activity: list[dict[str, Any]] = []
+    recent_failures: list[dict[str, Any]] = []
+    actionable_alerts: list[dict[str, Any]] = []
+    recovery_events: list[dict[str, Any]] = []
+    active_tutorial_runs: list[dict[str, Any]] = []
+    try:
+        rows = _query_activity_events(limit=300, apply_default_window=False)
+        relevant = [item for item in rows if _is_telegram_relevant_event(item)]
+        pipeline_activity = [_event_row(item) for item in relevant[:120]]
+        recent_notifications = pipeline_activity[:50]
+
+        for entry in pipeline_activity:
+            kind = str(entry.get("kind") or "").strip().lower()
+            severity = str(entry.get("severity") or "").strip().lower()
+            status = str(entry.get("status") or "").strip().lower()
+            if (
+                kind in failure_kinds
+                or severity in {"error", "warning"}
+                or (status in {"failed", "error"} and kind.startswith("youtube_"))
+            ):
+                recent_failures.append(entry)
+            if bool(entry.get("requires_action")) and status not in {"dismissed", "resolved", "completed"}:
+                actionable_alerts.append(entry)
+            if kind in recovery_kinds or "recovery" in kind:
+                recovery_events.append(entry)
+
+        stage_map = {
+            "youtube_playlist_new_video": "queued",
+            "youtube_tutorial_started": "processing",
+            "youtube_tutorial_progress": "in_progress",
+            "youtube_tutorial_interrupted": "interrupted",
+            "youtube_hook_recovery_queued": "recovery_queued",
+        }
+        seen_run_keys: set[str] = set()
+        for entry in pipeline_activity:
+            kind = str(entry.get("kind") or "").strip().lower()
+            if kind not in tutorial_active_kinds:
+                continue
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            video_id = str(metadata.get("video_id") or metadata.get("youtube_video_id") or "").strip()
+            run_key = (
+                video_id
+                or str(entry.get("session_id") or "").strip()
+                or f"{kind}:{entry.get('id')}"
+            )
+            if not run_key or run_key in seen_run_keys:
+                continue
+            seen_run_keys.add(run_key)
+            active_tutorial_runs.append(
+                {
+                    "run_key": run_key,
+                    "session_id": str(entry.get("session_id") or "").strip(),
+                    "video_id": video_id,
+                    "title": str(metadata.get("tutorial_title") or entry.get("title") or "").strip(),
+                    "stage": stage_map.get(kind, "queued"),
+                    "kind": kind,
+                    "status": str(entry.get("status") or "new"),
+                    "severity": str(entry.get("severity") or "info"),
+                    "created_at": str(entry.get("created_at") or _utc_now_iso()),
+                    "message": str(entry.get("message") or ""),
+                }
+            )
+            if len(active_tutorial_runs) >= 20:
+                break
+
+        recent_failures = recent_failures[:40]
+        actionable_alerts = actionable_alerts[:40]
+        recovery_events = recovery_events[:40]
+    except Exception as exc:
+        logger.debug("Telegram ops: activity query failed: %s", exc)
+
+    # Recent Telegram sessions
+    tg_sessions: list[dict[str, Any]] = []
+    try:
+        gateway = get_gateway()
+        all_sessions = gateway.list_sessions()
+        for s in all_sessions:
+            sid = str(getattr(s, "session_id", "") or "")
+            if sid.startswith("tg_"):
+                tg_sessions.append({
+                    "session_id": sid,
+                    "user_id": str(getattr(s, "user_id", "") or ""),
+                    "status": str(getattr(s, "status", "") or ""),
+                    "last_activity": str(getattr(s, "last_activity", "") or ""),
+                })
+        tg_sessions = sorted(tg_sessions, key=lambda x: x.get("last_activity", ""), reverse=True)[:20]
+    except Exception:
+        pass
+
+    # Channel configuration — check gateway env first, then CSI env file as fallback
+    csi_env_values: dict[str, str] = {}
+    csi_env_path = Path("/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env")
+    if csi_env_path.exists():
+        try:
+            for line in csi_env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                csi_env_values[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+    channels: list[dict[str, Any]] = []
+    for name, env_key in [
+        ("UA Tutorial Feed", "YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID"),
+        ("UA RSS Feed", "CSI_RSS_TELEGRAM_CHAT_ID"),
+        ("UA Reddit Feed", "CSI_REDDIT_TELEGRAM_CHAT_ID"),
+    ]:
+        chat_id = os.getenv(env_key, "").strip() or csi_env_values.get(env_key, "")
+        channels.append({"name": name, "env_var": env_key, "configured": bool(chat_id), "chat_id": chat_id[:6] + "..." if len(chat_id) > 6 else chat_id})
+
+    return {
+        "bot": {
+            "service_active": bool(bot_status.get("active")),
+            "service_scope": str(bot_status.get("scope") or "none"),
+            "service_unit": "universal-agent-telegram",
+            "enabled_by_policy": bool(_FACTORY_POLICY.enable_telegram_poll),
+            "polling_mode": "long_polling",
+            "allowed_user_ids": os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").strip() or None,
+        },
+        "notifier": notifier_status,
+        "channels": channels,
+        "recent_notifications": recent_notifications,
+        "pipeline_activity": pipeline_activity,
+        "active_tutorial_runs": active_tutorial_runs,
+        "recent_failures": recent_failures,
+        "actionable_alerts": actionable_alerts,
+        "recovery_events": recovery_events,
+        "telegram_sessions": tg_sessions,
+        "counts": {
+            "pipeline_activity": len(pipeline_activity),
+            "active_tutorial_runs": len(active_tutorial_runs),
+            "recent_failures": len(recent_failures),
+            "actionable_alerts": len(actionable_alerts),
+            "recovery_events": len(recovery_events),
+            "telegram_sessions": len(tg_sessions),
+        },
+    }
+
+
+@app.get("/api/v1/ops/timers")
+async def list_system_timers(request: Request):
+    """Return structured systemd timer status for the ops dashboard.
+
+    Runs ``systemctl list-timers --all --output=json`` and returns the
+    parsed result.  Requires ops auth.
+    """
+    _require_ops_auth(request)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "list-timers", "--all", "--output=json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            # Fallback: try without --output=json (older systemd)
+            proc2 = await asyncio.create_subprocess_exec(
+                "systemctl", "list-timers", "--all", "--no-pager",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
+            return {
+                "format": "text",
+                "timers": [],
+                "raw": (stdout2 or b"").decode(errors="replace")[:8000],
+            }
+        raw = (stdout or b"").decode(errors="replace")
+        timers = json.loads(raw) if raw.strip() else []
+        return {"format": "json", "timers": timers, "count": len(timers)}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="systemctl list-timers timed out")
+    except Exception as exc:
+        logger.warning("list_system_timers failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/artifacts")
@@ -9109,6 +11209,16 @@ async def list_artifacts(path: str = ""):
 async def get_artifact_file(file_path: str):
     """Get file content from the persistent artifacts root."""
     return _read_file_from_root(ARTIFACTS_DIR, file_path)
+
+
+@app.get("/api/files/{session_id}/{file_path:path}")
+async def get_session_file(session_id: str, file_path: str):
+    """Get file content from a session workspace (mirrors api/server.py endpoint)."""
+    safe_id = _sanitize_session_id_or_400(session_id)
+    session_root = WORKSPACES_DIR / safe_id
+    if not session_root.is_dir():
+        raise HTTPException(status_code=404, detail="Session workspace not found")
+    return _read_file_from_root(session_root, file_path)
 
 
 @app.get("/api/v1/dashboard/metrics/coder-vp")
@@ -9406,7 +11516,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
                     "window_start_utc": None,
                     "window_end_utc": None,
-                    "model_name": "trend-specialist",
+                    "model_name": "csi-trend-analyst",
                     "metadata": {
                         "report_key": str(metadata.get("report_key") or ""),
                         "kind": kind,
@@ -9453,6 +11563,13 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
             or 0
         )
         lowered = report_type.lower()
+        if "global_trend_brief" in lowered or lowered == "global_brief":
+            source_totals = report_data.get("source_totals")
+            if isinstance(source_totals, dict):
+                return {str(k): int(v or 0) for k, v in source_totals.items()}
+            return {"brief_items": total_items}
+        if "threads" in lowered:
+            return {"threads": total_items}
         if "reddit" in lowered:
             return {"reddit": total_items}
         if "rss" in lowered or lowered in {"daily", "emerging", "trend"}:
@@ -9502,6 +11619,8 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     def _report_class(report_type: str) -> str:
         lowered = report_type.lower()
+        if "brief" in lowered:
+            return "brief"
         if "opportunity" in lowered:
             return "opportunity"
         if "daily" in lowered:
@@ -9621,7 +11740,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     clamped_limit = max(1, min(int(limit), 50))
     db_detail: Optional[str] = None
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if db_path.exists():
         conn = None
         try:
@@ -9689,12 +11808,51 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                         }
                     )
 
+            if _table_exists(conn, "global_trend_briefs"):
+                for row in conn.execute(
+                    "SELECT * FROM global_trend_briefs ORDER BY created_at DESC LIMIT ?",
+                    (max(clamped_limit * 2, 20),),
+                ).fetchall():
+                    brief_json = _activity_json_loads_obj(row["brief_json"], default={})
+                    report_data = brief_json if isinstance(brief_json, dict) else {}
+                    report_data["markdown_content"] = str(row["brief_markdown"] or "")
+                    artifact_paths: dict[str, str] = {}
+                    md_path = str(row["artifact_markdown_path"] or "").strip()
+                    json_path = str(row["artifact_json_path"] or "").strip()
+                    if md_path:
+                        artifact_paths["markdown"] = md_path
+                    if json_path:
+                        artifact_paths["json"] = json_path
+                    if artifact_paths:
+                        report_data["artifact_paths"] = artifact_paths
+                    report_type = "global_trend_brief"
+                    reports.append(
+                        {
+                            "id": int(row["id"]),
+                            "report_type": report_type,
+                            "report_class": "brief",
+                            "window_hours": _window_hours(row["window_start_utc"], row["window_end_utc"]),
+                            "source_mix": _source_mix_for_report(report_type, report_data),
+                            "report_data": report_data,
+                            "usage": _parse_usage(
+                                prompt=row["prompt_tokens"],
+                                completion=row["completion_tokens"],
+                                total=row["total_tokens"],
+                            ),
+                            "created_at": _normalize_notification_timestamp(row["created_at"]),
+                            "window_start_utc": row["window_start_utc"],
+                            "window_end_utc": row["window_end_utc"],
+                            "model_name": row["model_name"],
+                            "metadata": {"report_key": row["brief_key"]},
+                        }
+                    )
+
             if _table_exists(conn, "events"):
                 for row in conn.execute(
                     """
-                    SELECT event_id, occurred_at, subject_json
+                    SELECT event_id, event_type, occurred_at, subject_json
                     FROM events
-                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready')
+                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready', 'global_trend_brief_ready')
                     ORDER BY occurred_at DESC
                     LIMIT ?
                     """,
@@ -9704,7 +11862,13 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     if not isinstance(subject, dict):
                         subject = {}
                     artifact_paths = subject.get("artifact_paths") if isinstance(subject.get("artifact_paths"), dict) else {}
-                    report_type_value = str(subject.get("report_type") or "hourly_report_product")
+                    raw_event_type = str(row["event_type"] or "").strip().lower()
+                    report_type_value = str(subject.get("report_type") or "").strip().lower()
+                    if not report_type_value:
+                        if raw_event_type == "global_trend_brief_ready":
+                            report_type_value = "global_trend_brief"
+                        else:
+                            report_type_value = "hourly_report_product"
                     if report_type_value == "opportunity_bundle":
                         quality_summary = subject.get("quality_summary") if isinstance(subject.get("quality_summary"), dict) else {}
                         opportunities = subject.get("opportunities") if isinstance(subject.get("opportunities"), list) else []
@@ -9731,6 +11895,12 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                             f"- has_trend_report: `{subject.get('has_trend_report')}`\n"
                             f"- insight_report_count: `{subject.get('insight_report_count')}`\n"
                         )
+                        if report_type_value == "global_trend_brief":
+                            markdown = (
+                                "## CSI Global Trend Brief\n\n"
+                                f"- brief_key: `{subject.get('brief_key')}`\n"
+                                f"- window: `{subject.get('window_start_utc')}` -> `{subject.get('window_end_utc')}`\n"
+                            )
                     if artifact_paths:
                         markdown += (
                             "\n### Artifacts\n"
@@ -9801,9 +11971,28 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
     return {"status": "ok", "source": "empty", "detail": db_detail, "reports": []}
 
 
+@app.get("/api/v1/dashboard/csi/briefings")
+async def dashboard_csi_briefings(limit: int = 12, include_suppressed: bool = False):
+    base = await dashboard_csi_reports(limit=max(1, min(int(limit), 50)), include_suppressed=include_suppressed)
+    reports = base.get("reports") if isinstance(base, dict) else []
+    if not isinstance(reports, list):
+        reports = []
+    allowed_classes = {"brief", "trend", "daily", "emerging", "product", "opportunity", "insight"}
+    filtered = [
+        item
+        for item in reports
+        if str(item.get("report_class") or "").strip().lower() in allowed_classes
+    ]
+    return {
+        "status": "ok",
+        "source": "csi_briefings",
+        "reports": filtered[: max(1, min(int(limit), 50))],
+    }
+
+
 @app.get("/api/v1/dashboard/csi/health")
 async def dashboard_csi_health():
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -9918,6 +12107,9 @@ async def dashboard_csi_health():
         tracked_types = {
             "rss_trend_report": 180,
             "reddit_trend_report": 180,
+            "threads_trend_report": 180,
+            "global_trend_brief_ready": 180,
+            "csi_global_brief_review_due": 720,
             "rss_insight_emerging": 180,
             "report_product_ready": 180,
             "opportunity_bundle_ready": 180,
@@ -10068,6 +12260,93 @@ async def dashboard_csi_health():
             conn.close()
 
 
+def _parse_source_min_events_spec(raw: str) -> dict[str, int]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    out: dict[str, int] = {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                cleaned = str(key or "").strip()
+                if not cleaned:
+                    continue
+                try:
+                    out[cleaned] = max(0, int(value))
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        pass
+    for token in text.split(","):
+        item = token.strip()
+        if not item or "=" not in item:
+            continue
+        key, value_raw = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        try:
+            out[key] = max(0, int(value_raw.strip()))
+        except Exception:
+            continue
+    return out
+
+
+def _default_delivery_source_min_events() -> dict[str, int]:
+    defaults = {
+        "youtube_channel_rss": 1,
+        "reddit_discovery": 1,
+        "threads_owned": 0,
+        "threads_trends_seeded": 0,
+        "threads_trends_broad": 0,
+        "csi_analytics": 0,
+    }
+    env_map = _parse_source_min_events_spec(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or ""))
+    defaults.update(env_map)
+    return defaults
+
+
+def _delivery_hint_for_source(source_name: str, *, under_min_volume: bool, stale: bool) -> dict[str, Any] | None:
+    if not (under_min_volume or stale):
+        return None
+    if source_name == "youtube_channel_rss":
+        return {
+            "code": "rss_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "RSS source volume below threshold",
+            "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
+            "runbook_command": (
+                "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
+                "journalctl -u csi-ingester -n 120 --no-pager"
+            ),
+        }
+    if source_name == "reddit_discovery":
+        return {
+            "code": "reddit_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "Reddit source volume below threshold",
+            "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
+            "runbook_command": (
+                "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
+                "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
+            ),
+        }
+    if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}:
+        return {
+            "code": "threads_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "Threads source volume below threshold",
+            "action": (
+                "Verify Threads token freshness, source query packs, and keyword quotas. "
+                "Confirm THREADS_* credentials are loaded in CSI runtime env."
+            ),
+            "runbook_command": "journalctl -u csi-ingester -n 200 --no-pager | grep -i threads",
+        }
+    return None
+
+
 @app.get("/api/v1/dashboard/csi/delivery-health")
 async def dashboard_csi_delivery_health(
     window_hours: int = 24,
@@ -10075,7 +12354,11 @@ async def dashboard_csi_delivery_health(
     max_failed_attempt_ratio: Optional[float] = None,
     min_rss_events: Optional[int] = None,
     min_reddit_events: Optional[int] = None,
+    min_threads_owned_events: Optional[int] = None,
+    min_threads_seeded_events: Optional[int] = None,
+    min_threads_broad_events: Optional[int] = None,
     max_dlq_recent: Optional[int] = None,
+    source_min_events: Optional[str] = None,
 ):
     clamped_window = max(1, min(int(window_hours), 24 * 30))
     stale_threshold_minutes = max(30, min(int(stale_minutes), 24 * 60 * 7))
@@ -10084,16 +12367,18 @@ async def dashboard_csi_delivery_health(
         if max_failed_attempt_ratio is not None
         else max(0.0, min(float(os.getenv("UA_CSI_DELIVERY_MAX_FAILED_ATTEMPT_RATIO", "0.2") or 0.2), 1.0))
     )
-    tuned_min_rss_events = (
-        max(0, int(min_rss_events))
-        if min_rss_events is not None
-        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H", "1") or 1))
-    )
-    tuned_min_reddit_events = (
-        max(0, int(min_reddit_events))
-        if min_reddit_events is not None
-        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H", "1") or 1))
-    )
+    source_min_map = _default_delivery_source_min_events()
+    source_min_map.update(_parse_source_min_events_spec(str(source_min_events or "")))
+    if min_rss_events is not None:
+        source_min_map["youtube_channel_rss"] = max(0, int(min_rss_events))
+    if min_reddit_events is not None:
+        source_min_map["reddit_discovery"] = max(0, int(min_reddit_events))
+    if min_threads_owned_events is not None:
+        source_min_map["threads_owned"] = max(0, int(min_threads_owned_events))
+    if min_threads_seeded_events is not None:
+        source_min_map["threads_trends_seeded"] = max(0, int(min_threads_seeded_events))
+    if min_threads_broad_events is not None:
+        source_min_map["threads_trends_broad"] = max(0, int(min_threads_broad_events))
     tuned_max_dlq_recent = (
         max(0, int(max_dlq_recent))
         if max_dlq_recent is not None
@@ -10103,14 +12388,14 @@ async def dashboard_csi_delivery_health(
         1,
         int(os.getenv("UA_CSI_DELIVERY_ADAPTER_CONSECUTIVE_FAILURES", "3") or 3),
     )
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        source_names = ["youtube_channel_rss", "reddit_discovery", "csi_analytics"]
+        source_name_set = set(source_min_map.keys())
         window_expr = f"-{clamped_window} hours"
         source_rows: list[dict[str, Any]] = []
         now_ts = time.time()
@@ -10140,11 +12425,26 @@ async def dashboard_csi_delivery_health(
             }
             adapter_health.append(adapter_entry)
             adapter_health_map[adapter_name] = adapter_entry
+            source_name_set.add(adapter_name)
 
+        try:
+            source_value_rows = conn.execute(
+                """
+                SELECT DISTINCT source
+                FROM events
+                WHERE created_at >= datetime('now', ?)
+                """,
+                (window_expr,),
+            ).fetchall()
+        except Exception:
+            source_value_rows = []
+        for row in source_value_rows:
+            source_name_set.add(str(row["source"] or "").strip())
+
+        source_names = sorted(name for name in source_name_set if name)
         expected_min_events_by_source = {
-            "youtube_channel_rss": tuned_min_rss_events,
-            "reddit_discovery": tuned_min_reddit_events,
-            "csi_analytics": 0,
+            name: int(source_min_map.get(name) or 0)
+            for name in source_names
         }
 
         for source_name in source_names:
@@ -10230,7 +12530,9 @@ async def dashboard_csi_delivery_health(
             failed_attempt_ratio = round((float(attempts_failed) / float(attempts)), 4) if attempts > 0 else 0.0
             expected_min_events = int(expected_min_events_by_source.get(source_name) or 0)
             under_min_volume = total < expected_min_events
-            stale = total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            stale = expected_min_events > 0 and (
+                total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            )
             high_failed_ratio = attempts > 0 and failed_attempt_ratio > float(tuned_max_failed_attempt_ratio)
             all_failed = attempts > 0 and attempts_failed == attempts
             dlq_exceeds = dlq_total > int(tuned_max_dlq_recent)
@@ -10250,32 +12552,13 @@ async def dashboard_csi_delivery_health(
                 status_value = "failing"
 
             repair_hints: list[dict[str, Any]] = []
-            if source_name == "youtube_channel_rss" and (under_min_volume or stale):
-                repair_hints.append(
-                    {
-                        "code": "rss_source_stale_or_low_volume",
-                        "severity": "warning",
-                        "title": "RSS source volume below threshold",
-                        "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
-                        "runbook_command": (
-                            "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
-                            "journalctl -u csi-ingester -n 120 --no-pager"
-                        ),
-                    }
-                )
-            if source_name == "reddit_discovery" and (under_min_volume or stale):
-                repair_hints.append(
-                    {
-                        "code": "reddit_source_stale_or_low_volume",
-                        "severity": "warning",
-                        "title": "Reddit source volume below threshold",
-                        "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
-                        "runbook_command": (
-                            "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
-                            "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
-                        ),
-                    }
-                )
+            low_volume_hint = _delivery_hint_for_source(
+                source_name,
+                under_min_volume=under_min_volume,
+                stale=stale,
+            )
+            if isinstance(low_volume_hint, dict):
+                repair_hints.append(low_volume_hint)
             if attempts_failed > 0 or high_failed_ratio:
                 repair_hints.append(
                     {
@@ -10285,7 +12568,7 @@ async def dashboard_csi_delivery_health(
                         "action": "Verify UA ingest endpoint auth and replay DLQ after repair.",
                         "runbook_command": (
                             "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
-                            "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 100 --max-attempts 3"
+                            "--db-path /var/lib/universal-agent/csi/csi.db --limit 100 --max-attempts 3"
                         ),
                     }
                 )
@@ -10297,7 +12580,7 @@ async def dashboard_csi_delivery_health(
                         "title": "DLQ backlog exceeds threshold",
                         "action": "Inspect latest delivery errors and replay DLQ once root cause is fixed.",
                         "runbook_command": (
-                            "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                            "sqlite3 /var/lib/universal-agent/csi/csi.db "
                             "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 25;\""
                         ),
                     }
@@ -10364,8 +12647,12 @@ async def dashboard_csi_delivery_health(
             },
             "tuning": {
                 "max_failed_attempt_ratio": tuned_max_failed_attempt_ratio,
-                "min_rss_events": tuned_min_rss_events,
-                "min_reddit_events": tuned_min_reddit_events,
+                "source_min_events": source_min_map,
+                "min_rss_events": int(source_min_map.get("youtube_channel_rss") or 0),
+                "min_reddit_events": int(source_min_map.get("reddit_discovery") or 0),
+                "min_threads_owned_events": int(source_min_map.get("threads_owned") or 0),
+                "min_threads_seeded_events": int(source_min_map.get("threads_trends_seeded") or 0),
+                "min_threads_broad_events": int(source_min_map.get("threads_trends_broad") or 0),
                 "max_dlq_recent": tuned_max_dlq_recent,
                 "adapter_consecutive_failures": tuned_adapter_consecutive_failures,
                 "stale_threshold_minutes": stale_threshold_minutes,
@@ -10384,7 +12671,7 @@ async def dashboard_csi_delivery_health(
 
 @app.get("/api/v1/dashboard/csi/reliability-slo")
 async def dashboard_csi_reliability_slo():
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -10446,7 +12733,7 @@ async def dashboard_csi_reliability_slo():
 @app.get("/api/v1/dashboard/csi/opportunities")
 async def dashboard_csi_opportunities(limit: int = 8):
     clamped_limit = max(1, min(int(limit), 50))
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}", "bundles": [], "latest": None}
     conn = None
@@ -10864,41 +13151,809 @@ async def dashboard_csi_specialist_loop_cleanup(payload: CSISpecialistLoopCleanu
     }
 
 
-@app.get("/api/v1/dashboard/todolist/pipeline")
-async def dashboard_todolist_pipeline():
-    from universal_agent.services.todoist_service import TodoService
+def _task_hub_enabled() -> bool:
+    return str(os.getenv("UA_TASK_HUB_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _task_hub_sync_pending_approvals(conn: sqlite3.Connection) -> int:
+    if not _task_hub_enabled():
+        return 0
+    pending = list_approvals(status="pending")
+    rows = task_hub.approvals_as_tasks(pending if isinstance(pending, list) else [])
+    count = 0
+    for row in rows:
+        task_hub.upsert_item(conn, row)
+        count += 1
+    maintenance = _task_hub_apply_csi_routing_maintenance(conn)
+    parked = int(maintenance.get("parked") or 0)
+    if parked:
+        logger.info("Task hub CSI routing maintenance parked %s legacy CSI items", parked)
+    return count
+
+
+def _task_hub_open_conn() -> sqlite3.Connection:
+    conn = _activity_connect()
+    _ensure_activity_schema(conn)
+    return conn
+
+
+def _supervisor_artifacts_payload(paths: dict[str, Any]) -> dict[str, Any]:
+    markdown_path = str(paths.get("markdown_path") or "").strip()
+    json_path = str(paths.get("json_path") or "").strip()
+    markdown_rel = _artifact_rel_path(markdown_path)
+    json_rel = _artifact_rel_path(json_path)
+    return {
+        "markdown_path": markdown_path,
+        "json_path": json_path,
+        "markdown_rel_path": markdown_rel,
+        "json_rel_path": json_rel,
+        "markdown_storage_href": (
+            _storage_explorer_href(scope="artifacts", path=markdown_rel, preview=markdown_rel)
+            if markdown_rel
+            else ""
+        ),
+        "json_storage_href": (
+            _storage_explorer_href(scope="artifacts", path=json_rel, preview=json_rel)
+            if json_rel
+            else ""
+        ),
+    }
+
+
+def _recent_delegation_history(limit: int = 50) -> list[dict[str, Any]]:
+    import universal_agent.main as main_module
+
+    rows_out: list[dict[str, Any]] = []
+    conn = getattr(main_module, "runtime_db_conn", None)
+    if conn is None:
+        return rows_out
     try:
-        todoist = TodoService()
-        return {"status": "ok", "pipeline_summary": todoist.get_pipeline_summary()}
+        rows = conn.execute(
+            "SELECT mission_id, vp_id, mission_type, objective, status, source, "
+            "created_at, updated_at FROM vp_missions "
+            "ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+        for row in rows:
+            rows_out.append(dict(row))
     except Exception as exc:
-        logger.warning(f"Failed todolist pipeline summary: {exc}")
-        return {"status": "error", "detail": str(exc)}
+        logger.warning("supervisor delegation history query failed: %s", exc)
+    return rows_out
 
 
-@app.get("/api/v1/dashboard/todolist/actionable")
-async def dashboard_todolist_actionable():
-    from universal_agent.services.todoist_service import TodoService
+async def _system_timers_snapshot(limit: int = 200) -> list[dict[str, Any]]:
     try:
-        todoist = TodoService()
-        return {"status": "ok", "actionable_tasks": todoist.get_actionable_tasks()}
-    except Exception as exc:
-        logger.warning(f"Failed todolist actionable tasks: {exc}")
-        return {"status": "error", "detail": str(exc)}
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl",
+            "list-timers",
+            "--all",
+            "--output=json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode != 0:
+            return []
+        raw = (stdout or b"").decode(errors="replace")
+        parsed = json.loads(raw) if raw.strip() else []
+        if not isinstance(parsed, list):
+            return []
+        return [row for row in parsed if isinstance(row, dict)][: max(1, min(int(limit), 1000))]
+    except Exception:
+        return []
 
 
-@app.get("/api/v1/dashboard/todolist/heartbeat")
-async def dashboard_todolist_heartbeat():
-    from universal_agent.services.todoist_service import TodoService
-    try:
-        todoist = TodoService()
+def _task_hub_supervisor_snapshot() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    approvals_pending = list_approvals(status="pending")
+    pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            task_hub.rebuild_dispatch_queue(conn)
+            overview = task_hub.overview(conn, approvals_pending=pending_count)
+            overview["heartbeat"] = _heartbeat_runtime_snapshot()
+            agent_queue = task_hub.list_agent_queue(
+                conn,
+                offset=0,
+                limit=200,
+                include_csi=True,
+                collapse_csi=True,
+                project_key=None,
+            )
+            dispatch_queue = task_hub.get_dispatch_queue(conn, limit=200)
+            return (
+                overview if isinstance(overview, dict) else {},
+                (agent_queue.get("items") if isinstance(agent_queue, dict) else []) or [],
+                (dispatch_queue.get("items") if isinstance(dispatch_queue, dict) else []) or [],
+            )
+        finally:
+            conn.close()
+
+
+def _factory_registrations_snapshot(limit: int = 500) -> list[dict[str, Any]]:
+    clamped_limit = max(1, min(int(limit), 2000))
+    if _factory_registry is not None:
+        return _factory_registry.list_all(limit=clamped_limit)
+    with _factory_registration_lock:
+        rows = [dict(record) for record in _factory_registrations.values()]
+    rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+    return rows[:clamped_limit]
+
+
+def _record_supervisor_brief_event(
+    *,
+    supervisor_id: str,
+    snapshot: dict[str, Any],
+    reason: Optional[str] = None,
+) -> None:
+    event = {
+        "event_id": f"sup_{int(time.time() * 1000)}",
+        "type": "supervisor_brief_ready",
+        "payload": {
+            "supervisor_id": supervisor_id,
+            "severity": snapshot.get("severity"),
+            "summary": snapshot.get("summary"),
+            "generated_at": snapshot.get("generated_at"),
+            "artifacts": snapshot.get("artifacts") if isinstance(snapshot.get("artifacts"), dict) else {},
+            "reason": str(reason or "").strip() or None,
+        },
+        "created_at": _utc_now_iso(),
+    }
+    _persist_system_activity_event(event, session_id=None)
+
+
+async def _build_supervisor_snapshot(supervisor_id: str) -> dict[str, Any]:
+    record = find_supervisor(supervisor_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Unknown supervisor_id: {supervisor_id}")
+
+    normalized = str(record.get("id") or "").strip().lower()
+    todolist_overview, agent_queue, dispatch_queue = _task_hub_supervisor_snapshot()
+    base_events = _query_activity_events(limit=200, apply_default_window=False)
+
+    if normalized == "factory-supervisor":
+        capabilities = _factory_capabilities_payload()
+        registrations = _factory_registrations_snapshot(limit=500)
+        delegation_history = _recent_delegation_history(limit=50)
+        timers = await _system_timers_snapshot(limit=200)
+        return build_factory_snapshot(
+            capabilities=capabilities,
+            registrations=registrations,
+            delegation_history=delegation_history,
+            todolist_overview=todolist_overview,
+            agent_queue=agent_queue,
+            dispatch_queue=dispatch_queue,
+            events=base_events,
+            timers=timers,
+        )
+
+    if normalized == "csi-supervisor":
+        csi_health = await dashboard_csi_health()
+        csi_delivery_health = await dashboard_csi_delivery_health()
+        csi_reliability_slo = await dashboard_csi_reliability_slo()
+        loops_payload = await dashboard_csi_specialist_loops(limit=50, status=None)
+        csi_opportunities = await dashboard_csi_opportunities(limit=8)
+        csi_events = _query_activity_events(
+            limit=200,
+            source_domain="csi",
+            apply_default_window=False,
+        )
+        return build_csi_snapshot(
+            csi_health=csi_health if isinstance(csi_health, dict) else {},
+            csi_delivery_health=csi_delivery_health if isinstance(csi_delivery_health, dict) else {},
+            csi_reliability_slo=csi_reliability_slo if isinstance(csi_reliability_slo, dict) else {},
+            csi_specialist_loops=(
+                loops_payload.get("loops")
+                if isinstance(loops_payload, dict) and isinstance(loops_payload.get("loops"), list)
+                else []
+            ),
+            csi_opportunities=csi_opportunities if isinstance(csi_opportunities, dict) else {},
+            agent_queue=agent_queue,
+            todolist_overview=todolist_overview,
+            csi_events=csi_events,
+        )
+
+    raise HTTPException(status_code=404, detail=f"Unsupported supervisor_id: {supervisor_id}")
+
+
+def _latest_supervisor_artifacts(supervisor_id: str) -> dict[str, Any]:
+    runs = list_snapshot_runs(
+        supervisor_id=supervisor_id,
+        artifacts_root=ARTIFACTS_DIR,
+        limit=1,
+    )
+    if not runs:
         return {
-            "status": "ok",
-            "heartbeat_summary": todoist.heartbeat_summary(),
-            "heartbeat_candidates": todoist.heartbeat_brainstorm_candidates()
+            "markdown_path": "",
+            "json_path": "",
+            "markdown_rel_path": "",
+            "json_rel_path": "",
+            "markdown_storage_href": "",
+            "json_storage_href": "",
         }
+    artifacts = runs[0].get("artifacts") if isinstance(runs[0], dict) else {}
+    return _supervisor_artifacts_payload(artifacts if isinstance(artifacts, dict) else {})
+
+
+class SupervisorRunRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+@app.get("/api/v1/dashboard/supervisors/registry")
+async def dashboard_supervisors_registry(request: Request):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    return {
+        "status": "ok",
+        "supervisors": supervisor_registry(),
+    }
+
+
+@app.get("/api/v1/dashboard/supervisors/{supervisor_id}/snapshot")
+async def dashboard_supervisor_snapshot(request: Request, supervisor_id: str):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    snapshot = await _build_supervisor_snapshot(supervisor_id)
+    snapshot["artifacts"] = _latest_supervisor_artifacts(supervisor_id)
+    return snapshot
+
+
+@app.post("/api/v1/dashboard/supervisors/{supervisor_id}/run")
+async def dashboard_supervisor_run(
+    request: Request,
+    supervisor_id: str,
+    payload: Optional[SupervisorRunRequest] = None,
+):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    snapshot = await _build_supervisor_snapshot(supervisor_id)
+    artifact_paths = persist_snapshot(
+        supervisor_id=supervisor_id,
+        snapshot=snapshot,
+        artifacts_root=ARTIFACTS_DIR,
+    )
+    snapshot["artifacts"] = _supervisor_artifacts_payload(artifact_paths)
+    _record_supervisor_brief_event(
+        supervisor_id=supervisor_id,
+        snapshot=snapshot,
+        reason=payload.reason if payload else None,
+    )
+    return snapshot
+
+
+@app.get("/api/v1/dashboard/supervisors/{supervisor_id}/runs")
+async def dashboard_supervisor_runs(request: Request, supervisor_id: str, limit: int = 25):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    if not find_supervisor(supervisor_id):
+        raise HTTPException(status_code=404, detail=f"Unknown supervisor_id: {supervisor_id}")
+    runs = list_snapshot_runs(
+        supervisor_id=supervisor_id,
+        artifacts_root=ARTIFACTS_DIR,
+        limit=max(1, min(int(limit), 200)),
+    )
+    normalized: list[dict[str, Any]] = []
+    for row in runs:
+        item = dict(row) if isinstance(row, dict) else {}
+        artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), dict) else {}
+        item["artifacts"] = _supervisor_artifacts_payload(artifacts)
+        normalized.append(item)
+    return {
+        "status": "ok",
+        "supervisor_id": supervisor_id,
+        "runs": normalized,
+    }
+
+
+def _approval_priority_value(record: dict[str, Any]) -> int:
+    meta = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    if bool(meta.get("must_complete")):
+        return 4
+    due = str(record.get("due_at") or record.get("deadline") or "").strip()
+    if due:
+        due_dt = _parse_iso_timestamp(due)
+        if due_dt and (due_dt - datetime.now(timezone.utc)).total_seconds() <= 6 * 3600:
+            return 4
+    created_raw = record.get("created_at")
+    try:
+        created_ts = float(created_raw)
+    except Exception:
+        created_ts = 0.0
+    if created_ts > 0 and (time.time() - created_ts) > (24 * 3600):
+        return 3
+    return 2
+
+
+def _parse_memory_entry_ts(entry: dict[str, Any]) -> Optional[datetime]:
+    raw = entry.get("timestamp")
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(raw), timezone.utc)
+        except Exception:
+            return None
+    return _parse_iso_timestamp(str(raw))
+
+
+def _compact_task_memory_indexes(*, dry_run: bool) -> dict[str, Any]:
+    shared_root = Path(resolve_shared_memory_workspace("")).resolve()
+    memory_dir = shared_root / "memory"
+    index_paths = [
+        memory_dir / "index.json",
+        memory_dir / "session_index.json",
+        memory_dir / "research" / "index.json",
+    ]
+    keep_tags = {"task_policy", "task_strategy", "task_risk"}
+    raw_tag = "task_event_raw"
+    max_daily = max(1, int(os.getenv("UA_TASK_MEMORY_MAX_DURABLE_ENTRIES_PER_DAY", "10") or 10))
+    raw_retention_days = max(1, int(os.getenv("UA_TASK_MEMORY_RAW_RETENTION_DAYS", "14") or 14))
+    summary_retention_days = max(7, int(os.getenv("UA_TASK_MEMORY_SUMMARY_RETENTION_DAYS", "180") or 180))
+    now_dt = datetime.now(timezone.utc)
+    raw_cutoff = now_dt - timedelta(days=raw_retention_days)
+    summary_cutoff = now_dt - timedelta(days=summary_retention_days)
+
+    report_files: list[dict[str, Any]] = []
+    total_before = 0
+    total_after = 0
+    total_pruned = 0
+
+    for idx_path in index_paths:
+        if not idx_path.exists():
+            continue
+        rows = load_index(str(idx_path))
+        if not isinstance(rows, list):
+            continue
+        total_before += len(rows)
+        # Keep deterministic behavior: newest first for cap decisions.
+        rows_sorted = sorted(
+            rows,
+            key=lambda row: (_parse_memory_entry_ts(row) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            reverse=True,
+        )
+        kept: list[dict[str, Any]] = []
+        dropped: list[dict[str, Any]] = []
+        day_counts: dict[str, int] = {}
+        for row in rows_sorted:
+            tags = {str(tag).strip().lower() for tag in (row.get("tags") or []) if str(tag).strip()}
+            is_task_entry = any(tag.startswith("task_") for tag in tags) or bool(tags & keep_tags)
+            if not is_task_entry:
+                kept.append(row)
+                continue
+
+            ts = _parse_memory_entry_ts(row)
+            if raw_tag in tags and ts and ts < raw_cutoff:
+                dropped.append(row)
+                continue
+
+            if raw_tag not in tags and ts and ts < summary_cutoff and not bool(tags & keep_tags):
+                dropped.append(row)
+                continue
+
+            date_key = (ts or now_dt).strftime("%Y-%m-%d")
+            current_count = int(day_counts.get(date_key) or 0)
+            if current_count >= max_daily and not bool(tags & keep_tags):
+                dropped.append(row)
+                continue
+
+            day_counts[date_key] = current_count + 1
+            kept.append(row)
+
+        # Restore chronological order in file.
+        kept_sorted = sorted(
+            kept,
+            key=lambda row: (_parse_memory_entry_ts(row) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+        )
+        if not dry_run:
+            idx_path.parent.mkdir(parents=True, exist_ok=True)
+            idx_path.write_text(json.dumps(kept_sorted, indent=2, ensure_ascii=True))
+
+        total_after += len(kept_sorted)
+        total_pruned += len(dropped)
+        report_files.append(
+            {
+                "path": str(idx_path),
+                "before": len(rows),
+                "after": len(kept_sorted),
+                "pruned": len(dropped),
+            }
+        )
+
+    return {
+        "dry_run": dry_run,
+        "memory_root": str(shared_root),
+        "files": report_files,
+        "totals": {
+            "before": total_before,
+            "after": total_after,
+            "pruned": total_pruned,
+        },
+        "policy": {
+            "keep_tags": sorted(keep_tags),
+            "raw_tag": raw_tag,
+            "max_daily": max_daily,
+            "raw_retention_days": raw_retention_days,
+            "summary_retention_days": summary_retention_days,
+        },
+    }
+
+
+@app.get("/api/v1/dashboard/todolist/overview")
+async def dashboard_todolist_overview():
+    approvals_pending = list_approvals(status="pending")
+    pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            synced_approvals = _task_hub_sync_pending_approvals(conn)
+            task_hub.rebuild_dispatch_queue(conn)
+            data = task_hub.overview(conn, approvals_pending=pending_count)
+            data["sync"] = {"approvals_upserted": synced_approvals}
+            data["mode_default"] = "agent"
+            data["status"] = "ok"
+            data["heartbeat"] = _heartbeat_runtime_snapshot()
+            return data
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/agent-queue")
+async def dashboard_todolist_agent_queue(
+    offset: int = 0,
+    limit: int = 60,
+    include_csi: bool = True,
+    collapse_csi: bool = True,
+    project_key: Optional[str] = None,
+):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            queue = task_hub.list_agent_queue(
+                conn,
+                offset=max(0, int(offset)),
+                limit=max(1, min(int(limit), 200)),
+                include_csi=bool(include_csi),
+                collapse_csi=bool(collapse_csi),
+                project_key=project_key,
+            )
+            return {
+                "status": "ok",
+                "items": queue.get("items") if isinstance(queue, dict) else [],
+                "pagination": queue.get("pagination") if isinstance(queue, dict) else {},
+            }
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/personal-queue")
+async def dashboard_todolist_personal_queue(limit: int = 120):
+    pending = list_approvals(status="pending")
+    pending_rows = pending if isinstance(pending, list) else []
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            items = task_hub.list_personal_queue(conn, limit=max(1, min(int(limit), 500)))
+            approval_rows = []
+            for approval in pending_rows:
+                approval_rows.append(
+                    {
+                        "approval_id": str(approval.get("approval_id") or approval.get("phase_id") or ""),
+                        "title": str(approval.get("title") or approval.get("summary") or "Approval required"),
+                        "status": str(approval.get("status") or "pending"),
+                        "priority": _approval_priority_value(approval),
+                        "focus_href": "/dashboard/todolist?mode=personal&focus=approvals",
+                        "created_at": approval.get("created_at"),
+                        "updated_at": approval.get("updated_at"),
+                        "approval": approval,
+                    }
+                )
+            approval_rows.sort(key=lambda row: int(row.get("priority") or 0), reverse=True)
+            human_rows = [item for item in items if _is_human_personal_queue_item(item)]
+            return {
+                "status": "ok",
+                "items": items,
+                "approval_priority_rows": approval_rows,
+                "banner": {
+                    "show": len(human_rows) > 0,
+                    "text": (
+                        f"{len(human_rows)} human task{'s' if len(human_rows) != 1 else ''} pending"
+                        if human_rows
+                        else ""
+                    ),
+                    "focus_href": "/dashboard/todolist?mode=personal&focus=human-tasks" if human_rows else "",
+                },
+            }
+        finally:
+            conn.close()
+
+
+def _is_human_personal_queue_item(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    source_kind = str(item.get("source_kind") or "").strip().lower()
+    if source_kind in {"csi_recommendation", "approval"}:
+        return True
+    labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+    normalized_labels = {str(label).strip().lower() for label in labels}
+    if "needs-human" in normalized_labels or "human-task" in normalized_labels:
+        return True
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    if bool(metadata.get("requires_human")):
+        return True
+    owner = str(metadata.get("owner") or "").strip().lower()
+    return owner in {"human", "human_in_loop", "human-in-loop"}
+
+
+@app.get("/api/v1/dashboard/human-actions/highlight")
+async def dashboard_human_actions_highlight(task_limit: int = 120, notification_limit: int = 60):
+    _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            personal_items = task_hub.list_personal_queue(conn, limit=max(1, min(int(task_limit), 500)))
+        finally:
+            conn.close()
+
+    human_tasks = [item for item in personal_items if _is_human_personal_queue_item(item)]
+    actionable_notifications: list[dict[str, Any]] = []
+    try:
+        events = _query_activity_events(
+            limit=max(1, min(int(notification_limit), 500)),
+            requires_action=True,
+            apply_default_window=False,
+        )
+        for item in events:
+            if str(item.get("event_class") or "") != "notification":
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            focus_href = str(metadata.get("focus_href") or "").strip()
+            actionable_notifications.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "kind": str(item.get("kind") or ""),
+                    "title": str(item.get("title") or ""),
+                    "summary": str(item.get("summary") or ""),
+                    "severity": str(item.get("severity") or "info"),
+                    "status": str(item.get("status") or "new"),
+                    "requires_action": bool(item.get("requires_action")),
+                    "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
+                    "focus_href": (
+                        focus_href
+                        if focus_href
+                        else "/dashboard/todolist?mode=personal&focus=human-tasks"
+                    ),
+                    "metadata": metadata,
+                }
+            )
     except Exception as exc:
-        logger.warning(f"Failed todolist heartbeat summary: {exc}")
-        return {"status": "error", "detail": str(exc)}
+        logger.debug("Failed querying actionable notifications: %s", exc)
+        fallback_rows = [item for item in list(_notifications) if bool(item.get("requires_action"))]
+        for item in fallback_rows[-max(1, min(int(notification_limit), 500)):][::-1]:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            focus_href = str(metadata.get("focus_href") or "").strip()
+            actionable_notifications.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "kind": str(item.get("kind") or ""),
+                    "title": str(item.get("title") or ""),
+                    "summary": str(item.get("summary") or ""),
+                    "severity": str(item.get("severity") or "info"),
+                    "status": str(item.get("status") or "new"),
+                    "requires_action": True,
+                    "created_at": str(item.get("created_at") or _utc_now_iso()),
+                    "focus_href": (
+                        focus_href
+                        if focus_href
+                        else "/dashboard/todolist?mode=personal&focus=human-tasks"
+                    ),
+                    "metadata": metadata,
+                }
+            )
+
+    banner_show = len(human_tasks) > 0 or len(actionable_notifications) > 0
+    if human_tasks:
+        banner_text = f"{len(human_tasks)} human task{'s' if len(human_tasks) != 1 else ''} pending"
+        banner_focus = "/dashboard/todolist?mode=personal&focus=human-tasks"
+    elif actionable_notifications:
+        banner_text = (
+            f"{len(actionable_notifications)} actionable notification"
+            f"{'s' if len(actionable_notifications) != 1 else ''} pending"
+        )
+        banner_focus = str(actionable_notifications[0].get("focus_href") or "/dashboard/notifications")
+    else:
+        banner_text = ""
+        banner_focus = ""
+
+    return {
+        "status": "ok",
+        "pending_count": len(human_tasks),
+        "actionable_notifications_count": len(actionable_notifications),
+        "human_tasks": human_tasks,
+        "actionable_notifications": actionable_notifications,
+        "banner": {
+            "show": banner_show,
+            "text": banner_text,
+            "focus_href": banner_focus,
+        },
+    }
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/action")
+async def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRequest):
+    action = str(payload.action or "").strip().lower()
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            updated = task_hub.perform_task_action(
+                conn,
+                task_id=str(task_id or "").strip(),
+                action=action,
+                reason=str(payload.reason or "").strip(),
+                note=str(payload.note or "").strip(),
+                agent_id=str(payload.agent_id or "dashboard_operator").strip() or "dashboard_operator",
+            )
+            return {"status": "ok", "item": updated}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+
+def _task_history_links_for_session(session_id: str) -> dict[str, str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"session_id": "", "session_href": "", "run_log_href": "", "run_log_path": ""}
+    session_href = f"/dashboard/sessions?session_id={urllib.parse.quote(sid, safe='')}"
+    run_log_rel = f"{sid}/run.log"
+    run_log_href = _storage_explorer_href(scope="workspaces", path=run_log_rel, preview=run_log_rel)
+    run_log_path = str((WORKSPACES_DIR / sid / "run.log").resolve())
+    return {
+        "session_id": sid,
+        "session_href": session_href,
+        "run_log_href": run_log_href,
+        "run_log_path": run_log_path,
+    }
+
+
+@app.get("/api/v1/dashboard/todolist/completed")
+async def dashboard_todolist_completed(limit: int = 60):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            rows = task_hub.list_completed_tasks(conn, limit=max(1, min(int(limit), 500)))
+        finally:
+            conn.close()
+
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row) if isinstance(row, dict) else {}
+        assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
+        links = _task_history_links_for_session(str(assignment.get("session_id") or ""))
+        item["links"] = links
+        enriched.append(item)
+    return {"status": "ok", "items": enriched}
+
+
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/history")
+async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            history = task_hub.get_task_history(
+                conn,
+                task_id=str(task_id or "").strip(),
+                limit=max(1, min(int(limit), 500)),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        finally:
+            conn.close()
+
+    assignments = history.get("assignments") if isinstance(history.get("assignments"), list) else []
+    enriched_assignments: list[dict[str, Any]] = []
+    for row in assignments:
+        record = dict(row) if isinstance(row, dict) else {}
+        links = _task_history_links_for_session(str(record.get("session_id") or ""))
+        record["links"] = links
+        enriched_assignments.append(record)
+    history["assignments"] = enriched_assignments
+    return {"status": "ok", **history}
+
+
+@app.get("/api/v1/dashboard/todolist/agent-activity")
+async def dashboard_todolist_agent_activity():
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            return {"status": "ok", **task_hub.get_agent_activity(conn)}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/dispatch-queue")
+async def dashboard_todolist_dispatch_queue(limit: int = 120):
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            task_hub.rebuild_dispatch_queue(conn)
+            queue = task_hub.get_dispatch_queue(conn, limit=max(1, min(int(limit), 500)))
+            return {"status": "ok", **queue}
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/dispatch-queue/rebuild")
+async def dashboard_todolist_dispatch_queue_rebuild():
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            summary = task_hub.rebuild_dispatch_queue(conn)
+            return {"status": "ok", **summary}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/approvals/highlight")
+async def dashboard_approvals_highlight():
+    pending = list_approvals(status="pending")
+    rows = []
+    for approval in pending if isinstance(pending, list) else []:
+        rows.append(
+            {
+                "approval_id": str(approval.get("approval_id") or approval.get("phase_id") or ""),
+                "title": str(approval.get("title") or approval.get("summary") or "Approval required"),
+                "status": str(approval.get("status") or "pending"),
+                "priority": _approval_priority_value(approval),
+                "focus_href": "/dashboard/todolist?mode=personal&focus=approvals",
+                "metadata": approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {},
+                "created_at": approval.get("created_at"),
+                "updated_at": approval.get("updated_at"),
+            }
+        )
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            agent_queue = task_hub.list_agent_queue(conn, limit=100)
+            agent_items = agent_queue.get("items") if isinstance(agent_queue, dict) else []
+        finally:
+            conn.close()
+
+    for item in agent_items:
+        if bool(item.get("must_complete")) and str(item.get("status") or "") in ("needs_review", "blocked"):
+            rows.append({
+                "approval_id": str(item.get("task_id") or ""),
+                "title": f"Action Required: {item.get('title')}",
+                "status": str(item.get("status")),
+                "priority": 5, 
+                "focus_href": "/dashboard/todolist?mode=agent",
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+            })
+
+    rows.sort(key=lambda item: int(item.get("priority") or 0), reverse=True)
+    return {
+        "status": "ok",
+        "pending_count": len(rows),
+        "approvals": rows,
+        "banner": {
+            "show": len(rows) > 0,
+            "text": f"{len(rows)} urgent action{'s' if len(rows) != 1 else ''} pending" if rows else "",
+        },
+    }
 
 
 @app.get("/api/v1/dashboard/notifications")
@@ -11695,87 +14750,85 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         source_context=source_context,
     )
 
-    try:
-        from universal_agent.services.todoist_service import TodoService
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Todoist service unavailable: {exc}")
-
-    try:
-        todoist = TodoService()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Todoist not configured: {exc}")
-
     if _system_command_is_status_query(text):
-        summary = todoist.heartbeat_summary()
-        pipeline = todoist.get_pipeline_summary()
+        pending_approvals = list_approvals(status="pending")
+        pending_count = len(pending_approvals if isinstance(pending_approvals, list) else [])
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                approvals_upserted = _task_hub_sync_pending_approvals(conn)
+                rebuild_summary = task_hub.rebuild_dispatch_queue(conn)
+                overview = task_hub.overview(conn, approvals_pending=pending_count)
+                dispatch = task_hub.get_dispatch_queue(conn, limit=20)
+                agent_activity = task_hub.get_agent_activity(conn)
+                mirror_policy = task_hub.get_mirror_policy(conn)
+                mirror_metrics = task_hub.get_mirror_metrics(conn)
+            finally:
+                conn.close()
         return {
             "ok": True,
             "lane": "system",
             "intent": "status_query",
-            "interpreted": {"query": text, "scope": "todoist"},
-            "todoist": {
-                "summary": summary,
-                "pipeline": pipeline,
+            "interpreted": {"query": text, "scope": "task_hub"},
+            "task_hub": {
+                "overview": overview,
+                "dispatch": dispatch,
+                "agent_activity": agent_activity,
+                "sync": {"approvals_upserted": approvals_upserted},
+                "dispatch_rebuild": rebuild_summary,
+                "mirror": {
+                    "policy": mirror_policy,
+                    "metrics": mirror_metrics,
+                },
             },
             "dry_run": dry_run,
         }
 
-    if _system_command_is_brainstorm_capture(text):
-        content, schedule_text = _extract_system_command_content_and_schedule(text)
-        if not content:
-            content = text
-        interpreted = {
-            "content": content,
-            "schedule_text": schedule_text,
-            "priority": _system_command_priority_from_text(text),
-            "source_page": source_page,
-            "source_context": source_context,
-        }
-        if dry_run:
-            return {
-                "ok": True,
-                "lane": "system",
-                "intent": "capture_idea",
-                "interpreted": interpreted,
-                "dry_run": True,
-            }
-        task = todoist.record_idea(
-            content=content,
-            description=task_description,
-            source_session_id=source_session_id,
-            impact="M",
-            effort="M",
-        )
-        _add_notification(
-            kind="system_command_idea_recorded",
-            title="Idea Captured",
-            message=f"Todoist brainstorm idea captured: {content[:120]}",
-            severity="info",
-            metadata={
-                "source": "system_command",
-                "source_page": source_page,
-                "todoist_task_id": str(task.get("id") or ""),
-            },
-        )
-        return {
-            "ok": True,
-            "lane": "system",
-            "intent": "capture_idea",
-            "interpreted": interpreted,
-            "todoist": {"task": task},
-            "dry_run": False,
-        }
-
+    is_brainstorm = _system_command_is_brainstorm_capture(text)
     content, schedule_text = _extract_system_command_content_and_schedule(text)
     if not content:
         content = _strip_system_command_prefix(text) or text
-    priority = _system_command_priority_from_text(text)
-    section = "scheduled" if schedule_text else "background"
+
+    priority_text = _system_command_priority_from_text(text)
+    priority_map = {"low": 1, "medium": 2, "high": 3, "urgent": 4}
+    priority_value = int(priority_map.get(priority_text, 2))
+    schedule_section = "scheduled" if schedule_text else "background"
+    is_personal = is_brainstorm or _system_command_is_personal_task(text)
+    repeat_schedule = bool(schedule_text and _schedule_text_suggests_repeat(schedule_text))
+    is_schedule_instruction = bool(schedule_text and not is_personal)
+    if is_schedule_instruction:
+        priority_value = max(priority_value, 4)
+    must_complete = bool(is_schedule_instruction and not repeat_schedule)
+    intent = "capture_idea" if is_brainstorm else ("schedule_task" if schedule_text else "capture_task")
+
+    due_at_iso: Optional[str] = None
+    if schedule_text and not repeat_schedule:
+        run_at_ts = parse_run_at(schedule_text, timezone_name=timezone_name)
+        if run_at_ts is not None:
+            due_at_iso = datetime.fromtimestamp(float(run_at_ts), tz=timezone.utc).isoformat()
+
+    project_key = "proactive" if is_brainstorm else "immediate"
+    labels = ["system-lane"]
+    if is_brainstorm:
+        labels.extend(["brainstorm", "human"])
+    elif is_personal:
+        labels.extend(["human", "personal-reminder"])
+    else:
+        labels.append("agent-ready")
+    if is_schedule_instruction:
+        labels.append("schedule-command")
+    if must_complete:
+        labels.append("must-complete")
+
     interpreted = {
         "content": content,
         "schedule_text": schedule_text,
-        "priority": priority,
-        "section": section,
+        "priority": priority_text,
+        "section": schedule_section,
+        "project_key": project_key,
+        "personal_task": is_personal,
+        "agent_ready": not is_personal,
+        "repeat_schedule": repeat_schedule,
         "source_page": source_page,
         "source_context": source_context,
     }
@@ -11783,19 +14836,120 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         return {
             "ok": True,
             "lane": "system",
-            "intent": "schedule_task" if schedule_text else "capture_task",
+            "intent": intent,
             "interpreted": interpreted,
             "dry_run": True,
         }
 
-    task = todoist.create_task(
+    hub_task: dict[str, Any] = {}
+    mirror_policy: dict[str, Any] = {}
+    mirror_class = "personal" if is_personal else "internal_only"
+    should_mirror = False
+    task_id = _system_command_task_id(
         content=content,
-        description=task_description,
-        priority=priority,
-        section=section,
-        due_string=schedule_text or None,
-        labels=["agent-ready", "system-lane"],
+        schedule_text=schedule_text,
+        source_page=source_page,
+        source_session_id=source_session_id,
+        intent=intent,
+        repeat_schedule=repeat_schedule,
     )
+    duplicate_parked = 0
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            mirror_policy = task_hub.get_mirror_policy(conn)
+            should_mirror = _task_hub_should_mirror(mirror_policy, mirror_class)
+            hub_task = task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": task_id,
+                    "source_kind": "system_command",
+                    "source_ref": source_session_id or "",
+                    "title": content,
+                    "description": task_description,
+                    "project_key": project_key,
+                    "priority": priority_value,
+                    "due_at": due_at_iso,
+                    "labels": labels,
+                    "status": "open",
+                    "must_complete": must_complete,
+                    "agent_ready": not is_personal,
+                    "mirror_status": "mirror_eligible" if should_mirror else "internal_only",
+                    "metadata": {
+                        "source_page": source_page,
+                        "source_context": source_context,
+                        "source_session_id": source_session_id or "",
+                        "schedule_text": schedule_text or "",
+                        "repeat_schedule": repeat_schedule,
+                        "intent": intent,
+                        "dispatch_hint": "system_schedule_instruction" if is_schedule_instruction else "",
+                    },
+                },
+            )
+            duplicate_parked = _park_duplicate_system_command_tasks(
+                conn,
+                keep_task_id=str(hub_task.get("task_id") or ""),
+                content=content,
+                schedule_text=schedule_text,
+                source_page=source_page,
+                source_session_id=source_session_id,
+                intent=intent,
+                repeat_schedule=repeat_schedule,
+            )
+            task_hub.rebuild_dispatch_queue(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+    mirrored_task: Optional[dict[str, Any]] = None
+    mirror_state = "not_attempted"
+    mirror_error = ""
+    if should_mirror:
+        mirror_state = "skipped"
+        try:
+            from universal_agent.services.todoist_service import TodoService
+
+            todoist = TodoService()
+            mirror_labels = sorted({*labels, "ua-mirror"})
+            mirror_project_key = "proactive" if is_brainstorm else "immediate"
+            mirror_section = "inbox" if is_brainstorm else ("scheduled" if schedule_text else "background")
+            mirrored_task = todoist.create_personal_task(
+                content=content,
+                description=task_description,
+                priority=priority_text,
+                section=mirror_section,
+                labels=mirror_labels,
+                due_string=schedule_text or None,
+                project_key=mirror_project_key,
+                upsert_key=str(hub_task.get("task_id") or ""),
+            )
+            mirror_state = "synced"
+        except Exception as exc:
+            mirror_state = "sync_failed"
+            mirror_error = str(exc)
+            logger.warning("System command Todoist mirror failed: %s", exc)
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            task_hub.upsert_mirror_map(
+                conn,
+                task_id=str(hub_task.get("task_id") or ""),
+                todoist_task_id=str((mirrored_task or {}).get("id") or "").strip() or None,
+                mirror_class=mirror_class,
+                mirror_state=mirror_state,
+                last_error=mirror_error or None,
+            )
+            hub_task = task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": str(hub_task.get("task_id") or ""),
+                    "mirror_status": mirror_state,
+                },
+            )
+            task_hub.rebuild_dispatch_queue(conn)
+        finally:
+            conn.close()
 
     cron_job: Optional[dict[str, Any]] = None
     cron_bridge_status: Optional[str] = None
@@ -11804,111 +14958,43 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     )
     if schedule_text and _cron_service and enable_cron_bridge:
         try:
-            task_id = str(task.get("id") or "").strip()
-            repeat = _schedule_text_suggests_repeat(schedule_text)
             every_raw, cron_expr, run_at_ts, delete_after_run = _resolve_simplified_schedule_fields(
                 schedule_time=schedule_text,
-                repeat=repeat,
+                repeat=repeat_schedule,
                 timezone_name=timezone_name,
             )
-            schedule_signature = _todoist_chron_schedule_signature(
-                schedule_text=schedule_text,
-                timezone_name=timezone_name,
-                every_raw=every_raw,
-                cron_expr=cron_expr,
-                run_at_ts=run_at_ts,
-                delete_after_run=delete_after_run,
-            )
-            run_command = _build_todoist_execution_cron_command(
-                task_id=task_id,
+            run_command = _build_task_hub_execution_cron_command(
+                task_id=str(hub_task.get("task_id") or ""),
                 content=content,
             )
             job_metadata = {
                 "source": "system_command",
-                "autonomous": True,
-                "todoist_task_id": task_id,
+                "autonomous": not is_personal,
+                "task_hub_task_id": str(hub_task.get("task_id") or ""),
+                "todoist_task_id": str((mirrored_task or {}).get("id") or "").strip() or None,
                 "source_page": source_page,
                 "source_context": source_context,
-                "schedule_signature": schedule_signature,
             }
-
-            existing_mapping = _todoist_chron_mapping_get(task_id) if task_id else None
-            existing_job_id = str((existing_mapping or {}).get("cron_job_id") or "").strip()
-            existing_job = _cron_service.get_job(existing_job_id) if existing_job_id else None
-
-            if existing_job is not None:
-                existing_signature = str((existing_mapping or {}).get("schedule_signature") or "").strip()
-                if existing_signature == schedule_signature:
-                    cron_bridge_status = "reused_existing"
-                    cron_job = {
-                        **existing_job.to_dict(),
-                        "running": existing_job.job_id in _cron_service.running_jobs,
-                    }
-                else:
-                    updated_job = _cron_service.update_job(
-                        existing_job.job_id,
-                        {
-                            "command": run_command,
-                            "enabled": True,
-                            "every_seconds": every_raw if every_raw is not None else 0,
-                            "cron_expr": cron_expr,
-                            "timezone": timezone_name,
-                            "run_at": run_at_ts,
-                            "delete_after_run": delete_after_run,
-                            "metadata": job_metadata,
-                        },
-                    )
-                    cron_bridge_status = "updated_existing"
-                    cron_job = {
-                        **updated_job.to_dict(),
-                        "running": updated_job.job_id in _cron_service.running_jobs,
-                    }
-                    todoist.add_comment(
-                        task_id,
-                        f"UA updated Chron job: {updated_job.job_id} ({schedule_text})",
-                    )
-            else:
-                job = _cron_service.add_job(
-                    user_id="cron_system",
-                    workspace_dir=str(
-                        WORKSPACES_DIR
-                        / f"cron_todoist_{str(task.get('id') or 'task')[:8]}_{int(time.time())}"
-                    ),
-                    command=run_command,
-                    every_raw=every_raw,
-                    cron_expr=cron_expr,
-                    timezone=timezone_name,
-                    run_at=run_at_ts,
-                    delete_after_run=delete_after_run,
-                    enabled=True,
-                    metadata=job_metadata,
-                )
-                cron_bridge_status = "created"
-                cron_job = {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
-                todoist.add_comment(
-                    task_id,
-                    f"UA scheduled Chron job: {job.job_id} ({schedule_text})",
-                )
-
-            if cron_job and task_id:
-                _todoist_chron_mapping_upsert(
-                    task_id,
-                    {
-                        "cron_job_id": str(cron_job.get("job_id") or ""),
-                        "schedule_text": schedule_text,
-                        "schedule_signature": schedule_signature,
-                        "timezone": timezone_name,
-                        "bridge_status": cron_bridge_status or "unknown",
-                        "source_page": source_page,
-                        "source_context": source_context,
-                    },
-                )
+            job = _cron_service.add_job(
+                user_id="cron_system",
+                workspace_dir=str(
+                    WORKSPACES_DIR
+                    / f"cron_taskhub_{str(hub_task.get('task_id') or 'task').split(':')[-1][:8]}_{int(time.time())}"
+                ),
+                command=run_command,
+                every_raw=every_raw,
+                cron_expr=cron_expr,
+                timezone=timezone_name,
+                run_at=run_at_ts,
+                delete_after_run=delete_after_run,
+                enabled=True,
+                metadata=job_metadata,
+            )
+            cron_bridge_status = "created"
+            cron_job = {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
         except Exception as exc:
             cron_bridge_status = "failed"
-            todoist.add_comment(
-                str(task.get("id") or ""),
-                f"UA could not create Chron schedule automatically: {exc}",
-            )
+            logger.warning("System command cron bridge failed: %s", exc)
 
     _add_notification(
         kind="system_command_routed",
@@ -11918,19 +15004,39 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         metadata={
             "source": "system_command",
             "source_page": source_page,
-            "todoist_task_id": str(task.get("id") or ""),
+            "task_hub_task_id": str(hub_task.get("task_id") or ""),
+            "todoist_task_id": str((mirrored_task or {}).get("id") or ""),
             "schedule_text": schedule_text or "",
             "cron_job_id": str((cron_job or {}).get("job_id") or ""),
             "cron_bridge_status": cron_bridge_status or "",
             "source_context": source_context,
         },
     )
+    if is_schedule_instruction and _heartbeat_service:
+        target_sessions: list[str] = []
+        if source_session_id:
+            target_sessions = [source_session_id]
+        else:
+            target_sessions = [str(s.session_id) for s in get_gateway().list_sessions()[:5]]
+        for sid in target_sessions:
+            if sid:
+                _heartbeat_service.request_heartbeat_next(sid, reason="system_command_schedule")
     return {
         "ok": True,
         "lane": "system",
-        "intent": "schedule_task" if schedule_text else "capture_task",
+        "intent": intent,
         "interpreted": interpreted,
-        "todoist": {"task": task},
+        "task_hub": {
+            "task": hub_task,
+            "duplicates_parked": int(duplicate_parked),
+            "mirror": {
+                "class": mirror_class,
+                "requested": should_mirror,
+                "status": mirror_state,
+                "policy_mode": str(mirror_policy.get("mode") or "selective"),
+            },
+        },
+        "todoist": {"task": mirrored_task} if mirrored_task else None,
         "cron": {"job": cron_job, "status": cron_bridge_status} if cron_job or cron_bridge_status else None,
         "dry_run": False,
     }
@@ -11972,10 +15078,15 @@ async def dashboard_tutorial_run_delete(run_path: str):
 
 
 _TUTORIAL_NOTIFICATION_KINDS = frozenset({
+    "youtube_playlist_new_video",
+    "youtube_playlist_dispatch_failed",
     "youtube_tutorial_started",
+    "youtube_tutorial_progress",
+    "youtube_tutorial_interrupted",
     "youtube_tutorial_ready",
     "youtube_tutorial_failed",
     "youtube_ingest_failed",
+    "youtube_ingest_proxy_alert",
     "youtube_hook_recovery_queued",
     "tutorial_repo_bootstrap_queued",
     "tutorial_repo_bootstrap_ready",
@@ -11987,6 +15098,52 @@ _TUTORIAL_NOTIFICATION_KINDS = frozenset({
 async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: bool = False):
     """Return recent notifications relevant to the YouTube tutorial pipeline."""
     clamped = max(1, min(int(limit), 200))
+    try:
+        rows = _query_activity_events(
+            limit=max(clamped * 5, 120),
+            source_domain="tutorial",
+            apply_default_window=False,
+        )
+        matching: list[dict[str, Any]] = []
+        for row in rows:
+            if str(row.get("event_class") or "") != "notification":
+                continue
+            kind = str(row.get("kind") or "").strip()
+            if kind not in _TUTORIAL_NOTIFICATION_KINDS:
+                continue
+            status = str(row.get("status") or "new")
+            if not include_dismissed and _normalize_notification_status(status) == "dismissed":
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            created_at = str(row.get("created_at_utc") or _utc_now_iso())
+            updated_at = str(row.get("updated_at_utc") or created_at)
+            full_message = str(row.get("full_message") or "")
+            matching.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "kind": kind,
+                    "title": str(row.get("title") or ""),
+                    "message": full_message,
+                    "summary": str(row.get("summary") or _activity_summary_text(full_message)),
+                    "full_message": full_message,
+                    "session_id": row.get("session_id"),
+                    "severity": str(row.get("severity") or "info"),
+                    "requires_action": bool(row.get("requires_action")),
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "channels": ["dashboard"],
+                    "email_targets": [],
+                    "metadata": metadata,
+                }
+            )
+            if len(matching) >= clamped:
+                break
+        if matching:
+            return {"notifications": matching}
+    except Exception as exc:
+        logger.debug("Tutorial notifications activity query failed; using in-memory fallback: %s", exc)
+
     matching = [
         n for n in reversed(_notifications)
         if n.get("kind") in _TUTORIAL_NOTIFICATION_KINDS
@@ -12034,6 +15191,7 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         )
 
     manifest = _tutorial_manifest(run_dir)
+    implementation_required = _tutorial_has_code_implementation(run_dir, manifest)
     run_snapshot = {
         "run_path": run_rel,
         "run_dir": str(run_dir),
@@ -12042,7 +15200,8 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         "video_id": str(manifest.get("video_id") or ""),
         "video_url": str(manifest.get("video_url") or ""),
         "status": str(manifest.get("status") or "unknown"),
-        "files": _tutorial_key_files(run_dir),
+        "files": _tutorial_key_files(run_dir, implementation_required=implementation_required),
+        "implementation_required": implementation_required,
     }
 
     now = datetime.now(timezone.utc)
@@ -12115,6 +15274,13 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             detail="run_path must be under youtube-tutorial-creation/",
         )
 
+    manifest = _tutorial_manifest(run_dir)
+    if not _tutorial_has_code_implementation(run_dir, manifest):
+        raise HTTPException(
+            status_code=400,
+            detail="Tutorial run is concept-only; repo bootstrap is available only for code implementation runs",
+        )
+
     implementation_dir = run_dir / "implementation"
     script_path = implementation_dir / "create_new_repo.sh"
     if not implementation_dir.exists() or not implementation_dir.is_dir():
@@ -12122,7 +15288,6 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
     if not script_path.exists() or not script_path.is_file():
         raise HTTPException(status_code=400, detail="create_new_repo.sh not found for tutorial run")
 
-    manifest = _tutorial_manifest(run_dir)
     title = str(manifest.get("title") or run_dir.name).strip() or run_dir.name
     auto_repo_name = f"{_safe_slug_component(title)}__{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     repo_name = _sanitize_tutorial_repo_name(str(payload.repo_name or "").strip()) or auto_repo_name
@@ -12312,6 +15477,93 @@ async def ops_yt_playlist_watcher_poll_now(request: Request):
     return result
 
 
+@app.get("/api/v1/ops/gws-event-listener")
+async def ops_gws_event_listener_status(request: Request):
+    _require_ops_auth(request)
+    if _gws_event_listener is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    return _gws_event_listener.status()
+
+
+@app.post("/api/v1/ops/gws-event-listener/poll")
+async def ops_gws_event_listener_poll_now(request: Request):
+    _require_ops_auth(request)
+    if _gws_event_listener is None:
+        raise HTTPException(status_code=503, detail="gws event listener not initialized")
+    result = await _gws_event_listener.poll_now()
+    return result
+
+
+@app.get("/api/v1/ops/agentmail")
+async def ops_agentmail_status(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    return _agentmail_service.status()
+
+
+@app.get("/api/v1/ops/agentmail/messages")
+async def ops_agentmail_messages(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        label = request.query_params.get("label")
+        limit = min(50, int(request.query_params.get("limit", "20")))
+        messages = await _agentmail_service.list_messages(label=label, limit=limit)
+        return {"ok": True, "messages": messages, "count": len(messages)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/v1/ops/agentmail/send")
+async def ops_agentmail_send(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    to = str(body.get("to", "")).strip()
+    subject = str(body.get("subject", "")).strip()
+    text = str(body.get("text", "")).strip()
+    html = body.get("html")
+    force_send = bool(body.get("force_send", False))
+    if not to or not subject or not text:
+        raise HTTPException(status_code=400, detail="to, subject, and text are required")
+    try:
+        result = await _agentmail_service.send_email(
+            to=to, subject=subject, text=text, html=html, force_send=force_send,
+        )
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/v1/ops/agentmail/drafts/{draft_id}/send")
+async def ops_agentmail_send_draft(request: Request, draft_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        result = await _agentmail_service.send_draft(draft_id)
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/api/v1/ops/telemetry/briefing")
+async def ops_telemetry_briefing_get(request: Request):
+    _require_ops_auth(request)
+    now_ts = time.time()
+    try:
+        data = _collect_autonomous_activity_rows(now_ts=now_ts)
+        return {"ok": True, "briefing_data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
 async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
     _require_ops_auth(request)
@@ -12357,6 +15609,13 @@ async def ops_tutorial_bootstrap_bundle(request: Request, job_id: str):
         raise HTTPException(status_code=400, detail="tutorial_run_path must be under youtube-tutorial-creation/")
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail="Tutorial run directory not found")
+
+    manifest = _tutorial_manifest(run_dir)
+    if not _tutorial_has_code_implementation(run_dir, manifest):
+        raise HTTPException(
+            status_code=400,
+            detail="Tutorial run is concept-only; bootstrap bundle is unavailable",
+        )
 
     implementation_dir = run_dir / "implementation"
     script_path = implementation_dir / "create_new_repo.sh"
@@ -12507,12 +15766,23 @@ async def wake_heartbeat(request: HeartbeatWakeRequest):
             _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
         return {"status": "queued", "session_id": session_id, "reason": reason, "mode": mode}
 
-    for session_id in list(_sessions.keys()):
+    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during heartbeat wake sweep", sid)
+
+    for session_id in sorted(target_sessions):
         if mode == "next":
             _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
         else:
             _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
-    return {"status": "queued", "count": len(_sessions), "reason": reason, "mode": mode}
+    return {"status": "queued", "count": len(target_sessions), "reason": reason, "mode": mode}
 
 
 @app.get("/api/v1/heartbeat/last")
@@ -13194,23 +16464,124 @@ def _system_command_is_status_query(text: str) -> bool:
     return has_query_verb and bool(re.search(r"\b(todo|todoist|to-?do)\b", lowered))
 
 
+def _system_command_is_personal_task(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return bool(
+        re.search(
+            r"\b(remind me|for me|personal reminder|my reminder|don't let me forget|follow up with me)\b",
+            lowered,
+        )
+    )
+
+
 def _system_command_is_brainstorm_capture(text: str) -> bool:
     lowered = str(text or "").strip().lower()
     return bool(re.search(r"\b(idea|brainstorm|backlog|capture this)\b", lowered))
 
 
-def _build_todoist_execution_cron_command(*, task_id: str, content: str) -> str:
+def _system_command_task_id(
+    *,
+    content: str,
+    schedule_text: Optional[str],
+    source_page: str,
+    source_session_id: str,
+    intent: str,
+    repeat_schedule: bool,
+) -> str:
+    signature = {
+        "content": str(content or "").strip().lower(),
+        "schedule_text": str(schedule_text or "").strip().lower(),
+        "source_page": str(source_page or "").strip().lower(),
+        "source_session_id": str(source_session_id or "").strip().lower(),
+        "intent": str(intent or "").strip().lower(),
+        "repeat_schedule": bool(repeat_schedule),
+    }
+    raw = json.dumps(signature, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return f"scmd:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _park_duplicate_system_command_tasks(
+    conn: sqlite3.Connection,
+    *,
+    keep_task_id: str,
+    content: str,
+    schedule_text: Optional[str],
+    source_page: str,
+    source_session_id: str,
+    intent: str,
+    repeat_schedule: bool,
+) -> int:
+    rows = conn.execute(
+        """
+        SELECT task_id, metadata_json
+        FROM task_hub_items
+        WHERE source_kind = 'system_command'
+          AND task_id <> ?
+          AND title = ?
+          AND status IN ('open', 'in_progress', 'blocked', 'needs_review')
+        """,
+        (str(keep_task_id or ""), str(content or "").strip()),
+    ).fetchall()
+    parked = 0
+    now_iso = _utc_now_iso()
+    target_schedule = str(schedule_text or "").strip().lower()
+    target_source_page = str(source_page or "").strip().lower()
+    target_source_session = str(source_session_id or "").strip().lower()
+    target_intent = str(intent or "").strip().lower()
+    for row in rows:
+        metadata = {}
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except Exception:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if str(metadata.get("schedule_text") or "").strip().lower() != target_schedule:
+            continue
+        if str(metadata.get("source_page") or "").strip().lower() != target_source_page:
+            continue
+        if str(metadata.get("source_session_id") or "").strip().lower() != target_source_session:
+            continue
+        if str(metadata.get("intent") or "").strip().lower() != target_intent:
+            continue
+        if bool(metadata.get("repeat_schedule")) != bool(repeat_schedule):
+            continue
+        metadata["duplicate_of_task_id"] = str(keep_task_id or "")
+        metadata["duplicate_parked_at"] = now_iso
+        metadata["duplicate_reason"] = "system_command_signature"
+        conn.execute(
+            """
+            UPDATE task_hub_items
+            SET status = ?, stale_state = ?, seizure_state = ?, metadata_json = ?, updated_at = ?
+            WHERE task_id = ?
+            """,
+            (
+                task_hub.TASK_STATUS_PARKED,
+                "duplicate_parked",
+                "unseized",
+                json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+                now_iso,
+                str(row["task_id"] or ""),
+            ),
+        )
+        parked += 1
+    return parked
+
+
+def _build_task_hub_execution_cron_command(*, task_id: str, content: str) -> str:
     safe_content = str(content or "").strip()
     if len(safe_content) > 200:
         safe_content = safe_content[:197] + "..."
     return "\n".join(
         [
-            "Autonomous Todoist execution task.",
-            f"todoist_task_id: {task_id}",
-            f"todoist_task_content: {safe_content}",
+            "Autonomous Task Hub execution task.",
+            f"task_hub_task_id: {task_id}",
+            f"task_hub_task_content: {safe_content}",
             "Run the task now using available UA tools and produce concrete outputs when relevant.",
-            "If completed, call internal Todoist task action to complete the task with a concise summary comment.",
-            "If blocked, add a Todoist comment describing exactly what is missing.",
+            "If completed, update the corresponding Task Hub task as completed with a concise summary note.",
+            "If blocked, update the Task Hub task metadata with exactly what is missing.",
         ]
     )
 
@@ -14407,6 +17778,51 @@ async def delete_session(session_id: str, request: Request):
 # Ops / Control Plane Endpoints
 # =============================================================================
 
+_DYNAMIC_MCP_ALLOWED_TYPES_DEFAULT = {"stdio", "http", "sse", "sdk", "claude_ai_proxy"}
+_DYNAMIC_MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def _dynamic_mcp_allowed_types() -> set[str]:
+    raw = str(os.getenv("UA_DYNAMIC_MCP_ALLOWED_TYPES") or "").strip()
+    if not raw:
+        return set(_DYNAMIC_MCP_ALLOWED_TYPES_DEFAULT)
+    parsed = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    return parsed or set(_DYNAMIC_MCP_ALLOWED_TYPES_DEFAULT)
+
+
+def _validate_dynamic_mcp_config(
+    server_name: str, server_config: dict[str, Any]
+) -> dict[str, Any]:
+    name = str(server_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="server_name is required")
+    if not _DYNAMIC_MCP_SERVER_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid server_name format")
+    if not isinstance(server_config, dict) or not server_config:
+        raise HTTPException(status_code=400, detail="server_config must be an object")
+
+    config_type = str(server_config.get("type") or "").strip().lower()
+    if not config_type:
+        raise HTTPException(status_code=400, detail="server_config.type is required")
+    if config_type not in _dynamic_mcp_allowed_types():
+        raise HTTPException(status_code=400, detail=f"MCP server type '{config_type}' is not allowed")
+
+    if config_type == "stdio":
+        command = str(server_config.get("command") or "").strip()
+        if not command:
+            raise HTTPException(status_code=400, detail="stdio MCP config requires command")
+    elif config_type in {"http", "sse"}:
+        url = str(server_config.get("url") or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail=f"{config_type} MCP config requires url")
+
+    return dict(server_config)
+
+
+def _require_dynamic_mcp_enabled() -> None:
+    if not dynamic_mcp_enabled(default=False):
+        raise HTTPException(status_code=404, detail="Dynamic MCP controls are disabled")
+
 
 @app.post("/api/v1/ops/notifications")
 async def ops_create_notification(request: Request, payload: OpsNotificationCreateRequest):
@@ -14460,6 +17876,104 @@ async def ops_list_sessions(
     except Exception:
         logger.exception("CRITICAL: Failed to list sessions")
         raise HTTPException(status_code=500, detail="Internal Server Error: check gateway logs")
+
+
+@app.get("/api/v1/ops/sdk/sessions")
+async def ops_list_sdk_sessions(
+    request: Request,
+    limit: int = 100,
+):
+    _require_ops_auth(request)
+    if not sdk_session_history_enabled(default=False):
+        raise HTTPException(status_code=404, detail="SDK session history is disabled")
+    rows = session_history_adapter.list_session_summaries_for_workspace(
+        WORKSPACES_DIR,
+        limit=max(1, min(int(limit), 500)),
+    )
+    return {"sessions": rows, "total": len(rows)}
+
+
+@app.get("/api/v1/ops/sdk/sessions/{session_id}/messages")
+async def ops_get_sdk_session_messages(
+    request: Request,
+    session_id: str,
+    limit: int = 100,
+    offset: int = 0,
+):
+    _require_ops_auth(request)
+    if not sdk_session_history_enabled(default=False):
+        raise HTTPException(status_code=404, detail="SDK session history is disabled")
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    rows = session_history_adapter.get_session_messages(
+        safe_session_id,
+        directory=str(WORKSPACES_DIR.resolve()),
+        limit=max(1, min(int(limit), 1000)),
+        offset=max(0, int(offset)),
+    )
+    return {"session_id": safe_session_id, "messages": rows, "total": len(rows)}
+
+
+@app.get("/api/v1/ops/sessions/{session_id}/mcp")
+async def ops_get_session_mcp_status(request: Request, session_id: str):
+    _require_ops_auth(request)
+    _require_dynamic_mcp_enabled()
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    gateway = get_gateway()
+    try:
+        status = await gateway.get_session_mcp_status(safe_session_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not active" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail)
+    return {"session_id": safe_session_id, "status": status}
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/mcp")
+async def ops_add_session_mcp_server(
+    request: Request,
+    session_id: str,
+    payload: OpsMcpAddServerRequest,
+):
+    _require_ops_auth(request)
+    _require_dynamic_mcp_enabled()
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    server_config = _validate_dynamic_mcp_config(payload.server_name, payload.server_config)
+    gateway = get_gateway()
+    try:
+        result = await gateway.add_session_mcp_server(
+            safe_session_id,
+            str(payload.server_name).strip(),
+            server_config,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not active" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail)
+    return {"session_id": safe_session_id, **result}
+
+
+@app.delete("/api/v1/ops/sessions/{session_id}/mcp")
+async def ops_remove_session_mcp_server(
+    request: Request,
+    session_id: str,
+    payload: OpsMcpRemoveServerRequest,
+):
+    _require_ops_auth(request)
+    _require_dynamic_mcp_enabled()
+    safe_session_id = _sanitize_session_id_or_400(session_id)
+    server_name = str(payload.server_name or "").strip()
+    if not server_name:
+        raise HTTPException(status_code=400, detail="server_name is required")
+    gateway = get_gateway()
+    try:
+        result = await gateway.remove_session_mcp_server(safe_session_id, server_name)
+    except ValueError as exc:
+        detail = str(exc)
+        lowered = detail.lower()
+        if "not active" in lowered:
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    return {"session_id": safe_session_id, **result}
 
 
 @app.post("/api/v1/ops/sessions/cancel")
@@ -14991,6 +18505,7 @@ async def ops_vp_dispatch_mission(
                 reply_mode=(body.reply_mode or "async").strip() or "async",
                 priority=int(body.priority or 100),
                 run_id=(body.run_id or "").strip() or None,
+                execution_mode=(body.execution_mode or "sdk").strip() or "sdk",
             ),
             workspace_base=WORKSPACES_DIR,
         )
@@ -15024,6 +18539,44 @@ async def ops_vp_cancel_mission(
         raise
     except Exception as exc:
         raise _vp_api_error("cancel_mission", exc) from exc
+
+
+@app.get("/api/v1/ops/session-budget/status")
+async def ops_session_budget_status(request: Request):
+    """Return current session budget slot usage for the dashboard."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.session_budget import SessionBudget
+        budget = SessionBudget.get_instance()
+        return budget.status()
+    except Exception as exc:
+        raise _vp_api_error("session_budget_status", exc) from exc
+
+
+class HeavyModeRequest(BaseModel):
+    consumer_id: str
+    action: str  # "enter" or "exit"
+
+
+@app.post("/api/v1/ops/session-budget/heavy-mode")
+async def ops_session_budget_heavy_mode(request: Request, body: HeavyModeRequest):
+    """Enter or exit heavy mission mode."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.session_budget import SessionBudget
+        budget = SessionBudget.get_instance()
+        if body.action == "enter":
+            ok = budget.enter_heavy_mode(body.consumer_id)
+            return {"heavy_mode_active": budget.heavy_mode_active, "entered": ok}
+        elif body.action == "exit":
+            budget.exit_heavy_mode(body.consumer_id)
+            return {"heavy_mode_active": budget.heavy_mode_active, "exited": True}
+        else:
+            raise HTTPException(status_code=400, detail="action must be 'enter' or 'exit'")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("session_budget_heavy_mode", exc) from exc
 
 
 @app.get("/api/v1/ops/metrics/coder-vp")
@@ -15447,6 +19000,49 @@ async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequ
     }
 
 
+@app.get("/api/v1/ops/todoist/mirror-policy")
+async def ops_todoist_mirror_policy_get(request: Request):
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            return {"status": "ok", "policy": task_hub.get_mirror_policy(conn)}
+        finally:
+            conn.close()
+
+
+@app.patch("/api/v1/ops/todoist/mirror-policy")
+async def ops_todoist_mirror_policy_patch(request: Request, payload: TodoistMirrorPolicyPatchRequest):
+    _require_ops_auth(request)
+    patch = payload.model_dump(exclude_none=True)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            policy = task_hub.update_mirror_policy(conn, patch)
+            return {"status": "ok", "policy": policy}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/ops/todoist/mirror-metrics")
+async def ops_todoist_mirror_metrics(request: Request):
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            return {"status": "ok", "metrics": task_hub.get_mirror_metrics(conn)}
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/ops/memory/compact-task-intel")
+async def ops_memory_compact_task_intel(request: Request, payload: MemoryTaskCompactRequest):
+    _require_ops_auth(request)
+    apply_changes = bool(payload.apply) if payload.apply is not None else (not bool(payload.dry_run))
+    result = _compact_task_memory_indexes(dry_run=not apply_changes)
+    return {"status": "ok", **result}
+
+
 @app.post("/api/v1/ops/workspaces/purge")
 async def ops_workspaces_purge(request: Request, confirm: bool = False):
     """
@@ -15609,6 +19205,36 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
     }
 
 
+def _should_inject_system_events_for_request(metadata: dict[str, Any]) -> bool:
+    source_hint = str(metadata.get("source") or "user").strip().lower()
+    include_system_events = bool(metadata.get("include_system_events"))
+    # Prevent cross-lane contamination in interactive user chat turns.
+    # System events are only injected for explicit system/heartbeat lanes
+    # (or when caller opts in via include_system_events).
+    return include_system_events or source_hint in {
+        "system",
+        "cron",
+        "heartbeat",
+        "autonomous",
+    }
+
+
+@app.websocket("/ws/agent")
+async def websocket_agent_compat(websocket: WebSocket):
+    """Compatibility shim for the web-ui chat page.
+
+    The Next.js frontend connects to ``/ws/agent?session_id=<id>`` while the
+    canonical gateway endpoint is ``/api/v1/sessions/{id}/stream``.  This thin
+    wrapper extracts the *session_id* from the query string and delegates to
+    :func:`websocket_stream`.
+    """
+    raw_session_id = (websocket.query_params.get("session_id") or "").strip()
+    if not raw_session_id:
+        # Generate a default session id so brand-new chat windows still work.
+        raw_session_id = f"session_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    await websocket_stream(websocket, raw_session_id)
+
+
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
     if _FACTORY_POLICY.gateway_mode == "health_only":
@@ -15704,6 +19330,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             },
                             session_id=session_id,
                         )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": False},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
                         continue
 
                     raw_data = msg.get("data", {}) or {}
@@ -15711,9 +19346,10 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     metadata = raw_data.get("metadata", {}) or {}
                     if not isinstance(metadata, dict):
                         metadata = {"raw": metadata}
-                    system_events = _drain_system_events(session_id)
-                    if system_events:
-                        metadata = {**metadata, "system_events": system_events}
+                    if _should_inject_system_events_for_request(metadata):
+                        system_events = _drain_system_events(session_id)
+                        if system_events:
+                            metadata = {**metadata, "system_events": system_events}
                     policy = _session_policy(session)
                     memory_policy = normalize_memory_policy(policy.get("memory"))
 
@@ -15729,6 +19365,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "data": {
                                         "message": "Pending request is not approved yet. Approve it first, then resume."
                                     },
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": False},
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                                 session_id=session_id,
@@ -15794,6 +19439,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                                 session_id=session_id,
                             )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": False},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
                             continue
 
                         if decision == "require_approval":
@@ -15851,6 +19505,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                                 session_id=session_id,
                             )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": False},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
                             continue
 
                         force_complex = raw_data.get("force_complex", False)
@@ -15882,6 +19545,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             },
                             session_id=session_id,
                         )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": False, "turn_id": admitted_turn_id},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
                         continue
                     if decision == "duplicate_in_progress":
                         _increment_metric("turn_duplicate_in_progress")
@@ -15894,6 +19566,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "turn_id": admitted_turn_id,
                                     "message": "This turn is already in progress.",
                                 },
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": False, "turn_id": admitted_turn_id},
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
@@ -15955,6 +19636,27 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         execution_start_ts = time.time()
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
+
+                        # Open run.log for append so session history can be rehydrated later
+                        _run_log_handle = None
+                        if session.workspace_dir:
+                            try:
+                                _rl_path = Path(session.workspace_dir) / "run.log"
+                                _run_log_handle = open(_rl_path, "a", encoding="utf-8")
+                                _ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                _run_log_handle.write(f"[{_ts0}] 👤 USER: {user_input}\n")
+                                _run_log_handle.flush()
+                            except Exception:
+                                _run_log_handle = None
+
+                        def _rl_write(line: str) -> None:
+                            if _run_log_handle:
+                                try:
+                                    _run_log_handle.write(line + "\n")
+                                    _run_log_handle.flush()
+                                except Exception:
+                                    pass
+
                         try:
                             # Execute the request and stream to all attached clients for this session.
                             async for event in gateway.execute(session, request):
@@ -16001,6 +19703,32 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         event.data,
                                     )
                                 await manager.broadcast(session_id, agent_event_to_wire(event))
+
+                                # Persist event to run.log for later rehydration
+                                _rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                if event.type == EventType.TEXT and isinstance(event.data, dict):
+                                    _rl_text = (event.data.get("text") or "").rstrip()
+                                    if _rl_text and event.data.get("final") is True:
+                                        _rl_write(f"[{_rl_ts}] 🤖 ASSISTANT: {_rl_text}")
+                                elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
+                                    _rl_tname = event.data.get("name") or "unknown"
+                                    _rl_write(f"[{_rl_ts}] 🔧 TOOL CALL: {_rl_tname}")
+                                elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
+                                    _rl_tsize = event.data.get("content_size") or 0
+                                    _rl_write(f"[{_rl_ts}] 📦 TOOL RESULT ({_rl_tsize} bytes)")
+                                elif event.type == EventType.ERROR and isinstance(event.data, dict):
+                                    _rl_err = event.data.get("message") or event.data.get("error") or "unknown"
+                                    _rl_write(f"[{_rl_ts}] ERROR: {_rl_err}")
+
+                            # Close the run.log handle
+                            if _run_log_handle:
+                                try:
+                                    _rl_ts_end = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                    _run_log_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_call_count} tool calls) ===\n")
+                                    _run_log_handle.close()
+                                except Exception:
+                                    pass
+                                _run_log_handle = None
 
                             if execution_duration_seconds <= 0:
                                 execution_duration_seconds = round(time.time() - execution_start_ts, 3)
@@ -16202,6 +19930,11 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     },
                                 )
                         finally:
+                            if _run_log_handle:
+                                try:
+                                    _run_log_handle.close()
+                                except Exception:
+                                    pass
                             _decrement_session_active_runs(session_id, run_source=request_source)
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)

@@ -65,6 +65,65 @@ def _classify_api_error(error: str, detail: str) -> str:
     if any(
         hint in lowered
         for hint in (
+            "video is no longer available",
+            "video unavailable",
+            "video is unavailable",
+            "this video is unavailable",
+            "this video is private",
+            "private video",
+            "has been removed by the uploader",
+            "video has been removed",
+            "not available in your country",
+        )
+    ):
+        return "video_unavailable"
+    if any(
+        hint in lowered
+        for hint in (
+            "subtitles are disabled",
+            "transcripts are disabled",
+            "no transcripts were found",
+            "no transcript available",
+            "no transcripts available",
+            "transcript is not available",
+        )
+    ):
+        return "transcript_unavailable"
+    if any(
+        hint in lowered
+        for hint in (
+            "invalid video id",
+            "video id is invalid",
+            "malformed video id",
+        )
+    ):
+        return "invalid_video_target"
+    if any(
+        hint in lowered
+        for hint in (
+            "402 payment required",
+            "payment required",
+            "quota exceeded",
+            "insufficient balance",
+            "billing",
+            "out of credits",
+        )
+    ):
+        return "proxy_quota_or_billing"
+    if any(
+        hint in lowered
+        for hint in (
+            "407 proxy authentication required",
+            "proxy auth",
+            "proxy authentication",
+            "invalid proxy credentials",
+            "bad proxy credentials",
+        )
+    ):
+        return "proxy_auth_failed"
+    if any(
+        hint in lowered
+        for hint in (
             "requestblocked",
             "ipblocked",
             "ip has been blocked",
@@ -140,9 +199,27 @@ def _build_webshare_proxy_config() -> tuple[Optional[Any], str]:
         or ""
     )
     locations = _parse_proxy_locations(location_raw)
+    domain_name = (
+        os.getenv("WEBSHARE_PROXY_HOST")
+        or os.getenv("PROXY_HOST")
+        or "proxy.webshare.io"
+    ).strip() or "proxy.webshare.io"
+    proxy_port_raw = (
+        os.getenv("WEBSHARE_PROXY_PORT")
+        or os.getenv("PROXY_PORT")
+        or "80"
+    ).strip()
+    try:
+        proxy_port = int(proxy_port_raw)
+    except Exception:
+        proxy_port = 80
+    if proxy_port <= 0 or proxy_port > 65535:
+        proxy_port = 80
     kwargs: dict[str, Any] = {
         "proxy_username": username,
         "proxy_password": password,
+        "domain_name": domain_name,
+        "proxy_port": proxy_port,
     }
     if locations:
         kwargs["filter_ip_locations"] = locations
@@ -277,6 +354,7 @@ def ingest_youtube_transcript(
     timeout_seconds: int = 120,
     max_chars: int = 180_000,
     min_chars: int = 160,
+    require_proxy: bool = False,
 ) -> dict[str, Any]:
     resolved_url, resolved_video_id = normalize_video_target(video_url, video_id)
     if not resolved_url:
@@ -302,6 +380,34 @@ def ingest_youtube_transcript(
 
     proxy_config, proxy_mode = _build_webshare_proxy_config()
     proxy_url = str(getattr(proxy_config, "url", "") or "")
+
+    if require_proxy and proxy_config is None:
+        _reason = (
+            "PROXY NOT CONFIGURED — YouTube transcript fetch BLOCKED. "
+            "Residential proxy is REQUIRED to avoid IP bans on this server. "
+        )
+        if proxy_mode == "module_unavailable":
+            _reason += (
+                "The youtube_transcript_api.proxies module could not be imported. "
+                "Install or upgrade youtube-transcript-api to a version that includes WebshareProxyConfig."
+            )
+        else:
+            _reason += (
+                "Set PROXY_USERNAME and PROXY_PASSWORD environment variables "
+                "(Webshare residential proxy credentials). "
+                "Without a residential proxy, requests from this server's datacenter IP WILL be blocked by YouTube."
+            )
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "proxy_not_configured",
+            "failure_class": "proxy_not_configured",
+            "detail": _reason,
+            "video_url": resolved_url,
+            "video_id": resolved_video_id,
+            "proxy_mode": proxy_mode,
+            "attempts": [],
+        }
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         transcript_future = executor.submit(
@@ -389,6 +495,7 @@ def ingest_youtube_transcript(
         "transcript_chars": len(transcript_text),
         "transcript_truncated": truncated,
         "source": source or "unknown",
+        "proxy_mode": proxy_mode,
         "transcript_quality_score": quality_score,
         "transcript_quality_pass": True,
         "metadata": metadata,

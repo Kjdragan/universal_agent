@@ -1,0 +1,11 @@
+{
+  "eval_id": 2,
+  "eval_name": "eval-2-notebooklm-flow",
+  "prompt": "Create a notebook called 'Q2 Strategy', add this URL as a source, run a fast research query on AI ROI, and generate a brief audio overview with confirmation guardrails.",
+  "assertions": [
+    "Response reports notebook/source/research/audio identifiers",
+    "Response indicates confirmation guardrail behavior for audio generation",
+    "Execution is reported as successful/completed",
+    "Response uses structured contract fields (status and path_used)"
+  ]
+}

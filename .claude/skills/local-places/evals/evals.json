@@ -1,0 +1,45 @@
+{
+    "skill_name": "local-places",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "Find me a good Italian restaurant open now, somewhere in Soho London, with a rating above 4. Keep it affordable.",
+            "expected_output": "Server ping check runs first. Location resolved via POST /locations/resolve for 'Soho, London'. Location coordinates used in POST /places/search with filters: types=['restaurant'], open_now=true, min_rating=4.0, price_levels=[1,2]. Results presented to user with name, rating, address, and open status.",
+            "files": [],
+            "expectations": [
+                "GET /ping (or equivalent server check) is called before any search",
+                "POST /locations/resolve is called with location_text='Soho, London' or similar",
+                "POST /places/search is called with a location_bias using lat/lng from the resolve response",
+                "filters.types contains at most 1 element (e.g. 'restaurant')",
+                "filters.open_now is set to true",
+                "filters.min_rating is 4.0 (a valid 0.5-increment value)",
+                "filters.price_levels includes only 1 and/or 2 (affordable)",
+                "Results are presented to user with name, rating, and address"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "Show me more results for the coffee shops we just searched.",
+            "expected_output": "If a next_page_token was returned from the previous search, POST /places/search is called again with that page_token set. Results from the next page are presented.",
+            "files": [],
+            "expectations": [
+                "POST /places/search is called with the same query and filters as the previous search",
+                "The page_token field is populated from the previous response's next_page_token",
+                "If no next_page_token was available from the previous search, the agent informs the user there are no more results"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "Get me the full details for the first result you found — I want the phone number and hours.",
+            "expected_output": "GET /places/{place_id} is called using the place_id from a previous search result. The phone, website, and hours fields are included in the response to the user.",
+            "files": [],
+            "expectations": [
+                "GET /places/{place_id} is called with the place_id from a prior search result",
+                "The phone field is presented if available",
+                "The hours field (list of day:time strings) is presented if available",
+                "The website field is presented if available",
+                "The agent does NOT call /places/search again unnecessarily"
+            ]
+        }
+    ]
+}

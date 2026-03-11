@@ -1,14 +1,24 @@
-# Phase 3c: Local Factory Deployment
+# Phase 3c: Local Factory Deployment (Infisical-First)
 
-**Status:** Not Started
+**Status:** In Progress (updated 2026-03-06)
 **Priority:** High — validates the entire distributed factory model end-to-end
-**Depends on:** Phase 3a (consumer), Phase 3b (heartbeat)
+**Depends on:** Phase 3a-bridge (Redis→SQLite bridge), VP worker system (complete — Track B)
 
 ---
 
+## What Changed (2026-03-06)
+
+- **Infisical is the canonical parameter store** — `.env.factory.template` is removed from this spec
+- **Environments are named by machine** (e.g., `kevins-desktop`), not by role
+- **Provisioning is automated** via `scripts/infisical_provision_factory_env.py`
+- **The consumer is the VP worker system** (not a new consumer built from scratch) — Phase 3a-bridge bridges Redis → VP SQLite
+- **Infisical `kevins-desktop` environment** has been provisioned (3c.0 complete)
+
+See `corporation/docs/INFISICAL_ENVIRONMENTS.md` for the full environment strategy.
+
 ## Objective
 
-Create a repeatable playbook and automation scripts to stand up a LOCAL_WORKER factory on any machine (starting with the local desktop). The factory must: clone the repo, install deps, configure `.env` via Infisical, register with HQ, and start the generalized mission consumer loop.
+Create a repeatable playbook and automation scripts to stand up a LOCAL_WORKER factory on any machine (starting with Kevin's desktop). The factory must: clone the repo, install deps, configure a minimal `.env` with Infisical credentials only (all other params come from Infisical), and start the Redis→SQLite bridge + VP worker loop.
 
 ## Current Desktop Environment
 
@@ -26,27 +36,31 @@ Create a repeatable playbook and automation scripts to stand up a LOCAL_WORKER f
 # Deploy a LOCAL_WORKER factory on the current machine.
 #
 # Usage:
-#   UA_OPS_TOKEN=<token> bash scripts/deploy_local_factory.sh [--factory-id <id>]
+#   bash scripts/deploy_local_factory.sh \
+#     --infisical-client-id <id> \
+#     --infisical-client-secret <secret> \
+#     --infisical-project-id <project> \
+#     --infisical-environment kevins-desktop
 #
 # Prerequisites:
 #   - git, uv, Python 3.11+
 #   - Network access to HQ Redis (Tailscale or public with UFW)
-#   - REDIS_PASSWORD available (via Infisical or manual .env)
+#   - Infisical machine identity for this machine's environment
 #
 # What this does:
 #   1. Clones/updates the repo to ~/universal_agent_factory/
 #   2. Runs uv sync to install dependencies
-#   3. Creates .env from template with LOCAL_WORKER defaults
-#   4. Installs systemd user service
-#   5. Starts the factory consumer
-#   6. Validates registration with HQ
+#   3. Creates minimal .env with ONLY Infisical credentials
+#   4. Validates Infisical connectivity (secrets load successfully)
+#   5. Installs systemd user services (gateway + bridge + VP workers)
+#   6. Starts the factory
+#   7. Validates registration with HQ
 
 set -euo pipefail
 
 FACTORY_DIR="${UA_FACTORY_DIR:-$HOME/universal_agent_factory}"
 REPO_URL="${UA_REPO_URL:-https://github.com/openclaw/universal_agent.git}"
 BRANCH="${UA_FACTORY_BRANCH:-main}"
-FACTORY_ID="${1:-$(hostname)}"
 
 # ... (full implementation in the actual script)
 ```
@@ -54,48 +68,27 @@ FACTORY_ID="${1:-$(hostname)}"
 **Key steps:**
 1. Clone or `git pull` the repo into `$FACTORY_DIR`
 2. `cd $FACTORY_DIR && uv sync`
-3. Generate `.env` from `.env.factory.template` with `FACTORY_ROLE=LOCAL_WORKER`
-4. If Infisical is configured, pull secrets for the `LOCAL_WORKER` environment
-5. Install systemd user service via `scripts/install_local_factory_service.sh`
+3. Create minimal `.env` with Infisical credentials only (4 keys)
+4. Validate: `python -c "from universal_agent.infisical_loader import ...; ..."` succeeds
+5. Install systemd user services
 6. `systemctl --user start universal-agent-local-factory`
 7. Verify: poll HQ `GET /api/v1/factory/registrations` until factory appears
 
-### 2. `.env.factory.template`
+### 2. Minimal `.env` (Infisical credentials only)
+
+The factory `.env` file contains **only** Infisical machine identity credentials. All other parameters (FACTORY_ROLE, Redis config, API keys, feature flags) are loaded from Infisical at startup.
 
 ```env
-# Universal Agent Local Factory Configuration
-# Copy to .env and fill in values, or use Infisical injection.
-
-FACTORY_ROLE=LOCAL_WORKER
-UA_DEPLOYMENT_PROFILE=local_workstation
-UA_FACTORY_ID=<factory-hostname-or-uuid>
-
-# VP Coder (enable if this factory should handle coding tasks)
-ENABLE_VP_CODER=true
-
-# LLM Provider (optional override for cost management)
-# LLM_PROVIDER_OVERRIDE=ZAI
-
-# Redis delegation bus (required for receiving missions)
-UA_DELEGATION_REDIS_ENABLED=1
-UA_REDIS_HOST=<vps-tailnet-ip-or-public-ip>
-UA_REDIS_PORT=6379
-UA_REDIS_DB=0
-REDIS_PASSWORD=<from-infisical-or-manual>
-UA_DELEGATION_STREAM_NAME=ua:missions:delegation
-UA_DELEGATION_CONSUMER_GROUP=ua_workers
-UA_DELEGATION_DLQ_STREAM=ua:missions:dlq
-
-# HQ connection (for heartbeat registration and ops API calls)
-UA_HQ_BASE_URL=https://api.clearspringcg.com
-UA_OPS_TOKEN=<short-lived-ops-token-from-hq>
-
-# Infisical (optional — if using centralized secrets)
-# INFISICAL_CLIENT_ID=
-# INFISICAL_CLIENT_SECRET=
-# INFISICAL_PROJECT_ID=
-# INFISICAL_ENVIRONMENT=LOCAL_WORKER
+# Universal Agent Local Factory — Infisical Bootstrap
+# All runtime parameters are loaded from Infisical at startup.
+# This file contains ONLY the credentials needed to authenticate.
+INFISICAL_CLIENT_ID=<machine-identity-from-infisical>
+INFISICAL_CLIENT_SECRET=<machine-identity-from-infisical>
+INFISICAL_PROJECT_ID=<shared-project-id>
+INFISICAL_ENVIRONMENT=kevins-desktop
 ```
+
+> **Note:** There is no `.env.factory.template` file. Use `scripts/infisical_provision_factory_env.py` to create the Infisical environment, then create this minimal `.env` with the machine identity credentials.
 
 ### 3. `scripts/install_local_factory_service.sh`
 
@@ -122,24 +115,26 @@ echo "Installed $SERVICE_NAME. Start with: systemctl --user start $SERVICE_NAME"
 
 ```ini
 [Unit]
-Description=Universal Agent Local Factory Consumer
+Description=Universal Agent Local Factory (Gateway + Bridge + VP Workers)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/universal_agent_factory
-ExecStart=%h/universal_agent_factory/.venv/bin/python -m universal_agent.delegation
+ExecStart=%h/universal_agent_factory/.venv/bin/python -m universal_agent.gateway_server
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-# Env file for secrets
+# Minimal .env with Infisical credentials only
 EnvironmentFile=%h/universal_agent_factory/.env
 
 [Install]
 WantedBy=default.target
 ```
+
+> **Note:** The gateway server starts the Redis→SQLite bridge and VP worker loops as background tasks when `FACTORY_ROLE=LOCAL_WORKER`. No separate consumer process needed.
 
 ### 5. `corporation/docs/LOCAL_FACTORY_SETUP.md`
 
@@ -151,21 +146,20 @@ Operator-facing setup guide:
 ## Prerequisites
 - Linux desktop with Python 3.11+ and uv
 - Network access to HQ VPS (Tailscale recommended, or public with UFW rules)
-- REDIS_PASSWORD (from Infisical or ask HQ admin)
-- UA_OPS_TOKEN (from HQ: POST /auth/ops-token)
+- Infisical machine identity for your machine's environment
 
 ## Quick Start
-1. Get an ops token from HQ
-2. Run the deploy script
-3. Verify in Corporation View
-
-## Detailed Steps
-...
+1. Provision Infisical environment (if not already done):
+   python scripts/infisical_provision_factory_env.py \
+     --machine-name "Kevin's Desktop" --machine-slug kevins-desktop --factory-role LOCAL_WORKER
+2. Create machine identity in Infisical dashboard (scoped to kevins-desktop env)
+3. Run the deploy script with Infisical credentials
+4. Verify in Corporation View
 
 ## Troubleshooting
 - Factory not appearing in Corporation View → check Redis connectivity
-- Missions not being consumed → check consumer logs: journalctl --user -u universal-agent-local-factory
-- Stale heartbeat → check network path to HQ
+- Missions not being consumed → check bridge logs: journalctl --user -u universal-agent-local-factory
+- Infisical auth failure → verify machine identity credentials in .env
 ...
 ```
 
@@ -174,8 +168,8 @@ Operator-facing setup guide:
 ### `corporation/infrastructure/redis/redis.conf`
 - Add comment documenting Tailscale IP range for UFW rules
 
-### `.env.example` / `.env.sample`
-- Add `FACTORY_ROLE`, `UA_FACTORY_ID`, and delegation env vars with comments
+### `src/universal_agent/gateway_server.py`
+- When `FACTORY_ROLE=LOCAL_WORKER`: start Redis→SQLite bridge + VP worker loops as background tasks
 
 ## Tests to Create
 
@@ -183,17 +177,23 @@ Operator-facing setup guide:
 
 ```python
 # Test cases (these are integration-level, may need --live flag):
-# 1. .env.factory.template contains all required vars
-# 2. deploy_local_factory.sh is executable and passes shellcheck
-# 3. systemd service file is valid (systemd-analyze verify)
-# 4. Consumer starts and registers with mock HQ endpoint
+# 1. deploy_local_factory.sh is executable and passes shellcheck
+# 2. systemd service file is valid (systemd-analyze verify)
+# 3. Factory starts with Infisical kevins-desktop environment and registers with mock HQ
+# 4. Infisical provisioning script creates correct override keys
 ```
 
 ## Validation Commands
 
 ```bash
+# Provision Infisical environment (one-time)
+python scripts/infisical_provision_factory_env.py \
+  --machine-name "Kevin's Desktop" --machine-slug kevins-desktop --factory-role LOCAL_WORKER
+
 # Deploy
-UA_OPS_TOKEN=<token> bash scripts/deploy_local_factory.sh
+bash scripts/deploy_local_factory.sh \
+  --infisical-client-id <id> --infisical-client-secret <secret> \
+  --infisical-project-id <project> --infisical-environment kevins-desktop
 
 # Check service status
 systemctl --user status universal-agent-local-factory
@@ -210,19 +210,19 @@ curl -H "x-ua-ops-token: <token>" https://api.clearspringcg.com/api/v1/factory/r
 
 ## Acceptance Criteria
 
-- [ ] `scripts/deploy_local_factory.sh` clones, installs, configures, and starts factory
-- [ ] Factory consumer starts and registers with HQ
-- [ ] Factory appears in Corporation View with correct capabilities
-- [ ] Factory heartbeat keeps `last_seen_at` fresh (< 2 min)
-- [ ] Factory receives and completes a test tutorial bootstrap delegation
-- [ ] `LOCAL_FACTORY_SETUP.md` guide is complete and accurate
-- [ ] `.env.factory.template` contains all required variables
-- [ ] Systemd service restarts on failure
+- [x] Infisical `kevins-desktop` environment provisioned via `scripts/infisical_provision_factory_env.py`
+- [x] `scripts/deploy_local_factory.sh` clones, installs, creates minimal .env, starts factory
+- [ ] Factory starts with Infisical environment and loads all parameters (needs machine identity)
+- [ ] Factory appears in Corporation View with correct capabilities (needs live test)
+- [ ] Factory receives and completes a test delegation via Redis→SQLite bridge (needs live test)
+- [x] `LOCAL_FACTORY_SETUP.md` guide is complete and accurate
+- [x] Systemd service restarts on failure (`Restart=on-failure` in service file)
 
 ## Security Checklist
 
-- [ ] Factory `.env` never committed to git (`.gitignore` entry)
-- [ ] REDIS_PASSWORD sourced from Infisical or manual secure transfer
-- [ ] UA_OPS_TOKEN is short-lived (1hr) — factory must refresh periodically or use Infisical-injected long-lived token
-- [ ] Factory runs as unprivileged user (not root)
-- [ ] Factory workspace directory is scoped (`~/universal_agent_factory/`)
+- [x] Factory `.env` contains only Infisical credentials (never API keys or secrets directly)
+- [x] Factory `.env` never committed to git (`.gitignore` entry — deploy script sets mode 600)
+- [ ] Infisical machine identity scoped to `kevins-desktop` environment only (needs dashboard creation)
+- [x] All secrets (REDIS_PASSWORD, API keys, etc.) loaded from Infisical at runtime
+- [x] Factory runs as unprivileged user (systemd user service, not root)
+- [x] Factory workspace directory is scoped (`~/universal_agent_factory/`)

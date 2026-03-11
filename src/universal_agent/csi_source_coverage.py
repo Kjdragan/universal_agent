@@ -77,11 +77,23 @@ _FEATURE_FLAGS = {
 }
 
 # Known source types
-KNOWN_SOURCES = {"youtube_rss", "reddit", "hackernews", "x_twitter", "threads", "bluesky"}
+KNOWN_SOURCES = {
+    "youtube_rss",
+    "reddit",
+    "hackernews",
+    "x_twitter",
+    "threads",
+    "threads_owned",
+    "threads_trends_seeded",
+    "threads_trends_broad",
+    "bluesky",
+}
 
 
 def is_source_enabled(source_type: str) -> bool:
     """Check if a source type is enabled via feature flag."""
+    if str(source_type).startswith("threads_"):
+        return bool(_FEATURE_FLAGS.get("csi_source_threads", False))
     flag_key = f"csi_source_{source_type}"
     if flag_key in _FEATURE_FLAGS:
         return _FEATURE_FLAGS[flag_key]

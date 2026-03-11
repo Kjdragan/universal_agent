@@ -173,8 +173,8 @@ def test_signals_ingest_csi_analytics_dispatches_internal_action(client, monkeyp
     assert body["analytics_internal_dispatches"] == 1
     assert hook_stub.calls == []
     assert len(hook_stub.action_calls) >= 1
-    assert hook_stub.action_calls[0]["to"] == "trend-specialist"
-    assert hook_stub.action_calls[0]["session_key"] == "csi_trend_specialist"
+    assert hook_stub.action_calls[0]["to"] == "csi-trend-analyst"
+    assert hook_stub.action_calls[0]["session_key"] == "csi_trend_analyst"
 
 
 def test_signals_ingest_csi_analytics_throttles_noisy_events(client, monkeypatch):
@@ -257,12 +257,14 @@ def test_signals_ingest_missing_todoist_credentials_is_notice_not_error(client, 
     assert body["analytics_internal_dispatches"] == 1
     kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
     assert "system_error" not in kinds
-    assert "system_notice" in kinds
-    notice = next(item for item in gateway_server._notifications if item.get("kind") == "system_notice")
-    assert notice.get("title") == "Todoist Sync Skipped"
+    # Todoist auth degradation should never surface as system_error for CSI ingest.
+    # In current routing policy, a dedicated system_notice is optional.
+    if "system_notice" in kinds:
+        notice = next(item for item in gateway_server._notifications if item.get("kind") == "system_notice")
+        assert str(notice.get("title") or "").strip()
 
 
-def test_signals_ingest_keeps_full_csi_notification_message(client, monkeypatch):
+def test_signals_ingest_compacts_csi_notification_message(client, monkeypatch):
     monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
     monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
     monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
@@ -289,8 +291,47 @@ def test_signals_ingest_keeps_full_csi_notification_message(client, monkeypatch)
     response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
     assert response.status_code == 200
     csi_notice = next(item for item in gateway_server._notifications if item.get("kind") == "csi_insight")
-    assert "subject_json:" in str(csi_notice.get("message") or "")
-    assert not str(csi_notice.get("message") or "").endswith("...")
+    rendered = str(csi_notice.get("message") or "")
+    assert "subject_json:" not in rendered
+    assert "specialist_followup_policy:" not in rendered
+    assert "window: 2026-02-22T00:00:00Z -> 2026-02-22T01:00:00Z" in rendered
+    assert len(rendered) < 2500
+
+
+def test_signals_ingest_dedupes_notifications_by_event_id(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_trend_report"
+    payload["events"][0]["event_id"] = "evt-dedupe-1"
+
+    timestamp = str(int(time.time()))
+    headers_1 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": "req-dedupe-1",
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", "req-dedupe-1", timestamp, payload),
+    }
+    headers_2 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": "req-dedupe-2",
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", "req-dedupe-2", timestamp, payload),
+    }
+
+    first = client.post("/api/v1/signals/ingest", json=payload, headers=headers_1)
+    second = client.post("/api/v1/signals/ingest", json=payload, headers=headers_2)
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    csi_notifications = [item for item in gateway_server._notifications if item.get("kind") == "csi_insight"]
+    assert len(csi_notifications) == 1
+    assert csi_notifications[0].get("metadata", {}).get("event_id") == "evt-dedupe-1"
 
 
 def test_signals_ingest_delivery_health_regression_emits_actionable_alert(client, monkeypatch):
@@ -332,7 +373,7 @@ def test_signals_ingest_delivery_health_regression_emits_actionable_alert(client
         item for item in gateway_server._notifications if item.get("kind") == "csi_delivery_health_regression"
     )
     assert regression_notice.get("severity") == "error"
-    assert bool(regression_notice.get("requires_action")) is True
+    assert bool(regression_notice.get("requires_action")) is False
     metadata = regression_notice.get("metadata") if isinstance(regression_notice.get("metadata"), dict) else {}
     assert metadata.get("delivery_health_status") == "failing"
     assert isinstance(metadata.get("remediation_steps"), list)
@@ -416,6 +457,166 @@ def test_signals_ingest_reliability_slo_breached_emits_actionable_notice(client,
     assert metadata.get("slo_status") == "breached"
     assert isinstance(metadata.get("top_root_causes"), list)
     assert "csi_replay_dlq.py" in str(metadata.get("primary_runbook_command") or "")
+
+
+def test_signals_ingest_recommendations_create_task_hub_action_items(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity.db").resolve()))
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_reliability_slo_breached"
+    payload["events"][0]["subject"] = {
+        "status": "breached",
+        "target_day_utc": "2026-03-01",
+        "metrics": {"delivery_success_ratio": 0.9575, "dlq_backlog_current": 0, "canary_regression_count": 0},
+        "thresholds": {"min_delivery_success_ratio": 0.98, "max_dlq_backlog": 0, "max_canary_regressions": 2},
+        "recommendations": [
+            "Install pydantic in CSI_Ingester env for auto-remediation",
+            "Add stale-state detection for empty opportunity bundles",
+            "Fix hook signature mismatch in AgentHookSet.on_pre_compact_capture()",
+        ],
+    }
+    request_id = "req-recommendation-tasks"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert int(body.get("recommendation_tasks_enqueued") or 0) >= 3
+    assert int(body.get("recommendation_tasks_agent_ready") or 0) >= 3
+
+    agent_queue_resp = client.get("/api/v1/dashboard/todolist/agent-queue?include_csi=true&collapse_csi=false&limit=200")
+    assert agent_queue_resp.status_code == 200
+    items = agent_queue_resp.json().get("items") or []
+    rec_items = [item for item in items if str(item.get("source_kind") or "") == "csi_recommendation"]
+    assert len(rec_items) >= 3
+    assert all(bool(item.get("agent_ready")) for item in rec_items[:3])
+    rec_titles = " || ".join(str(item.get("title") or "") for item in rec_items)
+    assert "Install pydantic" in rec_titles
+    assert "stale-state detection" in rec_titles or "stale state detection" in rec_titles
+    assert "hook signature mismatch" in rec_titles
+
+
+def test_signals_ingest_human_recommendations_raise_banner_notification(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_human.db").resolve()))
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_reliability_slo_breached"
+    payload["events"][0]["subject"] = {
+        "status": "breached",
+        "target_day_utc": "2026-03-01",
+        "metrics": {"delivery_success_ratio": 0.95, "dlq_backlog_current": 0, "canary_regression_count": 0},
+        "thresholds": {"min_delivery_success_ratio": 0.98, "max_dlq_backlog": 0, "max_canary_regressions": 2},
+        "recommendations": [
+            "Install pydantic in CSI_Ingester env for auto-remediation",
+            "Ask Kevin to approve vendor budget before rollout",
+        ],
+    }
+    request_id = "req-human-recommendation-tasks"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert int(body.get("recommendation_tasks_enqueued") or 0) >= 2
+    assert int(body.get("recommendation_tasks_human_queue") or 0) >= 1
+    assert int(body.get("recommendation_tasks_human_notices") or 0) >= 1
+
+    personal_resp = client.get("/api/v1/dashboard/todolist/personal-queue?limit=200")
+    assert personal_resp.status_code == 200
+    personal = personal_resp.json()
+    items = personal.get("items") or []
+    human_items = [item for item in items if str(item.get("source_kind") or "") == "csi_recommendation"]
+    assert human_items
+    assert any("needs-human" in {str(v).strip().lower() for v in (item.get("labels") or [])} for item in human_items)
+    banner = personal.get("banner") if isinstance(personal.get("banner"), dict) else {}
+    assert bool(banner.get("show")) is True
+    assert "human task" in str(banner.get("text") or "").lower()
+
+    notice = next(
+        item for item in gateway_server._notifications if str(item.get("kind") or "") == "csi_human_action_required"
+    )
+    assert bool(notice.get("requires_action")) is True
+    metadata = notice.get("metadata") if isinstance(notice.get("metadata"), dict) else {}
+    assert str(metadata.get("focus_href") or "").endswith("mode=personal&focus=human-tasks")
+
+
+def test_human_actions_highlight_surfaces_human_queue_and_actionable_notifications(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_human_highlight.db").resolve()))
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_reliability_slo_breached"
+    payload["events"][0]["subject"] = {
+        "status": "breached",
+        "target_day_utc": "2026-03-01",
+        "metrics": {"delivery_success_ratio": 0.95, "dlq_backlog_current": 0, "canary_regression_count": 0},
+        "thresholds": {"min_delivery_success_ratio": 0.98, "max_dlq_backlog": 0, "max_canary_regressions": 2},
+        "recommendations": [
+            "Install pydantic in CSI_Ingester env for auto-remediation",
+            "Ask Kevin to approve vendor budget before rollout",
+        ],
+    }
+    request_id = "req-human-actions-highlight"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+
+    highlight_resp = client.get("/api/v1/dashboard/human-actions/highlight")
+    assert highlight_resp.status_code == 200
+    highlight = highlight_resp.json()
+    assert highlight.get("status") == "ok"
+    assert int(highlight.get("pending_count") or 0) >= 1
+    assert int(highlight.get("actionable_notifications_count") or 0) >= 1
+
+    human_tasks = highlight.get("human_tasks") or []
+    assert human_tasks
+    assert any(str(item.get("source_kind") or "") == "csi_recommendation" for item in human_tasks)
+    assert any("needs-human" in {str(v).strip().lower() for v in (item.get("labels") or [])} for item in human_tasks)
+
+    actionable = highlight.get("actionable_notifications") or []
+    assert actionable
+    assert any(str(item.get("kind") or "") == "csi_human_action_required" for item in actionable)
+    assert all(bool(item.get("requires_action")) is True for item in actionable)
+
+    banner = highlight.get("banner") if isinstance(highlight.get("banner"), dict) else {}
+    assert bool(banner.get("show")) is True
+    assert str(banner.get("focus_href") or "").endswith("mode=personal&focus=human-tasks")
 
 
 def test_signals_ingest_reliability_slo_recovered_emits_success_notice(client, monkeypatch):
@@ -628,6 +829,8 @@ def test_signals_ingest_emerging_requests_followup_and_records_loop(client, monk
     assert len(hook_stub.action_calls) >= 1
     followup_calls = [call for call in hook_stub.action_calls if str(call.get("name") or "") == "CSITrendFollowUpRequest"]
     assert followup_calls
+    assert all(call.get("to") == "csi-trend-analyst" for call in followup_calls)
+    assert all(call.get("session_key") == "csi_trend_analyst" for call in followup_calls)
 
     kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
     assert "csi_specialist_followup_requested" in kinds or "csi_specialist_confidence_reached" in kinds

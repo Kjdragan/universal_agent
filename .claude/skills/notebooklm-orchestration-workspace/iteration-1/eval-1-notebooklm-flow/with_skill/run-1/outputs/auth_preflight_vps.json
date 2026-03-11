@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "profile": "vps",
+  "seeded": false,
+  "refreshed": false,
+  "command_path": "nlm",
+  "checks_attempted": 1,
+  "notes": [
+    "auth_check_passed"
+  ],
+  "errors": []
+}

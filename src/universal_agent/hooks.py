@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 from contextvars import ContextVar
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.constants import DISALLOWED_TOOLS, PRIMARY_ONLY_BLOCKED_TOOLS
-_TOOL_EVENT_START_TS: Optional[float] = None
+_TOOL_EVENT_START_TS: ContextVar[Optional[float]] = ContextVar("_TOOL_EVENT_START_TS", default=None)
 
 # -----------------------------------------------------------------------------
 
@@ -77,8 +77,12 @@ _RESEARCH_PIPELINE_SEARCH_MARKERS = (
     "gather information",
     "what happened",
     "news on",
-    "research",
     "look up",
+    "do some research",
+    "conduct research",
+    "research on ",
+    "research about",
+    "research this",
 )
 
 _RESEARCH_PIPELINE_REPORT_MARKERS = (
@@ -86,7 +90,8 @@ _RESEARCH_PIPELINE_REPORT_MARKERS = (
     "generate a report",
     "write a report",
     "research report",
-    "report",
+    "compile a report",
+    "put together a report",
 )
 
 _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
@@ -97,6 +102,117 @@ _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
     "send to me",
 )
 
+_YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
+    "youtu.be",
+    "youtube.com",
+    "youtube video",
+    "video id",
+    "transcript",
+    "captions",
+    "subtitles",
+)
+
+_YOUTUBE_INLINE_FETCH_MARKERS = (
+    "youtube_transcript_api",
+    "youtube-transcript-api",
+    "yt-dlp",
+    "yt_dlp",
+    "download_subtitles",
+    "get_metadata",
+    "youtu.be",
+    "youtube.com",
+)
+
+_YOUTUBE_SUBAGENT_ALIASES = {
+    "youtube-expert",
+    "youtube-explainer-expert",
+}
+
+_TASK_STOP_PLACEHOLDER_IDS = {
+    "",
+    "*",
+    "all",
+    "any",
+    "every",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "unknown",
+    "task",
+    "taskstop",
+    "task-stop",
+    "dummy",
+    "dummy-stop",
+    "placeholder",
+    "example",
+    "test",
+}
+
+
+def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
+    for key in ("task_id", "id", "target_task_id"):
+        value = tool_input.get(key)
+        if value is None:
+            continue
+        return str(value).strip()
+    return ""
+
+
+def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
+    clean_id = str(task_id or "").strip()
+    if not clean_id:
+        return "Missing `task_id`."
+
+    lowered = clean_id.lower()
+    if lowered.startswith("session_") or lowered.startswith("run_"):
+        return f"Invalid session/run identifier used as task_id ({clean_id!r})."
+    if lowered in _TASK_STOP_PLACEHOLDER_IDS:
+        return f"Invalid placeholder `task_id` ({clean_id!r})."
+
+    if "," in clean_id:
+        return "Multiple task IDs are not supported in one TaskStop call."
+
+    if any(lowered.startswith(prefix) for prefix in ("dummy", "fake", "placeholder", "example", "test-")):
+        return f"Likely fabricated `task_id` ({clean_id!r})."
+
+    # Reject weak synthetic task IDs commonly hallucinated by the model
+    # (e.g., "task_1"), which are not real SDK-emitted task IDs.
+    if lowered.startswith("task_"):
+        suffix = clean_id[5:]
+        if len(suffix) < 6:
+            return (
+                f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+                "task_id from TaskStarted/TaskProgress/TaskNotification."
+            )
+        if suffix.isdigit() and len(suffix) < 10:
+            return (
+                f"Untrusted numeric `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+                "task_id from TaskStarted/TaskProgress/TaskNotification."
+            )
+
+    # Common malformed placeholders from model retries.
+    if lowered in {"all-tasks", "stop-all", "cancel-all"}:
+        return f"Invalid bulk-stop token ({clean_id!r})."
+
+    if not any(ch.isdigit() for ch in clean_id):
+        return (
+            f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+            "task_id from TaskStarted/TaskProgress/TaskNotification."
+        )
+
+    # Golden runs should use provider-generated IDs, not natural-language aliases.
+    if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
+        has_separator = ("_" in clean_id) or ("-" in clean_id)
+        has_digit = any(ch.isdigit() for ch in clean_id)
+        if not has_separator and not has_digit:
+            return (
+                f"Untrusted `task_id` ({clean_id!r}). Use an SDK-emitted task_id from "
+                "TaskStarted/TaskProgress/TaskNotification."
+            )
+
+    return None
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -105,8 +221,7 @@ def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None
 
 def set_event_start_ts(start_ts: Optional[float]) -> None:
     """Set the start timestamp for time_offset calculation."""
-    global _TOOL_EVENT_START_TS
-    _TOOL_EVENT_START_TS = start_ts
+    _TOOL_EVENT_START_TS.set(start_ts)
 
 
 def reset_tool_event_tracking() -> None:
@@ -135,9 +250,10 @@ def _emit_event(event: AgentEvent) -> None:
 
 
 def _tool_time_offset() -> float:
-    if _TOOL_EVENT_START_TS is None:
+    _ts = _TOOL_EVENT_START_TS.get()
+    if _ts is None:
         return 0.0
-    return round(time.time() - _TOOL_EVENT_START_TS, 3)
+    return round(time.time() - _ts, 3)
 
 
 def _normalize_tool_use_id(tool_use_id: object, input_data: Optional[dict] = None) -> str:
@@ -169,15 +285,32 @@ def emit_tool_call_event(
     emitted_calls.add(tool_id)
     _EMITTED_TOOL_CALL_IDS_VAR.set(emitted_calls)
     input_payload = tool_input if isinstance(tool_input, dict) else {"value": tool_input}
+    agent_id = None
+    agent_type = None
+    parent_tool_use_id = None
+    if isinstance(input_data, dict):
+        agent_id, agent_type = _extract_hook_agent_identity(input_data)
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+    if not agent_type and isinstance(input_payload, dict):
+        fallback_type = input_payload.get("subagent_type")
+        if isinstance(fallback_type, str) and fallback_type.strip():
+            agent_type = fallback_type.strip()
+    event_data = {
+        "id": tool_id,
+        "name": tool_name or "",
+        "input": input_payload,
+        "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
+    }
+    if parent_tool_use_id:
+        event_data["parent_tool_use_id"] = str(parent_tool_use_id)
+    if agent_id:
+        event_data["agent_id"] = str(agent_id)
+    if agent_type:
+        event_data["agent_type"] = str(agent_type)
     _emit_event(
         AgentEvent(
             type=EventType.TOOL_CALL,
-            data={
-                "id": tool_id,
-                "name": tool_name or "",
-                "input": input_payload,
-                "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
-            },
+            data=event_data,
         )
     )
     return True
@@ -275,7 +408,7 @@ def _is_heartbeat_investigation_mode() -> bool:
     run_source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
     if run_source != "heartbeat":
         return False
-    raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1") or "1").strip().lower()
+    raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "0") or "0").strip().lower()
     return raw not in {"0", "false", "no", "off", ""}
 
 
@@ -286,6 +419,19 @@ def _looks_like_explicit_vp_intent(text: Any) -> bool:
     return any(pattern.search(candidate) for pattern in _VP_EXPLICIT_INTENT_PATTERNS)
 
 
+_RESEARCH_PIPELINE_MEDIA_EXCLUSIONS = (
+    "youtu.be",
+    "youtube.com",
+    "transcript",
+    "youtube video",
+    "subtitles",
+    "captions",
+    "download video",
+    "video id",
+    "podcast",
+)
+
+
 def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     candidate = str(text or "").strip().lower()
     if not candidate:
@@ -293,18 +439,92 @@ def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
     has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
     has_delivery = any(marker in candidate for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
-    # Information-gathering requests should route through specialists, with
-    # report/delivery requests treated as a stronger signal.
-    return has_search or has_report or has_delivery
+    has_research_signal = has_search or has_report
+    # Avoid false positives for media-only requests (e.g., "get transcript").
+    # Mixed requests that include media plus broader research/report instructions
+    # should still trigger research delegation.
+    has_media_hint = any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS)
+    if has_media_hint and not has_research_signal:
+        return False
+    # Delivery hints (email/pdf/send) are not enough on their own; they should
+    # only reinforce an already-research/report-oriented request.
+    if has_delivery and not has_research_signal:
+        return False
+    return has_research_signal
+
+
+def _looks_like_youtube_transcript_intent(text: Any) -> bool:
+    candidate = str(text or "").strip().lower()
+    if not candidate:
+        return False
+    return any(marker in candidate for marker in _YOUTUBE_TRANSCRIPT_INTENT_MARKERS)
+
+
+def _extract_hook_agent_identity(input_data: dict) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(input_data, dict):
+        return None, None
+    raw_agent_id = (
+        input_data.get("agent_id")
+        or input_data.get("agentId")
+        or input_data.get("agent-id")
+    )
+    raw_agent_type = (
+        input_data.get("agent_type")
+        or input_data.get("agentType")
+        or input_data.get("subagent_type")
+    )
+    agent_id = str(raw_agent_id or "").strip() or None
+    agent_type = str(raw_agent_type or "").strip() or None
+    return agent_id, agent_type
 
 
 def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Optional[str]) -> bool:
     parent_tool_use_id = input_data.get("parent_tool_use_id")
+    _agent_id, agent_type = _extract_hook_agent_identity(input_data)
+    normalized_agent_type = str(agent_type or "").strip().lower()
+    if normalized_agent_type and normalized_agent_type not in {
+        "primary",
+        "primary_agent",
+        "main",
+        "root",
+    }:
+        return True
     transcript_path = str(input_data.get("transcript_path", "") or "")
     return bool(parent_tool_use_id) or (
         bool(primary_transcript_path)
         and bool(transcript_path)
         and transcript_path != primary_transcript_path
+    )
+
+
+def _workspace_from_transcript_path(input_data: dict) -> Optional[str]:
+    transcript_path = str(input_data.get("transcript_path", "") or "").strip()
+    if not transcript_path:
+        return None
+    try:
+        candidate = Path(transcript_path).resolve()
+    except Exception:
+        return None
+
+    if candidate.name == "transcript.md":
+        parts = candidate.parts
+        if "subagent_outputs" in parts:
+            idx = parts.index("subagent_outputs")
+            return str(Path(*parts[:idx]).resolve())
+        return str(candidate.parent.resolve())
+    return None
+
+
+def _looks_like_session_workspace_path(path_value: str) -> bool:
+    try:
+        candidate = Path(path_value).resolve()
+    except Exception:
+        return False
+    if candidate.name.startswith("session_"):
+        return True
+    return (
+        (candidate / "session_policy.json").exists()
+        and (candidate / "work_products").exists()
     )
 
 
@@ -448,16 +668,29 @@ def emit_tool_result_event(
     emitted_results.add(tool_id)
     _EMITTED_TOOL_RESULT_IDS_VAR.set(emitted_results)
     content_text = _extract_tool_result_text(tool_result)
+    agent_id = None
+    agent_type = None
+    parent_tool_use_id = None
+    if isinstance(input_data, dict):
+        agent_id, agent_type = _extract_hook_agent_identity(input_data)
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+    event_data = {
+        "tool_use_id": tool_id,
+        "is_error": bool(is_error),
+        "content_preview": content_text[:2500],
+        "content_size": len(content_text),
+        "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
+    }
+    if parent_tool_use_id:
+        event_data["parent_tool_use_id"] = str(parent_tool_use_id)
+    if agent_id:
+        event_data["agent_id"] = str(agent_id)
+    if agent_type:
+        event_data["agent_type"] = str(agent_type)
     _emit_event(
         AgentEvent(
             type=EventType.TOOL_RESULT,
-            data={
-                "tool_use_id": tool_id,
-                "is_error": bool(is_error),
-                "content_preview": content_text[:2500],
-                "content_size": len(content_text),
-                "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
-            },
+            data=event_data,
         )
     )
     return True
@@ -515,10 +748,17 @@ class AgentHookSet:
         self._vp_dispatch_seen_this_turn = False
         self._requires_research_delegate_first = False
         self._research_delegate_seen_this_turn = False
+        self._requires_youtube_skill_first = False
+        self._youtube_skill_seen_this_turn = False
+        self._stopped_task_ids: set[str] = set()
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
             "/agent_run_workspaces/vp_" in workspace_norm
             and "/vp-mission-" in workspace_norm
+        )
+        self._is_cron_lane = (
+            "/agent_run_workspaces/cron_" in workspace_norm
+            or os.getenv("UA_RUN_SOURCE", "").strip().lower() == "cron"
         )
 
     def build_hooks(self) -> dict:
@@ -545,6 +785,7 @@ class AgentHookSet:
                         self.on_pre_bash_warn_dependency_installs,
                         self.on_pre_bash_block_composio_sdk,
                         self.on_pre_bash_block_playwright_non_html,
+                        self.on_pre_bash_redirect_pdf_conversion,
                         self.on_pre_bash_skill_hint,
                     ],
                 ),
@@ -619,6 +860,17 @@ class AgentHookSet:
             "read_file",
             "list_dir",
         }
+
+        # Tools that legitimately operate across session workspaces (e.g.,
+        # reading HTML from one session, writing PDF to current session).
+        CROSS_WORKSPACE_TOOLS = {
+            "mcp__internal__html_to_pdf",
+            "mcp__internal__run_research_phase",
+            "mcp__internal__run_report_generation",
+            "mcp__internal__run_research_pipeline",
+        }
+        if tool_name in CROSS_WORKSPACE_TOOLS:
+            return {}  # Allow cross-workspace access for pipeline tools
         
         # Check if tool name contains read-only patterns
         tool_lower = tool_name.lower()
@@ -738,10 +990,75 @@ class AgentHookSet:
         tool_input = input_data.get("tool_input", {}) or {}
         if not isinstance(tool_input, dict):
             tool_input = {}
+        requested_skill = ""
+        delegated_subagent = ""
         try:
-            normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
+            normalized_tool_name = parse_tool_identity(tool_name).tool_name.strip().lower()
         except Exception:
-            normalized_tool_name = tool_name.lower()
+            normalized_tool_name = tool_name.strip().lower()
+        if normalized_tool_name == "skill":
+            requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
+        elif normalized_tool_name in ("task", "agent"):
+            delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
+
+        # Ensure internal research pipeline tools receive an explicit workspace hint.
+        # This avoids dead-ends when ambient workspace env/context is absent.
+        if normalized_tool_name in {
+            "run_research_phase",
+            "run_research_pipeline",
+            "run_report_generation",
+            "mcp__internal__run_research_phase",
+            "mcp__internal__run_research_pipeline",
+            "mcp__internal__run_report_generation",
+        } and isinstance(tool_input, dict):
+            workspace_hint = (
+                _workspace_from_transcript_path(input_data)
+                or str(get_current_workspace() or "").strip()
+                or str(self.workspace_dir or "").strip()
+            )
+            if (
+                workspace_hint
+                and _looks_like_session_workspace_path(workspace_hint)
+                and not str(tool_input.get("workspace_dir", "") or "").strip()
+            ):
+                patched_tool_input = dict(tool_input)
+                patched_tool_input["workspace_dir"] = workspace_hint
+                input_data["tool_input"] = patched_tool_input
+                tool_input = patched_tool_input
+
+        if normalized_tool_name in ("taskstop", "task_stop"):
+            task_id = _extract_task_stop_id(tool_input)
+            reason = _task_stop_rejection_reason(task_id)
+            if reason:
+                return {
+                    "systemMessage": (
+                        "⚠️ Invalid TaskStop request blocked.\n\n"
+                        f"{reason}\n"
+                        "Use a concrete task ID emitted by the SDK task lifecycle messages "
+                        "(TaskStarted/TaskProgress/TaskNotification)."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    },
+                }
+            if task_id in self._stopped_task_ids:
+                reason = f"TaskStop for task_id {task_id!r} is a duplicate request."
+                return {
+                    "systemMessage": (
+                        "⚠️ Duplicate TaskStop request blocked.\n\n"
+                        f"{reason}\n"
+                        "Do not stop the same task multiple times in one session."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    },
+                }
 
         # Track transcript paths to detect sub-agent context.
         # The first transcript_path seen is the primary agent's; subsequent
@@ -756,7 +1073,66 @@ class AgentHookSet:
         if normalized_tool_name == "vp_dispatch_mission":
             self._vp_dispatch_seen_this_turn = True
 
+        if normalized_tool_name == "skill":
+            if requested_skill == "youtube-transcript-metadata":
+                self._youtube_skill_seen_this_turn = True
+
         is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+
+        if (
+            self._requires_youtube_skill_first
+            and not self._youtube_skill_seen_this_turn
+            and not self._is_vp_worker_lane
+            and not self._is_cron_lane
+        ):
+            is_mcp_youtube_direct = tool_name.lower().startswith("mcp__youtube__")
+            if is_mcp_youtube_direct:
+                logfire.info(
+                    "youtube_mcp_blocked_prefer_skill",
+                    tool_name=tool_name,
+                    run_id=self.run_id,
+                )
+                return {
+                    "systemMessage": (
+                        "⚠️ YouTube transcript workflow detected.\n\n"
+                        "Do not call `mcp__youtube__*` tools before the skill — direct calls frequently fail "
+                        "bot detection on cloud IPs.\n"
+                        "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` instead. "
+                        "It uses the hardened proxy-backed transcript+metadata path and is the correct tool here."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "youtube-transcript-metadata skill must be called before any mcp__youtube__ tool."
+                        ),
+                    },
+                }
+            if normalized_tool_name == "bash":
+                command, _, _ = _extract_bash_command(input_data)
+                lowered_command = command.lower()
+                if any(marker in lowered_command for marker in _YOUTUBE_INLINE_FETCH_MARKERS):
+                    logfire.info(
+                        "youtube_bash_blocked_prefer_skill",
+                        run_id=self.run_id,
+                    )
+                    return {
+                        "systemMessage": (
+                            "⚠️ YouTube transcript workflow detected.\n\n"
+                            "Do not run inline YouTube extraction via Bash before the skill.\n"
+                            "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` first, then continue "
+                            "with downstream research/reporting."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": (
+                                "youtube-transcript-metadata skill must run before inline Bash YouTube extraction."
+                            ),
+                        },
+                    }
         if (
             self._requires_vp_tool_path
             and not self._vp_dispatch_seen_this_turn
@@ -824,18 +1200,56 @@ class AgentHookSet:
             and not self._research_delegate_seen_this_turn
             and not is_subagent_context
             and not self._is_vp_worker_lane
+            and not self._is_cron_lane
         ):
-            if normalized_tool_name == "task":
-                delegated = str(tool_input.get("subagent_type", "") or "").strip().lower()
-                if delegated == "research-specialist":
+            # Mixed YouTube+research turns must allow ingestion to happen before
+            # the research-specialist handoff. Otherwise the turn deadlocks:
+            # research guard blocks YouTube skill/subagent, and YouTube guard
+            # blocks direct YouTube tool usage.
+            allows_youtube_ingestion_step = (
+                self._requires_youtube_skill_first
+                and (
+                    (normalized_tool_name == "skill" and requested_skill == "youtube-transcript-metadata")
+                    or (normalized_tool_name in ("task", "agent") and delegated_subagent in _YOUTUBE_SUBAGENT_ALIASES)
+                )
+            )
+            
+            # Allow read-only/context-gathering tools to run before the research delegation
+            # so the agent does not deadlock when asked to "look at this image and research it".
+            ALLOWED_PRE_DELEGATION_TOOLS = {
+                "describe_image", "mcp__internal__describe_image",
+                "preview_image", "mcp__internal__preview_image",
+                "read", "read_file", "read_document", "view",
+                "mcp__composio__read_file",
+                "memory_search", "memory_get",
+                "mcp__internal__memory_search", "mcp__internal__memory_get",
+                # SDK-native progress tracker; safe before first research delegation.
+                "todowrite",
+            }
+            if allows_youtube_ingestion_step or normalized_tool_name in ALLOWED_PRE_DELEGATION_TOOLS:
+                return {}
+
+            if normalized_tool_name in ("task", "agent"):
+                if delegated_subagent == "research-specialist":
                     self._research_delegate_seen_this_turn = True
                 else:
+                    ordering_hint = (
+                        "\nFor mixed YouTube + research turns, run YouTube ingestion first with "
+                        "`Task(subagent_type='youtube-expert', ...)` / "
+                        "`Agent(subagent_type='youtube-expert', ...)` or "
+                        "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
+                        "then delegate to `research-specialist`."
+                        if self._requires_youtube_skill_first
+                        else ""
+                    )
                     return {
                         "systemMessage": (
                             "⚠️ Report-style research workflow detected.\n\n"
                             "First tool call in this turn must be "
-                            "`Task(subagent_type='research-specialist', ...)`.\n"
+                            "`Task(subagent_type='research-specialist', ...)` or "
+                            "`Agent(subagent_type='research-specialist', ...)`.\n"
                             "Do not delegate to another specialist before the research handoff."
+                            + ordering_hint
                         ),
                         "decision": "block",
                         "hookSpecificOutput": {
@@ -847,12 +1261,23 @@ class AgentHookSet:
                         },
                     }
             else:
+                ordering_hint = (
+                    "\nFor mixed YouTube + research turns, run YouTube ingestion first with "
+                    "`Task(subagent_type='youtube-expert', ...)` / "
+                    "`Agent(subagent_type='youtube-expert', ...)` or "
+                    "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
+                    "then delegate to `research-specialist`."
+                    if self._requires_youtube_skill_first
+                    else ""
+                )
                 return {
                     "systemMessage": (
                         "⚠️ Report-style research workflow detected.\n\n"
                         "First tool call in this turn must be "
-                        "`Task(subagent_type='research-specialist', ...)`.\n"
+                        "`Task(subagent_type='research-specialist', ...)` or "
+                        "`Agent(subagent_type='research-specialist', ...)`.\n"
                         "Direct search/tool execution is blocked until that delegation occurs."
+                        + ordering_hint
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -949,10 +1374,13 @@ class AgentHookSet:
         # 1b. Primary-only blocked tools (sub-agents are allowed)
         if tool_name in PRIMARY_ONLY_BLOCKED_TOOLS:
              is_subagent = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+             hook_agent_id, hook_agent_type = _extract_hook_agent_identity(input_data)
              logfire.info(
                  "primary_only_tool_check",
                  tool=tool_name,
                  is_subagent=is_subagent,
+                 agent_id=hook_agent_id,
+                 agent_type=hook_agent_type,
                  parent_tool_use_id=input_data.get("parent_tool_use_id"),
                  transcript_path=str(input_data.get("transcript_path", ""))[:80],
                  primary_path=str(self._primary_transcript_path or "")[:80],
@@ -996,7 +1424,11 @@ class AgentHookSet:
             if thought and isinstance(thought, str) and thought.strip():
                 # Resolve author from sub-agent context
                 parent_tool_use_id = input_data.get("parent_tool_use_id")
-                if parent_tool_use_id:
+                _agent_id, agent_type = _extract_hook_agent_identity(input_data)
+                normalized_agent_type = str(agent_type or "").strip()
+                if normalized_agent_type:
+                    thought_author = normalized_agent_type
+                elif parent_tool_use_id:
                     # Sub-agent thought — try to resolve from transcript path or default
                     transcript_path = input_data.get("transcript_path", "")
                     if "research" in transcript_path.lower() if transcript_path else False:
@@ -1055,9 +1487,9 @@ class AgentHookSet:
                 "systemMessage": (
                     "⚠️ BLOCK: Do not use the `composio` Python SDK or CLI directly from Bash. "
                     "Your environment is NOT configured for direct SDK usage.\n"
-                    "✅ REQUIRED PATH (attachments):\n"
-                    "1) Upload local file with `mcp__internal__upload_to_composio({path, tool_slug:'GMAIL_SEND_EMAIL', toolkit_slug:'gmail'})`\n"
-                    "2) Send with `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` using `GMAIL_SEND_EMAIL` and the returned `attachment.s3key`\n"
+                    "✅ REQUIRED PATH:\n"
+                    "- For Gmail/Calendar/Drive/Sheets: use `mcp__gws__*` tools (gws MCP server)\n"
+                    "- For other Composio services (Slack, GitHub, etc.): use `mcp__composio__*` tools\n"
                     "Use MCP tools only; they are pre-authenticated and reliable."
                 ),
                 "decision": "block",
@@ -1099,6 +1531,59 @@ class AgentHookSet:
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": "Playwright PDF conversion without explicit HTML input.",
+            },
+        }
+
+    async def on_pre_bash_redirect_pdf_conversion(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        PreToolUse Hook: Redirect Bash-based HTML-to-PDF conversion attempts
+        to the dedicated `mcp__internal__html_to_pdf` MCP tool.
+        Catches chrome --headless, wkhtmltopdf, and weasyprint invocations.
+        """
+        command, _, _ = _extract_bash_command(input_data)
+        command_lower = command.lower()
+
+        if "pdf" not in command_lower:
+            return {}
+
+        pdf_conversion_patterns = [
+            "google-chrome",
+            "chromium",
+            "--print-to-pdf",
+            "wkhtmltopdf",
+            "weasyprint",
+            "write_pdf",
+            "html().write_pdf",
+            "from weasyprint",
+            "import weasyprint",
+        ]
+
+        if not any(pattern in command_lower for pattern in pdf_conversion_patterns):
+            return {}
+
+        emit_status_event("Hook: redirecting Bash PDF conversion to html_to_pdf MCP tool", level="WARNING", prefix="Hook")
+        logfire.warning(
+            "bash_pdf_conversion_redirected",
+            command_preview=command[:200],
+            tool_use_id=str(tool_use_id),
+        )
+        return {
+            "systemMessage": (
+                "⚠️ REDIRECT: Use the dedicated MCP tool for HTML→PDF conversion instead of Bash.\n\n"
+                "✅ CORRECT approach:\n"
+                "```\n"
+                "mcp__internal__html_to_pdf(html_path=\"<path/to/report.html>\", output_path=\"<path/to/report.pdf>\")\n"
+                "```\n"
+                "This tool handles browser/WeasyPrint fallback automatically and resolves workspace paths correctly.\n"
+                "You can call it once per HTML file. It is faster and more reliable than manual Bash conversion."
+            ),
+            "decision": "block",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Bash PDF conversion redirected to html_to_pdf MCP tool.",
             },
         }
 
@@ -1160,8 +1645,16 @@ class AgentHookSet:
             _looks_like_research_report_pipeline_intent(prompt_text)
             and not self._requires_vp_tool_path
             and not self._is_vp_worker_lane
+            and not self._is_cron_lane
         )
         self._research_delegate_seen_this_turn = False
+        self._requires_youtube_skill_first = (
+            _looks_like_youtube_transcript_intent(prompt_text)
+            and not self._requires_vp_tool_path
+            and not self._is_vp_worker_lane
+            and not self._is_cron_lane
+        )
+        self._youtube_skill_seen_this_turn = False
 
         # Reset counters for the new user turn
         self._current_turn_tool_count = 0
@@ -1270,9 +1763,20 @@ class AgentHookSet:
             return {}
 
         try:
+            prefix_parts: list[str] = []
+
+            # UV_CACHE_DIR injection is independent of workspace — always apply
+            # so uv run commands never inherit a stale/wrong path from the env.
+            if "uv run" in command and "UV_CACHE_DIR=" not in command:
+                prefix_parts.append("export UV_CACHE_DIR=/tmp/uv_cache")
+
             ws = get_current_workspace() or self.workspace_dir or ""
             if not ws:
-                return {}
+                if not prefix_parts:
+                    return {}
+                updated_command = "; ".join(prefix_parts) + "; " + command
+                return _build_bash_command_update(command_source, tool_input, updated_command)
+
             from universal_agent.artifacts import resolve_artifacts_dir
 
             artifacts_root = str(resolve_artifacts_dir())
@@ -1295,7 +1799,6 @@ class AgentHookSet:
             auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
             auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
 
-            prefix_parts: list[str] = []
             if "CURRENT_SESSION_WORKSPACE=" not in command:
                 prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
             if "UA_ARTIFACTS_DIR=" not in command:
@@ -1351,6 +1854,28 @@ class AgentHookSet:
         return {}
 
     async def on_post_tool_use_ledger(self, *args) -> dict:
+        input_data = args[0] if len(args) > 0 and isinstance(args[0], dict) else {}
+        tool_name = str(input_data.get("tool_name", "") or "")
+        tool_input = input_data.get("tool_input", {}) or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+        try:
+            normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
+        except Exception:
+            normalized_tool_name = tool_name.lower()
+
+        if normalized_tool_name in ("taskstop", "task_stop"):
+            tool_result = input_data.get("tool_result")
+            if tool_result is None:
+                tool_result = input_data.get("tool_response")
+            is_error = bool(input_data.get("is_error"))
+            if isinstance(tool_result, dict):
+                is_error = bool(is_error or tool_result.get("is_error") or tool_result.get("error"))
+            if not is_error:
+                task_id = _extract_task_stop_id(tool_input)
+                if task_id:
+                    self._stopped_task_ids.add(task_id)
+
         if self.tool_ledger:
             pass # Ledger completion logic
         return {}

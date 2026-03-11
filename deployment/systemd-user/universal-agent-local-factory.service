@@ -1,0 +1,19 @@
+[Unit]
+Description=Universal Agent Local Factory (Redis→SQLite Bridge + VP Workers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+Environment=PYTHONPATH=__REPO_ROOT__/src
+ExecStart=__REPO_ROOT__/.venv/bin/python -m universal_agent.delegation.bridge_main
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# Minimal .env with Infisical credentials only — all other params from Infisical
+EnvironmentFile=__REPO_ROOT__/.env
+
+[Install]
+WantedBy=default.target

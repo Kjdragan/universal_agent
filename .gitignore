@@ -28,6 +28,8 @@ pip-delete-this-directory.txt
 # === Environments & IDs ===
 .env.local
 .env.*.local
+.env.bridge
+.env.backup*
 # Explicit local secret snapshot from VPS security sync.
 tmp/vps_security_env_keys_*.env
 identity_registry.json
@@ -57,6 +59,9 @@ src/universal_agent/Memory_System_Data/
 AGENT_RUN_WORKSPACES/
 AGENT_RUN_WORKSPACES_ARCHIVE/
 Memory_System/ua_shared_workspace/memory/sessions/
+# Shared workspace runtime memory state (operational; host-local, not source).
+Memory_System/ua_shared_workspace/MEMORY.md
+Memory_System/ua_shared_workspace/memory/
 urw_sessions/
 urw_smoke_workspace*/
 urw_phase*_workspace*/
@@ -120,3 +125,20 @@ scraping/runs/*/
 urls.json
 run_report.json
 latest_export.md
+
+# === User-requested local excludes ===
+src/universal_agent/prompt_assets/capabilities.last_good.md
+.claude/skills/excalidraw-diagram/references/uv.lock
+docs/ag-ui-protocol-streaming.excalidraw
+client_secret_*.json
+
+# === Generated security/memory artifacts ===
+security_evals/promptfoo_redteam_generated.yaml
+memory/research/index.json
+
+# === Local runtime locks and scratch scripts ===
+.claude/scheduled_tasks.lock
+test_bridge.py
+test_bridge_2.py
+memory/CSIR_Remediation.md
+memory/CSI_AutoRemediation_Fix.md

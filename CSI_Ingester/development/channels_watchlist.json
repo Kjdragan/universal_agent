@@ -1,8 +1,8 @@
 {
-  "extraction_date": "2026-02-22",
+  "extraction_date": "2026-03-05",
   "playlist_id": "PLjL3liQSixtvyu1yGb6IOwPUPMKeS067E",
   "total_videos_found": 930,
-  "unique_channels": 443,
+  "unique_channels": 444,
   "channels": [
     {
       "channel_id": "UC0m81bQuthaQZmFbXEY9QSw",
@@ -3104,6 +3104,13 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBnLhz50WZAvsF4S72xtESA",
       "youtube_url": "https://www.youtube.com/channel/UCBnLhz50WZAvsF4S72xtESA"
+    },
+    {
+      "channel_id": "UCoy6cTJ7Tg0dqS-DI-_REsA",
+      "channel_name": "Chase AI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCoy6cTJ7Tg0dqS-DI-_REsA",
+      "youtube_url": "https://www.youtube.com/@Chase-H-AI"
     }
   ]
 }

@@ -47,24 +47,29 @@ _DEFAULT_INTERVAL = 10
 
 _stop_event: threading.Event | None = None
 _thread: threading.Thread | None = None
+_current_path: Path | None = None
+_current_label = "Process heartbeat"
 
 
-def _heartbeat_path() -> Path:
+def _heartbeat_path(*, path_env_var: str, legacy_path_env_var: str | None, default_path: str) -> Path:
+    legacy_value = ""
+    if legacy_path_env_var:
+        legacy_value = os.getenv(legacy_path_env_var, "")
     return Path(
-        os.getenv("UA_PROCESS_HEARTBEAT_FILE", os.getenv("UA_HEARTBEAT_FILE", _DEFAULT_PATH)).strip()
-        or _DEFAULT_PATH
+        os.getenv(path_env_var, legacy_value).strip()
+        or default_path
     )
 
 
-def _heartbeat_interval() -> float:
+def _heartbeat_interval(*, interval_env_var: str, default_interval: float) -> float:
     try:
-        raw = os.getenv("UA_PROCESS_HEARTBEAT_INTERVAL_SECONDS")
+        raw = os.getenv(interval_env_var)
         if raw is None:
-            raw = str(_DEFAULT_INTERVAL)
+            raw = str(default_interval)
         val = float(raw)
         return max(1.0, val)
     except (ValueError, TypeError):
-        return float(_DEFAULT_INTERVAL)
+        return float(default_interval)
 
 
 def _writer_loop(path: Path, interval: float, stop: threading.Event) -> None:
@@ -85,23 +90,39 @@ def _writer_loop(path: Path, interval: float, stop: threading.Event) -> None:
         stop.wait(interval)
 
 
-def start() -> None:
+def start(
+    *,
+    path_env_var: str = "UA_PROCESS_HEARTBEAT_FILE",
+    legacy_path_env_var: str | None = "UA_HEARTBEAT_FILE",
+    interval_env_var: str = "UA_PROCESS_HEARTBEAT_INTERVAL_SECONDS",
+    default_path: str = _DEFAULT_PATH,
+    default_interval: float = _DEFAULT_INTERVAL,
+    thread_name: str = "process-heartbeat",
+    log_label: str = "Process heartbeat",
+) -> None:
     """Start the heartbeat writer thread (idempotent)."""
-    global _stop_event, _thread
+    global _stop_event, _thread, _current_path, _current_label
     if _thread is not None and _thread.is_alive():
         return
-    path = _heartbeat_path()
-    interval = _heartbeat_interval()
+    path = _heartbeat_path(
+        path_env_var=path_env_var,
+        legacy_path_env_var=legacy_path_env_var,
+        default_path=default_path,
+    )
+    interval = _heartbeat_interval(interval_env_var=interval_env_var, default_interval=default_interval)
+    _current_path = path
+    _current_label = log_label
     _stop_event = threading.Event()
     _thread = threading.Thread(
         target=_writer_loop,
         args=(path, interval, _stop_event),
-        name="process-heartbeat",
+        name=thread_name,
         daemon=True,
     )
     _thread.start()
     logger.info(
-        "Process heartbeat started path=%s interval=%.0fs",
+        "%s started path=%s interval=%.0fs",
+        log_label,
         path,
         interval,
     )
@@ -109,7 +130,7 @@ def start() -> None:
 
 def stop() -> None:
     """Stop the heartbeat writer thread and remove the file."""
-    global _stop_event, _thread
+    global _stop_event, _thread, _current_path
     if _stop_event is not None:
         _stop_event.set()
     if _thread is not None:
@@ -118,7 +139,9 @@ def stop() -> None:
     _stop_event = None
     # Remove file so watchdog sees "no heartbeat" immediately on clean shutdown
     try:
-        _heartbeat_path().unlink(missing_ok=True)
+        if _current_path is not None:
+            _current_path.unlink(missing_ok=True)
     except OSError:
         pass
-    logger.info("Process heartbeat stopped")
+    logger.info("%s stopped", _current_label)
+    _current_path = None

@@ -10,7 +10,7 @@ authors = [
 dependencies = [
     "anthropic>=0.75.0",
     "chromadb>=1.4.0",
-    "claude-agent-sdk>=0.1.18",
+    "claude-agent-sdk>=0.1.48,<0.2.0",
     "click>=8.3.1",
     "composio>=0.10.6,<1.0.0",
     "composio-anthropic>=0.10.6,<1.0.0",
@@ -76,6 +76,7 @@ dependencies = [
     "infisical-python==2.3.5",
     "redis>=7.2.1",
     "agentmail>=0.2.22",
+    "email-reply-parser>=0.5.12",
 ]
 
 [tool.ruff]

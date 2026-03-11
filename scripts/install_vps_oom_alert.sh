@@ -32,11 +32,33 @@ systemctl enable --now "$TIMER_NAME"
 # Run a one-shot validation only when gateway health is reachable; otherwise
 # the timer will execute shortly after deploy and validate then.
 gateway_health_url="${UA_OOM_ALERT_GATEWAY_HEALTH_URL:-http://127.0.0.1:8002/api/v1/health}"
+gateway_retry_attempts="${UA_OOM_ALERT_GATEWAY_HEALTH_RETRIES:-6}"
+gateway_retry_sleep_seconds="${UA_OOM_ALERT_GATEWAY_HEALTH_RETRY_SECONDS:-5}"
+
+if ! [[ "$gateway_retry_attempts" =~ ^[0-9]+$ ]] || [[ "$gateway_retry_attempts" -lt 1 ]]; then
+  gateway_retry_attempts=6
+fi
+if ! [[ "$gateway_retry_sleep_seconds" =~ ^[0-9]+$ ]] || [[ "$gateway_retry_sleep_seconds" -lt 1 ]]; then
+  gateway_retry_sleep_seconds=5
+fi
+
 if command -v curl >/dev/null 2>&1; then
-  if curl --silent --show-error --fail --max-time 3 "$gateway_health_url" >/dev/null; then
+  gateway_ready="false"
+  for ((attempt=1; attempt<=gateway_retry_attempts; attempt++)); do
+    if curl --silent --show-error --fail --max-time 3 "$gateway_health_url" >/dev/null; then
+      gateway_ready="true"
+      break
+    fi
+    if [[ "$attempt" -lt "$gateway_retry_attempts" ]]; then
+      echo "Waiting for gateway health before immediate ${SERVICE_NAME} run (attempt ${attempt}/${gateway_retry_attempts})..."
+      sleep "$gateway_retry_sleep_seconds"
+    fi
+  done
+
+  if [[ "$gateway_ready" == "true" ]]; then
     systemctl start "$SERVICE_NAME" || true
   else
-    echo "Skipping immediate ${SERVICE_NAME} run: gateway health check unavailable at ${gateway_health_url}."
+    echo "Skipping immediate ${SERVICE_NAME} run: gateway health check unavailable at ${gateway_health_url} after ${gateway_retry_attempts} attempts."
   fi
 else
   echo "Skipping immediate ${SERVICE_NAME} run: curl not installed."

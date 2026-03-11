@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI DB backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+Unit=csi-db-backup.service
+
+[Install]
+WantedBy=timers.target

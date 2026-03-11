@@ -772,6 +772,7 @@ def queue_vp_mission(
     budget: Optional[dict[str, Any]] = None,
     run_id: Optional[str] = None,
     priority: int = 100,
+    source: str = "gateway",
 ) -> None:
     # Ensure referenced VP session row exists for FK integrity.
     if get_vp_session(conn, vp_id) is None:
@@ -795,6 +796,15 @@ def queue_vp_mission(
         priority=priority,
         cancel_requested=False,
     )
+    # Set source column for bridge tracking (additive — safe on older schemas)
+    try:
+        conn.execute(
+            "UPDATE vp_missions SET source = ? WHERE mission_id = ?",
+            (str(source or "gateway"), mission_id),
+        )
+        conn.commit()
+    except Exception:
+        pass  # Column may not exist on older DBs
 
 
 def claim_next_vp_mission(
@@ -1054,3 +1064,44 @@ def upsert_vp_bridge_cursor(conn: sqlite3.Connection, cursor_key: str, last_rowi
         (clamped, now, cursor_key),
     )
     conn.commit()
+
+
+def list_unpublished_bridge_missions(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    """Return completed/failed missions inserted by the redis bridge whose
+    results have not yet been published back to Redis."""
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM vp_missions
+        WHERE source = 'redis_bridge'
+          AND result_published = 0
+          AND status IN ('completed', 'failed', 'cancelled')
+        ORDER BY updated_at ASC
+        LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    return list(rows)
+
+
+def mark_mission_result_published(
+    conn: sqlite3.Connection,
+    mission_id: str,
+) -> bool:
+    """Mark a bridge-sourced mission's result as published to Redis."""
+    result = conn.execute(
+        """
+        UPDATE vp_missions
+        SET result_published = 1,
+            updated_at = ?
+        WHERE mission_id = ?
+          AND source = 'redis_bridge'
+        """,
+        (_now(), mission_id),
+    )
+    conn.commit()
+    return result.rowcount == 1

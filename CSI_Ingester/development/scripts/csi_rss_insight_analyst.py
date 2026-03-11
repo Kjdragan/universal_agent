@@ -539,10 +539,10 @@ def _run_one_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate CSI RSS insight reports.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/rss_insight_analyst_state.json",
+        default="/var/lib/universal-agent/csi/rss_insight_analyst_state.json",
     )
     parser.add_argument("--daily-window-hours", type=int, default=24)
     parser.add_argument("--emerging-window-hours", type=int, default=6)

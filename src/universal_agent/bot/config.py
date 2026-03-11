@@ -1,19 +1,32 @@
-
 import os
 from typing import List
 from dotenv import load_dotenv
+import logging
 
 # Load .env file
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
+def _telegram_allowed_user_ids_raw() -> str:
+    primary = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if primary:
+        return primary
+    legacy = (os.getenv("ALLOWED_USER_IDS") or "").strip()
+    if legacy:
+        logger.warning("ALLOWED_USER_IDS is deprecated; use TELEGRAM_ALLOWED_USER_IDS instead")
+    return legacy
+
 def get_allowed_user_ids() -> List[int]:
-    raw = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+    raw = _telegram_allowed_user_ids_raw()
     if not raw:
         return []
     return [int(uid.strip()) for uid in raw.split(",") if uid.strip()]
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ALLOWED_USER_IDS = get_allowed_user_ids()
+def get_telegram_bot_token() -> str:
+    return (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+
+
 SESSION_FILE_PATH = os.path.join(os.getcwd(), ".sessions/telegram.json")
 
 # Gateway Config

@@ -227,6 +227,7 @@ export default function DashboardEventsPage() {
   const [timeWindow, setTimeWindow] = useState("7d");
   const [actionableOnly, setActionableOnly] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
+  const [hideTransient, setHideTransient] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -241,6 +242,7 @@ export default function DashboardEventsPage() {
   const [counters, setCounters] = useState<EventCounters>(emptyCounters());
   const [activityMetrics, setActivityMetrics] = useState<ActivityOpsMetrics | null>(null);
   const [activityMetricsError, setActivityMetricsError] = useState("");
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
 
   const sseSeqRef = useRef(0);
   const sseFailuresRef = useRef(0);
@@ -252,14 +254,17 @@ export default function DashboardEventsPage() {
   const buildTimeBounds = useCallback((): { since?: string } => {
     if (timeWindow === "all") return {};
     const nowMs = Date.now();
-    const windowMs =
-      timeWindow === "24h"
-        ? 24 * 60 * 60 * 1000
-        : timeWindow === "30d"
-          ? 30 * 24 * 60 * 60 * 1000
-          : timeWindow === "90d"
-            ? 90 * 24 * 60 * 60 * 1000
-            : 7 * 24 * 60 * 60 * 1000;
+    const windowMap: Record<string, number> = {
+      "30m": 30 * 60 * 1000,
+      "1h": 60 * 60 * 1000,
+      "2h": 2 * 60 * 60 * 1000,
+      "4h": 4 * 60 * 60 * 1000,
+      "24h": 24 * 60 * 60 * 1000,
+      "7d": 7 * 24 * 60 * 60 * 1000,
+      "30d": 30 * 24 * 60 * 60 * 1000,
+      "90d": 90 * 24 * 60 * 60 * 1000,
+    };
+    const windowMs = windowMap[timeWindow] ?? 7 * 24 * 60 * 60 * 1000;
     return { since: new Date(nowMs - windowMs).toISOString() };
   }, [timeWindow]);
 
@@ -351,6 +356,97 @@ export default function DashboardEventsPage() {
       void loadCounters();
     }, 350);
   }, [loadCounters]);
+
+  const _TRANSIENT_PATTERNS = useMemo(() => [
+    /connection\s*refused/i,
+    /connecterror/i,
+    /\b50[234]\b/,
+    /dns\s*resolution\s*failed/i,
+    /maintenance\s*mode/i,
+    /timeout/i,
+    /transient/i,
+  ], []);
+
+  const filteredItems = useMemo(() => {
+    if (!hideTransient) return items;
+    return items.filter((item) => {
+      const fc = String(item.metadata?.failure_class || "");
+      if (fc.startsWith("transient_") || fc === "maintenance_mode") return false;
+      const msg = (item.full_message || item.summary || "").toLowerCase();
+      if (_TRANSIENT_PATTERNS.some((re) => re.test(msg))) return false;
+      return true;
+    });
+  }, [items, hideTransient, _TRANSIENT_PATTERNS]);
+
+  const [copyBusy, setCopyBusy] = useState(false);
+
+  const copyEventsToClipboard = useCallback(async () => {
+    if (filteredItems.length === 0) return;
+    setCopyBusy(true);
+    try {
+      const lines: string[] = [
+        `# UA Events Digest (${filteredItems.length} events, filter: ${timeWindow}${sourceFilter ? ` source=${sourceFilter}` : ""}${severityFilter ? ` severity=${severityFilter}` : ""})`,
+        `# Exported: ${new Date().toISOString()}`,
+        "",
+      ];
+      for (const item of filteredItems) {
+        lines.push(`---`);
+        lines.push(`[${item.severity.toUpperCase()}] ${item.source_domain} | ${item.title}`);
+        lines.push(`  kind: ${item.kind} | status: ${item.status} | created: ${item.created_at_utc}`);
+        if (item.requires_action) lines.push(`  ** REQUIRES ACTION **`);
+        const msg = (item.full_message || item.summary || "").trim();
+        if (msg) {
+          lines.push(`  message: ${msg.length > 500 ? msg.slice(0, 500) + "..." : msg}`);
+        }
+        if (item.entity_ref && Object.keys(item.entity_ref).length > 0) {
+          lines.push(`  entity_ref: ${JSON.stringify(item.entity_ref)}`);
+        }
+        if (item.metadata && Object.keys(item.metadata).length > 0) {
+          lines.push(`  metadata: ${JSON.stringify(item.metadata)}`);
+        }
+        lines.push("");
+      }
+      lines.push("---");
+      lines.push("# End of events digest. Investigate any errors or warnings above.");
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setHandoffResult(`Copied ${filteredItems.length} event(s) to clipboard.`);
+    } catch {
+      setHandoffResult("Unable to copy events to clipboard.");
+    } finally {
+      setCopyBusy(false);
+    }
+  }, [filteredItems, timeWindow, sourceFilter, severityFilter]);
+
+  const deleteAllNotifications = useCallback(async () => {
+    const targetCount = items.length;
+    if (targetCount === 0) return;
+    if (!window.confirm("Delete all notifications/events from the dashboard feed?")) return;
+
+    setBulkDeleteBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/purge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clear_all: true }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String(payload.detail || payload.reason || `HTTP ${res.status}`));
+      }
+
+      const deletedCount = Number(payload.deleted || 0);
+      setItems([]);
+      setSelectedId("");
+
+      await loadCounters();
+
+      setHandoffResult(`Deleted ${deletedCount} notification/event item(s).`);
+    } catch (err: any) {
+      setHandoffResult(err?.message || "Failed to delete notifications/events.");
+    } finally {
+      setBulkDeleteBusy(false);
+    }
+  }, [items.length, loadCounters]);
 
   const loadEvents = useCallback(async ({ append = false, cursorToken = "" }: { append?: boolean; cursorToken?: string } = {}) => {
     if (append) {
@@ -640,7 +736,7 @@ export default function DashboardEventsPage() {
     setStatusFilter(String(filters.status || ""));
     setKindFilter(String(filters.kind || ""));
     const tw = String(filters.time_window || "7d");
-    setTimeWindow(["24h", "7d", "30d", "90d", "all"].includes(tw) ? tw : "7d");
+    setTimeWindow(["30m", "1h", "2h", "4h", "24h", "7d", "30d", "90d", "all"].includes(tw) ? tw : "7d");
     setActionableOnly(Boolean(filters.actionable_only));
     setPinnedOnly(Boolean(filters.pinned_only));
   }, []);
@@ -866,6 +962,26 @@ export default function DashboardEventsPage() {
           </span>
           <button
             type="button"
+            onClick={() => void copyEventsToClipboard()}
+            disabled={copyBusy || filteredItems.length === 0}
+            className="rounded border border-cyan-800/60 bg-cyan-950/25 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Copy all visible events as structured text for IDE AI coder"
+          >
+            {copyBusy ? "Copying..." : `Copy Events (${filteredItems.length})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void deleteAllNotifications();
+            }}
+            disabled={bulkDeleteBusy || filteredItems.length === 0}
+            className="rounded border border-rose-800/60 bg-rose-950/25 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Delete all currently visible notifications/events"
+          >
+            {bulkDeleteBusy ? "Deleting..." : `Delete All (${filteredItems.length})`}
+          </button>
+          <button
+            type="button"
             onClick={() => {
               void loadEvents({ append: false });
               void loadCounters();
@@ -956,6 +1072,10 @@ export default function DashboardEventsPage() {
             onChange={(event) => setTimeWindow(event.target.value)}
             className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
           >
+            <option value="30m">Last 30m</option>
+            <option value="1h">Last 1h</option>
+            <option value="2h">Last 2h</option>
+            <option value="4h">Last 4h</option>
             <option value="24h">Last 24h</option>
             <option value="7d">Last 7d</option>
             <option value="30d">Last 30d</option>
@@ -978,26 +1098,42 @@ export default function DashboardEventsPage() {
             />
             Pinned only
           </label>
+          <label className="inline-flex items-center gap-1 rounded border border-amber-700/40 bg-amber-950/20 px-2 py-1 text-[12px] text-amber-200">
+            <input
+              type="checkbox"
+              checked={hideTransient}
+              onChange={(event) => setHideTransient(event.target.checked)}
+            />
+            Hide transient
+          </label>
         </div>
 
         <div className="mt-2 flex flex-wrap gap-2">
           {SOURCE_ORDER.map((source) => {
             const bucket = counters.by_source[source] || { unread: 0, actionable: 0, total: 0 };
+            const selected = sourceFilter === source;
             return (
               <button
                 key={`src-chip-${source}`}
                 type="button"
                 onClick={() => setSourceFilter((prev) => (prev === source ? "" : source))}
-                className={`rounded border px-2 py-1 text-[11px] ${SOURCE_STYLES[source] || SOURCE_STYLES.system}`}
+                className={`rounded border px-2 py-1 text-[11px] transition-colors ${SOURCE_STYLES[source] || SOURCE_STYLES.system} ${selected ? "ring-1 ring-cyan-400/70" : "opacity-80 hover:opacity-100"}`}
                 title={`unread: ${bucket.unread} | actionable: ${bucket.actionable} | total: ${bucket.total}`}
+                aria-pressed={selected}
               >
-                {source} {bucket.unread}/{bucket.actionable}/{bucket.total}
+                {source}
               </button>
             );
           })}
-          <span className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300">
-            totals {counters.totals.unread}/{counters.totals.actionable}/{counters.totals.total}
-          </span>
+          <button
+            type="button"
+            onClick={() => setSourceFilter("")}
+            className={`rounded border px-2 py-1 text-[11px] transition-colors ${sourceFilter === "" ? "border-cyan-500/60 bg-cyan-500/10 text-cyan-200 ring-1 ring-cyan-400/70" : "border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800/70"}`}
+            title={`Show all sources • unread: ${counters.totals.unread} | actionable: ${counters.totals.actionable} | total: ${counters.totals.total}`}
+            aria-pressed={sourceFilter === ""}
+          >
+            all
+          </button>
         </div>
 
         <div className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2">
@@ -1024,12 +1160,12 @@ export default function DashboardEventsPage() {
 
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-1 overflow-y-auto pr-1 scrollbar-thin">
-          {items.length === 0 && (
+          {filteredItems.length === 0 && (
             <div className="rounded border border-slate-800 bg-slate-950/40 px-3 py-4 text-sm text-slate-400">
-              No notifications/events found.
+              {hideTransient && items.length > 0 ? `${items.length} event(s) hidden by transient filter.` : "No notifications/events found."}
             </div>
           )}
-          {items.map((item) => {
+          {filteredItems.map((item) => {
             const sourceStyle = SOURCE_STYLES[item.source_domain] || SOURCE_STYLES.system;
             const severityStyle = SEVERITY_STYLES[item.severity] || SEVERITY_STYLES.info;
             const active = selectedId === item.id;
@@ -1089,7 +1225,7 @@ export default function DashboardEventsPage() {
               {loadingMore ? "Loading older..." : "Load older"}
             </button>
           )}
-          {!hasMore && items.length > 0 && (
+          {!hasMore && filteredItems.length > 0 && (
             <div className="mt-2 rounded border border-slate-800 bg-slate-950/40 px-3 py-2 text-center text-[11px] text-slate-500">
               End of retained history
             </div>

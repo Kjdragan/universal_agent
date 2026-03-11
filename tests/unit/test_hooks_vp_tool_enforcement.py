@@ -372,3 +372,26 @@ def test_information_prompt_enforces_research_delegate_first_even_without_report
     )
     assert result.get("decision") == "block"
     assert "research-specialist" in str(result.get("systemMessage", ""))
+
+
+def test_delivery_only_creative_prompt_does_not_enforce_research_delegate_first():
+    hooks = AgentHookSet(run_id="unit-research-delegation-delivery-only")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Write a poem and then email it to me."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+                "tool_input": {
+                    "queries": [{"use_case": "send an email"}],
+                },
+            },
+            "tool-delivery-only",
+            {},
+        )
+    )
+    assert result == {}

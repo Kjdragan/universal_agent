@@ -167,6 +167,20 @@ class FakePagedTodoistAPI(FakeTodoistAPI):
         return [rows]
 
 
+class FakeTodoistForbiddenProjectAPI(FakeTodoistAPI):
+    def __init__(self):
+        super().__init__()
+        self.forbidden_project_ids: set[str] = set()
+        self.add_task_calls: list[dict[str, object]] = []
+
+    def add_task(self, **kwargs):
+        self.add_task_calls.append(dict(kwargs))
+        project_id = str(kwargs.get("project_id") or "")
+        if project_id in self.forbidden_project_ids:
+            raise RuntimeError("403 Client Error: Forbidden for url: https://api.todoist.com/api/v1/tasks")
+        return super().add_task(**kwargs)
+
+
 def test_ensure_taxonomy_idempotent_creates_projects_sections_and_labels():
     from universal_agent.services.todoist_service import (
         AGENT_TASKS_PROJECT,
@@ -218,6 +232,37 @@ def test_create_task_applies_priority_mapping_and_agent_ready_label():
     assert "agent-ready" in created["labels"]
     assert "foo" in created["labels"]
     assert "sub-agent:research" in created["labels"]
+
+
+def test_create_task_reroutes_to_immediate_when_target_project_is_forbidden():
+    from universal_agent.services.todoist_service import (
+        TodoService,
+        UA_PROJECT_CSI,
+        UA_PROJECT_IMMEDIATE,
+    )
+
+    api = FakeTodoistForbiddenProjectAPI()
+    svc = TodoService(api_token="test", api=api)
+    taxonomy = svc.ensure_taxonomy()
+    csi_project_id = str(taxonomy["project_ids"][UA_PROJECT_CSI])
+    immediate_project_id = str(taxonomy["project_ids"][UA_PROJECT_IMMEDIATE])
+    immediate_background_id = str(taxonomy["section_ids"][UA_PROJECT_IMMEDIATE]["background"])
+
+    api.forbidden_project_ids.add(csi_project_id)
+
+    created = svc.create_task(
+        content="CSI write fallback test",
+        project_key="csi",
+        section="background",
+    )
+
+    assert len(api.add_task_calls) == 2
+    assert str(api.add_task_calls[0].get("project_id") or "") == csi_project_id
+    assert str(api.add_task_calls[1].get("project_id") or "") == immediate_project_id
+    assert created["project_id"] == immediate_project_id
+    assert created["section_id"] == immediate_background_id
+    assert created["project_rerouted_from"] == UA_PROJECT_CSI
+    assert created["project_rerouted_reason"] == "forbidden"
 
 
 def test_mark_blocked_swaps_labels_and_adds_comment():

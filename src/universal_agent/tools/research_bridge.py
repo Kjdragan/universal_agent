@@ -4,6 +4,9 @@ from claude_agent_sdk import tool
 import sys
 import os
 
+from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
+from universal_agent.utils.session_workspace import resolve_current_session_workspace
+
 # Import the original function
 # We need to ensure the python path can find src/mcp_server.py if it's not a package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -24,12 +27,70 @@ except ImportError:
 from universal_agent.utils.task_guardrails import resolve_best_task_match
 from universal_agent.hooks import StdoutToEventStream
 
+
+def _is_session_workspace(path_value: str) -> bool:
+    try:
+        candidate = Path(path_value).resolve()
+    except Exception:
+        return False
+    if candidate.name.startswith("session_"):
+        return True
+    return (
+        (candidate / "session_policy.json").exists()
+        and (candidate / "work_products").exists()
+    )
+
+
+def _infer_latest_session_workspace() -> str | None:
+    root = (Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES").resolve()
+    if not root.exists():
+        return None
+    candidates = sorted(
+        (p for p in root.iterdir() if p.is_dir() and p.name.startswith("session_")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        if _is_session_workspace(str(candidate)):
+            return str(candidate.resolve())
+    return None
+
+
+def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
+    """Best-effort workspace resolution for research bridge tools."""
+    explicit = str(args.get("workspace_dir", "") or "").strip()
+    if explicit and Path(explicit).exists() and _is_session_workspace(explicit):
+        return str(Path(explicit).resolve())
+
+    ctx_ws = str(_ctx_get_workspace() or "").strip()
+    if ctx_ws and Path(ctx_ws).exists() and _is_session_workspace(ctx_ws):
+        return str(Path(ctx_ws).resolve())
+
+    marker_ws = resolve_current_session_workspace(
+        repo_root=str(Path(__file__).resolve().parents[3])
+    )
+    if marker_ws and Path(marker_ws).exists() and _is_session_workspace(marker_ws):
+        return str(Path(marker_ws).resolve())
+
+    try:
+        import universal_agent.main as ua_main
+
+        observer_ws = str(getattr(ua_main, "OBSERVER_WORKSPACE_DIR", "") or "").strip()
+        if observer_ws and Path(observer_ws).exists() and _is_session_workspace(observer_ws):
+            return str(Path(observer_ws).resolve())
+    except Exception:
+        pass
+
+    return _infer_latest_session_workspace()
+
+
 @tool(
     name="run_research_pipeline", 
     description="Execute the UNIFIED Research & Reporting Pipeline. Handles Search -> Crawl -> Refine -> Outline -> Draft -> Compile in one Turn. EFFICIENCY: Use this to avoid fragmented tool calls. TRUST the JSON success receipt; DO NOT call Bash/ls after this.",
     input_schema={
         "query": str, 
-        "task_name": str
+        "task_name": str,
+        "workspace_dir": str,
     }
 )
 async def run_research_pipeline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -38,6 +99,7 @@ async def run_research_pipeline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     """
     query = args.get("query")
     raw_task_name = args.get("task_name", "default")
+    workspace_hint = _resolve_workspace_hint(args)
     
     # Apply Guardrail
     task_name = resolve_best_task_match(raw_task_name)
@@ -46,7 +108,7 @@ async def run_research_pipeline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     # Since it runs in this process, its print/stderr writes will go to our console
     # [ENHANCED] Capture stdout and bridge to Web UI events
     with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = await original_pipeline(query, task_name)
+        result_str = await original_pipeline(query, task_name, workspace_dir=workspace_hint)
     
     return {
         "content": [{
@@ -93,7 +155,8 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description="Execute Phase 1 of Research: Crawl & Refine. Produces refined_corpus.md. EFFICIENCY: Trust the output path in the JSON response. Do NOT call 'ls' to verify.",
     input_schema={
         "query": str, 
-        "task_name": str
+        "task_name": str,
+        "workspace_dir": str,
     }
 )
 async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -102,12 +165,13 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     """
     query = args.get("query")
     raw_task_name = args.get("task_name", "default")
+    workspace_hint = _resolve_workspace_hint(args)
     
     # Apply Guardrail
     task_name = resolve_best_task_match(raw_task_name)
     
     with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = await research_phase_core(query, task_name)
+        result_str = await research_phase_core(query, task_name, workspace_dir=workspace_hint)
     return {"content": [{"type": "text", "text": result_str}]}
 
 @tool(
@@ -116,7 +180,8 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     input_schema={
         "query": str, 
         "task_name": str,
-        "corpus_data": str  # Option to provide corpus directly (for non-search tasks)
+        "corpus_data": str,  # Option to provide corpus directly (for non-search tasks)
+        "workspace_dir": str,
     }
 )
 async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -126,12 +191,13 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     query = args.get("query")
     raw_task_name = args.get("task_name", "default")
     corpus_data = args.get("corpus_data")
+    workspace_hint = _resolve_workspace_hint(args)
 
     # If corpus_data is an existing refined_corpus.md path, align task_name to it
     if isinstance(corpus_data, str) and corpus_data.strip():
         candidate = Path(corpus_data.strip())
         if not candidate.is_absolute():
-            workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+            workspace = _ctx_get_workspace()
             if workspace:
                 candidate = Path(workspace) / candidate
         if candidate.exists():
@@ -146,7 +212,12 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     task_name = resolve_best_task_match(raw_task_name)
     
     with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = await report_gen_core(query, task_name, corpus_data=corpus_data)
+        result_str = await report_gen_core(
+            query,
+            task_name,
+            corpus_data=corpus_data,
+            workspace_dir=workspace_hint,
+        )
     return {"content": [{"type": "text", "text": result_str}]}
 
 @tool(

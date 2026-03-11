@@ -271,7 +271,7 @@ inside the current session workspace for downstream agent reuse.
 - **design-md**: Analyze Stitch projects and synthesize a semantic design system into DESIGN.md files
 - **shadcn-ui**: Expert guidance for integrating and building applications with shadcn/ui components, including component discovery, installation, customization, and best practices.
 - **remotion**: Generate walkthrough videos from Stitch projects using Remotion with smooth transitions, zooming, and text overlays
-- **youtube-tutorial-creation**: Turn a YouTube tutorial into durable learning artifacts (concept doc + runnable implementation) stored under UA_ARTIFACTS_DIR.
+- **youtube-tutorial-creation**: Turn a YouTube tutorial into durable learning artifacts stored under UA_ARTIFACTS_DIR, with runnable implementation generated only when the content is truly software/coding.
 USE WHEN user provides a YouTube URL and wants to learn/implement from it.
 
 - **pdf**: Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging/splitting documents, and handling forms. When Claude needs to fill in a PDF form or programmatically process, generate, or analyze PDF documents at scale.

@@ -1,4 +1,3 @@
-
 from mcp.server.fastmcp import FastMCP
 import asyncio
 import os
@@ -6,13 +5,22 @@ import logging
 from telegram import Bot
 from telegram.error import TelegramError
 
-# Config
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ALLOWED_USER_IDS = [int(uid) for uid in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if uid]
-
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_server_telegram")
+
+
+def _telegram_allowed_user_ids_raw() -> str:
+    primary = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if primary:
+        return primary
+    legacy = (os.getenv("ALLOWED_USER_IDS") or "").strip()
+    if legacy:
+        logger.warning("ALLOWED_USER_IDS is deprecated; use TELEGRAM_ALLOWED_USER_IDS instead")
+    return legacy
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ALLOWED_USER_IDS = [int(uid) for uid in _telegram_allowed_user_ids_raw().split(",") if uid]
 
 mcp = FastMCP("Telegram Toolkit")
 
@@ -20,8 +28,7 @@ def _validate_config():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
 
-@mcp.tool() # Sync wrapper mainly because FastMCP handles async? 
-# Actually FastMCP supports async def tools.
+@mcp.tool()
 async def telegram_send_message(chat_id: int, text: str) -> str:
     """
     Send a message to a Telegram chat.
@@ -35,9 +42,17 @@ async def telegram_send_message(chat_id: int, text: str) -> str:
         return f"Error: Chat ID {chat_id} is not in allowed list."
 
     try:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-        return f"Message sent to {chat_id}"
+        from universal_agent.services.telegram_send import telegram_send_async
+
+        ok, err = await telegram_send_async(
+            chat_id=chat_id,
+            text=text,
+            bot_token=TELEGRAM_BOT_TOKEN,
+            parse_mode="Markdown",
+        )
+        if ok:
+            return f"Message sent to {chat_id}"
+        return f"Error sending message: {err}"
     except Exception as e:
         return f"Error sending message: {str(e)}"
 

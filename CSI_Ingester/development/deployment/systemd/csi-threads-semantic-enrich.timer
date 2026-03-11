@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI Threads semantic enrichment every 15 minutes
+
+[Timer]
+OnCalendar=*:11/15
+Persistent=true
+Unit=csi-threads-semantic-enrich.service
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -144,6 +146,11 @@ class TodoistTaxonomy:
 class TodoService:
     """Pure Todoist API service. No LLM/tool coupling."""
 
+    # Shared across all instances to respect global rate limits (1000 req / 15 min)
+    _last_call_time = 0.0
+    _global_lock = threading.Lock()
+    _RATE_LIMIT_DELAY = 1.1  # Stay slightly under 1 request per second
+
     def __init__(self, api_token: str | None = None, *, api: Optional[object] = None):
         if api_token is None:
             token = (
@@ -158,15 +165,62 @@ class TodoService:
                 raise ValueError("TODOIST_API_TOKEN or TODOIST_API_KEY is required")
             if TodoistAPI is None:
                 raise RuntimeError("todoist-api-python is not installed")
-            self._api = TodoistAPI(token)
+            actual_api = TodoistAPI(token)
         else:
-            self._api = api
+            actual_api = api
 
+        self._api = self._wrap_api(actual_api)
         self._taxonomy: Optional[UA5Taxonomy] = None
+
+    def _wrap_api(self, api_instance: Any) -> Any:
+        """Wraps the TodoistAPI instance with a rate-limiting throttler."""
+        service_self = self
+
+        class ThrottledAPI:
+            def __getattr__(self, name):
+                attr = getattr(api_instance, name)
+                if callable(attr):
+
+                    def wrapper(*args, **kwargs):
+                        service_self._wait_for_slot()
+                        return attr(*args, **kwargs)
+
+                    return wrapper
+                return attr
+
+        return ThrottledAPI()
+
+    def _wait_for_slot(self):
+        """Global throttle to stay under Todoist's rate limit."""
+        with self._global_lock:
+            now = time.time()
+            elapsed = now - self.__class__._last_call_time
+            if elapsed < self.__class__._RATE_LIMIT_DELAY:
+                sleep_time = self.__class__._RATE_LIMIT_DELAY - elapsed
+                time.sleep(sleep_time)
+            self.__class__._last_call_time = time.time()
 
     @property
     def api(self):
         return self._api
+
+    def verify_token(self) -> tuple[bool, str]:
+        """Probe the Todoist API to verify the token is valid.
+
+        Makes a single lightweight GET request (list projects) and returns
+        ``(True, "")`` on success or ``(False, error_message)`` on failure.
+        Distinguishes 401/403 auth errors from 429 rate-limit errors.
+        """
+        try:
+            _collect_items(self._api.get_projects())
+            return True, ""
+        except Exception as exc:
+            exc_str = str(exc)
+            if "429" in exc_str or "rate limit" in exc_str.lower():
+                return False, f"rate_limited: {exc_str}"
+            if any(s in exc_str for s in ("401", "403", "Unauthorized", "Forbidden", "UNAUTHORIZED")):
+                return False, f"auth_failure: {exc_str}"
+            return False, f"unknown: {exc_str}"
 
     def ensure_taxonomy(self) -> dict:
         """Idempotently create all 5 UA projects, sections, and labels."""
@@ -334,15 +388,115 @@ class TodoService:
         if sub_agent:
             task_labels.add(f"sub-agent:{sub_agent}")
         api_priority = PRIORITY_TO_API.get(priority.lower(), 1)
+        task_payload: dict[str, Any] = {
+            "content": content,
+            "description": description,
+            "project_id": project_id,
+            "section_id": section_id,
+            "labels": sorted(task_labels),
+            "priority": api_priority,
+            "due_string": due_string,
+            "parent_id": parent_id,
+        }
+        try:
+            task = self.api.add_task(**task_payload)
+            return self._task_to_dict(task)
+        except Exception as exc:
+            # Some legacy/shared Todoist projects can be readable but not writable.
+            # If CSI (or another non-default project) rejects writes with 403, reroute
+            # safely to the immediate queue so ingestion continues.
+            if _is_forbidden_error(exc):
+                fallback_project_id = taxonomy.agent_project_id
+                if fallback_project_id and str(project_id) != str(fallback_project_id):
+                    fallback_sections = taxonomy.section_ids.get(UA_PROJECT_IMMEDIATE, {})
+                    fallback_section_id = (
+                        fallback_sections.get(section.lower())
+                        or fallback_sections.get("background")
+                    )
+                    fallback_payload = dict(task_payload)
+                    fallback_payload["project_id"] = fallback_project_id
+                    fallback_payload["section_id"] = fallback_section_id
+                    task = self.api.add_task(**fallback_payload)
+                    task_dict = self._task_to_dict(task)
+                    task_dict["project_rerouted_from"] = project_name
+                    task_dict["project_rerouted_reason"] = "forbidden"
+                    return task_dict
+            raise
+
+    def create_personal_task(
+        self,
+        content: str,
+        description: str = "",
+        *,
+        priority: str = "low",
+        section: str = "scheduled",
+        labels: list[str] | None = None,
+        due_string: str | None = None,
+        project_key: str = "immediate",
+        upsert_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create/update a personal reminder task without forcing agent-ready."""
+
+        taxonomy = self._get_taxonomy_or_bootstrap()
+        project_name = PROJECT_KEY_MAP.get((project_key or "").strip().lower(), UA_PROJECT_IMMEDIATE)
+        project_id = taxonomy.project_ids.get(project_name, taxonomy.agent_project_id)
+        project_sections = taxonomy.section_ids.get(project_name, {})
+        section_id = project_sections.get(section.lower()) or project_sections.get("scheduled") or project_sections.get("background")
+        if not section_id:
+            raise RuntimeError(f"Unable to resolve Todoist section for project={project_name} section={section}")
+
+        normalized_labels = sorted(
+            {
+                str(label or "").strip()
+                for label in (labels or [])
+                if str(label or "").strip()
+            }
+        )
+        if "agent-ready" in normalized_labels:
+            normalized_labels = [label for label in normalized_labels if label != "agent-ready"]
+
+        clean_upsert_key = str(upsert_key or "").strip() or None
+        marker = f"ua_upsert_key:{clean_upsert_key}" if clean_upsert_key else ""
+        description_with_marker = str(description or "")
+        if marker and marker not in description_with_marker:
+            description_with_marker = (description_with_marker.rstrip() + f"\n\n{marker}").strip()
+
+        existing_id: str | None = None
+        if marker:
+            all_tasks = self.get_all_tasks(project_id=project_id)
+            for task in all_tasks:
+                if str(task.get("section_id") or "") != str(section_id):
+                    continue
+                task_description = str(task.get("description") or "")
+                if marker in task_description:
+                    existing_id = str(task.get("id") or "").strip() or None
+                    break
+
+        api_priority = PRIORITY_TO_API.get(priority.lower(), 1)
+        if existing_id:
+            payload: dict[str, Any] = {
+                "content": content,
+                "description": description_with_marker,
+                "section_id": section_id,
+                "labels": normalized_labels,
+                "priority": api_priority,
+            }
+            if due_string:
+                payload["due_string"] = due_string
+            self.api.update_task(task_id=existing_id, **payload)
+            refreshed = self.get_task_detail(existing_id)
+            if refreshed is not None:
+                return refreshed
+            return {"id": existing_id, "content": content, "description": description_with_marker}
+
         task = self.api.add_task(
             content=content,
-            description=description,
+            description=description_with_marker,
             project_id=project_id,
             section_id=section_id,
-            labels=sorted(task_labels),
+            labels=normalized_labels,
             priority=api_priority,
             due_string=due_string,
-            parent_id=parent_id,
         )
         return self._task_to_dict(task)
 
@@ -802,3 +956,8 @@ def _safe_int(value: Any, *, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _is_forbidden_error(exc: Exception) -> bool:
+    exc_text = str(exc)
+    return "403" in exc_text or "Forbidden" in exc_text

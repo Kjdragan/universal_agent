@@ -39,8 +39,9 @@ Use this sequence for deterministic debugging:
 
 1. Confirm service mode and ingest gate:
    1. `curl http://127.0.0.1:8002/api/v1/signals/ingest` should clearly show whether ingest is disabled.
-2. Validate Todoist path directly:
-   1. `curl http://127.0.0.1:8002/api/v1/dashboard/todolist/actionable`
+2. Validate internal task-hub and mirror path directly:
+   1. `curl "http://127.0.0.1:8002/api/v1/dashboard/todolist/agent-queue?limit=20"`
+   2. `curl http://127.0.0.1:8002/api/v1/ops/todoist/mirror-metrics`
 3. Run controlled end-to-end test with temporary gateway and signed CSI payload:
    1. Set `UA_SIGNALS_INGEST_ENABLED=true`
    2. Set `UA_SIGNALS_INGEST_SHARED_SECRET=<secret>`

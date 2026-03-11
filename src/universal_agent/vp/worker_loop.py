@@ -63,7 +63,7 @@ class VpWorkerLoop:
             max_concurrent_missions or vp_max_concurrent_missions(default=1)
         )
         self._stopped = asyncio.Event()
-        self._client = self._create_client()
+        self._default_client = self._create_client()
 
     def stop(self) -> None:
         self._stopped.set()
@@ -164,7 +164,8 @@ class VpWorkerLoop:
             lease_ttl_seconds=self.lease_ttl_seconds,
         )
 
-        outcome = await self._client.run_mission(
+        client = self._select_client_for_mission(mission)
+        outcome = await client.run_mission(
             mission=dict(mission),
             workspace_root=self.profile.workspace_root,
         )
@@ -218,6 +219,24 @@ class VpWorkerLoop:
             lease_owner=self.worker_id,
             metadata={"client_kind": self.profile.client_kind, "display_name": self.profile.display_name},
         )
+
+    def _select_client_for_mission(self, mission: Any) -> VpClient:
+        """Select SDK or CLI client based on mission payload's execution_mode."""
+        payload_json = mission["payload_json"] if "payload_json" in mission.keys() else None
+        if isinstance(payload_json, str) and payload_json.strip():
+            try:
+                payload = json.loads(payload_json)
+                execution_mode = str(payload.get("execution_mode") or "").strip().lower()
+                if execution_mode == "cli":
+                    from universal_agent.vp.clients.claude_cli_client import ClaudeCodeCLIClient
+                    logger.info(
+                        "Mission %s using CLI execution mode (vp=%s)",
+                        mission.get("mission_id", "?"), self.vp_id,
+                    )
+                    return ClaudeCodeCLIClient()
+            except (json.JSONDecodeError, Exception):
+                pass
+        return self._default_client
 
     def _create_client(self) -> VpClient:
         if self.profile.client_kind == "claude_code":

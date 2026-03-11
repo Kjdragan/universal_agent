@@ -169,6 +169,16 @@ def memory_session_delta_messages(default: int = 50) -> int:
     return _read_int("UA_MEMORY_SESSION_DELTA_MESSAGES", default, minimum=0)
 
 
+def memory_rollover_mode(default: str = "transcript") -> str:
+    """
+    Control how session rollover captures are written.
+
+    - transcript: include transcript/run-log excerpts (legacy behavior)
+    - summary_only: only write explicit summaries (no transcript tail capture)
+    """
+    return _read_choice("UA_MEMORY_ROLLOVER_MODE", ("transcript", "summary_only"), default)
+
+
 def memory_scope(default: str = "direct_only") -> str:
     """Return memory retrieval scope."""
     return _read_choice("UA_MEMORY_SCOPE", ("direct_only", "all"), default)
@@ -197,27 +207,21 @@ def memory_flush_max_chars(default: int = 4000) -> int:
     return _read_int("UA_MEMORY_FLUSH_MAX_CHARS", default, minimum=0)
 
 
-def google_direct_enabled(default: bool = False) -> bool:
-    """Enable first-party direct Google Workspace execution lane."""
-    if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_DIRECT")):
+def gws_cli_enabled(default: bool = False) -> bool:
+    """Enable Google Workspace CLI (gws) as primary Google Workspace execution path."""
+    if _is_truthy(os.getenv("UA_DISABLE_GWS_CLI")):
         return False
-    if _is_truthy(os.getenv("UA_ENABLE_GOOGLE_DIRECT")):
+    if _is_truthy(os.getenv("UA_ENABLE_GWS_CLI")):
         return True
     return default
 
 
-def google_direct_allow_composio_fallback(default: bool = True) -> bool:
-    """Allow routing fallback to Composio when direct Google path cannot execute."""
-    if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_DIRECT_FALLBACK")):
-        return False
-    explicit = _read_env_bool("UA_ENABLE_GOOGLE_DIRECT_FALLBACK")
-    if explicit is not None:
-        return explicit
-    return default
+def gws_events_enabled(default: bool = False) -> bool:
+    """Enable the gws workspace event listener (Phase 5 — Gmail/Calendar polling).
 
-
-def google_workspace_events_enabled(default: bool = False) -> bool:
-    """Enable Google Workspace Events ingestion (Pub/Sub based)."""
+    Defaults OFF. Set UA_ENABLE_GOOGLE_WORKSPACE_EVENTS=1 to activate.
+    Set UA_DISABLE_GOOGLE_WORKSPACE_EVENTS=1 to hard-disable (overrides enable).
+    """
     if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_WORKSPACE_EVENTS")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_GOOGLE_WORKSPACE_EVENTS")):
@@ -381,3 +385,30 @@ def vp_general_workspace_root(default: str = "") -> str:
     """Workspace root for external generalist VP worker."""
     value = (os.getenv("UA_VP_GENERAL_WORKSPACE_ROOT") or "").strip()
     return value or default
+
+
+def sdk_typed_task_events_enabled(default: bool = False) -> bool:
+    """Enable typed SDK task lifecycle message handling."""
+    if _is_truthy(os.getenv("UA_DISABLE_SDK_TYPED_TASK_EVENTS")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS")):
+        return True
+    return default
+
+
+def sdk_session_history_enabled(default: bool = False) -> bool:
+    """Enable SDK-native session history list/message APIs."""
+    if _is_truthy(os.getenv("UA_DISABLE_SDK_SESSION_HISTORY")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_SDK_SESSION_HISTORY")):
+        return True
+    return default
+
+
+def dynamic_mcp_enabled(default: bool = False) -> bool:
+    """Enable runtime MCP server attach/detach controls."""
+    if _is_truthy(os.getenv("UA_DISABLE_DYNAMIC_MCP")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_DYNAMIC_MCP")):
+        return True
+    return default

@@ -12,6 +12,7 @@ type SystemCommandResponse = {
   intent?: string;
   lane?: string;
   interpreted?: Record<string, unknown>;
+  task_hub?: Record<string, unknown> | null;
   todoist?: Record<string, unknown> | null;
   cron?: Record<string, unknown> | null;
   dry_run?: boolean;
@@ -26,6 +27,7 @@ type CommandHistoryEntry = {
   intent?: string;
   lane?: string;
   todoist_task_id?: string;
+  task_hub_task_id?: string;
   cron_job_id?: string;
   error?: string;
 };
@@ -49,12 +51,12 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
 
   const placeholder = useMemo(() => {
     if (sourcePage.includes("/tutorials")) {
-      return "Example: Add this tutorial package to Todoist and schedule review tomorrow at 9am";
+      return "Example: Add this tutorial package for review tomorrow at 9am";
     }
     if (sourcePage.includes("/cron-jobs")) {
       return "Example: Schedule daily autonomous briefing at 7am";
     }
-    return "Type or dictate a system command (e.g., 'add this to Todoist for tonight at 2am')";
+    return "Type or dictate a system command (e.g., 'remind me to review this tonight at 8pm')";
   }, [sourcePage]);
 
   const sourceContext = useMemo(() => {
@@ -193,6 +195,10 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
         payload.cron && typeof payload.cron === "object" && (payload.cron as Record<string, unknown>).job
           ? ((payload.cron as Record<string, unknown>).job as Record<string, unknown>)
           : undefined;
+      const payloadTaskHub =
+        payload.task_hub && typeof payload.task_hub === "object" && (payload.task_hub as Record<string, unknown>).task
+          ? ((payload.task_hub as Record<string, unknown>).task as Record<string, unknown>)
+          : undefined;
       setResult(payload);
       appendHistory({
         id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
@@ -202,6 +208,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
         ok: true,
         lane: asText(payload.lane),
         intent: asText(payload.intent),
+        task_hub_task_id: asText(payloadTaskHub?.task_id),
         todoist_task_id: asText(payloadTodoistTask?.id),
         cron_job_id: asText(payloadCronJob?.job_id),
       });
@@ -230,6 +237,12 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
     : {};
   const interpretedContent = asText((interpreted as Record<string, unknown>).content);
   const interpretedSchedule = asText((interpreted as Record<string, unknown>).schedule_text);
+  const taskHubBlock = result?.task_hub && typeof result.task_hub === "object"
+    ? (result.task_hub as Record<string, unknown>)
+    : {};
+  const taskHubTask = taskHubBlock.task && typeof taskHubBlock.task === "object"
+    ? (taskHubBlock.task as Record<string, unknown>)
+    : {};
   const todoistBlock = result?.todoist && typeof result.todoist === "object"
     ? (result.todoist as Record<string, unknown>)
     : {};
@@ -242,6 +255,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
   const cronJob = cronBlock.job && typeof cronBlock.job === "object"
     ? (cronBlock.job as Record<string, unknown>)
     : {};
+  const taskHubTaskId = asText(taskHubTask.task_id);
   const todoistTaskId = asText(todoistTask.id);
   const cronJobId = asText(cronJob.job_id);
   const historyRows = history.slice(0, 5);
@@ -296,6 +310,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
           </div>
           {interpretedContent && <div>task={interpretedContent}</div>}
           {interpretedSchedule && <div>schedule={interpretedSchedule}</div>}
+          {taskHubTaskId && <div>task_hub_task_id={taskHubTaskId}</div>}
           {todoistTaskId && <div>todoist_task_id={todoistTaskId}</div>}
           {cronJobId && <div>cron_job_id={cronJobId}</div>}
         </div>

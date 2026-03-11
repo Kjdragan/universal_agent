@@ -13,14 +13,21 @@ def get_current_workspace() -> Optional[str]:
 
 
 def bind_workspace_env(workspace_dir: str, absolute: bool = False) -> str:
-    """Bind the workspace to the current execution environment."""
+    """Bind the workspace to the current execution environment.
+
+    Uses ContextVar for per-task isolation in the concurrent gateway.
+    Does NOT write to os.environ to prevent workspace leakage between
+    concurrent sessions sharing the same process.
+    """
     resolved = os.path.abspath(workspace_dir) if absolute else workspace_dir
     
-    # 1. Update ContextVar (primary for modern engine/gateway)
+    # Update ContextVar only — this is per-asyncio-task, not process-global.
+    # os.environ["CURRENT_SESSION_WORKSPACE"] was removed here because it
+    # caused session workspace leakage: concurrent sessions in the gateway
+    # process would overwrite each other's workspace path, leading to
+    # subagents writing to the wrong session (e.g., report-writer writing
+    # to session_hook_csi_trend_analyst instead of the user's session).
     _WORKSPACE_CONTEXT_VAR.set(resolved)
-    
-    # 2. Sync with os.environ for legacy tools/subprocess compatibility
-    os.environ["CURRENT_SESSION_WORKSPACE"] = resolved
     
     return resolved
 

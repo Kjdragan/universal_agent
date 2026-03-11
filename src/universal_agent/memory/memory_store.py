@@ -56,6 +56,13 @@ def ensure_memory_scaffold(workspace_dir: str) -> MemoryPaths:
     index_path = os.path.join(memory_dir, "index.json")
     _ensure_dir(memory_dir)
     _ensure_memory_md(memory_md)
+    # Ensure research sub-directory exists with an empty index (fix #7).
+    research_dir = os.path.join(memory_dir, "research")
+    research_index = os.path.join(research_dir, "index.json")
+    _ensure_dir(research_dir)
+    if not os.path.exists(research_index):
+        with open(research_index, "w", encoding="utf-8") as _f:
+            _f.write("[]")
     return MemoryPaths(
         workspace_dir=workspace_dir,
         memory_dir=memory_dir,

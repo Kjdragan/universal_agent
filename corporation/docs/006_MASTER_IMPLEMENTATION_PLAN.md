@@ -1,6 +1,7 @@
 # Corporation Master Implementation Plan
 
 **Created:** 2026-03-01
+**Updated:** 2026-03-06 (Track B audit, Infisical-first approach, Phase 3a reframe)
 **Purpose:** Single source of truth for resuming and continuing the Corporation build-out.
 **Audience:** Any AI coder or human picking up this work.
 
@@ -29,18 +30,33 @@
 | **Tutorial Worker (Redis transport)** | `scripts/tutorial_local_bootstrap_worker.py --transport redis` end-to-end validated | **Implemented & validated** |
 | **CSI Rebuild** | `docs/csi-rebuild/` — Phase 1 reliability in progress (packet 8 next), separate from Corporation work | **Independent workstream** |
 
+#### Track B Discoveries (2026-03-06 Audit)
+
+The following systems were built since the plan creation as part of ongoing HQ improvements. They significantly impact the corporation rollout:
+
+| Layer | Artifact | Impact on Plan |
+|---|---|---|
+| **VP External Worker System** | `src/universal_agent/vp/` — `VpWorkerLoop`, `dispatcher.py`, `ClaudeCodeClient`, `ClaudeGeneralistClient`, `VpProfile` registry, 15+ feature flags | **Partially supersedes Phase 3a** — complete local mission consumer with SQLite lifecycle (queue/claim/heartbeat/finalize/events). Only needs Redis→SQLite bridge for cross-machine. |
+| **VP Mission Lifecycle** | `src/universal_agent/durable/state.py` — `queue_vp_mission`, `claim_next_vp_mission`, `heartbeat_vp_session_lease`, `finalize_vp_mission`, `append_vp_event` | **Provides Phase 3a foundation** — mature mission lifecycle already exists in SQLite. |
+| **SessionContext Concurrency** | `Refactor_Workspace/` — 6-phase refactor replacing global execution locks with per-session `ContextVar` isolation | **Enables multi-mission concurrency** — critical for factory handling multiple delegated missions. |
+| **GWS MCP Bridge** | `src/universal_agent/services/gws_mcp_bridge.py` — 195 Google Workspace tools via `gws` CLI | HQ-only capability (disabled on LOCAL_WORKER via feature flag). |
+| **Process Heartbeat** | `src/universal_agent/process_heartbeat.py` — OS-level liveness file for watchdog daemon thread | **Partially addresses Phase 3b** — OS-level heartbeat exists; needs HQ registration heartbeat. |
+| **Threads CSI Channel** | Webhooks, publishing, semantic enrichment | HQ-only capability. |
+| **Todoist Integration** | Rich handoff skill, heartbeat injection | HQ-only capability. |
+| **Infisical Env Provisioning** | `scripts/infisical_provision_factory_env.py` — automated environment cloning with role overrides | **Replaces Phase 3c `.env.factory.template`** — Infisical is canonical parameter store, not dotenv. |
+
 ### What Is NOT Yet Done (Gaps)
 
-| Gap ID | Description | Phase |
-|---|---|---|
-| **G1** | **Generalized Stream Consumer** — Only the tutorial bootstrap worker uses Redis transport. No generalized "mission consumer" loop exists in the UA core that can pull arbitrary delegation missions and route them to the appropriate local VP agent. | Phase 3 |
-| **G2** | **Local Factory Deployment Automation** — No script/playbook exists to stand up a LOCAL_WORKER factory on the desktop machine (install, configure `.env` via Infisical, register with HQ, start consumer loop). | Phase 3 |
-| **G3** | **Factory Heartbeat Protocol** — Factories register once but there is no periodic heartbeat loop keeping `last_seen_at` fresh. The Corporation View shows stale detection but nothing sends heartbeats. | Phase 3 |
-| **G4** | **Cost Analytics** — ZAI API telemetry aggregation across factories is not implemented. | Phase 4 |
-| **G5** | **Memo Promotion Pipeline** — No mechanism for local factories to author executive summary memos and promote insights to HQ global knowledge base. | Phase 5 |
-| **G6** | **Database Federation** — No explicit Global vs Local state boundary enforcement beyond the conceptual design. Local factories use their own `vp_state.db`. | Phase 5 |
-| **G7** | **Factory Template / Redeployment Automation** — No "factory template" package that can be parameterized and deployed to new nodes. No mechanism to push factory updates from repo to all deployed factories. | Phase 3-4 |
-| **G8** | **CSI-to-HQ Integration** — CSI is designed as an upstream supplier to HQ, but the actual "push trend reports to Simone" bridge is not wired through the delegation bus. | Phase 4 |
+| Gap ID | Description | Phase | Status |
+|---|---|---|---|
+| **G1** | **~~Generalized Stream Consumer~~** → **Redis→SQLite Bridge** — VP worker system provides the local consumer. What's missing is a thin adapter that consumes Redis missions and inserts them into local VP SQLite for `VpWorkerLoop` pickup. | Phase 3a | **Partially mitigated** |
+| **G2** | **Local Factory Deployment Automation** — Infisical `kevins-desktop` environment provisioned. Need deploy script and systemd service. | Phase 3c | **In progress** |
+| **G3** | **Factory Heartbeat Protocol** — VP worker has local SQLite heartbeats + process_heartbeat.py provides OS liveness. Missing: periodic registration heartbeat to HQ. | Phase 3b | **Partially mitigated** |
+| **G4** | **Cost Analytics** — ZAI API telemetry aggregation across factories is not implemented. | Phase 4 | Open |
+| **G5** | **Memo Promotion Pipeline** — No mechanism for local factories to author executive summary memos and promote insights to HQ global knowledge base. | Phase 5 | Open |
+| **G6** | **Database Federation** — No explicit Global vs Local state boundary enforcement beyond the conceptual design. Local factories use their own `vp_state.db`. | Phase 5 | Open |
+| **G7** | **Factory Template / Redeployment Automation** — No "factory template" package that can be parameterized and deployed to new nodes. No mechanism to push factory updates from repo to all deployed factories. | Phase 3-4 | Open |
+| **G8** | **CSI-to-HQ Integration** — CSI is designed as an upstream supplier to HQ, but the actual "push trend reports to Simone" bridge is not wired through the delegation bus. | Phase 4 | Open |
 
 ---
 
@@ -82,7 +98,9 @@
                     └─────────────────────────────┘
 ```
 
-**Key Invariant:** Both nodes run identical codebase. Behavior is determined entirely by `.env` parameterization.
+**Key Invariant:** Both nodes run identical codebase. Behavior is determined entirely by **Infisical environment parameterization** (not `.env` files — see `corporation/docs/INFISICAL_ENVIRONMENTS.md`).
+
+**Architecture Decision (D-006, 2026-03-06):** Cross-machine delegation uses **Option B: Redis→SQLite bridge**. Redis Streams provide the cross-machine transport. A thin bridge adapter on each LOCAL_WORKER consumes Redis missions and inserts them into the local VP SQLite `vp_missions` table. The existing `VpWorkerLoop` then picks them up and executes them. This avoids building a new consumer from scratch — the VP worker system already handles mission lifecycle.
 
 ---
 
@@ -113,19 +131,23 @@ Single-node HQ running on VPS with Simone, VP Coders, Web UI, Telegram.
 - [x] Local worker bridging (tutorial bootstrap worker + systemd service)
 
 ### Phase 3: Message Bus & Generalized Delegation 🔶 IN PROGRESS
-Redis infrastructure is deployed. The bus and schema exist. What remains is generalizing beyond the tutorial worker.
+Redis infrastructure is deployed. The bus and schema exist. The VP external worker system (Track B) provides a complete local mission consumer via SQLite. What remains is bridging Redis (cross-machine) to VP SQLite (local execution).
 
-#### Phase 3a: Generalized Mission Consumer (Next Up)
-- [ ] **3a.1** Create `src/universal_agent/delegation/consumer.py` — a generic mission consumer loop that:
+#### Phase 3a: Redis→SQLite Bridge Adapter (Reframed — Next Up)
+> **Note (2026-03-06):** Original scope was "build generalized consumer from scratch." The VP worker system (`src/universal_agent/vp/`) now provides the local consumer. Phase 3a is reframed to building the thin cross-machine bridge only.
+
+- [ ] **3a.1** Create `src/universal_agent/delegation/redis_vp_bridge.py` — a thin bridge that:
   - Polls `ua:missions:delegation` via `RedisMissionBus.consume()`
-  - Deserializes `MissionEnvelope` and routes to the appropriate handler based on `payload.task` type
-  - Publishes `MissionResultEnvelope` back to `ua:missions:delegation:results`
-  - Handles retries, DLQ escalation, and graceful shutdown
-  - Runs as a standalone entry point (`python -m universal_agent.delegation.consumer`) or as an async background task within the gateway
-- [ ] **3a.2** Define mission task-type registry (e.g., `bootstrap_repo`, `coding_task`, `research_task`, `general_task`) with handler dispatch
-- [ ] **3a.3** Wire the tutorial bootstrap worker to use the generalized consumer (replace bespoke polling)
-- [ ] **3a.4** Add unit + integration tests for consumer loop, handler dispatch, DLQ escalation
-- [ ] **3a.5** Validate end-to-end: HQ publishes mission → local consumer picks up → executes → result published back
+  - Deserializes `MissionEnvelope` and transforms it to a `queue_vp_mission()` call
+  - Inserts into local VP SQLite `vp_missions` table
+  - `VpWorkerLoop` (already running) picks up and executes the mission
+  - Mission results are published back to `ua:missions:delegation:results` via `RedisMissionBus`
+  - Handles ack/DLQ escalation and graceful shutdown
+  - Runs as a background task within the LOCAL_WORKER gateway or as a standalone entry point
+- [ ] **3a.2** Map Redis `MissionEnvelope.payload.task` types to VP mission types (`coding_task` → CODIE, `general_task` → Generalist, etc.)
+- [ ] **3a.3** Add result-back bridge: monitor VP mission finalization → publish `MissionResultEnvelope` to Redis results stream
+- [ ] **3a.4** Add unit + integration tests for bridge (Redis consume → SQLite insert → VP pickup → result publish)
+- [ ] **3a.5** Validate end-to-end: HQ publishes mission → Redis → bridge inserts into SQLite → VpWorkerLoop executes → result back on Redis
 
 #### Phase 3b: Factory Heartbeat Protocol
 - [ ] **3b.1** Add periodic heartbeat sender in the consumer/factory process that POSTs to `POST /api/v1/factory/registrations` every 60s with current capabilities and status
@@ -133,9 +155,12 @@ Redis infrastructure is deployed. The bus and schema exist. What remains is gene
 - [ ] **3b.3** Corporation View UI reflects live heartbeat status (already has stale detection UI)
 - [ ] **3b.4** Add tests for heartbeat registration refresh and stale detection
 
-#### Phase 3c: Local Factory Deployment Playbook
-- [ ] **3c.1** Create `scripts/deploy_local_factory.sh` — clones repo, installs deps via `uv`, creates `.env` from Infisical `LOCAL_WORKER` profile, starts consumer service
-- [ ] **3c.2** Create `deployment/systemd-user/universal-agent-local-factory.service` — systemd unit for the local factory consumer loop
+#### Phase 3c: Local Factory Deployment (Infisical-First)
+> **Note (2026-03-06):** Replaces `.env.factory.template` approach with Infisical environment provisioning. See `corporation/docs/INFISICAL_ENVIRONMENTS.md`.
+
+- [x] **3c.0** Provision Infisical `kevins-desktop` environment via `scripts/infisical_provision_factory_env.py`
+- [ ] **3c.1** Create `scripts/deploy_local_factory.sh` — clones repo, installs deps via `uv`, creates minimal `.env` with Infisical credentials only, starts factory services
+- [ ] **3c.2** Create `deployment/systemd-user/universal-agent-local-factory.service` — systemd unit for local factory (gateway + Redis→SQLite bridge + VP workers)
 - [ ] **3c.3** Document the local factory setup in `corporation/docs/LOCAL_FACTORY_SETUP.md`
 - [ ] **3c.4** Validate: deploy local factory on desktop → registers with HQ → appears in Corporation View → receives and executes a test delegation
 
@@ -177,35 +202,38 @@ Redis infrastructure is deployed. The bus and schema exist. What remains is gene
 
 ## 5. Env Contract Reference
 
-### HQ (VPS) `.env`
-```env
+> **Important (2026-03-06):** All parameters are stored in **Infisical**, not in `.env` files. Each machine has its own Infisical environment (e.g., `dev` for VPS HQ, `kevins-desktop` for the desktop). The local `.env` file contains **only** Infisical credentials. See `corporation/docs/INFISICAL_ENVIRONMENTS.md` for the full environment strategy.
+
+### HQ (VPS) — Infisical environment: `dev`
+Key parameters (loaded from Infisical at startup):
+```
 FACTORY_ROLE=HEADQUARTERS
 UA_DEPLOYMENT_PROFILE=vps
-ENABLE_VP_CODER=true
+INFISICAL_ENVIRONMENT=dev
 UA_DELEGATION_REDIS_ENABLED=1
-UA_REDIS_HOST=<vps-host>
-UA_REDIS_PORT=6379
-UA_REDIS_DB=0
-REDIS_PASSWORD=<from-infisical>
-UA_DELEGATION_STREAM_NAME=ua:missions:delegation
-UA_DELEGATION_CONSUMER_GROUP=ua_workers
-UA_DELEGATION_DLQ_STREAM=ua:missions:dlq
+UA_VP_EXTERNAL_DISPATCH_ENABLED=1
+UA_ENABLE_HEARTBEAT=1
+UA_ENABLE_GWS_CLI=1
 ```
 
-### Local Factory (Desktop) `.env`
-```env
+### Local Factory (Desktop) — Infisical environment: `kevins-desktop`
+Key parameters (loaded from Infisical at startup):
+```
 FACTORY_ROLE=LOCAL_WORKER
 UA_DEPLOYMENT_PROFILE=local_workstation
-ENABLE_VP_CODER=true
-LLM_PROVIDER_OVERRIDE=  # optional: ZAI, ANTHROPIC, OPENAI, OLLAMA
+INFISICAL_ENVIRONMENT=kevins-desktop
 UA_DELEGATION_REDIS_ENABLED=1
-UA_REDIS_HOST=<vps-host-or-tailnet>
-UA_REDIS_PORT=6379
-UA_REDIS_DB=0
-REDIS_PASSWORD=<from-infisical>
-UA_DELEGATION_STREAM_NAME=ua:missions:delegation
-UA_DELEGATION_CONSUMER_GROUP=ua_workers
-UA_DELEGATION_DLQ_STREAM=ua:missions:dlq
+UA_VP_EXTERNAL_DISPATCH_ENABLED=0
+UA_ENABLE_HEARTBEAT=0
+UA_ENABLE_GWS_CLI=0
+```
+
+### Minimal local `.env` (only Infisical credentials)
+```env
+INFISICAL_CLIENT_ID=<machine-identity-from-infisical>
+INFISICAL_CLIENT_SECRET=<machine-identity-from-infisical>
+INFISICAL_PROJECT_ID=<shared-project-id>
+INFISICAL_ENVIRONMENT=kevins-desktop
 ```
 
 ### Role-to-Runtime Behavior Matrix
@@ -245,10 +273,11 @@ UA_DELEGATION_DLQ_STREAM=ua:missions:dlq
 
 ## 6. Immediate Next Steps (Recommended Session Order)
 
-1. **Session N+1:** Implement Phase 3a (Generalized Mission Consumer) — this is the critical path that unlocks everything else.
-2. **Session N+2:** Implement Phase 3b (Factory Heartbeat) + Phase 3c (Local Factory Deployment).
-3. **Session N+3:** Validate end-to-end: HQ → Redis → Local Factory → VP Coder → Result back to HQ.
-4. **Session N+4:** Phase 3d (Factory Template & Self-Update) + Phase 4a (Enhanced Corporation View).
+1. **Session N+1:** Implement Phase 3a-bridge (`redis_vp_bridge.py`) — thin Redis consumer → VP SQLite bridge. This is the critical path.
+2. **Session N+2:** Implement Phase 3c deploy script + systemd services for desktop factory.
+3. **Session N+3:** Validate end-to-end: HQ publishes mission → Redis → desktop bridge → VP SQLite → VpWorkerLoop → result back on Redis.
+4. **Session N+4:** Phase 3b (HQ registration heartbeat) + Phase 3d (Factory Template & Self-Update).
+5. **Session N+5:** Phase 4a (Enhanced Corporation View) + Phase 4c (CSI-to-HQ Bridge).
 
 Factory improvements (Track B) can happen in any session — they are independent and deploy via normal `git pull` on each factory.
 
@@ -259,16 +288,17 @@ Factory improvements (Track B) can happen in any session — they are independen
 Each phase has explicit acceptance criteria before moving to the next:
 
 ### Phase 3a Gate
-- [ ] `uv run pytest tests/delegation/test_consumer.py -q` passes
-- [ ] End-to-end: `POST /api/v1/delegation/publish` → consumer picks up → result on results stream
+- [ ] `uv run pytest tests/delegation/test_redis_vp_bridge.py -q` passes
+- [ ] End-to-end: HQ publishes mission → Redis → bridge inserts into VP SQLite → VpWorkerLoop executes → result on Redis results stream
 
 ### Phase 3b Gate
 - [ ] Factory heartbeat appears in Corporation View with < 2 minute freshness
 - [ ] Stale factories correctly flagged after 5 minutes of silence
 
 ### Phase 3c Gate
-- [ ] Desktop factory starts, registers, and appears in Corporation View
-- [ ] Desktop factory receives and completes a test delegation mission
+- [ ] Desktop factory starts with Infisical `kevins-desktop` environment
+- [ ] Factory registers and appears in Corporation View
+- [ ] Desktop factory receives and completes a test delegation mission via Redis→SQLite bridge
 
 ### Phase 3d Gate
 - [ ] `system:update_factory` mission triggers self-update on local factory
@@ -290,6 +320,8 @@ Each phase has explicit acceptance criteria before moving to the next:
 | Database drift between HQ and local | Explicit Global/Local state boundary; local factories query HQ API for global state |
 | Factory update breaks consumer | Graceful shutdown on SIGTERM; consumer acks only after successful execution |
 | Redis bus downtime | Gateway falls back to HTTP queue; delegation metrics report connection state |
+| Two parallel dispatch systems (Redis + VP SQLite) | Redis→SQLite bridge provides clean separation: Redis for cross-machine, SQLite for local execution |
+| Infisical environment drift | Provisioning script is idempotent; re-run to sync from `dev` baseline |
 
 ---
 
@@ -304,12 +336,18 @@ Each phase has explicit acceptance criteria before moving to the next:
 ### Phase Specifications (Detailed Implementation Guides)
 | Doc | Phase | Status |
 |---|---|---|
-| `docs/phases/phase_3a_generalized_consumer.md` | 3a: Generalized Mission Consumer | Not Started |
-| `docs/phases/phase_3b_factory_heartbeat.md` | 3b: Factory Heartbeat Protocol | Not Started |
-| `docs/phases/phase_3c_local_factory_deployment.md` | 3c: Local Factory Deployment | Not Started |
+| `docs/phases/phase_3a_generalized_consumer.md` | 3a: Redis→SQLite Bridge (reframed) | Partially Done |
+| `docs/phases/phase_3b_factory_heartbeat.md` | 3b: Factory Heartbeat Protocol | Partially Done |
+| `docs/phases/phase_3c_local_factory_deployment.md` | 3c: Local Factory Deployment (Infisical-first) | In Progress |
 | `docs/phases/phase_3d_factory_template.md` | 3d: Factory Template & Self-Update | Not Started |
 | `docs/phases/phase_4_observability.md` | 4: Observability & CSI Bridge | Not Started |
 | `docs/phases/phase_5_memory_federation.md` | 5: Memory & Federation | Not Started |
+
+### Infisical & Environment Strategy
+| Doc | Purpose |
+|---|---|
+| `docs/INFISICAL_ENVIRONMENTS.md` | Machine-named environments, override tables, provisioning guide |
+| `scripts/infisical_provision_factory_env.py` | Automated Infisical environment cloning with role overrides |
 
 ### Design & Architecture
 | Doc | Purpose |
@@ -322,3 +360,11 @@ Each phase has explicit acceptance criteria before moving to the next:
 | `docs/004_DISTRIBUTED_FACTORIES_ARCHITECTURE.md` | Symmetrical factory architectural analysis |
 | `docs/005_CORPORATION_AND_FACTORIES_ARCHITECTURE.md` | Corporate hierarchy, memory sync, security, rollout strategy |
 | `infrastructure/redis/` | Redis bus Docker config, deployment README |
+
+### Track B Reference (HQ Improvements Affecting Plan)
+| Artifact | Impact |
+|---|---|
+| `src/universal_agent/vp/` | VP external worker system — supersedes Phase 3a consumer |
+| `src/universal_agent/process_heartbeat.py` | OS-level liveness — partially addresses Phase 3b |
+| `src/universal_agent/execution_context.py` | Session workspace ContextVar — enables concurrent missions |
+| `Refactor_Workspace/parallel-refactor-progress.md` | SessionContext concurrency refactor log |

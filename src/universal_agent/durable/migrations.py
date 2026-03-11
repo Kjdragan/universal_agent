@@ -214,4 +214,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_vp_missions_vp_claim ON vp_missions(vp_id, claim_expires_at)"
     )
+    # Phase 3a: Redis→SQLite bridge columns
+    _add_column_if_missing(conn, "vp_missions", "source", "TEXT DEFAULT 'gateway'")
+    _add_column_if_missing(conn, "vp_missions", "result_published", "INTEGER DEFAULT 0")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vp_missions_bridge_results "
+        "ON vp_missions(source, result_published, status)"
+    )
     conn.commit()

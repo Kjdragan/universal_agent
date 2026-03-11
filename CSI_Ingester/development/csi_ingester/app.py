@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,13 @@ from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.service import CSIService
 from csi_ingester.store import analysis_tasks as analysis_task_store
 from csi_ingester.store.sqlite import connect, ensure_schema
+from csi_ingester.threads_webhooks import (
+    ThreadsWebhookEnvelope,
+    ingest_threads_webhook_envelope,
+    validate_signed_payload,
+    validate_verification_request,
+    webhook_settings_from_env,
+)
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -80,6 +87,68 @@ async def readyz() -> dict[str, object]:
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics() -> str:
     return _metrics.render_prometheus()
+
+
+@app.get("/webhooks/threads")
+async def threads_webhook_verify(
+    hub_mode: str = Query(default="", alias="hub.mode"),
+    hub_verify_token: str = Query(default="", alias="hub.verify_token"),
+    hub_challenge: str = Query(default="", alias="hub.challenge"),
+) -> Response:
+    settings = webhook_settings_from_env()
+    try:
+        challenge = validate_verification_request(
+            mode=hub_mode,
+            verify_token=hub_verify_token,
+            challenge=hub_challenge,
+            settings=settings,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PlainTextResponse(content=challenge, status_code=200)
+
+
+@app.post("/webhooks/threads")
+async def threads_webhook_ingest(request: Request) -> dict[str, Any]:
+    settings = webhook_settings_from_env()
+    if not settings.enabled:
+        return {"status": "ignored", "reason": "threads_webhook_disabled"}
+
+    raw_body = await request.body()
+    signature_header = str(request.headers.get("x-hub-signature-256") or "")
+    if not validate_signed_payload(raw_body=raw_body, signature_header=signature_header, settings=settings):
+        raise HTTPException(status_code=401, detail="invalid_signature")
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json:{exc}") from exc
+    envelope = ThreadsWebhookEnvelope.model_validate(payload)
+    if _db_conn is None:
+        raise HTTPException(status_code=503, detail="db_not_ready")
+
+    emitter = _service.emitter if _service is not None else None
+    ingest_stats = await ingest_threads_webhook_envelope(
+        conn=_db_conn,
+        envelope=envelope,
+        emitter=emitter,
+    )
+
+    entry_count = len(envelope.entry)
+    change_count = sum(len(entry.changes) for entry in envelope.entry)
+    logger.info(
+        "Threads webhook ingested object=%s entries=%d changes=%d normalized=%d stored=%d deduped=%d delivered=%d",
+        envelope.object,
+        entry_count,
+        change_count,
+        int(ingest_stats.get("normalized") or 0),
+        int(ingest_stats.get("stored") or 0),
+        int(ingest_stats.get("deduped") or 0),
+        int(ingest_stats.get("delivered") or 0),
+    )
+    return ingest_stats
 
 
 @app.post("/analysis/tasks")

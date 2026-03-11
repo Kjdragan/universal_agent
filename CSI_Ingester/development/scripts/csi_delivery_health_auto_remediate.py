@@ -147,10 +147,10 @@ def _cursor_reset_if_stale(*, conn: sqlite3.Connection, state_path: Path, source
         ),
         "runbook_command": (
             "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_rss_telegram_digest.py "
-            "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db"
+            "--db-path /var/lib/universal-agent/csi/csi.db"
             if source_name == "youtube_channel_rss"
             else "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_telegram_digest.py "
-            "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db"
+            "--db-path /var/lib/universal-agent/csi/csi.db"
         ),
     }
 
@@ -458,10 +458,10 @@ async def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--state-key", default="runtime_canary:auto_remediation")
-    parser.add_argument("--rss-state-path", default="/opt/universal_agent/CSI_Ingester/development/var/rss_digest_state.json")
-    parser.add_argument("--reddit-state-path", default="/opt/universal_agent/CSI_Ingester/development/var/reddit_digest_state.json")
+    parser.add_argument("--rss-state-path", default="/var/lib/universal-agent/csi/rss_digest_state.json")
+    parser.add_argument("--reddit-state-path", default="/var/lib/universal-agent/csi/reddit_digest_state.json")
     parser.add_argument("--cooldown-minutes", type=int, default=30)
     parser.add_argument("--max-attempts-per-window", type=int, default=3)
     parser.add_argument("--attempt-window-minutes", type=int, default=360)

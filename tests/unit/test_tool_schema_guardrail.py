@@ -1,8 +1,15 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from universal_agent.guardrails.tool_schema import ToolSchema, pre_tool_use_schema_guardrail
+
+
+@pytest.fixture(autouse=True)
+def _enable_strict_policy_guardrails_for_legacy_contract(monkeypatch):
+    # Preserve existing strict-block expectations in this test module.
+    monkeypatch.setenv("UA_GUARDRAIL_POLICY_MODE", "strict")
 
 
 @pytest.mark.anyio
@@ -30,6 +37,42 @@ async def test_schema_guardrail_blocks_crontab_mutation_for_bash():
     assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
     reason = result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
     assert "crontab" in reason.lower()
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_defaults_to_guide_mode(monkeypatch, tmp_path):
+    # New runtime default: guide mode should avoid hard-blocking policy-level flows.
+    monkeypatch.delenv("UA_GUARDRAIL_POLICY_MODE", raising=False)
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(tmp_path))
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test-guide-default",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_guide_mode_reroutes_system_config_task(monkeypatch):
+    monkeypatch.setenv("UA_GUARDRAIL_POLICY_MODE", "guide")
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": "Create a chron job that runs every 30 minutes and send heartbeat updates.",
+            },
+        },
+        run_id="run-test-guide-reroute",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
+    updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+    assert isinstance(updated, dict)
+    assert updated.get("subagent_type") == "system-configuration-agent"
 
 
 @pytest.mark.anyio
@@ -245,6 +288,41 @@ async def test_schema_guardrail_blocks_primary_run_research_phase_without_inputs
     )
     assert result.get("decision") == "block"
     assert "Happy path" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_prefers_transcript_workspace_for_research_phase(monkeypatch, tmp_path):
+    # Simulate stale/global workspace context with no search inputs.
+    stale_workspace = tmp_path / "stale_workspace"
+    stale_workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(stale_workspace))
+
+    # Actual session workspace for this tool call has collected search JSON files.
+    session_workspace = tmp_path / "session_workspace"
+    search_dir = session_workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text(
+        json.dumps(
+            {
+                "tool": "COMPOSIO_SEARCH_WEB",
+                "results": [{"url": "https://example.com", "title": "Example"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    transcript_path = session_workspace / "transcript.md"
+    transcript_path.write_text("# transcript", encoding="utf-8")
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "transcript_path": str(transcript_path),
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
 
 
 @pytest.mark.anyio
@@ -486,6 +564,56 @@ async def test_schema_guardrail_allows_search_results_listing_before_research_ph
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_allows_external_list_directory_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    external_path = tmp_path / "shared_skills_dir"
+    external_path.mkdir(parents=True, exist_ok=True)
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__list_directory",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"path": str(external_path)},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result == {}
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_still_blocks_workspace_root_listing_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__list_directory",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"path": str(workspace)},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "run_research_phase" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_blocks_composio_search_tools_for_reddit():
     result = await pre_tool_use_schema_guardrail(
         {
@@ -574,11 +702,54 @@ async def test_schema_guardrail_injects_canonical_rolling_window_for_research_ta
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_injects_canonical_rolling_window_for_research_agent(monkeypatch):
+    monkeypatch.setenv("USER_TIMEZONE", "America/Chicago")
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Agent",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": "Research the latest updates from the past 3 days.",
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+    assert isinstance(updated, dict)
+    assert "MANDATORY DATE WINDOW:" in updated.get("prompt", "")
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_rewrites_stale_inline_date_window_for_research_task(monkeypatch):
     monkeypatch.setenv("USER_TIMEZONE", "America/Chicago")
     result = await pre_tool_use_schema_guardrail(
         {
             "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": (
+                    "Research the latest news from the Russia-Ukraine war over the past three days "
+                    "(January 30-31, February 1, 2026)."
+                ),
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+    assert isinstance(updated, dict)
+    updated_prompt = updated.get("prompt", "")
+    assert "January 30-31, February 1, 2026" not in updated_prompt
+    assert "MANDATORY DATE WINDOW:" in updated_prompt
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_rewrites_stale_inline_date_window_for_research_agent(monkeypatch):
+    monkeypatch.setenv("USER_TIMEZONE", "America/Chicago")
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Agent",
             "tool_input": {
                 "subagent_type": "research-specialist",
                 "prompt": (

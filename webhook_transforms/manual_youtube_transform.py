@@ -13,8 +13,49 @@ from urllib.parse import parse_qs, urlparse
 YOUTUBE_LEARNING_SUBAGENT = "youtube-expert"
 MODE_EXPLAINER_ONLY = "explainer_only"
 MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
+MODE_AUTO = "auto"
 LEARNING_MODE_CONCEPT_ONLY = "concept_only"
 LEARNING_MODE_CONCEPT_PLUS_IMPLEMENTATION = "concept_plus_implementation"
+_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
 
 
 def _extract_video_id(video_url: str | None) -> str | None:
@@ -56,6 +97,8 @@ def _normalize_mode(raw_mode: Any) -> str:
     mode = raw_mode.strip().lower()
     if not mode:
         return MODE_EXPLAINER_ONLY
+    if mode in {MODE_AUTO, "detect", "auto_detect"}:
+        return MODE_AUTO
     if mode in {MODE_EXPLAINER_ONLY, "explain", "explanation", "explainer"}:
         return MODE_EXPLAINER_ONLY
     if mode in {
@@ -90,6 +133,17 @@ def _learning_mode_from_mode(mode: str) -> str:
     if mode == MODE_EXPLAINER_PLUS_CODE:
         return LEARNING_MODE_CONCEPT_PLUS_IMPLEMENTATION
     return LEARNING_MODE_CONCEPT_ONLY
+
+
+def _is_probably_code_tutorial(*parts: Any) -> bool:
+    tokens = " ".join(str(part or "") for part in parts).strip().lower()
+    if not tokens:
+        return False
+    has_code = any(keyword in tokens for keyword in _CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _NON_CODE_HINT_KEYWORDS)
+    if has_non_code and not has_code:
+        return False
+    return has_code
 
 
 def _resolve_artifacts_root_hint() -> str:
@@ -129,14 +183,23 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if not video_url:
         return None
 
-    mode = _normalize_mode(payload.get("mode") or MODE_EXPLAINER_PLUS_CODE)
+    channel_id = payload.get("channel_id")
+    if not isinstance(channel_id, str):
+        channel_id = ""
+
+    explicit_mode = payload.get("mode")
+    mode = _normalize_mode(explicit_mode or MODE_AUTO)
+    if mode == MODE_AUTO:
+        title_hint = payload.get("title")
+        mode = (
+            MODE_EXPLAINER_PLUS_CODE
+            if _is_probably_code_tutorial(title_hint, channel_id, video_url)
+            else MODE_EXPLAINER_ONLY
+        )
     learning_mode = _learning_mode_from_mode(mode)
     allow_degraded = _coerce_bool(payload.get("allow_degraded_transcript_only"), default=True)
     artifacts_root = _resolve_artifacts_root_hint()
 
-    channel_id = payload.get("channel_id")
-    if not isinstance(channel_id, str):
-        channel_id = ""
     channel_seg = _safe_segment(channel_id, "manual")
 
     if video_id:
@@ -158,7 +221,9 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "Path rule: do not use a literal UA_ARTIFACTS_DIR folder segment in file paths.",
         "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
         f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-creation/...",
-        "Required artifacts: README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/, manifest.json.",
+        "Required baseline artifacts: README.md, CONCEPT.md, manifest.json.",
+        "If learning_mode is concept_plus_implementation, also create IMPLEMENTATION.md and implementation/ with runnable code.",
+        "If learning_mode is concept_only, keep implementation procedural (no repo bootstrap scripts).",
         "Create required artifacts first and keep them even if extraction fails.",
         "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
         f"video_url: {video_url}",
@@ -168,6 +233,7 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"mode: {mode}",
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
+        "Set implementation_required=true only when transcript+metadata confirm software/coding content.",
         "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
         "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
         "Video analysis path: use Gemini multimodal video understanding with the YouTube URL directly when available.",

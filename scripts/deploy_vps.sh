@@ -122,12 +122,17 @@ fi
 RSYNC_RSH="$(printf '%q ' "${rsync_ssh[@]}")"
 
 # Sync tracked project content while preserving runtime secrets/state on VPS.
+# - Keep per-host operational memory on VPS (no local runtime memory bleed-over).
+# - Keep per-host prompt warm-cache (`capabilities.last_good.md`) on VPS.
 rsync -az \
   --exclude ".git/" \
   --exclude ".venv/" \
   --exclude ".env" \
+  --exclude "Memory_System/ua_shared_workspace/" \
+  --exclude "src/universal_agent/prompt_assets/capabilities.last_good.md" \
   --exclude "AGENT_RUN_WORKSPACES/" \
   --exclude "artifacts/" \
+  --exclude "CSI_Ingester/development/var/" \
   --exclude "tmp/" \
   --exclude "web-ui/.next/" \
   --exclude "web-ui/node_modules/" \
@@ -141,9 +146,17 @@ rsync -az \
   set -euo pipefail
   cd '$REMOTE_DIR'
 
+  resolve_env_key_from_infisical() {
+    key=\"\$1\"
+    KEY=\"\$key\" runuser -u ua -- bash -lc \"cd '$REMOTE_DIR' && set -a && source .env && set +a && export PYTHONPATH='$REMOTE_DIR/src' && '$REMOTE_DIR/.venv/bin/python3' -c \\\"import os; from universal_agent.infisical_loader import initialize_runtime_secrets; initialize_runtime_secrets(profile='vps', force_reload=True); print(str(os.getenv(os.environ.get('KEY', '') or '') or ''))\\\"\"
+  }
+
   require_env_key() {
     key=\"\$1\"
     value=\$(grep -E \"^\${key}=\" .env | tail -n1 | cut -d= -f2- || true)
+    if [ -z \"\$value\" ]; then
+      value=\$(resolve_env_key_from_infisical \"\$key\" || true)
+    fi
     if [ -z \"\$value\" ]; then
       echo \"ERROR: missing required env key \${key} in $REMOTE_DIR/.env\" >&2
       exit 42
@@ -159,7 +172,16 @@ rsync -az \
   chown -R ua:ua Memory_System AGENT_RUN_WORKSPACES artifacts logs 2>/dev/null || true
   # Process heartbeat directory for watchdog liveness detection.
   mkdir -p /var/lib/universal-agent/heartbeat
+  mkdir -p /var/lib/universal-agent/csi/backups
   chown ua:ua /var/lib/universal-agent/heartbeat 2>/dev/null || true
+  chown -R ua:ua /var/lib/universal-agent/csi 2>/dev/null || true
+
+  # One-time CSI DB migration to durable runtime path.
+  if [ -f /opt/universal_agent/CSI_Ingester/development/var/csi.db ] && [ ! -f /var/lib/universal-agent/csi/csi.db ]; then
+    cp /opt/universal_agent/CSI_Ingester/development/var/csi.db /var/lib/universal-agent/csi/csi.db
+    chown ua:ua /var/lib/universal-agent/csi/csi.db 2>/dev/null || true
+    chmod 640 /var/lib/universal-agent/csi/csi.db 2>/dev/null || true
+  fi
   # Tutorial bootstrap target root (used by dashboard "Create Repo" action).
   mkdir -p '${DEPLOY_TUTORIAL_REPO_ROOT}'
   chown -R ua:ua '${DEPLOY_TUTORIAL_REPO_ROOT}' 2>/dev/null || true
@@ -220,6 +242,10 @@ rsync -az \
 
   echo '== Infisical SDK verification =='
   APP_ROOT='$REMOTE_DIR' APP_USER='ua' bash scripts/install_vps_infisical_sdk.sh --verify-only
+
+  echo '== Web UI service env synthesis =='
+  chmod 0755 scripts/install_vps_webui_env.sh scripts/render_service_env_from_infisical.py
+  APP_ROOT='$REMOTE_DIR' APP_USER='ua' bash scripts/install_vps_webui_env.sh
 
   echo '== Web UI build =='
   if [ -d web-ui ] && command -v npm >/dev/null 2>&1; then
@@ -375,6 +401,9 @@ rsync -az \
   echo \"APP=\$app_code\"
 
   token=\$(grep '^UA_OPS_TOKEN=' .env | tail -n1 | cut -d= -f2- || true)
+  if [ -z \"\$token\" ]; then
+    token=\$(resolve_env_key_from_infisical 'UA_OPS_TOKEN' || true)
+  fi
   if [ -n \"\$token\" ]; then
     echo '== Ops auth check =='
     printf 'OPS_UNAUTH='

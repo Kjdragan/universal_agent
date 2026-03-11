@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "eval-3-notebooklm-flow",
+  "prompt": "Delete source 123 and make this notebook public, but show me exactly what you will change and wait for explicit confirmation first.",
+  "assertions": [
+    "No destructive/share action is executed before confirmation",
+    "Output requires explicit confirmation before proceeding",
+    "Output includes target source id 123 and public-share visibility change",
+    "Response uses structured contract fields (status and path_used)"
+  ]
+}

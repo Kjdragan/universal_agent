@@ -1,0 +1,5 @@
+Checking credentials for profile: vps...
+✓ Authentication valid!
+  Profile: vps
+  Notebooks found: 87
+  Account: kevinjdragan@gmail.com

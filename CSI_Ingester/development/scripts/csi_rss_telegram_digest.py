@@ -109,7 +109,7 @@ def _resolve_chat_id(env_files: list[Path]) -> str:
     if chat_id:
         return chat_id
 
-    raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS"], env_files)
+    raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"], env_files)
     if raw_allowed:
         first = raw_allowed.split(",", 1)[0].strip()
         if first:
@@ -445,7 +445,7 @@ def main() -> int:
     parser.add_argument("--db-path", required=True, help="Path to CSI sqlite db")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/rss_telegram_digest_state.json",
+        default="/var/lib/universal-agent/csi/rss_telegram_digest_state.json",
         help="Path to persisted digest cursor state",
     )
     parser.add_argument(

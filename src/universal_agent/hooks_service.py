@@ -39,7 +39,75 @@ YOUTUBE_AGENT_CANONICAL = "youtube-expert"
 YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
+YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
+YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
+YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
+YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
+    "invalid_video_target",
+    "video_unavailable",
+    "api_unavailable",
+    "transcript_unavailable",
+    "empty_or_low_quality_transcript",
+    "proxy_not_configured",
+    "proxy_auth_failed",
+    "proxy_quota_or_billing",
+}
+YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES = {
+    "api_unavailable",
+    "request_blocked",
+    "transcript_unavailable",
+    "empty_or_low_quality_transcript",
+}
+YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS = (
+    "exit code -15",
+    "exit code: -15",
+    "terminated process",
+    "cannot write to terminated process",
+    "sigterm",
+    "sigkill",
+    "signal 15",
+    "killed",
+)
 
 
 class HookReportedTimeout(RuntimeError):
@@ -143,6 +211,11 @@ class HooksService:
             self._safe_int_env("UA_HOOKS_AGENT_DISPATCH_QUEUE_LIMIT", 40),
         )
         self._agent_dispatch_pending_count = 0
+        self._dispatch_overflow_notification_cooldown_seconds = max(
+            0,
+            self._safe_int_env("UA_HOOKS_AGENT_DISPATCH_OVERFLOW_NOTIFICATION_COOLDOWN_SECONDS", 120),
+        )
+        self._dispatch_overflow_state: Dict[str, dict[str, Any]] = {}
         self.config = self._load_config()
         self.transform_cache = {}
         self._seen_webhook_ids: Dict[str, float] = {}
@@ -433,6 +506,9 @@ class HooksService:
     def _startup_recovery_marker_path(self, session_dir: Path) -> Path:
         return session_dir / ".hook_startup_recovery.json"
 
+    def _pending_hook_recovery_marker_path(self, session_dir: Path) -> Path:
+        return session_dir / "pending_hook_recovery.json"
+
     def _startup_recovery_allowed(self, session_dir: Path) -> bool:
         marker = self._startup_recovery_marker_path(session_dir)
         payload = self._safe_json(marker)
@@ -455,6 +531,56 @@ class HooksService:
         except Exception:
             logger.warning("Failed writing startup recovery marker session_id=%s", session_id)
 
+    def _write_pending_hook_recovery_marker(
+        self,
+        session_dir: Path,
+        *,
+        session_id: str,
+        reason: str,
+        expected_video_id: str,
+    ) -> Path:
+        marker = self._pending_hook_recovery_marker_path(session_dir)
+        out = {
+            "status": "dispatch_interrupted",
+            "session_id": session_id,
+            "video_id": str(expected_video_id or "").strip(),
+            "reason": str(reason or "hook_dispatch_interrupted").strip(),
+            "created_at_epoch": time.time(),
+        }
+        try:
+            marker.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception:
+            logger.warning("Failed writing pending hook recovery marker session_id=%s", session_id)
+        return marker
+
+    def _clear_pending_hook_recovery_marker(self, session_dir: Path) -> None:
+        marker = self._pending_hook_recovery_marker_path(session_dir)
+        if not marker.exists():
+            return
+        try:
+            marker.unlink()
+        except Exception:
+            logger.warning("Failed removing pending hook recovery marker path=%s", marker)
+
+    @staticmethod
+    def _is_dispatch_interruption_error(reason: str) -> bool:
+        lowered = str(reason or "").strip().lower()
+        if not lowered:
+            return False
+        return any(token in lowered for token in YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS)
+
+    def _dispatch_failure_reason(self, exc: Exception, execution_summary: Optional[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        if isinstance(exc, Exception):
+            parts.append(str(exc))
+        if isinstance(execution_summary, dict):
+            parts.append(str(execution_summary.get("reported_error_message") or ""))
+            parts.append(str(execution_summary.get("iteration_status") or ""))
+        detail = " ".join(part for part in parts if part).strip()
+        if self._is_dispatch_interruption_error(detail):
+            return "hook_dispatch_interrupted"
+        return "hook_dispatch_failed"
+
     def _build_youtube_recovery_action(self, *, session_id: str) -> Optional[HookAction]:
         session_key = self._session_key_from_session_id(session_id)
         channel_key, video_id = self._youtube_parts_from_session_key(session_key)
@@ -468,8 +594,8 @@ class HooksService:
                 f"video_url: {video_url}",
                 f"video_id: {video_id}",
                 f"channel_id: {channel_id}",
-                "mode: explainer_plus_code",
-                "learning_mode: concept_plus_implementation",
+                "mode: auto",
+                "learning_mode: auto",
                 "allow_degraded_transcript_only: true",
                 "Resume this tutorial run and complete artifact generation.",
             ]
@@ -480,6 +606,72 @@ class HooksService:
             session_key=session_key,
             to=YOUTUBE_AGENT_CANONICAL,
             message=recovery_message,
+            deliver=True,
+        )
+
+    def _build_youtube_recovery_action_from_pending(
+        self,
+        *,
+        session_id: str,
+        pending_payload: dict[str, Any],
+    ) -> Optional[HookAction]:
+        session_key = self._session_key_from_session_id(session_id)
+        _, key_video_id = self._youtube_parts_from_session_key(session_key)
+        video_url = str(pending_payload.get("video_url") or "").strip()
+        video_id = str(pending_payload.get("video_id") or "").strip() or key_video_id
+        if not video_url and video_id:
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+        if not video_url:
+            return None
+        message_lines = [
+            "Recovered failed local ingest run during startup backfill.",
+            f"video_url: {video_url}",
+            f"video_id: {video_id}",
+            "mode: auto",
+            "learning_mode: auto",
+            "allow_degraded_transcript_only: true",
+            "Resume this tutorial run and complete artifact generation.",
+        ]
+        return HookAction(
+            kind="agent",
+            name="RecoveredPendingLocalIngest",
+            session_key=session_key,
+            to=YOUTUBE_AGENT_CANONICAL,
+            message="\n".join(message_lines),
+            deliver=True,
+        )
+
+    def _build_youtube_recovery_action_from_pending_interrupt(
+        self,
+        *,
+        session_id: str,
+        pending_payload: dict[str, Any],
+    ) -> Optional[HookAction]:
+        # Prefer the canonical session-key derived recovery action because it
+        # keeps routing deterministic after restarts.
+        action = self._build_youtube_recovery_action(session_id=session_id)
+        if action is not None:
+            return action
+
+        video_id = str(pending_payload.get("video_id") or "").strip()
+        if not video_id:
+            return None
+        session_key = self._session_key_from_session_id(session_id)
+        message_lines = [
+            "Recovered interrupted YouTube webhook run during startup backfill.",
+            f"video_url: https://www.youtube.com/watch?v={video_id}",
+            f"video_id: {video_id}",
+            "mode: auto",
+            "learning_mode: auto",
+            "allow_degraded_transcript_only: true",
+            "Resume this tutorial run and complete artifact generation.",
+        ]
+        return HookAction(
+            kind="agent",
+            name="RecoveredInterruptedHookDispatch",
+            session_key=session_key,
+            to=YOUTUBE_AGENT_CANONICAL,
+            message="\n".join(message_lines),
             deliver=True,
         )
 
@@ -542,6 +734,86 @@ class HooksService:
                 severity="warning",
                 metadata={"source": "hooks", "reason": "startup_recovery"},
             )
+
+        for _, session_dir in candidates:
+            if recovered >= self._startup_recovery_max_sessions:
+                break
+            session_id = session_dir.name
+            pending_dispatch_path = self._pending_hook_recovery_marker_path(session_dir)
+            if not pending_dispatch_path.is_file():
+                continue
+            pending_payload = self._safe_json(pending_dispatch_path)
+            if not isinstance(pending_payload, dict):
+                continue
+            pending_status = str(pending_payload.get("status") or "").strip().lower()
+            if pending_status != "dispatch_interrupted":
+                continue
+            created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
+            if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):
+                continue
+            if not self._startup_recovery_allowed(session_dir):
+                continue
+            action = self._build_youtube_recovery_action_from_pending_interrupt(
+                session_id=session_id,
+                pending_payload=pending_payload,
+            )
+            if action is None:
+                continue
+            self._record_startup_recovery_attempt(session_dir, session_id=session_id)
+            asyncio.create_task(self._dispatch_action(action))
+            recovered += 1
+            logger.warning(
+                "Queued startup recovery for interrupted youtube dispatch session_id=%s",
+                session_id,
+            )
+            self._emit_notification(
+                kind="youtube_hook_recovery_queued",
+                title="Recovered Interrupted YouTube Dispatch",
+                message=f"Queued recovery run for session {session_id}",
+                session_id=session_id,
+                severity="warning",
+                metadata={"source": "hooks", "reason": "startup_dispatch_interrupted_backfill"},
+            )
+
+        for _, session_dir in candidates:
+            if recovered >= self._startup_recovery_max_sessions:
+                break
+            session_id = session_dir.name
+            pending_path = session_dir / "pending_local_ingest.json"
+            if not pending_path.is_file():
+                continue
+            pending_payload = self._safe_json(pending_path)
+            if not isinstance(pending_payload, dict):
+                continue
+            pending_status = str(pending_payload.get("status") or "").strip().lower()
+            if pending_status not in {"failed_local_ingest", "pending_local_ingest"}:
+                continue
+            created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
+            if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):
+                continue
+            if not self._startup_recovery_allowed(session_dir):
+                continue
+            action = self._build_youtube_recovery_action_from_pending(
+                session_id=session_id,
+                pending_payload=pending_payload,
+            )
+            if action is None:
+                continue
+            self._record_startup_recovery_attempt(session_dir, session_id=session_id)
+            asyncio.create_task(self._dispatch_action(action))
+            recovered += 1
+            logger.warning(
+                "Queued startup backfill for pending local ingest session_id=%s",
+                session_id,
+            )
+            self._emit_notification(
+                kind="youtube_hook_recovery_queued",
+                title="Recovered Failed YouTube Ingest",
+                message=f"Queued degraded recovery for session {session_id}",
+                session_id=session_id,
+                severity="warning",
+                metadata={"source": "hooks", "reason": "startup_pending_local_ingest_backfill"},
+            )
         return recovered
 
     def _emit_notification(
@@ -579,11 +851,44 @@ class HooksService:
         except Exception:
             return ""
 
+    @staticmethod
+    def _tutorial_manifest_probably_code(manifest_payload: dict[str, Any]) -> bool:
+        values = [
+            manifest_payload.get("title"),
+            manifest_payload.get("description"),
+            manifest_payload.get("summary"),
+            manifest_payload.get("channel"),
+            manifest_payload.get("channel_name"),
+        ]
+        tokens = " ".join(str(value or "") for value in values).strip().lower()
+        if not tokens:
+            return False
+        has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
+        has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
+        return has_code and not (has_non_code and not has_code)
+
+    @staticmethod
+    def _tutorial_manifest_explicitly_non_code(manifest_payload: dict[str, Any]) -> bool:
+        values = [
+            manifest_payload.get("title"),
+            manifest_payload.get("description"),
+            manifest_payload.get("summary"),
+            manifest_payload.get("channel"),
+            manifest_payload.get("channel_name"),
+        ]
+        tokens = " ".join(str(value or "") for value in values).strip().lower()
+        if not tokens:
+            return False
+        has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
+        has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
+        return has_non_code and not has_code
+
     def _tutorial_key_files_for_notification(
         self,
         *,
         run_dir: Path,
         run_rel_path: str,
+        implementation_required: bool = False,
     ) -> list[dict[str, str]]:
         files: list[dict[str, str]] = []
         primary_files = [
@@ -607,19 +912,32 @@ class HooksService:
             )
         implementation_dir = run_dir / "implementation"
         if implementation_dir.is_dir():
-            implementation_files = sorted(
-                [
-                    node
-                    for node in implementation_dir.rglob("*")
-                    if node.is_file() and node.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".sh"}
-                ]
-            )[:8]
+            if implementation_required:
+                implementation_files = sorted(
+                    [
+                        node
+                        for node in implementation_dir.rglob("*")
+                        if node.is_file()
+                        and node.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".sh", ".ipynb", ".sql"}
+                        and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                    ]
+                )[:8]
+            else:
+                implementation_files = sorted(
+                    [
+                        node
+                        for node in implementation_dir.rglob("*")
+                        if node.is_file()
+                        and node.suffix.lower() in {".md", ".txt"}
+                        and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                    ]
+                )[:8]
             for node in implementation_files:
                 rel_under_run = node.relative_to(run_dir).as_posix()
                 rel_path = f"{run_rel_path}/{rel_under_run}" if run_rel_path else ""
                 files.append(
                     {
-                        "label": f"Code: {node.name}",
+                        "label": (f"Code: {node.name}" if implementation_required else f"Procedure: {node.name}"),
                         "name": node.name,
                         "path": str(node),
                         "rel_path": rel_path,
@@ -766,7 +1084,10 @@ class HooksService:
         self._emit_notification(
             kind="youtube_tutorial_failed",
             title="YouTube Tutorial Processing Failed",
-            message=f"{tutorial_title}: {reason}",
+            message=(
+                f"{tutorial_title}: {reason}"
+                f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+            ),
             session_id=session_id,
             severity="error",
             requires_action=True,
@@ -782,7 +1103,37 @@ class HooksService:
         max_attempts: int,
     ) -> str:
         err = str(error or "local_ingest_failed").strip()
-        cls = str(failure_class or "unknown").strip()
+        cls = str(failure_class or "unknown").strip().lower()
+        if cls == "proxy_quota_or_billing":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare quota/billing appears exhausted; verify account credits/bandwidth and retry."
+            )
+        if cls == "proxy_auth_failed":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare credentials appear invalid; verify PROXY_USERNAME/PROXY_PASSWORD secrets."
+            )
+        if cls == "proxy_not_configured":
+            return (
+                f"YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: PROXY_USERNAME and PROXY_PASSWORD env vars are missing. "
+                "Without a residential proxy, YouTube WILL ban this server's datacenter IP. "
+                "Add Webshare credentials to Infisical and redeploy."
+            )
+        if cls == "video_unavailable":
+            return (
+                f"video is unavailable (error={err}, failure_class={cls}). "
+                "Likely deleted/private/region-restricted; skipping retries."
+            )
+        if cls == "transcript_unavailable":
+            return (
+                f"transcript is unavailable (error={err}, failure_class={cls}). "
+                "Captions are missing/disabled for this video; skipping retries."
+            )
         return (
             f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
             f"(error={err}, failure_class={cls})"
@@ -949,6 +1300,31 @@ class HooksService:
             return stripped.split(":", 1)[1].strip()
         return ""
 
+    @staticmethod
+    def _parse_bool_text(raw: str, *, default: bool = False) -> bool:
+        value = str(raw or "").strip().lower()
+        if not value:
+            return bool(default)
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
+    def _allow_degraded_transcript_only(self, action: HookAction) -> bool:
+        raw = self._extract_action_field(action.message or "", "allow_degraded_transcript_only")
+        if not raw:
+            return False
+        return self._parse_bool_text(raw, default=False)
+
+    def _should_fail_open_ingest(self, *, action: HookAction, failure_class: str) -> bool:
+        if self._youtube_ingest_fail_open:
+            return True
+        normalized = str(failure_class or "").strip().lower()
+        if normalized not in YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES:
+            return False
+        return self._allow_degraded_transcript_only(action)
+
     async def _maybe_forward_youtube_manual(self, mapping_id: str, action: HookAction) -> None:
         """
         Optional YouTube hook mirroring:
@@ -986,7 +1362,7 @@ class HooksService:
         payload = {
             "video_url": video_url,
             "video_id": video_id,
-            "mode": mode or "explainer_plus_code",
+            "mode": mode or "explainer_only",
             "allow_degraded_transcript_only": allow_degraded,
         }
 
@@ -1323,11 +1699,53 @@ class HooksService:
         artifacts = manifest_payload.get("artifacts") if isinstance(manifest_payload, dict) else None
         artifacts_map = artifacts if isinstance(artifacts, dict) else {}
         implementation_dir_hint = str(artifacts_map.get("implementation_dir") or "").strip()
-        implementation_required = bool(manifest_payload.get("implementation_required")) or (
-            learning_mode in {"concept_plus_implementation", "implementation", "code_only"}
-            or mode in {"explainer_plus_code", "implementation", "code_only"}
-            or bool(implementation_dir_hint)
-        )
+        hinted_dir = run_dir / implementation_dir_hint if implementation_dir_hint else run_dir / "implementation"
+        has_substantive_code = False
+        if hinted_dir.exists() and hinted_dir.is_dir():
+            has_substantive_code = any(
+                node.is_file()
+                and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                and node.suffix.lower()
+                in {
+                    ".py",
+                    ".ts",
+                    ".tsx",
+                    ".js",
+                    ".jsx",
+                    ".sh",
+                    ".ipynb",
+                    ".gs",
+                    ".html",
+                    ".css",
+                    ".sql",
+                    ".java",
+                    ".go",
+                    ".rs",
+                }
+                for node in hinted_dir.rglob("*")
+            )
+        manifest_flag = manifest_payload.get("implementation_required")
+        if isinstance(manifest_flag, bool):
+            if not manifest_flag:
+                implementation_required = False
+            elif has_substantive_code:
+                implementation_required = True
+            else:
+                implementation_required = not self._tutorial_manifest_explicitly_non_code(
+                    manifest_payload
+                )
+        elif learning_mode in {"concept_only"} or mode in {"explainer_only"}:
+            implementation_required = False
+        elif learning_mode in {"concept_plus_implementation", "implementation", "code_only"} or mode in {
+            "explainer_plus_code",
+            "implementation",
+            "code_only",
+        }:
+            implementation_required = has_substantive_code or not self._tutorial_manifest_explicitly_non_code(
+                manifest_payload
+            )
+        else:
+            implementation_required = has_substantive_code
 
         missing: list[str] = []
         required_files = ["README.md", "CONCEPT.md"]
@@ -1341,7 +1759,10 @@ class HooksService:
             if not implementation_dir.is_dir():
                 missing.append("implementation/")
             else:
-                has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
+                has_impl_file = any(
+                    node.is_file() and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                    for node in implementation_dir.rglob("*")
+                )
                 if not has_impl_file:
                     missing.append("implementation/*")
         if missing:
@@ -1350,8 +1771,11 @@ class HooksService:
         bootstrap_scripts: list[str] = []
         implementation_dir = run_dir / "implementation"
         if implementation_dir.is_dir():
-            has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
-            if has_impl_file:
+            has_impl_file = any(
+                node.is_file() and node.name.strip().lower() not in YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES
+                for node in implementation_dir.rglob("*")
+            )
+            if implementation_required and has_impl_file:
                 bootstrap_scripts = self._ensure_tutorial_bootstrap_scripts(implementation_dir)
 
         run_rel_path = self._tutorial_run_rel_path(run_dir)
@@ -1368,6 +1792,7 @@ class HooksService:
             "key_files": self._tutorial_key_files_for_notification(
                 run_dir=run_dir,
                 run_rel_path=run_rel_path,
+                implementation_required=implementation_required,
             ),
         }
 
@@ -1480,6 +1905,9 @@ class HooksService:
                             "detail": str(ingest_result.get("detail") or "")[:2000],
                         }
                     )
+                    failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
+                    if failure_class in YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES:
+                        break
                     if attempt_index < self._youtube_ingest_retries - 1:
                         delay_seconds = self._youtube_ingest_retry_delay(attempt_index)
                         if delay_seconds > 0:
@@ -1489,7 +1917,7 @@ class HooksService:
 
         if not (ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded"):
             failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
-            if failure_class in {"request_blocked", "api_unavailable"}:
+            if failure_class in {"request_blocked", "api_unavailable", *YOUTUBE_PROXY_ALERT_FAILURE_CLASSES}:
                 self._set_youtube_ingest_cooldown(
                     video_key=video_key,
                     failure_class=failure_class,
@@ -1589,7 +2017,17 @@ class HooksService:
             "hook_youtube_ingest_video_key": video_key,
         }
 
-        if self._youtube_ingest_fail_open:
+        should_fail_open = self._should_fail_open_ingest(
+            action=action,
+            failure_class=failure_class,
+        )
+        if should_fail_open:
+            metadata["hook_youtube_ingest_status"] = "failed_fail_open"
+            metadata["hook_youtube_ingest_fail_open_reason"] = (
+                "env_fail_open"
+                if self._youtube_ingest_fail_open
+                else "allow_degraded_transcript_only"
+            )
             fail_open_lines = [
                 "local_youtube_ingest_mode: local_worker",
                 "local_youtube_ingest_status: failed_fail_open",
@@ -1866,6 +2304,7 @@ class HooksService:
         session_workspace: Optional[Path] = None
         admitted_turn_id: Optional[str] = None
         start_ts: Optional[float] = None
+        execution_summary: dict[str, Any] = {}
         dispatch_gate_acquired = False
         dispatch_wait_started = time.time()
         pending_admitted = False
@@ -1878,12 +2317,26 @@ class HooksService:
                     candidate_pending,
                     self._agent_dispatch_queue_limit,
                 )
+                now_ts = time.time()
+                cooldown = int(self._dispatch_overflow_notification_cooldown_seconds)
+                state = self._dispatch_overflow_state.get(session_id) or {}
+                last_emit_ts = float(state.get("last_emit_ts") or 0.0)
+                suppressed_count = int(state.get("suppressed_count") or 0)
+                if cooldown > 0 and (now_ts - last_emit_ts) < cooldown:
+                    state["suppressed_count"] = suppressed_count + 1
+                    state["last_pending"] = candidate_pending
+                    self._dispatch_overflow_state[session_id] = state
+                    return
+
+                note_suffix = ""
+                if suppressed_count > 0:
+                    note_suffix = f"; suppressed {suppressed_count} duplicate overflow alert(s)"
                 self._emit_notification(
                     kind="hook_dispatch_queue_overflow",
                     title="Hook Dispatch Queue Overflow",
                     message=(
                         f"Dropped hook action for {session_id} "
-                        f"(pending={candidate_pending}, limit={self._agent_dispatch_queue_limit})"
+                        f"(pending={candidate_pending}, limit={self._agent_dispatch_queue_limit}{note_suffix})"
                     ),
                     session_id=session_id,
                     severity="error",
@@ -1891,8 +2344,15 @@ class HooksService:
                         "source": "hooks",
                         "pending": candidate_pending,
                         "limit": int(self._agent_dispatch_queue_limit),
+                        "suppressed_duplicates": suppressed_count,
+                        "cooldown_seconds": cooldown,
                     },
                 )
+                self._dispatch_overflow_state[session_id] = {
+                    "last_emit_ts": now_ts,
+                    "suppressed_count": 0,
+                    "last_pending": candidate_pending,
+                }
                 return
             self._agent_dispatch_pending_count = candidate_pending
             pending_admitted = True
@@ -1914,6 +2374,7 @@ class HooksService:
         try:
             session = await self._resolve_or_create_webhook_session(session_id)
             session_workspace = Path(str(session.workspace_dir)).resolve()
+            self._clear_pending_hook_recovery_marker(session_workspace)
             action, ingest_metadata, should_skip_dispatch = await self._prepare_local_youtube_ingest(
                 action=action,
                 session_id=session_id,
@@ -1941,6 +2402,7 @@ class HooksService:
                     )
                 if failed_local_ingest:
                     reason = str(metadata.get("hook_youtube_ingest_reason") or "local_ingest_failed").strip()
+                    failure_class = str(metadata.get("hook_youtube_ingest_failure_class") or "").strip().lower()
                     logger.error(
                         "Hook action failed pre-dispatch session_id=%s hook=%s reason=%s",
                         session_id,
@@ -1966,6 +2428,35 @@ class HooksService:
                             "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
                         },
                     )
+                    if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
+                        if failure_class == "proxy_not_configured":
+                            _proxy_alert_msg = (
+                                "CRITICAL: YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED. "
+                                "PROXY_USERNAME/PROXY_PASSWORD env vars are missing. "
+                                "All YouTube transcript requests will fail until proxy credentials are added."
+                            )
+                        else:
+                            _proxy_alert_msg = (
+                                "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
+                                "Check Webshare account status and proxy secrets."
+                            )
+                        self._emit_notification(
+                            kind="youtube_ingest_proxy_alert",
+                            title="YouTube Proxy Alert",
+                            message=_proxy_alert_msg,
+                            session_id=session_id,
+                            severity="error",
+                            requires_action=True,
+                            metadata={
+                                "source": "hooks",
+                                "hook_name": hook_name,
+                                "hook_session_key": session_key,
+                                "failure_class": failure_class,
+                                "error": str(metadata.get("hook_youtube_ingest_error") or ""),
+                                "reason": reason,
+                                "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                            },
+                        )
                 else:
                     logger.info(
                         "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
@@ -2029,7 +2520,10 @@ class HooksService:
                 self._emit_notification(
                     kind="youtube_tutorial_started",
                     title="YouTube Tutorial Pipeline Started",
-                    message=f"Processing: {processing_label}",
+                    message=(
+                        f"Processing: {processing_label}"
+                        f"{f' [video_id: {expected_video_id}]' if expected_video_id else ''}"
+                    ),
                     session_id=session_id,
                     severity="info",
                     metadata={
@@ -2040,7 +2534,6 @@ class HooksService:
                         "tutorial_title": tutorial_title,
                     },
                 )
-            execution_summary: dict[str, Any] = {}
             idle_timeout_seconds = (
                 int(self._youtube_hook_idle_timeout_seconds)
                 if is_youtube_tutorial and self._youtube_hook_idle_timeout_seconds
@@ -2074,7 +2567,10 @@ class HooksService:
                     self._emit_notification(
                         kind="youtube_tutorial_ready",
                         title="YouTube Tutorial Artifacts Ready",
-                        message=f"{tutorial_title} artifacts are ready for review.",
+                        message=(
+                            f"{tutorial_title} artifacts are ready for review."
+                            f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+                        ),
                         session_id=session_id,
                         severity="success",
                         requires_action=True,
@@ -2269,11 +2765,14 @@ class HooksService:
                     reason=f"hook_timeout_{timeout_seconds}s",
                     started_at_epoch=start_ts,
                 )
-        except Exception:
+        except Exception as exc:
+            dispatch_failure_reason = self._dispatch_failure_reason(exc, execution_summary)
+            is_interrupted_dispatch = dispatch_failure_reason == "hook_dispatch_interrupted"
             logger.exception(
-                "Failed dispatching hook action session_key=%s session_id=%s",
+                "Failed dispatching hook action session_key=%s session_id=%s reason=%s",
                 session_key,
                 session_id,
+                dispatch_failure_reason,
             )
             if session_workspace is not None:
                 state = {
@@ -2283,13 +2782,13 @@ class HooksService:
                 self._write_sync_ready_marker(
                     session_id=session_id,
                     workspace_root=session_workspace,
-                    state="dispatch_failed",
+                    state="dispatch_interrupted" if is_interrupted_dispatch else "dispatch_failed",
                     ready=True,
                     hook_name=hook_name,
                     run_source=run_source,
                     started_at_epoch=start_ts,
                     completed_at_epoch=time.time(),
-                    error="hook_dispatch_failed",
+                    error=dispatch_failure_reason,
                     execution_summary=state,
                 )
             if self._turn_finalizer:
@@ -2303,20 +2802,50 @@ class HooksService:
                             session_id,
                             admitted_turn_id,
                             "failed",
-                            "hook_dispatch_failed",
+                            dispatch_failure_reason,
                             state,
                         )
                 except Exception:
                     logger.exception("Failed finalizing errored hook turn session_id=%s", session_id)
             if is_youtube_tutorial:
-                self._emit_youtube_tutorial_failure_notification(
-                    session_id=session_id,
-                    session_key=session_key,
-                    hook_name=hook_name,
-                    expected_video_id=expected_video_id,
-                    reason="hook_dispatch_failed",
-                    started_at_epoch=start_ts,
-                )
+                if is_interrupted_dispatch:
+                    pending_marker_path = ""
+                    if session_workspace is not None:
+                        marker = self._write_pending_hook_recovery_marker(
+                            session_workspace,
+                            session_id=session_id,
+                            reason=dispatch_failure_reason,
+                            expected_video_id=expected_video_id,
+                        )
+                        pending_marker_path = str(marker)
+                    self._emit_notification(
+                        kind="youtube_tutorial_interrupted",
+                        title="YouTube Tutorial Interrupted",
+                        message=(
+                            f"Run interrupted for {expected_video_id or session_key}; "
+                            "queued for startup recovery/backfill."
+                        ),
+                        session_id=session_id,
+                        severity="warning",
+                        requires_action=True,
+                        metadata={
+                            "source": "hooks",
+                            "hook_name": hook_name,
+                            "hook_session_key": session_key,
+                            "video_id": expected_video_id or "",
+                            "reason": dispatch_failure_reason,
+                            "pending_recovery_file": pending_marker_path,
+                        },
+                    )
+                else:
+                    self._emit_youtube_tutorial_failure_notification(
+                        session_id=session_id,
+                        session_key=session_key,
+                        hook_name=hook_name,
+                        expected_video_id=expected_video_id,
+                        reason=dispatch_failure_reason,
+                        started_at_epoch=start_ts,
+                    )
         finally:
             if self._run_counter_finish:
                 try:
@@ -2349,7 +2878,7 @@ class HooksService:
         total_timeout_seconds: Optional[int],
         idle_timeout_seconds: Optional[int],
     ) -> dict[str, Any]:
-        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request))
+        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request, workspace_root=workspace_root))
         started = time.monotonic()
         last_progress = started
         run_log_path = (
@@ -2399,7 +2928,9 @@ class HooksService:
                 except BaseException:
                     pass
 
-    async def _consume_gateway_execute(self, session, request: GatewayRequest) -> dict[str, Any]:
+    async def _consume_gateway_execute(
+        self, session, request: GatewayRequest, *, workspace_root: Optional[Path] = None,
+    ) -> dict[str, Any]:
         tool_calls = 0
         duration_seconds = 0.0
         started = time.time()
@@ -2407,28 +2938,71 @@ class HooksService:
         reported_timeout_message: Optional[str] = None
         iteration_status: str = ""
         text_tail: list[str] = []
-        async for event in self.gateway.execute(session, request):
-            event_type = getattr(event, "type", None)
-            event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
-            if event_name == "tool_call":
-                tool_calls += 1
-            elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
-                text = str((event.data or {}).get("text") or "").strip()
-                if text:
-                    text_tail.append(text)
-                    if len(text_tail) > 8:
-                        text_tail = text_tail[-8:]
-            elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
-                message = str((event.data or {}).get("message") or "").strip()
-                detail = str((event.data or {}).get("detail") or "").strip()
-                if message or detail:
-                    reported_error_message = f"{message} {detail}".strip()
-            elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
-                data = getattr(event, "data", {}) or {}
-                duration_seconds = float(data.get("duration_seconds") or duration_seconds)
-                if isinstance(data.get("tool_calls"), int):
-                    tool_calls = int(data.get("tool_calls"))
-                iteration_status = str(data.get("status") or "").strip().lower()
+
+        # Open run.log for append so hook-dispatched sessions can be rehydrated
+        _rl_handle = None
+        if workspace_root is not None:
+            try:
+                _rl_path = workspace_root / "run.log"
+                _rl_handle = open(_rl_path, "a", encoding="utf-8")
+                _ts0 = time.strftime("%H:%M:%S", time.gmtime())
+                user_text = (request.user_input or "")[:500]
+                _rl_handle.write(f"[{_ts0}] \U0001f464 USER: {user_text}\n")
+                _rl_handle.flush()
+            except Exception:
+                _rl_handle = None
+
+        def _rl_write(line: str) -> None:
+            if _rl_handle:
+                try:
+                    _rl_handle.write(line + "\n")
+                    _rl_handle.flush()
+                except Exception:
+                    pass
+
+        try:
+            async for event in self.gateway.execute(session, request):
+                event_type = getattr(event, "type", None)
+                event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
+                if event_name == "tool_call":
+                    tool_calls += 1
+                    _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                    tool_name = ""
+                    if isinstance(getattr(event, "data", None), dict):
+                        tool_name = str(event.data.get("tool_name") or event.data.get("name") or "")
+                    _rl_write(f"[{_rl_ts}] \U0001f527 TOOL CALL: {tool_name}" if tool_name else f"[{_rl_ts}] \U0001f527 TOOL CALL")
+                elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
+                    text = str((event.data or {}).get("text") or "").strip()
+                    if text:
+                        text_tail.append(text)
+                        if len(text_tail) > 8:
+                            text_tail = text_tail[-8:]
+                elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
+                    message = str((event.data or {}).get("message") or "").strip()
+                    detail = str((event.data or {}).get("detail") or "").strip()
+                    if message or detail:
+                        reported_error_message = f"{message} {detail}".strip()
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] ERROR: {reported_error_message[:300]}")
+                elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
+                    data = getattr(event, "data", {}) or {}
+                    duration_seconds = float(data.get("duration_seconds") or duration_seconds)
+                    if isinstance(data.get("tool_calls"), int):
+                        tool_calls = int(data.get("tool_calls"))
+                    iteration_status = str(data.get("status") or "").strip().lower()
+                elif event_name == "status" and isinstance(getattr(event, "data", None), dict):
+                    status_msg = str((event.data or {}).get("message") or "").strip()
+                    if status_msg:
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] INFO: {status_msg[:300]}")
+        finally:
+            if _rl_handle:
+                try:
+                    _rl_ts_end = time.strftime("%H:%M:%S", time.gmtime())
+                    _rl_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_calls} tool calls) ===\n")
+                    _rl_handle.close()
+                except Exception:
+                    pass
         if duration_seconds <= 0:
             duration_seconds = round(max(0.0, time.time() - started), 3)
         text_window = "\n".join(text_tail).lower()
@@ -2523,7 +3097,8 @@ class HooksService:
                 "Path rule: never use a literal UA_ARTIFACTS_DIR folder name in paths.",
                 "Invalid examples: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
                 f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-creation/...",
-                "Create required artifacts first (manifest.json, README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/) before retrieval.",
+                "Create required baseline artifacts first (manifest.json, README.md, CONCEPT.md).",
+                "Only create runnable implementation artifacts when transcript+metadata confirm software/coding content.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
             ]
             if payload_video_id or payload_video_url:

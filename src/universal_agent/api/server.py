@@ -99,12 +99,17 @@ from universal_agent.api.events import (
     ApprovalResponse,
 )
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.timeout_policy import (
     gateway_owner_lookup_timeout_seconds,
     gateway_ws_send_timeout_seconds,
     gateway_ws_handshake_timeout_seconds,
 )
 ensure_runtime_path()
+
+_DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
+if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
+    _DEPLOYMENT_PROFILE = "local_workstation"
 
 
 
@@ -205,7 +210,16 @@ def _dashboard_session_secret() -> str:
         or (os.getenv("UA_OPS_TOKEN") or "").strip()
         or (os.getenv("UA_DASHBOARD_PASSWORD") or "").strip()
     )
-    return secret or "ua-dashboard-dev-secret"
+    return secret
+
+
+def _log_internal_dashboard_auth(*, surface: str, target: str, client_host: str) -> None:
+    logger.info(
+        "dashboard_internal_token_auth surface=%s target=%s client=%s",
+        surface,
+        target,
+        client_host or "unknown",
+    )
 
 
 def _extract_auth_token(headers: Any) -> str:
@@ -244,8 +258,13 @@ def _decode_dashboard_session_token(token: str) -> DashboardAuthResult:
     if not payload_b64 or not sig:
         return DashboardAuthResult(False, auth_required, default_owner, None)
 
+    secret = _dashboard_session_secret()
+    if not secret:
+        logger.warning("dashboard_session_secret_missing auth_required=%s", auth_required)
+        return DashboardAuthResult(False, auth_required, default_owner, None)
+
     expected_sig = base64.urlsafe_b64encode(
-        hmac.new(_dashboard_session_secret().encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+        hmac.new(secret.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).digest()
     ).decode("ascii").rstrip("=")
     if not hmac.compare_digest(sig, expected_sig):
         return DashboardAuthResult(False, auth_required, default_owner, None)
@@ -269,6 +288,11 @@ def _authenticate_dashboard_request(request: Request) -> DashboardAuthResult:
     internal_token = _internal_service_token()
     header_token = _extract_auth_token(request.headers)
     if internal_token and header_token and hmac.compare_digest(header_token, internal_token):
+        _log_internal_dashboard_auth(
+            surface="http",
+            target=str(request.url.path),
+            client_host=request.client.host if request.client else "",
+        )
         return DashboardAuthResult(True, _dashboard_auth_required(), _normalize_owner_id(None), None)
 
     cookie_token = request.cookies.get(DASHBOARD_AUTH_COOKIE, "")
@@ -279,6 +303,11 @@ def _authenticate_dashboard_ws(websocket: WebSocket) -> DashboardAuthResult:
     internal_token = _internal_service_token()
     header_token = _extract_auth_token(websocket.headers)
     if internal_token and header_token and hmac.compare_digest(header_token, internal_token):
+        _log_internal_dashboard_auth(
+            surface="websocket",
+            target=str(websocket.url.path),
+            client_host=websocket.client.host if websocket.client else "",
+        )
         return DashboardAuthResult(True, _dashboard_auth_required(), _normalize_owner_id(None), None)
 
     cookie_token = websocket.cookies.get(DASHBOARD_AUTH_COOKIE, "")
@@ -701,7 +730,7 @@ async def _run_vps_sync_status_probe() -> dict[str, Any]:
             "error": f"Sync script missing: {VPS_SYNC_SCRIPT}",
         }
 
-    remote_host = os.getenv("UA_REMOTE_SSH_HOST", "root@100.106.113.93")
+    remote_host = os.getenv("UA_REMOTE_SSH_HOST", "root@srv1360701.taildcc090.ts.net")
     remote_dir = os.getenv("UA_REMOTE_WORKSPACES_DIR", "/opt/universal_agent/AGENT_RUN_WORKSPACES")
     local_dir = str(VPS_WORKSPACES_MIRROR_DIR)
     remote_artifacts_dir = os.getenv("UA_REMOTE_ARTIFACTS_DIR", "/opt/universal_agent/artifacts")
@@ -1080,6 +1109,7 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
+    bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
     logger.info("🚀 Universal Agent API Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
 

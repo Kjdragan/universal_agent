@@ -169,10 +169,10 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run adaptive category quality loop.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/category_quality_loop_state.json",
+        default="/var/lib/universal-agent/csi/category_quality_loop_state.json",
     )
     parser.add_argument("--lookback-hours", type=int, default=72)
     parser.add_argument("--min-items", type=int, default=30)

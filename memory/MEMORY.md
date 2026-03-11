@@ -32,6 +32,14 @@ Preferences:
 Package Manager: uv (Always use `uv add`)
 OS: Linux
 
+## [SYSTEM_ISSUES]
+
+### CSI Auto-Remediation Permission Denied (2026-03-10) - **File:** `CSI_Ingester/development/scripts/csi_delivery_health_auto_remediate.py`
+- **Issue:** `_restart_ingester()` calls `systemctl try-restart csi-ingester.service` without `sudo`
+- **Result:** "permission denied" on VPS when trying to restart service
+- **Fix:** Add `sudo` prefix OR configure Polkit rules on VPS
+- **Status:** BLOCKED - requires VPS-side action (Polkit/sudoers fix). Cannot be resolved from local dev investigation-only mode. Analysis artifacts at `work_products/csi_auto_remediation_fix_plan.md` and `work_products/csi_slo_breach_analysis.md`.
+
 ---
 *Last synced from agent_core.db: 2026-01-30*
 

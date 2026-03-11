@@ -340,6 +340,7 @@ class CronRunRecord:
     finished_at: Optional[float] = None
     error: Optional[str] = None
     output_preview: Optional[str] = None
+    session_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -351,6 +352,7 @@ class CronRunRecord:
             "finished_at": self.finished_at,
             "error": self.error,
             "output_preview": self.output_preview,
+            "session_id": self.session_id,
         }
 
 
@@ -431,9 +433,16 @@ class CronService:
         runs_path = workspaces_dir / "cron_runs.jsonl"
         self.store = CronStore(jobs_path, runs_path)
         self.jobs = self.store.load_jobs()
+        _now_ts = time.time()
+        _needs_save = False
         for job in self.jobs.values():
-            if job.next_run_at is None:
-                job.schedule_next(time.time())
+            if job.next_run_at is None or job.next_run_at < _now_ts:
+                # Recalculate from now to prevent stale/wrong timestamps from
+                # causing immediate catch-up fires on restart (fix #5: timezone double-fire).
+                job.schedule_next(_now_ts)
+                _needs_save = True
+        if _needs_save:
+            self.store.save_jobs(self.jobs.values())
 
     async def start(self) -> None:
         if self.running:
@@ -644,6 +653,7 @@ class CronService:
                                 user_id=job.user_id,
                                 workspace_dir=job.workspace_dir,
                             )
+                            record.session_id = str(getattr(session, "session_id", "") or "")
                             # Build request metadata with optional model override
                             request_metadata: dict[str, Any] = {
                                 "source": "cron",
@@ -653,42 +663,102 @@ class CronService:
                             if job.model:
                                 request_metadata["model"] = job.model
 
-                            request = GatewayRequest(
-                                user_input=job.command,
-                                force_complex=False,
-                                metadata=request_metadata,
-                            )
-                            run_coro = self.gateway.run_query(session, request)
-                            if timeout_seconds is not None:
-                                result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
-                            else:
-                                result = await run_coro
-                            meta = getattr(result, "metadata", None)
-                            auth_required = False
-                            auth_link = None
-                            errors: list[str] = []
-                            if isinstance(meta, dict):
-                                auth_required = bool(meta.get("auth_required"))
-                                raw_link = meta.get("auth_link")
-                                auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
-                                raw_errors = meta.get("errors")
-                                if isinstance(raw_errors, list):
-                                    errors = [str(e) for e in raw_errors if str(e).strip()]
-
-                            if auth_required:
-                                record.status = "auth_required"
-                                # Preserve the link in output so the Web UI can display it without terminal access.
-                                if auth_link:
-                                    record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                            raw_command = job.command.strip()
+                            if raw_command.startswith("!script "):
+                                script_path = raw_command.replace("!script ", "", 1).strip()
+                                logger.info(f"Chron job {job.job_id} executing native script: {script_path}")
+                                
+                                # Use asyncio.create_subprocess_exec
+                                import sys
+                                import subprocess
+                                
+                                env = os.environ.copy()
+                                cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else "/home/kjdragan/lrepos/universal_agent"
+                                env["PYTHONPATH"] = f"/home/kjdragan/lrepos/universal_agent/src:{env.get('PYTHONPATH', '')}"
+                                
+                                proc = await asyncio.create_subprocess_exec(
+                                    sys.executable, "-m", script_path.replace("/", ".").replace(".py", ""),
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    cwd=cwd_str,
+                                    env=env,
+                                )
+                                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                                
+                                exit_code = proc.returncode
+                                output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
+                                
+                                if exit_code == 0:
+                                    record.status = "success"
+                                    record.output_preview = output_text[:400]
                                 else:
-                                    record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
-                            elif errors:
-                                record.status = "error"
-                                record.error = errors[0]
-                                record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                                    record.status = "error"
+                                    record.error = f"Script exited with {exit_code}"
+                                    record.output_preview = output_text[:400]
+
+                                # Manually construct a result object to satisfy _persist_run_output
+                                class _MockResult:
+                                    def __init__(self, text):
+                                        self.response_text = text
+                                        self.session_id = session_id
+                                result = _MockResult(output_text)
+                                record.finished_at = time.time()
+                                self._persist_run_output(job, record, result)
+                                break
                             else:
-                                record.status = "success"
-                                record.output_preview = (getattr(result, "response_text", "") or "")[:400]
+                                # Standard LLM cron execution
+                                try:
+                                    from universal_agent.artifacts import resolve_artifacts_dir
+                                    _artifacts_dir = str(resolve_artifacts_dir())
+                                except Exception:
+                                    _artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip()
+                                if _artifacts_dir:
+                                    resolved_command = (
+                                        f"[SYSTEM CONTEXT: UA_ARTIFACTS_DIR={_artifacts_dir}]\n\n"
+                                        + job.command
+                                    )
+                                else:
+                                    resolved_command = job.command
+
+                                request = GatewayRequest(
+                                    user_input=resolved_command,
+                                    force_complex=True,
+                                    metadata=request_metadata,
+                                )
+                                run_coro = self.gateway.run_query(session, request)
+                                if timeout_seconds is not None:
+                                    result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+                                else:
+                                    result = await run_coro
+                                meta = getattr(result, "metadata", None)
+                                auth_required = False
+                                auth_link = None
+                                errors: list[str] = []
+                                if isinstance(meta, dict):
+                                    auth_required = bool(meta.get("auth_required"))
+                                    raw_link = meta.get("auth_link")
+                                    auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
+                                    raw_errors = meta.get("errors")
+                                    if isinstance(raw_errors, list):
+                                        errors = [str(e) for e in raw_errors if str(e).strip()]
+
+                                if auth_required:
+                                    record.status = "auth_required"
+                                    # Preserve the link in output so the Web UI can display it without terminal access.
+                                    if auth_link:
+                                        record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                                    else:
+                                        record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
+                                elif errors:
+                                    record.status = "error"
+                                    record.error = errors[0]
+                                    record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                                else:
+                                    record.status = "success"
+                                    record.output_preview = (getattr(result, "response_text", "") or "")[:400]
+                                record.finished_at = time.time()
+                                self._persist_run_output(job, record, result)
+                                break
                             record.finished_at = time.time()
                             self._persist_run_output(job, record, result)
                             break
@@ -729,6 +799,30 @@ class CronService:
                     self.store.save_jobs(self.jobs.values())
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+
+                # Post-run memory capture: write a session rollover to shared memory
+                # so cron run context is available to future sessions (fix #6).
+                if record.status == "success":
+                    try:
+                        from universal_agent.feature_flags import memory_enabled
+                        if memory_enabled():
+                            from universal_agent.memory.orchestrator import get_memory_orchestrator
+                            from universal_agent.memory.paths import resolve_shared_memory_workspace
+                            _ws_dir = str(job.workspace_dir)
+                            _transcript = os.path.join(_ws_dir, "transcript.md")
+                            _shared_root = resolve_shared_memory_workspace(_ws_dir)
+                            _broker = get_memory_orchestrator(workspace_dir=_shared_root)
+                            _broker.capture_session_rollover(
+                                session_id=record.session_id or job.job_id,
+                                trigger="cron_run_completed",
+                                transcript_path=_transcript,
+                                summary=(
+                                    f"Cron job '{job.job_id}' completed. "
+                                    + (record.output_preview or "")[:200]
+                                ),
+                            )
+                    except Exception:
+                        pass
                 if moved_outputs:
                     logger.info(
                         "Chron job %s moved %d root output(s) into work_products: %s",

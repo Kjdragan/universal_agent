@@ -1,0 +1,11 @@
+{
+  "eval_id": 1,
+  "eval_name": "eval-1-notebooklm-flow",
+  "prompt": "Set up NotebookLM on this VPS-backed UA runtime, verify auth for profile vps, then list my notebooks with a fallback path if MCP is unavailable.",
+  "assertions": [
+    "Auth preflight is reported as successful for the execution profile",
+    "Notebook listing is reported with a non-zero count",
+    "MCP-first attempt and CLI fallback/path decision is documented",
+    "Response uses structured contract fields (status and path_used)"
+  ]
+}

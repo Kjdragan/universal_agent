@@ -161,12 +161,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Send hourly CSI token usage report event to UA.")
     parser.add_argument(
         "--db-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/csi.db",
+        default="/var/lib/universal-agent/csi/csi.db",
         help="Path to CSI sqlite db",
     )
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/token_usage_report_state.json",
+        default="/var/lib/universal-agent/csi/token_usage_report_state.json",
         help="Path to report state cursor file",
     )
     parser.add_argument(

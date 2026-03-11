@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.feature_flags import sdk_typed_task_events_enabled
+from universal_agent.sdk.task_events import extract_typed_task_payload
 
 import logfire
 from claude_agent_sdk.client import ClaudeSDKClient
@@ -266,6 +268,7 @@ def _extract_result_message_telemetry(msg: Any) -> dict[str, Any]:
     telemetry: dict[str, Any] = {}
     for key in (
         "subtype",
+        "stop_reason",
         "duration_ms",
         "total_cost_usd",
         "num_turns",
@@ -511,8 +514,8 @@ async def malformed_tool_guardrail_hook(
                 "systemMessage": (
                     "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                     "**USE MCP TOOLS INSTEAD:**\n"
-                    "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
-                    "- For file upload: `mcp__internal__upload_to_composio`\n"
+                    "- For Gmail/Calendar/Drive/Sheets: Use `mcp__gws__*` tools (gws MCP server)\n"
+                    "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                     "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool (EXCEPT X/Twitter).\n"
                     "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
                     "The Composio SDK is not available in the Bash environment. "
@@ -1271,6 +1274,7 @@ class UniversalAgent:
             "token_usage": {"input": 0, "output": 0, "total": 0},
             "compact_boundary_events": [],
             "sdk_result_messages": [],
+            "typed_task_messages": [],
             "context_pressure": _default_context_pressure_state(),
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
@@ -1463,6 +1467,7 @@ class UniversalAgent:
             "token_usage": {"input": 0, "output": 0, "total": 0},
             "compact_boundary_events": [],
             "sdk_result_messages": [],
+            "typed_task_messages": [],
             "context_pressure": _default_context_pressure_state(),
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
@@ -1503,7 +1508,8 @@ class UniversalAgent:
             "## 🏗️ ARCHITECTURE & TOOL USAGE\n"
             "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
             "**Tool Namespaces:**\n"
-            "- `mcp__composio__*` - Remote tools (Gmail, Slack, Search) -> Call directly\n"
+            "- `mcp__composio__*` - Remote tools (Slack, Search, etc.) -> Call directly\n"
+            "- `mcp__gws__*` - Google Workspace tools (Gmail, Calendar, Drive, Sheets) -> Call directly\n"
             "- `mcp__internal__*` - Local tools (File I/O, Memory) -> Call directly\n"
             "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
             "## 🚀 EXECUTION STRATEGY (THE COORDINATOR LOOP)\n"
@@ -1517,6 +1523,15 @@ class UniversalAgent:
             "   - Need schedule/runtime/system changes (Chron/Cron, heartbeat, ops config)? -> IMMEDIATELY delegate to `system-configuration-agent`.\n"
             "3. **Delegate**: Use `Task(subagent_type='[name]', ...)` to hand off the workflow.\n"
             "4. **Fallback**: If NO specialist exists, use your own tools (`read_file`, `write_file`, `bash`, etc.) to solve it.\n\n"
+            "## 🧭 FIRST-TURN ORCHESTRATION PROTOCOL (MANDATORY)\n"
+            "Before using direct tools, classify the request into one of these lanes:\n"
+            "1. **Single-specialist lane**: If one specialist clearly owns the first required phase, delegate immediately.\n"
+            "2. **Multi-phase lane**: If request has multiple phases, produce a short ordered phase list, then execute phase-by-phase with specialist handoffs.\n"
+            "3. **Direct-tools lane**: Use direct tools only when no suitable specialist exists.\n\n"
+            "Specialist-first precedence:\n"
+            "- Prefer specialist delegation over tool improvisation when a capable specialist exists.\n"
+            "- Do not bypass specialists with ad-hoc Bash/Python unless delegation is impossible.\n"
+            "- For mixed requests (e.g., transcript -> research -> report -> delivery), keep strict phase order and hand off each phase to the best specialist.\n\n"
             "🛑 **CRITICAL RULE**: Do not attempt complex multi-step workflows (like 'Research & Report' or 'Video Production') yourself if a Specialist exists.\n"
             "🛑 **SCHEDULING RULE**: Never mutate OS crontab (`crontab -e/-r`, `crontab -`, `/etc/cron*`) for user scheduling requests.\n"
             "Use `system-configuration-agent` and Universal Agent Chron APIs.\n"
@@ -1711,16 +1726,24 @@ class UniversalAgent:
             "- Tool compiles all sections into final HTML\n"
             "- Output: `work_products/report.html`\n"
             "- ⚠️ **NEVER manually Write the final report** - context limits make this impossible\n\n"
-            "### Phase 5: COMPLETION\n"
-            "Return a success message with the report location.\n\n"
+            "### Phase 5: PDF CONVERSION\n"
+            "After HTML is compiled, convert to PDF:\n"
+            "```\n"
+            "mcp__internal__html_to_pdf(html_path=\"work_products/report.html\", output_path=\"work_products/report.pdf\")\n"
+            "```\n"
+            "- Tool converts the HTML report to a styled PDF\n"
+            "- Output: `work_products/report.pdf`\n\n"
+            "### Phase 6: COMPLETION\n"
+            "Return a success message with both report locations (HTML and PDF).\n\n"
             "---\n\n"
             "## ⚠️ CRITICAL RULES\n\n"
             "1. **Always call draft_report_parallel** - never write sections manually\n"
             "2. **Always call cleanup_report** - selective edits only, never rewrite the full report\n"
             "3. **Always call compile_report** - never assemble HTML manually\n"
-            "4. Section order is determined by outline.json - list most important first\n"
-            "5. The tools handle all file I/O - you focus on planning and coordination\n\n"
-            "**👉 START NOW: Read corpus → Create outline → Call draft_report_parallel → Call cleanup_report → Call compile_report**\n"
+            "4. **Always call html_to_pdf** after compile_report to produce the PDF\n"
+            "5. Section order is determined by outline.json - list most important first\n"
+            "6. The tools handle all file I/O - you focus on planning and coordination\n\n"
+            "**👉 START NOW: Read corpus → Create outline → draft_report_parallel → cleanup_report → compile_report → html_to_pdf**\n"
         )
         
         tool_knowledge = get_tool_knowledge_block()
@@ -2034,6 +2057,8 @@ class UniversalAgent:
         tool_calls_this_iter = []
         auth_link = None
         current_agent_name = getattr(self, "current_agent_name", DEFAULT_AGENT_NAME)
+        typed_task_events_active = sdk_typed_task_events_enabled(default=False)
+        latest_result_telemetry: dict[str, Any] = {}
 
         with logfire.span("llm_response_stream"):
             async for msg in self.client.receive_response():  # type: ignore
@@ -2064,6 +2089,33 @@ class UniversalAgent:
                             "event_kind": "sdk_compact_boundary",
                             "compact_boundary": compact_payload,
                             "source": "claude_sdk",
+                        },
+                    )
+                    continue
+
+                typed_task_payload = (
+                    extract_typed_task_payload(msg) if typed_task_events_active else None
+                )
+                if typed_task_payload is not None:
+                    self.trace.setdefault("typed_task_messages", []).append(typed_task_payload)
+                    lifecycle = str(typed_task_payload.get("task_lifecycle") or "event")
+                    summary = str(
+                        typed_task_payload.get("summary")
+                        or typed_task_payload.get("description")
+                        or typed_task_payload.get("status")
+                        or ""
+                    ).strip()
+                    status_text = f"Task {lifecycle}"
+                    if summary:
+                        status_text = f"{status_text}: {summary[:200]}"
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": status_text,
+                            "level": "INFO",
+                            "prefix": "Task",
+                            "event_kind": "sdk_task_message",
+                            "sdk_task": typed_task_payload,
                         },
                     )
                     continue
@@ -2176,6 +2228,7 @@ class UniversalAgent:
 
                 elif isinstance(msg, ResultMessage):
                     result_telemetry = _extract_result_message_telemetry(msg)
+                    latest_result_telemetry = result_telemetry
                     self.trace.setdefault("sdk_result_messages", []).append(result_telemetry)
                     if msg.session_id:
                         self.trace["provider_session_id"] = msg.session_id
@@ -2229,6 +2282,7 @@ class UniversalAgent:
                         total_cost_usd=result_telemetry.get("total_cost_usd"),
                         num_turns=result_telemetry.get("num_turns"),
                         is_error=result_telemetry.get("is_error"),
+                        stop_reason=result_telemetry.get("stop_reason"),
                         usage=result_telemetry.get("usage"),
                         model_usage=result_telemetry.get("model_usage"),
                         context_tokens=context_tokens_for_reset,
@@ -2306,6 +2360,7 @@ class UniversalAgent:
             "query": query[:200],
             "duration_seconds": round(time.time() - self.start_ts, 3),
             "tool_calls": len(tool_calls_this_iter),
+            "stop_reason": latest_result_telemetry.get("stop_reason"),
         }
         self.trace["iterations"].append(iter_record)
 
@@ -2316,6 +2371,7 @@ class UniversalAgent:
                 "tool_calls": len(tool_calls_this_iter),
                 "duration_seconds": round(time.time() - self.start_ts, 3),
                 "token_usage": self.trace.get("token_usage"),
+                "stop_reason": latest_result_telemetry.get("stop_reason"),
             },
         )
 

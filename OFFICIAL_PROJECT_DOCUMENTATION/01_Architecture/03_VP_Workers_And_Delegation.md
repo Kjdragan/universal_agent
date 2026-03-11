@@ -1,0 +1,219 @@
+# 03. VP Workers and Delegation Architecture
+
+**Last verified against source code:** 2026-03-06
+
+## Overview
+
+VP (Virtual Primary) workers are external agent processes that execute delegated work on behalf of Simone (the primary agent). This architecture separates the control plane (Simone decides what to delegate) from the execution plane (VP workers do the work).
+
+## Two VP Lanes
+
+| VP ID | Service | Purpose |
+|-------|---------|---------|
+| `vp.general.primary` | `universal-agent-vp-worker@vp.general.primary` | General tasks — research, content, analysis |
+| `vp.coder.primary` | `universal-agent-vp-worker@vp.coder.primary` | Coding tasks — implementation, refactoring |
+
+Each VP worker runs as a separate systemd service with its own Claude Agent SDK session.
+
+## Delegation Flow
+
+### Local Delegation (single machine)
+
+Simone delegates via tool calls → mission inserted into VP SQLite → VP worker claims and executes.
+
+```mermaid
+sequenceDiagram
+    participant S as Simone (Gateway)
+    participant D as Dispatcher
+    participant DB as VP SQLite
+    participant W as VP Worker
+    participant C as Claude API
+
+    S->>D: dispatch_mission_with_retry()
+    D->>DB: queue_vp_mission()
+    Note over DB: status = queued
+
+    loop Poll every 5s
+        W->>DB: claim_next_vp_mission()
+    end
+    DB-->>W: mission claimed
+    Note over DB: status = running
+
+    W->>C: execute via Claude SDK
+    C-->>W: result
+    W->>DB: finalize_vp_mission()
+    Note over DB: status = completed
+```
+
+### Cross-Machine Delegation (factory model)
+
+HQ publishes to Redis → factory bridge consumes → inserts into local VP SQLite → local VP worker executes.
+
+```mermaid
+sequenceDiagram
+    participant HQ as HQ Gateway
+    participant R as Redis Streams
+    participant IB as Inbound Bridge
+    participant DB as Local VP SQLite
+    participant W as Local VP Worker
+    participant OB as Result Bridge
+
+    HQ->>R: publish_mission(envelope)
+    Note over R: XADD to stream
+
+    IB->>R: consume(count=5)
+    R-->>IB: mission envelope
+    IB->>IB: route by mission_kind
+    IB->>DB: queue_vp_mission()
+    IB->>R: ack(message_id)
+
+    W->>DB: claim_next_vp_mission()
+    W->>W: execute via Claude SDK
+    W->>DB: finalize_vp_mission()
+
+    OB->>DB: poll completed missions
+    OB->>R: publish result back to HQ
+```
+
+## Key Implementation Files
+
+### VP Worker
+
+| File | Purpose |
+|------|---------|
+| `vp/worker_loop.py` | Main claim-execute-finalize loop |
+| `vp/worker_main.py` | Standalone entry point for systemd service |
+| `vp/dispatcher.py` | Mission dispatch from Simone to VP SQLite |
+| `vp/coder_runtime.py` | CODIE coder VP — session/lease management, telemetry |
+| `vp/profiles.py` | VP identity profiles (display name, model config) |
+| `vp/clients/` | VP client SDK adapters |
+
+### Delegation Infrastructure
+
+| File | Purpose |
+|------|---------|
+| `delegation/redis_bus.py` | Redis Streams transport (publish, consume, ack, DLQ) |
+| `delegation/redis_vp_bridge.py` | Inbound bridge: Redis → VP SQLite |
+| `delegation/redis_vp_result_bridge.py` | Outbound bridge: VP results → Redis |
+| `delegation/bridge_main.py` | Standalone bridge entry point with Infisical self-load |
+| `delegation/heartbeat.py` | Factory→HQ registration heartbeat (60s interval) |
+| `delegation/factory_registry.py` | SQLite-backed factory presence on HQ |
+| `delegation/system_handlers.py` | System missions: update, pause, resume |
+| `delegation/schema.py` | `MissionEnvelope` / `MissionPayload` Pydantic models |
+
+## Mission Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued : dispatch / bridge insert
+    queued --> claimed : worker claims
+    claimed --> running : execution starts
+    running --> completed : success
+    running --> failed : error / timeout
+    completed --> [*]
+    failed --> [*]
+```
+
+### Mission Schema (VP SQLite)
+
+Key columns in `vp_missions`:
+- `mission_id` — unique identifier (prefixed `bridge-` for cross-machine)
+- `vp_id` — target VP lane (`vp.general.primary` or `vp.coder.primary`)
+- `mission_type` — kind of work (`coding_task`, `general_task`, etc.)
+- `status` — lifecycle state
+- `objective` — what the VP should accomplish
+- `payload` — JSON with task context, source info, reply mode
+- `result` — JSON output from VP execution
+- `source` — origin (`gateway`, `redis_bridge`)
+
+## Mission Routing
+
+The inbound bridge routes missions by `mission_kind`:
+
+| Mission Kind | VP Target |
+|-------------|-----------|
+| `coding_task` | `vp.coder.primary` |
+| `general_task` | `vp.general.primary` |
+| `research_task` | `vp.general.primary` |
+| `tutorial_bootstrap_repo` | Skipped (handled by tutorial worker) |
+| `system:update_factory` | Handled inline by bridge (not queued) |
+| `system:pause_factory` | Handled inline — pauses bridge consumption |
+| `system:resume_factory` | Handled inline — resumes bridge consumption |
+| Unknown kinds | Default to `vp.general.primary` |
+
+## CODIE (Coder VP Runtime)
+
+**Primary implementation:** `vp/coder_runtime.py`
+
+CODIE is the specialized coder VP with additional runtime management:
+
+- **Session isolation** — dedicated SQLite DB (`coder_vp_state.db`) separate from Simone's runtime
+- **Lease management** — lease heartbeat and release to prevent stale locks
+- **Single-lane execution** — dedicated `_coder_vp_lock` in the gateway
+- **Lifecycle events** — emits session created/resumed/degraded events to VP event tables
+
+## Factory Heartbeat and Registry
+
+```mermaid
+sequenceDiagram
+    participant F as Factory Bridge
+    participant HQ as HQ Gateway
+    participant REG as Factory Registry DB
+
+    loop Every 60s
+        F->>HQ: POST /api/v1/factory/registrations
+        Note over F: factory_id, role, capabilities,<br/>status, latency, metadata
+        HQ->>REG: upsert registration
+        HQ-->>F: 200 OK
+    end
+
+    loop Every 60s (enforcement)
+        HQ->>REG: check last_seen_at
+        Note over REG: >5min → stale<br/>>15min → offline
+    end
+
+    Note over HQ: Operator clicks Pause
+    HQ->>F: system:pause_factory (via Redis)
+    F->>F: stop consuming work missions
+    F->>HQ: heartbeat with status=paused
+
+    Note over HQ: Operator clicks Resume
+    HQ->>F: system:resume_factory (via Redis)
+    F->>F: resume consumption
+    F->>HQ: heartbeat with status=online
+```
+
+### Heartbeat (factory → HQ)
+
+Every 60 seconds, each factory bridge sends a `POST /api/v1/factory/registrations` to HQ with:
+- Factory ID, role, capabilities
+- Registration status (`online`, `paused`)
+- Heartbeat latency measurement
+- Metadata (hostname, PID, uptime, platform)
+
+Exponential backoff on failure (cap at 5 min).
+
+### Registry (HQ side)
+
+HQ maintains a SQLite-backed factory registry (`factory_registry.py`):
+- Upsert on heartbeat → status reverts to `online`
+- Background enforcement loop (60s): >5min → `stale`, >15min → `offline`
+- HQ self-heartbeat keeps its own registration fresh
+
+### Operator Controls
+
+| Endpoint | Action |
+|----------|--------|
+| `POST /api/v1/ops/factory/update` | Publish `system:update_factory` mission |
+| `POST /api/v1/ops/factory/control` | Publish `system:pause_factory` or `system:resume_factory` |
+
+Pause/resume: bridge stops consuming work missions but stays running (heartbeat continues, reports `paused` status). System missions are always processed even when paused.
+
+## Cross-Health Surface
+
+The factory capabilities endpoint (`GET /api/v1/factory/capabilities`) includes:
+- Factory capabilities (role, delegation mode, features)
+- Delegation bus metrics (connected, published/consumed counts)
+- CSI delivery health canary status (when CSI DB is accessible)
+
+This provides a single ops surface for "is everything alive?" across both factory heartbeats and CSI delivery health.

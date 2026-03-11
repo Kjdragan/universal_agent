@@ -1,21 +1,75 @@
 # Documentation Status
 
-Last Run: 2026-02-05 02:00:00
-✅ System Overview
-✅ Core Classes
-✅ Memory System
-✅ Durable Execution
-✅ Heartbeat Service
-✅ URW Orchestration
-✅ Event Streaming Flow
-✅ Resource Guardrails
-✅ Configuration Guide
-✅ Running The Agent
-✅ Skill Development
-✅ Testing Strategy
-✅ Soul Architecture
-✅ UI Architecture
-✅ Ops API Reference
-✅ Tool Architecture ADR
-✅ Glossary
-✅ Root README
+**Last updated:** 2026-03-06
+
+## Architecture (01_Architecture/)
+
+Written from source code review — these describe the system as it actually exists.
+
+| Doc | Subject |
+|-----|---------|
+| 01 | System Architecture Overview — component map, services, data stores, deployment topology |
+| 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
+| 03 | VP Workers & Delegation — mission lifecycle, cross-machine delegation, factory heartbeat |
+
+## Canonical Source-of-Truth Documents (03_Operations/)
+
+These are the authoritative references for each subsystem. When any other document conflicts, **the canonical doc wins**.
+
+| # | Subject |
+|---|---------|
+| 07 | WebSocket Architecture (`02_Flows/`) |
+| 08 | Auth & Session Security (`02_Flows/`) |
+| 82 | Email / AgentMail |
+| 83 | Webhooks |
+| 85 | Infisical Secrets |
+| 86 | Residential Proxy |
+| 87 | Tailscale |
+| 88 | Factory Delegation, Heartbeat & Registry |
+| 89 | Runtime Bootstrap, Deployment Profiles & Factory Role |
+| 90 | Artifacts, Workspaces & Remote Sync |
+| 91 | Telegram |
+| 92 | CSI Architecture |
+
+## Review & Decision Documents
+
+| # | Subject |
+|---|---------|
+| 93 | Prioritized Cleanup Plan from Canonical Review |
+| 94 | Architectural Integration Review |
+| 95 | Integration Architectural Decisions (ADRs) |
+
+## Remaining Operational References
+
+| Doc | Subject |
+|-----|---------|
+| 01 | Heartbeat Debug Fixes — historical debug reference |
+| 02 | Browser Debugging Lessons — debugging patterns |
+| 11 | Scheduling Runtime V2 Operational Runbook — cron operations |
+| 13 | Skill Dependency Setup Guide — skill installation |
+| 14 | Session Runtime Behavior And Recovery Model |
+| 15 | Execution Lock Concurrency Architecture |
+| 16 | Concurrency Conflict Root Cause — VP general interim path |
+| 19 | VPS App/API/Telegram Deployment Explainer |
+| 20 | VPS Daily Ops Quickstart |
+| 22 | VPS Remote Dev, Deploy And File Transfer Runbook |
+| 23 | Agent Workspace Inspector Skill |
+| 24 | VPS Service Recovery System Runbook |
+| 26 | VPS Host Security Hardening Runbook |
+| 27 | Deployment Runbook |
+| 30 | Memory System Architecture And Health |
+| 31 | VPS Deployment Decision Tree |
+| 32 | VPS FileBrowser Setup And Access |
+| 41 | Todoist Heartbeat And Triage Operational Runbook |
+| 76 | Sandbox Permissioning And Exception Profile |
+| 77 | CSI Todoist Sync Debugging Lessons |
+| 78 | Daily Autonomous Briefing Reliability |
+| 79 | Golden Run Research Report Pipeline Reference |
+| 80 | Google Workspace Integration Retrospective Memo |
+
+## Cleanup Summary
+
+**72 outdated documents** were deleted on 2026-03-06:
+- 6 stale architecture docs (01_Architecture/) — replaced by 3 new docs written from source code
+- 46 implementation plans, verifications, assessments, and handoffs for deployed systems
+- 20 superseded operational docs covered by canonical source-of-truth documents

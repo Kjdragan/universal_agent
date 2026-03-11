@@ -47,6 +47,26 @@ install_unit "csi-delivery-health-auto-remediate.service"
 install_unit "csi-delivery-health-auto-remediate.timer"
 install_unit "csi-delivery-slo-gatekeeper.service"
 install_unit "csi-delivery-slo-gatekeeper.timer"
+install_unit "csi-threads-token-refresh-sync.service"
+install_unit "csi-threads-token-refresh-sync.timer"
+install_unit "csi-threads-rollout-verify.service"
+install_unit "csi-threads-rollout-verify.timer"
+install_unit "csi-threads-publish-canary-verify.service"
+install_unit "csi-threads-publish-canary-verify.timer"
+install_unit "csi-threads-webhook-canary-verify.service"
+install_unit "csi-threads-webhook-canary-verify.timer"
+install_unit "csi-reddit-semantic-enrich.service"
+install_unit "csi-reddit-semantic-enrich.timer"
+install_unit "csi-threads-semantic-enrich.service"
+install_unit "csi-threads-semantic-enrich.timer"
+install_unit "csi-threads-trend-report.service"
+install_unit "csi-threads-trend-report.timer"
+install_unit "csi-global-trend-brief.service"
+install_unit "csi-global-trend-brief.timer"
+install_unit "csi-global-brief-reminder.service"
+install_unit "csi-global-brief-reminder.timer"
+install_unit "csi-db-backup.service"
+install_unit "csi-db-backup.timer"
 
 systemctl daemon-reload
 systemctl enable --now csi-rss-telegram-digest.timer
@@ -68,6 +88,16 @@ systemctl enable --now csi-hourly-token-report.timer
 systemctl enable --now csi-delivery-health-canary.timer
 systemctl enable --now csi-delivery-health-auto-remediate.timer
 systemctl enable --now csi-delivery-slo-gatekeeper.timer
+systemctl enable --now csi-threads-token-refresh-sync.timer
+systemctl enable --now csi-threads-rollout-verify.timer
+systemctl enable --now csi-threads-publish-canary-verify.timer
+systemctl enable --now csi-threads-webhook-canary-verify.timer
+systemctl enable --now csi-reddit-semantic-enrich.timer
+systemctl enable --now csi-threads-semantic-enrich.timer
+systemctl enable --now csi-threads-trend-report.timer
+systemctl enable --now csi-global-trend-brief.timer
+systemctl enable --now csi-global-brief-reminder.timer
+systemctl enable --now csi-db-backup.timer
 
 echo "SYSTEMD_EXTRAS_INSTALLED=1"
 systemctl is-active csi-rss-telegram-digest.timer
@@ -89,3 +119,13 @@ systemctl is-active csi-hourly-token-report.timer
 systemctl is-active csi-delivery-health-canary.timer
 systemctl is-active csi-delivery-health-auto-remediate.timer
 systemctl is-active csi-delivery-slo-gatekeeper.timer
+systemctl is-active csi-threads-token-refresh-sync.timer
+systemctl is-active csi-threads-rollout-verify.timer
+systemctl is-active csi-threads-publish-canary-verify.timer
+systemctl is-active csi-threads-webhook-canary-verify.timer
+systemctl is-active csi-reddit-semantic-enrich.timer
+systemctl is-active csi-threads-semantic-enrich.timer
+systemctl is-active csi-threads-trend-report.timer
+systemctl is-active csi-global-trend-brief.timer
+systemctl is-active csi-global-brief-reminder.timer
+systemctl is-active csi-db-backup.timer

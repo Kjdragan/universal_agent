@@ -185,6 +185,7 @@ def _safe_read_excerpt(path: Path, max_bytes: int) -> Optional[str]:
         "idempotency_key": str,
         "priority": int,
         "reply_mode": str,
+        "execution_mode": str,
     },
 )
 async def vp_dispatch_mission_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -223,6 +224,7 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                 reply_mode=reply_mode,
                 priority=priority,
                 run_id=str(args.get("run_id") or "").strip() or None,
+                execution_mode=str(args.get("execution_mode") or "sdk").strip() or "sdk",
             ),
         )
         mission = _mission_to_dict(row) or {}

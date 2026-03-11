@@ -13,6 +13,11 @@ class _StubGateway:
         return SimpleNamespace(user_id=user_id, workspace_dir=workspace_dir)
 
 
+def test_autonomous_cron_to_heartbeat_enabled_defaults_off(monkeypatch):
+    monkeypatch.delenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", raising=False)
+    assert gateway_server._autonomous_cron_to_heartbeat_enabled() is False
+
+
 def test_emit_cron_event_adds_completion_notification(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
@@ -87,7 +92,7 @@ def test_emit_cron_event_labels_autonomous_runs(tmp_path: Path, monkeypatch):
     assert latest["metadata"]["autonomous"] is True
 
 
-def test_emit_cron_event_daily_briefing_includes_report_links(tmp_path: Path, monkeypatch):
+def test_emit_cron_event_daily_briefing_records_autonomous_completion(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
@@ -137,10 +142,10 @@ def test_emit_cron_event_daily_briefing_includes_report_links(tmp_path: Path, mo
     )
 
     latest = gateway_server._notifications[-1]
-    assert latest["kind"] == "autonomous_daily_briefing_ready"
-    assert latest["title"] == "Daily Autonomous Briefing Ready"
-    assert latest["metadata"]["report_api_url"].startswith("/api/artifacts/files/autonomous-briefings/")
-    assert latest["metadata"]["report_relative_path"].endswith("/DAILY_BRIEFING.md")
+    assert latest["kind"] == "autonomous_run_completed"
+    assert latest["title"] == "Autonomous Task Completed"
+    assert latest["metadata"]["autonomous"] is True
+    assert latest["metadata"]["system_job"] == gateway_server.AUTONOMOUS_DAILY_BRIEFING_JOB_KEY
 
 
 def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkeypatch):

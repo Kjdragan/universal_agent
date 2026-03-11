@@ -172,3 +172,25 @@ async def test_service_records_adapter_health_on_fetch_failure(tmp_path):
     assert bool(parsed.get("ok")) is False
     assert int(parsed.get("consecutive_failures") or 0) >= 1
     assert "fetch_events:RuntimeError" in str(parsed.get("last_error") or "")
+
+
+def test_service_builds_threads_adapters_when_enabled(tmp_path):
+    config = CSIConfig(
+        raw={
+            "csi": {"instance_id": "csi-test"},
+            "storage": {"db_path": str(tmp_path / "csi.db")},
+            "sources": {
+                "threads_owned": {"enabled": True},
+                "threads_trends_seeded": {"enabled": True},
+                "threads_trends_broad": {"enabled": True},
+            },
+            "delivery": {},
+        }
+    )
+    conn = connect(tmp_path / "csi.db")
+    ensure_schema(conn)
+    service = CSIService(config=config, conn=conn, metrics=MetricsRegistry())
+    service._build_adapters()
+    assert "threads_owned" in service.adapters
+    assert "threads_trends_seeded" in service.adapters
+    assert "threads_trends_broad" in service.adapters

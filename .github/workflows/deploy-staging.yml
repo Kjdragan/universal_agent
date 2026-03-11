@@ -1,0 +1,52 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Staging VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_SSH_HOST }}
+          username: ${{ secrets.VPS_SSH_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            # Exit immediately on error
+            set -euo pipefail
+            
+            STAGING_DIR="/opt/universal-agent-staging"
+            
+            echo "Deploying Staging to $STAGING_DIR..."
+            
+            # Ensure the directory exists and has a git repo
+            if [ ! -d "$STAGING_DIR/.git" ]; then
+              echo "Error: Staging repository not found at $STAGING_DIR."
+              echo "VPS must be prepared prior to first deployment."
+              exit 1
+            fi
+            
+            cd "$STAGING_DIR"
+            
+            # 1. Pull latest code
+            echo "--> Fetching and pulling latest develop branch..."
+            sudo -u ua bash -c "cd $STAGING_DIR && git fetch origin && git checkout develop && git pull origin develop"
+            
+            # 2. Sync Infisical Secrets
+            echo "--> Provisioning Infisical Environment (staging-hq)..."
+            sudo -u ua bash -c "cd $STAGING_DIR && python scripts/infisical_provision_factory_env.py --machine-name \"Staging VPS HQ\" --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
+            
+            # 3. Dependency Sync
+            echo "--> Syncing dependencies with uv..."
+            sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $STAGING_DIR && uv sync"
+            
+            # 4. Restart Systemd Service
+            echo "--> Restarting staging service..."
+            # Assuming staging service is installed as a systemd user service for 'ua' or a system service
+            sudo -u ua XDG_RUNTIME_DIR=/run/user/$(id -u ua) systemctl --user restart universal-agent-staging.service
+            
+            echo "Deployment to Staging complete!"

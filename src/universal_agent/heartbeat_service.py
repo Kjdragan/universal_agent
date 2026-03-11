@@ -3,14 +3,17 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, Any
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent import task_hub
 import shutil
 
 
@@ -40,15 +43,23 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
-    "Investigation-only mode: do not modify repository source files or run mutating shell commands. "
-    "If you draft code, write artifacts under work_products/ or UA_ARTIFACTS_DIR only. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
+INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS = (
+    "Investigation-only mode: do not modify repository source files or run mutating shell commands. "
+    "If you draft code, write artifacts under work_products/ or UA_ARTIFACTS_DIR only."
+)
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
-MIN_INTERVAL_SECONDS = max(
-    1,
-    int(os.getenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", str(30 * 60)) or str(30 * 60)),
-)  # Never run heartbeats more frequently than this minimum
+
+
+def _resolve_min_interval_seconds(default: int = 30 * 60) -> int:
+    return max(
+        1,
+        int(os.getenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", str(default)) or str(default)),
+    )
+
+
+MIN_INTERVAL_SECONDS = _resolve_min_interval_seconds()  # Import-time fallback; prefer runtime helper usage.
 BUSY_RETRY_DELAY = 10  # Seconds
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
@@ -154,6 +165,80 @@ def _parse_duration_seconds(raw: str | None, default: int) -> int:
     if unit == "d":
         return amount * 86400
     return default
+
+
+def _resolve_heartbeat_interval_env(
+    *,
+    prefer_interval: bool = True,
+    warn_on_conflict: bool = False,
+) -> str | None:
+    interval_raw = (os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip()
+    every_raw = (os.getenv("UA_HEARTBEAT_EVERY") or "").strip()
+    if interval_raw and every_raw and interval_raw != every_raw and warn_on_conflict:
+        primary = "UA_HEARTBEAT_INTERVAL" if prefer_interval else "UA_HEARTBEAT_EVERY"
+        logger.warning(
+            "Conflicting heartbeat interval env vars detected; using %s. "
+            "Keep only UA_HEARTBEAT_INTERVAL for clarity.",
+            primary,
+        )
+    if prefer_interval:
+        return interval_raw or every_raw or None
+    return every_raw or interval_raw or None
+
+
+def _heartbeat_interval_source_label(overrides: Optional[dict[str, Any]] = None) -> str:
+    schedule_overridden = False
+    if isinstance(overrides, dict):
+        for block in (overrides, overrides.get("heartbeat"), overrides.get("schedule")):
+            if not isinstance(block, dict):
+                continue
+            if any(str(block.get(key) or "").strip() for key in ("every", "every_seconds", "interval")):
+                schedule_overridden = True
+                break
+    if schedule_overridden:
+        return "workspace_override"
+    if str(os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip():
+        return "UA_HEARTBEAT_INTERVAL"
+    if str(os.getenv("UA_HEARTBEAT_EVERY") or "").strip():
+        return "UA_HEARTBEAT_EVERY"
+    return "default"
+
+
+def _resolve_heartbeat_investigation_only(default: bool = False) -> bool:
+    raw = os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY")
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _compose_heartbeat_prompt(
+    base_prompt: str,
+    *,
+    investigation_only: bool,
+    task_hub_claims: list[dict[str, Any]],
+) -> str:
+    prompt = (base_prompt or DEFAULT_HEARTBEAT_PROMPT).strip()
+    if "{ok_token}" in prompt:
+        # Placeholder replacement happens separately where schedule.ok_tokens is available.
+        pass
+    if investigation_only and "investigation-only mode" not in prompt.lower():
+        prompt = f"{prompt} {INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS}".strip()
+    if task_hub_claims:
+        task_ids = sorted(
+            {
+                str(item.get("task_id") or "").strip()
+                for item in task_hub_claims
+                if str(item.get("task_id") or "").strip()
+            }
+        )
+        prompt = (
+            f"{prompt}\n\n"
+            "Task Hub lifecycle requirement: before finishing, disposition every claimed Task Hub item using "
+            "the `task_hub_task_action` tool with one of: `review`, `complete`, `block`, `park`, `unblock`. "
+            "Do not leave claimed tasks in `in_progress`. If work is not completed, use `review`.\n"
+            f"Claimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}"
+        )
+    return prompt
 
 
 def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
@@ -509,7 +594,10 @@ class HeartbeatService:
         if legacy_ok:
             ok_tokens = [legacy_ok] + [t for t in ok_tokens if t != legacy_ok]
 
-        interval_raw = os.getenv("UA_HEARTBEAT_EVERY") or os.getenv("UA_HEARTBEAT_INTERVAL")
+        interval_raw = _resolve_heartbeat_interval_env(
+            prefer_interval=True,
+            warn_on_conflict=True,
+        )
         self.default_schedule = HeartbeatScheduleConfig(
             every_seconds=_parse_duration_seconds(interval_raw, DEFAULT_INTERVAL_SECONDS),
             active_start=active_start or None,
@@ -561,7 +649,8 @@ class HeartbeatService:
         )
         if interval_raw is not None:
             schedule.every_seconds = _parse_duration_seconds(str(interval_raw), schedule.every_seconds)
-        schedule.every_seconds = max(MIN_INTERVAL_SECONDS, int(schedule.every_seconds or DEFAULT_INTERVAL_SECONDS))
+        min_interval_seconds = _resolve_min_interval_seconds(default=MIN_INTERVAL_SECONDS)
+        schedule.every_seconds = max(min_interval_seconds, int(schedule.every_seconds or DEFAULT_INTERVAL_SECONDS))
 
         active_start = schedule_data.get("active_start") or schedule_data.get("activeStart")
         active_end = schedule_data.get("active_end") or schedule_data.get("activeEnd")
@@ -833,6 +922,7 @@ class HeartbeatService:
         schedule = self._resolve_schedule(overrides)
         delivery = self._resolve_delivery(overrides, session.session_id)
         visibility = self._resolve_visibility(overrides)
+        interval_source = _heartbeat_interval_source_label(overrides)
         now = time.time()
 
         # If this is a fresh state (last_run=0), align to the previous scheduled slot
@@ -1033,6 +1123,7 @@ class HeartbeatService:
             schedule,
             delivery,
             visibility,
+            interval_source=interval_source,
         )
 
     def _session_heartbeat_lock_reason(self, session: GatewaySession, now_ts: float) -> Optional[str]:
@@ -1078,11 +1169,26 @@ class HeartbeatService:
         schedule: HeartbeatScheduleConfig,
         delivery: HeartbeatDeliveryConfig,
         visibility: HeartbeatVisibilityConfig,
+        interval_source: str = "default",
     ):
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
         keep_busy_until_collect_finishes = False
         timed_out = False
+        run_failed = False
+        task_hub_agent_id = f"heartbeat:{session.session_id}"
+        task_hub_claimed: list[dict] = []
+        task_hub_finalize_result: dict[str, int] = {
+            "finalized": 0,
+            "reopened": 0,
+            "reviewed": 0,
+            "completed": 0,
+            "retry_exhausted": 0,
+        }
+        task_hub_finalize_state = "completed"
+        task_hub_finalize_summary = "heartbeat_run_finished"
+        task_hub_claimed_count = 0
+        completed_event_payload: Optional[dict[str, Any]] = None
         
         # Resolve wake_reason for tracing
         _wake_reason = self.last_wake_reason.get(session.session_id, "scheduled")
@@ -1144,30 +1250,20 @@ class HeartbeatService:
                 for evt in system_events
             )
             
-            # Use exec prompt for async completions, standard heartbeat otherwise
-            if has_exec_completion:
-                prompt = EXEC_EVENT_PROMPT
-                logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
-            else:
-                prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
-                if "{ok_token}" in prompt:
-                    ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
-                    prompt = prompt.replace("{ok_token}", ok_token)
-            
             # Build metadata with system events
-            heartbeat_investigation_only = str(
-                os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1")
-            ).strip().lower() not in {"0", "false", "no", "off"}
+            heartbeat_investigation_only = _resolve_heartbeat_investigation_only(default=False)
             metadata: dict = {
                 "source": "heartbeat",
                 "heartbeat_investigation_only": heartbeat_investigation_only,
+                "heartbeat_effective_interval_seconds": int(schedule.every_seconds),
+                "heartbeat_interval_source": str(interval_source or "default"),
             }
             if system_events:
                 metadata["system_events"] = system_events
                 logger.info("Injecting %d system events into heartbeat for %s", len(system_events), session.session_id)
 
-            todoist_actionable_count: Optional[int] = None
-            todoist_brainstorm_candidate_count: Optional[int] = None
+            dispatch_actionable_count: Optional[int] = None
+            dispatch_claimed_count: Optional[int] = None
             guard_policy = _heartbeat_guard_policy(
                 actionable_count=None,
                 brainstorm_candidate_count=0,
@@ -1177,81 +1273,68 @@ class HeartbeatService:
             max_proactive_per_cycle = int(guard_policy.get("max_proactive_per_cycle") or 1)
             max_system_events = int(guard_policy.get("max_system_events") or 1)
 
-            # Deterministic Todoist pre-step: inject actionable summary and/or
-            # brainstorm candidates when present.
+            # Deterministic Task Hub pre-step: heartbeat consumes prepared dispatch queue.
             try:
-                from universal_agent.services.todoist_service import TodoService
-
-                todoist = TodoService()
-                summary = todoist.heartbeat_summary()
-                actionable = int(summary.get("actionable_count") or 0)
-                todoist_actionable_count = actionable
-                candidates = []
+                conn = connect_runtime_db(get_activity_db_path())
+                conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
                 try:
-                    candidates = todoist.heartbeat_brainstorm_candidates(
-                        limit=max(3, max_proactive_per_cycle),
+                    task_hub.ensure_schema(conn)
+                    stale_result = task_hub.release_stale_assignments(
+                        conn,
+                        agent_id_prefix="heartbeat:",
+                        stale_after_seconds=max(
+                            60,
+                            _parse_int(os.getenv("UA_TASK_HUB_STALE_ASSIGNMENT_SECONDS"), 1800),
+                        ),
                     )
-                except Exception:
-                    candidates = []
-                todoist_brainstorm_candidate_count = len(candidates)
-                selected_candidates = candidates[:max_proactive_per_cycle]
-                selected_tasks = []
-                if isinstance(summary.get("tasks"), list):
-                    selected_tasks = summary.get("tasks", [])[:max_proactive_per_cycle]
-                if actionable > 0:
-                    summary = {
-                        **summary,
-                        "selected_tasks": selected_tasks,
-                        "selected_count": len(selected_tasks),
-                        "actionable_count_total": actionable,
-                    }
-
-                if selected_candidates:
-                    brainstorm_event = {
-                        "type": "todoist_brainstorm_candidates",
-                        "payload": {
-                            "count": len(candidates),
-                            "selected_count": len(selected_candidates),
-                            "candidates": selected_candidates,
-                        },
-                        "created_at": datetime.now().isoformat(),
-                        "session_id": session.session_id,
-                    }
-                    system_events.append(brainstorm_event)
-                    metadata["system_events"] = system_events
-                    metadata["todoist_brainstorm_candidates"] = selected_candidates
-
-                if actionable > 0:
-                    todoist_event = {
-                        "type": "todoist_summary",
-                        "payload": summary,
-                        "created_at": datetime.now().isoformat(),
-                        "session_id": session.session_id,
-                    }
-                    system_events.append(todoist_event)
-                    metadata["system_events"] = system_events
-                    metadata["todoist_summary"] = summary
-                    logger.info(
-                        "Injected Todoist heartbeat summary (%d actionable) into heartbeat for %s",
-                        actionable,
-                        session.session_id,
+                    if int(stale_result.get("finalized") or 0) > 0:
+                        logger.warning(
+                            "Released stale Task Hub heartbeat assignments: finalized=%s reopened=%s",
+                            stale_result.get("finalized"),
+                            stale_result.get("reopened"),
+                        )
+                    queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
+                    dispatch_actionable_count = int(queue.get("eligible_total") or 0)
+                    task_hub_claimed = task_hub.claim_next_dispatch_tasks(
+                        conn,
+                        limit=max(1, max_proactive_per_cycle),
+                        agent_id=task_hub_agent_id,
                     )
-                elif selected_candidates:
-                    logger.info(
-                        "Injected Todoist brainstorm candidates (%d) into heartbeat for %s",
-                        len(selected_candidates),
-                        session.session_id,
-                    )
+                    dispatch_claimed_count = len(task_hub_claimed)
+                    task_hub_claimed_count = dispatch_claimed_count
+                    if task_hub_claimed:
+                        hub_event = {
+                            "type": "task_hub_dispatch",
+                            "payload": {
+                                "queue_build_id": str(queue.get("queue_build_id") or ""),
+                                "eligible_total": int(queue.get("eligible_total") or 0),
+                                "claimed_count": len(task_hub_claimed),
+                                "claimed": task_hub_claimed,
+                            },
+                            "created_at": datetime.now().isoformat(),
+                            "session_id": session.session_id,
+                        }
+                        system_events.append(hub_event)
+                        metadata["system_events"] = system_events
+                        metadata["task_hub_dispatch"] = hub_event["payload"]
+                        logger.info(
+                            "Injected Task Hub dispatch payload (%d claimed / %d eligible) into heartbeat for %s",
+                            len(task_hub_claimed),
+                            int(queue.get("eligible_total") or 0),
+                            session.session_id,
+                        )
+                finally:
+                    conn.close()
             except Exception as exc:
-                logger.info("Todoist heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
+                logger.info("Task Hub heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
 
             if len(system_events) > max_system_events:
                 system_events = system_events[-max_system_events:]
                 metadata["system_events"] = system_events
 
             guard_policy = _heartbeat_guard_policy(
-                actionable_count=todoist_actionable_count,
-                brainstorm_candidate_count=int(todoist_brainstorm_candidate_count or 0),
+                actionable_count=dispatch_actionable_count,
+                brainstorm_candidate_count=int(dispatch_claimed_count or 0),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
             )
@@ -1263,11 +1346,27 @@ class HeartbeatService:
                 "max_proactive_per_cycle": int(
                     guard_policy.get("max_proactive_per_cycle") or DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE
                 ),
-                "actionable_count": int(todoist_actionable_count or 0),
-                "brainstorm_candidate_count": int(todoist_brainstorm_candidate_count or 0),
+                "actionable_count": int(dispatch_actionable_count or 0),
+                "brainstorm_candidate_count": int(dispatch_claimed_count or 0),
                 "system_event_count": len(system_events),
                 "skip_reason": guard_skip_reason or None,
             }
+
+            # Compose heartbeat prompt only after Task Hub claims are known so the
+            # model can explicitly disposition claimed items before completion.
+            if has_exec_completion:
+                base_prompt = EXEC_EVENT_PROMPT
+                logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
+            else:
+                base_prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
+                if "{ok_token}" in base_prompt:
+                    ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
+                    base_prompt = base_prompt.replace("{ok_token}", ok_token)
+            prompt = _compose_heartbeat_prompt(
+                base_prompt,
+                investigation_only=heartbeat_investigation_only,
+                task_hub_claims=task_hub_claimed,
+            )
             
             full_response = ""
             streamed_chunks: list[str] = []
@@ -1301,7 +1400,7 @@ class HeartbeatService:
             if should_skip_agent_run:
                 full_response = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
                 logger.info(
-                    "Skipping heartbeat agent execution for %s (no actionable Todoist tasks)",
+                    "Skipping heartbeat agent execution for %s (no actionable task-hub dispatch items)",
                     session.session_id,
                 )
             elif os.getenv("UA_HEARTBEAT_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:
@@ -1377,6 +1476,9 @@ class HeartbeatService:
                     await asyncio.wait_for(collect_task, timeout=self.execution_timeout_seconds)
                 except asyncio.TimeoutError:
                     timed_out = True
+                    run_failed = True
+                    task_hub_finalize_state = "failed"
+                    task_hub_finalize_summary = f"heartbeat_timeout:{self.execution_timeout_seconds}s"
                     logger.error(
                         "Heartbeat execution timed out after %ss for %s",
                         self.execution_timeout_seconds,
@@ -1598,25 +1700,28 @@ class HeartbeatService:
             
             with open(state_path, "w") as f:
                 json.dump(state.to_dict(), f)
-            self._emit_event(
-                {
-                    "type": "heartbeat_completed",
-                    "session_id": session.session_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "ok_only": ok_only,
-                    "suppressed_reason": suppressed_reason,
-                    "sent": sent_any,
-                    "guard_reason": str((metadata.get("heartbeat_guard") or {}).get("skip_reason") or ""),
-                    "guard": metadata.get("heartbeat_guard") if isinstance(metadata.get("heartbeat_guard"), dict) else {},
-                    "artifacts": {
-                        "writes": write_paths[-50:],
-                        "work_products": work_product_paths[-50:],
-                        "bash_commands": bash_commands[-50:],
-                    },
-                }
-            )
+            completed_event_payload = {
+                "type": "heartbeat_completed",
+                "session_id": session.session_id,
+                "timestamp": datetime.now().isoformat(),
+                "ok_only": ok_only,
+                "suppressed_reason": suppressed_reason,
+                "sent": sent_any,
+                "guard_reason": str((metadata.get("heartbeat_guard") or {}).get("skip_reason") or ""),
+                "guard": metadata.get("heartbeat_guard") if isinstance(metadata.get("heartbeat_guard"), dict) else {},
+                "heartbeat_interval_source": str(interval_source or "default"),
+                "heartbeat_effective_interval_seconds": int(schedule.every_seconds),
+                "artifacts": {
+                    "writes": write_paths[-50:],
+                    "work_products": work_product_paths[-50:],
+                    "bash_commands": bash_commands[-50:],
+                },
+            }
 
         except Exception as e:
+            run_failed = True
+            task_hub_finalize_state = "failed"
+            task_hub_finalize_summary = f"heartbeat_failed:{str(e)[:180]}"
             logger.error(f"Heartbeat execution failed for {session.session_id}: {e}")
             self._emit_event(
                 {
@@ -1635,6 +1740,72 @@ class HeartbeatService:
             except Exception:
                 pass
         finally:
+            if task_hub_claimed:
+                assignment_ids = [
+                    str(item.get("assignment_id") or "").strip()
+                    for item in task_hub_claimed
+                    if str(item.get("assignment_id") or "").strip()
+                ]
+                if assignment_ids:
+                    conn = None
+                    try:
+                        conn = connect_runtime_db(get_activity_db_path())
+                        conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
+                        heartbeat_retry_budget = max(
+                            1,
+                            _parse_int(os.getenv("UA_TASK_HUB_HEARTBEAT_MAX_RETRIES"), 3),
+                        )
+                        task_hub_finalize_result = task_hub.finalize_assignments(
+                            conn,
+                            assignment_ids=assignment_ids,
+                            state=task_hub_finalize_state,
+                            result_summary=task_hub_finalize_summary,
+                            reopen_in_progress=True,
+                            policy="heartbeat",
+                            heartbeat_max_retries=heartbeat_retry_budget,
+                        )
+                        logger.info(
+                            "Finalized Task Hub heartbeat claims for %s: state=%s finalized=%s completed=%s reviewed=%s reopened=%s retry_exhausted=%s%s",
+                            session.session_id,
+                            task_hub_finalize_state,
+                            task_hub_finalize_result.get("finalized"),
+                            task_hub_finalize_result.get("completed"),
+                            task_hub_finalize_result.get("reviewed"),
+                            task_hub_finalize_result.get("reopened"),
+                            task_hub_finalize_result.get("retry_exhausted"),
+                            " (run_failed)" if run_failed else "",
+                        )
+                        if int(task_hub_finalize_result.get("reviewed") or 0) > 0 or int(
+                            task_hub_finalize_result.get("reopened") or 0
+                        ) > 0:
+                            logger.info(
+                                "Task Hub heartbeat disposition for %s: moved_to_review=%s reopened=%s",
+                                session.session_id,
+                                int(task_hub_finalize_result.get("reviewed") or 0),
+                                int(task_hub_finalize_result.get("reopened") or 0),
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to finalize Task Hub heartbeat claims for %s: %s",
+                            session.session_id,
+                            exc,
+                        )
+                    finally:
+                        if conn is not None:
+                            conn.close()
+            if completed_event_payload is not None:
+                completed_event_payload.update(
+                    {
+                        "task_hub_claimed_count": int(task_hub_claimed_count),
+                        "task_hub_completed_count": int(task_hub_finalize_result.get("completed") or 0),
+                        "task_hub_review_count": int(task_hub_finalize_result.get("reviewed") or 0),
+                        "task_hub_reopened_count": int(task_hub_finalize_result.get("reopened") or 0),
+                        "task_hub_retry_exhausted_count": int(
+                            task_hub_finalize_result.get("retry_exhausted") or 0
+                        ),
+                    }
+                )
+                self._emit_event(completed_event_payload)
             # Close the heartbeat Logfire span
             if _hb_span is not None:
                 try:

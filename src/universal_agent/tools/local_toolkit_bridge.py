@@ -48,8 +48,9 @@ from universal_agent.utils.task_guardrails import resolve_best_task_match
 @tool(
     name="upload_to_composio",
     description=(
-        "Upload a local file to Composio S3 for use as an email attachment or tool input. "
-        "Returns s3key for GMAIL_SEND_EMAIL. In-process fallback for local_toolkit upload."
+        "Upload a local file to Composio S3 for use as a tool input (e.g., Slack attachments). "
+        "Note: Gmail attachments should use gws MCP tools directly (no upload needed). "
+        "Returns s3key for Composio tool calls. In-process fallback for local_toolkit upload."
     ),
     input_schema={
         "path": str,

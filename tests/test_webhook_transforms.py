@@ -25,7 +25,7 @@ def test_composio_transform_youtube_event():
     assert "abc123xyz00" in out["message"]
     assert out["session_key"].startswith("yt_")
     assert out["to"] == "youtube-expert"
-    assert "learning_mode: concept_plus_implementation" in out["message"]
+    assert "learning_mode: concept_only" in out["message"]
     assert "resolved_artifacts_root:" in out["message"]
     assert "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/..." in out["message"]
     assert "never leave empty run dirs" in out["message"]
@@ -160,8 +160,8 @@ def test_manual_transform_from_video_url():
     assert out["name"] == "ManualYouTubeWebhook"
     assert "xyz987abc12" in out["message"]
     assert out["to"] == "youtube-expert"
-    assert "mode: explainer_plus_code" in out["message"]
-    assert "learning_mode: concept_plus_implementation" in out["message"]
+    assert "mode: explainer_only" in out["message"]
+    assert "learning_mode: concept_only" in out["message"]
     assert "resolved_artifacts_root:" in out["message"]
     assert "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/..." in out["message"]
     assert "never leave empty run dirs" in out["message"]
@@ -187,6 +187,27 @@ def test_composio_transform_normalizes_mode_and_degraded_flag():
     assert out is not None
     assert "mode: explainer_plus_code" in out["message"]
     assert "allow_degraded_transcript_only: false" in out["message"]
+
+
+def test_composio_transform_infers_code_mode_from_title():
+    ctx = {
+        "payload": {
+            "type": "composio.trigger.message",
+            "data": {
+                "trigger_slug": "youtube_new_playlist_item_trigger",
+                "toolkit_slug": "youtube",
+                "data": {
+                    "video_url": "https://www.youtube.com/watch?v=abc123xyz00",
+                    "title": "Build an MCP App with Claude Code",
+                },
+            },
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert "mode: explainer_plus_code" in out["message"]
+    assert "learning_mode: concept_plus_implementation" in out["message"]
 
 
 def test_manual_transform_normalizes_mode_and_degraded_flag():

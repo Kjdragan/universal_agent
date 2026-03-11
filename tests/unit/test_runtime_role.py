@@ -39,3 +39,19 @@ def test_llm_provider_override_validation(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER_OVERRIDE", "invalid-provider")
     assert normalize_llm_provider_override() is None
     assert os.getenv("LLM_PROVIDER_OVERRIDE") in {"", None}
+
+
+def test_capability_overrides(monkeypatch):
+    monkeypatch.setenv("FACTORY_ROLE", "LOCAL_WORKER")
+    # Base local worker has start_ui=False, delegation_mode="listen_only"
+    
+    # Apply overrides
+    monkeypatch.setenv("UA_CAPABILITY_START_UI", "true")
+    monkeypatch.setenv("UA_CAPABILITY_DELEGATION_MODE", "publish_and_listen")
+    
+    worker_with_overrides = build_factory_runtime_policy()
+    
+    assert worker_with_overrides.start_ui is True
+    assert worker_with_overrides.delegation_mode == "publish_and_listen"
+    assert worker_with_overrides.can_publish_delegations is True
+    assert worker_with_overrides.gateway_mode == "health_only"  # Should remain unchanged

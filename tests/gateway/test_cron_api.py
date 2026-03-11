@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone
 
 import aiohttp
+from pathlib import Path
 
 from universal_agent.cron_service import parse_run_at
 
@@ -37,6 +38,7 @@ def test_cron_job_crud_and_run():
     base_url = f"http://127.0.0.1:{port}"
     env = {
         **os.environ,
+        "PYTHONPATH": str(Path(__file__).parent.parent.parent / "src"),
         "UA_GATEWAY_PORT": str(port),
         "UA_ENABLE_CRON": "1",
         "UA_CRON_MOCK_RESPONSE": "1",

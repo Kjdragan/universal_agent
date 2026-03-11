@@ -31,6 +31,48 @@ logger = logging.getLogger(__name__)
 
 _YOUTUBE_API_PLAYLIST_ITEMS = "https://www.googleapis.com/youtube/v3/playlistItems"
 _STATE_FILENAME = "youtube_playlist_watcher_state.json"
+MODE_EXPLAINER_ONLY = "explainer_only"
+MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
+_CODE_HINT_KEYWORDS = {
+    "code",
+    "coding",
+    "programming",
+    "python",
+    "javascript",
+    "typescript",
+    "react",
+    "nextjs",
+    "next.js",
+    "mcp",
+    "api",
+    "sdk",
+    "cli",
+    "sql",
+    "database",
+    "docker",
+    "kubernetes",
+    "repo",
+    "github",
+    "automation",
+    "agent",
+}
+_NON_CODE_HINT_KEYWORDS = {
+    "recipe",
+    "cooking",
+    "cook",
+    "food",
+    "kitchen",
+    "grill",
+    "charcoal",
+    "souvlaki",
+    "baking",
+    "travel",
+    "vlog",
+    "music",
+    "song",
+    "workout",
+    "fitness",
+}
 
 
 def _is_enabled() -> bool:
@@ -74,6 +116,17 @@ def _save_state(state: dict[str, Any]) -> None:
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _infer_youtube_mode(*parts: Any) -> str:
+    tokens = " ".join(str(part or "") for part in parts).strip().lower()
+    if not tokens:
+        return MODE_EXPLAINER_ONLY
+    has_code = any(keyword in tokens for keyword in _CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in _NON_CODE_HINT_KEYWORDS)
+    if has_non_code and not has_code:
+        return MODE_EXPLAINER_ONLY
+    return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
 
 
 DispatchFn = Callable[[str, dict[str, Any]], Coroutine[Any, Any, tuple[bool, str]]]
@@ -311,12 +364,18 @@ class YouTubePlaylistWatcher:
     # ------------------------------------------------------------------
 
     async def _dispatch(self, item: dict[str, Any]) -> None:
+        mode = _infer_youtube_mode(
+            item.get("title"),
+            item.get("channel_id"),
+            item.get("url"),
+            item.get("playlist_id"),
+        )
         payload = {
             "video_url": item.get("url", f"https://www.youtube.com/watch?v={item['video_id']}"),
             "video_id": item.get("video_id", ""),
             "channel_id": item.get("channel_id", ""),
             "title": item.get("title", ""),
-            "mode": "explainer_only",
+            "mode": mode,
             "allow_degraded_transcript_only": True,
             "source": "yt_playlist_watcher",
         }

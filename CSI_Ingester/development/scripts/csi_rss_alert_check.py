@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument("--db-path", required=True, help="Path to CSI sqlite db")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/rss_alert_state.json",
+        default="/var/lib/universal-agent/csi/rss_alert_state.json",
         help="Path to persisted alert cursor state",
     )
     parser.add_argument("--max-detail", type=int, default=5, help="Max new events to print details for")
