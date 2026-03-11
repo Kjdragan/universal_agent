@@ -15,12 +15,16 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           
       - name: Deploy to Production VPS via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SSH_HOST }}
-          username: ${{ secrets.VPS_SSH_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
+        env:
+          SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
             
@@ -52,3 +56,4 @@ jobs:
             sudo -u ua XDG_RUNTIME_DIR=/run/user/$(id -u ua) systemctl --user restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram universal-agent-vp-worker@vp.general.primary universal-agent-vp-worker@vp.coder.primary
             
             echo "Deployment to Production complete!"
+          EOF
