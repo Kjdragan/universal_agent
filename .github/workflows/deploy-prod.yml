@@ -54,14 +54,27 @@ jobs:
             # Exit immediately on error
             set -euo pipefail
             
-            PROD_DIR="/opt/universal_agent"
-            
-            echo "Deploying Production to $PROD_DIR..."
-            
-            if [ ! -d "$PROD_DIR/.git" ]; then
-              echo "Error: Production repository not found at $PROD_DIR."
+            resolve_prod_dir() {
+              for candidate in /opt/universal_agent /opt/universal-agent /home/ua/universal_agent /home/ua/universal-agent; do
+                if [ -d "$candidate/.git" ]; then
+                  echo "$candidate"
+                  return 0
+                fi
+              done
+              return 1
+            }
+
+            PROD_DIR="$(resolve_prod_dir || true)"
+            if [ -z "$PROD_DIR" ]; then
+              echo "Error: Production repository not found in expected paths:"
+              echo "  - /opt/universal_agent"
+              echo "  - /opt/universal-agent"
+              echo "  - /home/ua/universal_agent"
+              echo "  - /home/ua/universal-agent"
               exit 1
             fi
+
+            echo "Deploying Production to $PROD_DIR..."
             
             cd "$PROD_DIR"
 
