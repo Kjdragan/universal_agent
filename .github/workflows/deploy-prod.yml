@@ -67,11 +67,11 @@ jobs:
 
             run_as_ua() {
               if command -v sudo >/dev/null 2>&1; then
-                sudo -u ua bash -lc "$1"
+                sudo -u ua /bin/bash -lc "$1"
               elif command -v runuser >/dev/null 2>&1; then
-                runuser -u ua -- bash -lc "$1"
+                runuser -u ua -- /bin/bash -lc "$1"
               else
-                bash -lc "$1"
+                /bin/bash -lc "$1"
               fi
             }
             
