@@ -61,6 +61,19 @@ jobs:
                   return 0
                 fi
               done
+
+              for base in /opt /home /root /srv /var/www; do
+                [ -d "$base" ] || continue
+                while IFS= read -r git_dir; do
+                  repo_dir="${git_dir%/.git}"
+                  origin_url="$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)"
+                  if printf '%s' "$origin_url" | grep -Eq 'Kjdragan/universal_agent(\.git)?$'; then
+                    echo "$repo_dir"
+                    return 0
+                  fi
+                done < <(find "$base" -maxdepth 5 -type d -name .git 2>/dev/null)
+              done
+
               return 1
             }
 
