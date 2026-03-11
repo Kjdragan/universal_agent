@@ -74,6 +74,9 @@ jobs:
                 /bin/bash -lc "$1"
               fi
             }
+
+            echo "--> Ensuring Python build tooling (maturin)..."
+            run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; command -v maturin >/dev/null 2>&1 || uv tool install maturin"
             
             # 1. Pull latest code
             echo "--> Fetching and pulling latest main branch..."
