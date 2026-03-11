@@ -37,3 +37,7 @@ Our CI/CD pipeline is built on GitHub Actions and automates the deployment of co
   sudo journalctl -u universal-agent-staging-gateway -f
   ```
 - Verify the `.env` file exists in the installation directory.
+
+
+## Tailscale SSH Note
+If deployment hangs at the SSH step, ensure that 'Check-in' is disabled in the Tailscale ACLs for the runner's identity/tag.
