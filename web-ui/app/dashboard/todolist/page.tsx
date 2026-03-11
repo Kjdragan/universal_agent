@@ -296,6 +296,7 @@ export default function ToDoListDashboardPage() {
   const [includeCsi, setIncludeCsi] = useState(true);
   const [collapseCsi, setCollapseCsi] = useState(true);
   const [showNonCsiOnly, setShowNonCsiOnly] = useState(false);
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionPendingTaskId, setActionPendingTaskId] = useState("");
   const [wakePending, setWakePending] = useState(false);
   const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
@@ -588,49 +589,6 @@ export default function ToDoListDashboardPage() {
                 {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {item.status === "open" ? (
-                  <button
-                    onClick={() => void handleTaskAction(item.task_id, "seize")}
-                    disabled={actionPendingTaskId === item.task_id}
-                    className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                  >
-                    Seize
-                  </button>
-                ) : null}
-                <button
-                  onClick={() => void handleOpenTaskHistory(item.task_id)}
-                  disabled={taskHistoryLoadingId === item.task_id}
-                  className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
-                >
-                  {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
-                </button>
-                <button
-                  onClick={() => setSelectedTaskDetails(item)}
-                  className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
-                >
-                  Inspect
-                </button>
-                <button
-                  onClick={() => void handleTaskAction(item.task_id, "review")}
-                  disabled={actionPendingTaskId === item.task_id}
-                  className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                >
-                  Mark Review
-                </button>
-                <button
-                  onClick={() => void handleTaskAction(item.task_id, "block")}
-                  disabled={actionPendingTaskId === item.task_id}
-                  className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
-                >
-                  Block
-                </button>
-                <button
-                  onClick={() => void handleTaskAction(item.task_id, "reject")}
-                  disabled={actionPendingTaskId === item.task_id}
-                  className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                >
-                  Reject
-                </button>
                 <button
                   onClick={() => void handleTaskAction(item.task_id, "complete")}
                   disabled={actionPendingTaskId === item.task_id}
@@ -639,12 +597,62 @@ export default function ToDoListDashboardPage() {
                   Complete
                 </button>
                 <button
-                  onClick={() => void handleTaskAction(item.task_id, "park")}
-                  disabled={actionPendingTaskId === item.task_id}
-                  className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                  onClick={() => void handleWakeHeartbeat(item.task_id)}
+                  disabled={wakePending}
+                  className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
                 >
-                  Park
+                  Force Next Heartbeat
                 </button>
+
+                <div className="relative ml-2">
+                  <button
+                    onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
+                    className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+                  >
+                    Advanced ▾
+                  </button>
+                  {openActionMenuId === item.task_id && (
+                    <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-slate-700 bg-slate-900 p-1 shadow-xl">
+                      {item.status === "open" && (
+                        <button
+                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "seize"); }}
+                          disabled={actionPendingTaskId === item.task_id}
+                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                        >
+                          Seize
+                        </button>
+                      )}
+                      <button
+                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "review"); }}
+                        disabled={actionPendingTaskId === item.task_id}
+                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        Mark Review
+                      </button>
+                      <button
+                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "block"); }}
+                        disabled={actionPendingTaskId === item.task_id}
+                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
+                      >
+                        Block
+                      </button>
+                      <button
+                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "reject"); }}
+                        disabled={actionPendingTaskId === item.task_id}
+                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "park"); }}
+                        disabled={actionPendingTaskId === item.task_id}
+                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                      >
+                        Park
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={() => void handleWakeHeartbeat(item.task_id)}
                   disabled={wakePending}
