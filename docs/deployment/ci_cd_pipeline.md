@@ -47,3 +47,4 @@ If deployment hangs at the SSH step, ensure that 'Check-in' is disabled in the T
 - Verification of Tailscale SSH non-interactive login (accept rule).
 
 - Verification of final Tailscale SSH ACL (autogroup:member access).
+# Triggering deploy-staging Run #17 with Tailscale Tag fixes
