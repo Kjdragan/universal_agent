@@ -13922,6 +13922,28 @@ async def dashboard_approvals_highlight():
                 "updated_at": approval.get("updated_at"),
             }
         )
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            agent_queue = task_hub.list_agent_queue(conn, limit=100)
+            agent_items = agent_queue.get("items") if isinstance(agent_queue, dict) else []
+        finally:
+            conn.close()
+
+    for item in agent_items:
+        if bool(item.get("must_complete")) and str(item.get("status") or "") in ("needs_review", "blocked"):
+            rows.append({
+                "approval_id": str(item.get("task_id") or ""),
+                "title": f"Action Required: {item.get('title')}",
+                "status": str(item.get("status")),
+                "priority": 5, 
+                "focus_href": "/dashboard/todolist?mode=agent",
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+            })
+
     rows.sort(key=lambda item: int(item.get("priority") or 0), reverse=True)
     return {
         "status": "ok",
@@ -13929,7 +13951,7 @@ async def dashboard_approvals_highlight():
         "approvals": rows,
         "banner": {
             "show": len(rows) > 0,
-            "text": f"{len(rows)} approval{'s' if len(rows) != 1 else ''} pending" if rows else "",
+            "text": f"{len(rows)} urgent action{'s' if len(rows) != 1 else ''} pending" if rows else "",
         },
     }
 
