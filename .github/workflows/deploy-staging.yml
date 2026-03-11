@@ -47,11 +47,11 @@ jobs:
             
             # 2. Provision Infisical Environment
             echo "--> Provisioning Infisical environment..."
-            sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $STAGING_DIR && uv run scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
+            sudo -u ua bash -c "export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'; export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'; export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'; export PATH='/home/ua/.local/bin:/usr/local/bin:$PATH'; cd $STAGING_DIR && uv run scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
 
             # 3. Sync Dependencies
             echo "--> Syncing dependencies with uv..."
-            sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $STAGING_DIR && uv sync"
+            sudo -u ua bash -c "export PATH='/home/ua/.local/bin:/usr/local/bin:$PATH'; cd $STAGING_DIR && uv sync"
             
             # 4. Restart Systemd Services
             echo "--> Restarting staging services..."
