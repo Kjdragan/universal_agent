@@ -45,18 +45,18 @@ jobs:
             echo "--> Fetching and pulling latest develop branch..."
             sudo -u ua bash -c "cd $STAGING_DIR && git fetch origin && git checkout develop && git pull origin develop"
             
-            # 2. Sync Infisical Secrets
-            echo "--> Provisioning Infisical Environment (staging-hq)..."
-            sudo -u ua bash -c "cd $STAGING_DIR && python scripts/infisical_provision_factory_env.py --machine-name \"Staging VPS HQ\" --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
-            
-            # 3. Dependency Sync
+            # 2. Provision Infisical Environment
+            echo "--> Provisioning Infisical environment..."
+            sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $STAGING_DIR && uv run scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
+
+            # 3. Sync Dependencies
             echo "--> Syncing dependencies with uv..."
             sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $STAGING_DIR && uv sync"
             
-            # 4. Restart Systemd Service
-            echo "--> Restarting staging service..."
-            # Assuming staging service is installed as a systemd user service for 'ua' or a system service
-            sudo -u ua XDG_RUNTIME_DIR=/run/user/$(id -u ua) systemctl --user restart universal-agent-staging.service
+            # 4. Restart Systemd Services
+            echo "--> Restarting staging services..."
+            # Restart multiple staging services
+            sudo systemctl restart universal-agent-staging-gateway universal-agent-staging-api
             
             echo "Deployment to Staging complete!"
           EOF
