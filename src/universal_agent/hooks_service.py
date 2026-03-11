@@ -85,11 +85,18 @@ YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_fai
 YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
     "invalid_video_target",
     "video_unavailable",
+    "api_unavailable",
     "transcript_unavailable",
     "empty_or_low_quality_transcript",
     "proxy_not_configured",
     "proxy_auth_failed",
     "proxy_quota_or_billing",
+}
+YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES = {
+    "api_unavailable",
+    "request_blocked",
+    "transcript_unavailable",
+    "empty_or_low_quality_transcript",
 }
 
 
@@ -539,6 +546,38 @@ class HooksService:
             deliver=True,
         )
 
+    def _build_youtube_recovery_action_from_pending(
+        self,
+        *,
+        session_id: str,
+        pending_payload: dict[str, Any],
+    ) -> Optional[HookAction]:
+        session_key = self._session_key_from_session_id(session_id)
+        _, key_video_id = self._youtube_parts_from_session_key(session_key)
+        video_url = str(pending_payload.get("video_url") or "").strip()
+        video_id = str(pending_payload.get("video_id") or "").strip() or key_video_id
+        if not video_url and video_id:
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+        if not video_url:
+            return None
+        message_lines = [
+            "Recovered failed local ingest run during startup backfill.",
+            f"video_url: {video_url}",
+            f"video_id: {video_id}",
+            "mode: auto",
+            "learning_mode: auto",
+            "allow_degraded_transcript_only: true",
+            "Resume this tutorial run and complete artifact generation.",
+        ]
+        return HookAction(
+            kind="agent",
+            name="RecoveredPendingLocalIngest",
+            session_key=session_key,
+            to=YOUTUBE_AGENT_CANONICAL,
+            message="\n".join(message_lines),
+            deliver=True,
+        )
+
     async def recover_interrupted_youtube_sessions(self, workspace_root: Path) -> int:
         if not self._startup_recovery_enabled:
             return 0
@@ -597,6 +636,46 @@ class HooksService:
                 session_id=session_id,
                 severity="warning",
                 metadata={"source": "hooks", "reason": "startup_recovery"},
+            )
+
+        for _, session_dir in candidates:
+            if recovered >= self._startup_recovery_max_sessions:
+                break
+            session_id = session_dir.name
+            pending_path = session_dir / "pending_local_ingest.json"
+            if not pending_path.is_file():
+                continue
+            pending_payload = self._safe_json(pending_path)
+            if not isinstance(pending_payload, dict):
+                continue
+            pending_status = str(pending_payload.get("status") or "").strip().lower()
+            if pending_status not in {"failed_local_ingest", "pending_local_ingest"}:
+                continue
+            created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
+            if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):
+                continue
+            if not self._startup_recovery_allowed(session_dir):
+                continue
+            action = self._build_youtube_recovery_action_from_pending(
+                session_id=session_id,
+                pending_payload=pending_payload,
+            )
+            if action is None:
+                continue
+            self._record_startup_recovery_attempt(session_dir, session_id=session_id)
+            asyncio.create_task(self._dispatch_action(action))
+            recovered += 1
+            logger.warning(
+                "Queued startup backfill for pending local ingest session_id=%s",
+                session_id,
+            )
+            self._emit_notification(
+                kind="youtube_hook_recovery_queued",
+                title="Recovered Failed YouTube Ingest",
+                message=f"Queued degraded recovery for session {session_id}",
+                session_id=session_id,
+                severity="warning",
+                metadata={"source": "hooks", "reason": "startup_pending_local_ingest_backfill"},
             )
         return recovered
 
@@ -1083,6 +1162,31 @@ class HooksService:
                 continue
             return stripped.split(":", 1)[1].strip()
         return ""
+
+    @staticmethod
+    def _parse_bool_text(raw: str, *, default: bool = False) -> bool:
+        value = str(raw or "").strip().lower()
+        if not value:
+            return bool(default)
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
+    def _allow_degraded_transcript_only(self, action: HookAction) -> bool:
+        raw = self._extract_action_field(action.message or "", "allow_degraded_transcript_only")
+        if not raw:
+            return False
+        return self._parse_bool_text(raw, default=False)
+
+    def _should_fail_open_ingest(self, *, action: HookAction, failure_class: str) -> bool:
+        if self._youtube_ingest_fail_open:
+            return True
+        normalized = str(failure_class or "").strip().lower()
+        if normalized not in YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES:
+            return False
+        return self._allow_degraded_transcript_only(action)
 
     async def _maybe_forward_youtube_manual(self, mapping_id: str, action: HookAction) -> None:
         """
@@ -1776,7 +1880,17 @@ class HooksService:
             "hook_youtube_ingest_video_key": video_key,
         }
 
-        if self._youtube_ingest_fail_open:
+        should_fail_open = self._should_fail_open_ingest(
+            action=action,
+            failure_class=failure_class,
+        )
+        if should_fail_open:
+            metadata["hook_youtube_ingest_status"] = "failed_fail_open"
+            metadata["hook_youtube_ingest_fail_open_reason"] = (
+                "env_fail_open"
+                if self._youtube_ingest_fail_open
+                else "allow_degraded_transcript_only"
+            )
             fail_open_lines = [
                 "local_youtube_ingest_mode: local_worker",
                 "local_youtube_ingest_status: failed_fail_open",

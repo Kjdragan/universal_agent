@@ -41,6 +41,14 @@ type DashboardNotification = {
   metadata?: Record<string, unknown>;
 };
 
+type TutorialProgressEntry = {
+  notificationId: string;
+  kind: string;
+  title: string;
+  createdAt: string;
+  sessionId: string;
+};
+
 type VpSessionSnapshot = {
   vp_id: string;
   status?: string;
@@ -167,6 +175,40 @@ function chatSessionHref(sessionId?: string | null): string {
     role: "viewer",
   });
   return `/?${params.toString()}`;
+}
+
+function parseVideoIdFromHookSession(sessionId: string): string {
+  const normalized = asText(sessionId);
+  if (!normalized.startsWith("session_hook_yt_")) return "";
+  const body = normalized.slice("session_hook_yt_".length);
+  const parts = body.split("_");
+  if (parts.length < 2) return "";
+  return parts[parts.length - 1] || "";
+}
+
+function tutorialVideoKey(item: DashboardNotification): string {
+  const metadata = asRecord(item.metadata);
+  const fromVideoId = asText(metadata.video_id);
+  if (fromVideoId) return fromVideoId;
+  const fromVideoKey = asText(metadata.video_key);
+  if (fromVideoKey) return fromVideoKey;
+  return parseVideoIdFromHookSession(asText(item.session_id));
+}
+
+function tutorialSessionId(item: DashboardNotification): string {
+  const sessionId = asText(item.session_id);
+  if (sessionId) return sessionId;
+  const metadata = asRecord(item.metadata);
+  const hookSessionKey = asText(metadata.hook_session_key);
+  if (!hookSessionKey) return "";
+  return `session_hook_${hookSessionKey}`;
+}
+
+function isTutorialKind(kind: string): boolean {
+  return (
+    kind.startsWith("youtube_")
+    || kind.startsWith("tutorial_")
+  );
 }
 
 function RefLine({
@@ -458,6 +500,36 @@ export default function DashboardPage() {
         : notifications,
     [notificationFilter, notifications],
   );
+  const tutorialProgressByVideo = useMemo(() => {
+    const index = new Map<string, TutorialProgressEntry>();
+    for (const item of notifications) {
+      if (!isTutorialKind(item.kind)) continue;
+      const videoKey = tutorialVideoKey(item);
+      if (!videoKey) continue;
+      const existing = index.get(videoKey);
+      if (!existing) {
+        index.set(videoKey, {
+          notificationId: item.id,
+          kind: item.kind,
+          title: item.title,
+          createdAt: item.created_at,
+          sessionId: tutorialSessionId(item),
+        });
+        continue;
+      }
+      const nextTs = new Date(item.created_at).getTime();
+      const prevTs = new Date(existing.createdAt).getTime();
+      if (Number.isFinite(nextTs) && Number.isFinite(prevTs) && nextTs <= prevTs) continue;
+      index.set(videoKey, {
+        notificationId: item.id,
+        kind: item.kind,
+        title: item.title,
+        createdAt: item.created_at,
+        sessionId: tutorialSessionId(item),
+      });
+    }
+    return index;
+  }, [notifications]);
 
   const deleteAllVisibleNotifications = useCallback(async () => {
     const targetCount = visibleNotifications.length;
@@ -1312,7 +1384,16 @@ export default function DashboardPage() {
             const metadata = asRecord(item.metadata);
             const tutorialRunPath = asText(metadata.tutorial_run_path);
             const reviewRunPath = asText(metadata.review_run_path);
+            const sessionId = asText(item.session_id);
+            const videoKey = tutorialVideoKey(item);
+            const relatedProgress = videoKey ? tutorialProgressByVideo.get(videoKey) : undefined;
+            const relatedSessionId = asText(relatedProgress?.sessionId);
+            const effectiveSessionId = sessionId || relatedSessionId;
             const chatHref = chatSessionHref(item.session_id);
+            const relatedChatHref = chatSessionHref(effectiveSessionId);
+            const sessionRunLogHref = effectiveSessionId
+              ? workspaceExplorerHref(`${effectiveSessionId}/run.log`)
+              : "";
             const tutorialHref = artifactExplorerHref(tutorialRunPath);
             const reviewHref = artifactExplorerHref(reviewRunPath);
             const metadataRequiresAction =
@@ -1324,6 +1405,15 @@ export default function DashboardPage() {
               item.status === "new" &&
               item.kind !== "tutorial_review_ready" &&
               item.kind !== "tutorial_review_failed",
+            );
+            const hasSessionAction = Boolean(effectiveSessionId);
+            const hasAnyAction = Boolean(
+              tutorialHref
+              || reviewHref
+              || canDispatchTutorial
+              || hasSessionAction
+              || sessionRunLogHref
+              || relatedChatHref,
             );
             return (
               <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
@@ -1337,8 +1427,28 @@ export default function DashboardPage() {
                 <p className="mt-2 text-[11px] text-slate-500">
                   {item.kind} · {item.session_id || "global"} · {formatLocalDateTime(item.created_at)}
                 </p>
-                {(tutorialHref || reviewHref || canDispatchTutorial) && (
+                {relatedProgress && relatedProgress.notificationId !== item.id && (
+                  <p className="mt-1 text-[11px] text-sky-300">
+                    Latest tutorial status: {relatedProgress.title} · {formatLocalDateTime(relatedProgress.createdAt)}
+                  </p>
+                )}
+                {hasAnyAction && (
                   <div className="mt-2 flex flex-wrap gap-2">
+                    {hasSessionAction && (
+                      <button
+                        type="button"
+                        className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                        onClick={() =>
+                          openOrFocusChatWindow({
+                            sessionId: effectiveSessionId,
+                            attachMode: "tail",
+                            role: "viewer",
+                          })
+                        }
+                      >
+                        Open Session Viewer
+                      </button>
+                    )}
                     {tutorialHref && (
                       <Link
                         href={tutorialHref}
@@ -1364,6 +1474,24 @@ export default function DashboardPage() {
                       >
                         Open Session
                       </a>
+                    )}
+                    {!chatHref && relatedChatHref && (
+                      <a
+                        href={relatedChatHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                      >
+                        Open Related Session
+                      </a>
+                    )}
+                    {sessionRunLogHref && (
+                      <Link
+                        href={sessionRunLogHref}
+                        className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                      >
+                        View Run Log
+                      </Link>
                     )}
                     {canDispatchTutorial && (
                       <button

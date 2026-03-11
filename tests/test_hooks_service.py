@@ -1073,6 +1073,81 @@ async def test_local_ingest_non_retryable_failure_stops_after_first_attempt(mock
 
 
 @pytest.mark.asyncio
+async def test_local_ingest_api_unavailable_allow_degraded_fails_open(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template=(
+                    "video_url: https://www.youtube.com/watch?v=3L7wPEB8sEc\n"
+                    "video_id: 3L7wPEB8sEc\n"
+                    "allow_degraded_transcript_only: true"
+                ),
+                name="RouteHook",
+                session_key="yt_route_3L7wPEB8sEc_allow_degraded",
+                to="youtube-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_3L7wPEB8sEc_allow_degraded"
+    session = GatewaySession(
+        session_id="session_hook_yt_route_3L7wPEB8sEc_allow_degraded",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+    notifications: list[dict] = []
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "10",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS": "0",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+        service.config = config
+        service._call_local_youtube_ingest_worker = AsyncMock(
+            return_value={
+                "ok": False,
+                "status": "failed",
+                "error": "youtube_transcript_api_failed",
+                "failure_class": "api_unavailable",
+            }
+        )
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.2)
+
+    assert service._call_local_youtube_ingest_worker.await_count == 1
+    mock_gateway.execute.assert_called()
+    gateway_request = mock_gateway.execute.call_args[0][1]
+    assert "local_youtube_ingest_status: failed_fail_open" in gateway_request.user_input
+    assert gateway_request.metadata["hook_youtube_ingest_status"] == "failed_fail_open"
+    assert gateway_request.metadata["hook_youtube_ingest_failure_class"] == "api_unavailable"
+    assert gateway_request.metadata["hook_youtube_ingest_fail_open_reason"] == "allow_degraded_transcript_only"
+    assert not any(item.get("kind") == "youtube_ingest_failed" for item in notifications)
+
+
+@pytest.mark.asyncio
 async def test_local_ingest_proxy_failure_emits_proxy_alert_notification(mock_gateway, tmp_path):
     config = HooksConfig(
         enabled=True,
@@ -1261,6 +1336,51 @@ async def test_recover_interrupted_youtube_sessions_queues_recovery(mock_gateway
     action = service._dispatch_action.call_args.args[0]
     assert action.to == "youtube-expert"
     assert "km5fvKPRsJw" in (action.message or "")
+    marker = session_dir / ".hook_startup_recovery.json"
+    assert marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_backfills_pending_local_ingest(mock_gateway, tmp_path):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+
+    session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_3L7wPEB8sEc"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_local_ingest.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "failed_local_ingest",
+                "session_id": session_id,
+                "video_url": "https://www.youtube.com/watch?v=3L7wPEB8sEc",
+                "video_id": "3L7wPEB8sEc",
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    assert recovered == 1
+    await asyncio.sleep(0.05)
+    service._dispatch_action.assert_called_once()
+    action = service._dispatch_action.call_args.args[0]
+    assert action.to == "youtube-expert"
+    assert action.name == "RecoveredPendingLocalIngest"
+    assert "allow_degraded_transcript_only: true" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
 

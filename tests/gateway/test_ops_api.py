@@ -2018,6 +2018,43 @@ def test_dashboard_tutorial_notifications_hide_dismissed_by_default(client):
     assert str(notif.get("id") or "") in include_ids
 
 
+def test_dashboard_tutorial_notifications_include_playlist_and_proxy_alert_kinds(client):
+    created = []
+    created.append(
+        gateway_server._add_notification(
+            kind="youtube_playlist_new_video",
+            title="New Tutorial Video Detected",
+            message="Demo video queued",
+            severity="info",
+            metadata={"video_id": "demo123"},
+        )
+    )
+    created.append(
+        gateway_server._add_notification(
+            kind="youtube_playlist_dispatch_failed",
+            title="Tutorial Dispatch Rejected",
+            message="demo123: no_match",
+            severity="warning",
+            metadata={"video_id": "demo123"},
+        )
+    )
+    created.append(
+        gateway_server._add_notification(
+            kind="youtube_ingest_proxy_alert",
+            title="YouTube Proxy Alert",
+            message="Proxy credentials missing",
+            severity="error",
+            metadata={"failure_class": "proxy_not_configured"},
+        )
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50&include_dismissed=true")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    for notif in created:
+        assert str((notif or {}).get("id") or "") in ids
+
+
 def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_mission(client, tmp_path, monkeypatch):
     class _FakeMissionBus:
         def __init__(self):

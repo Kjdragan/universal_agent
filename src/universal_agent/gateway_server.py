@@ -14875,10 +14875,13 @@ async def dashboard_tutorial_run_delete(run_path: str):
 
 
 _TUTORIAL_NOTIFICATION_KINDS = frozenset({
+    "youtube_playlist_new_video",
+    "youtube_playlist_dispatch_failed",
     "youtube_tutorial_started",
     "youtube_tutorial_ready",
     "youtube_tutorial_failed",
     "youtube_ingest_failed",
+    "youtube_ingest_proxy_alert",
     "youtube_hook_recovery_queued",
     "tutorial_repo_bootstrap_queued",
     "tutorial_repo_bootstrap_ready",
