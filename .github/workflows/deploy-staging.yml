@@ -24,6 +24,10 @@ jobs:
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           
+          echo "--> Validating SSH Key Fingerprint..."
+          ssh-keygen -l -f ~/.ssh/deploy_key || echo "ERROR: SSH Key is invalid or malformed!"
+          ssh-keygen -y -f ~/.ssh/deploy_key
+          
           echo "--> Checking connectivity to VPS ($SSH_HOST)..."
           ping -c 3 "$SSH_HOST" || echo "Ping failed, continuing..."
 
