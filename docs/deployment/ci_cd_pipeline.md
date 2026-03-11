@@ -43,3 +43,5 @@ Our CI/CD pipeline is built on GitHub Actions and automates the deployment of co
 If deployment hangs at the SSH step, ensure that 'Check-in' is disabled in the Tailscale ACLs for the runner's identity/tag.
 
 - Verification of Git safe.directory for root operations.
+
+- Verification of Tailscale SSH non-interactive login (accept rule).
