@@ -886,11 +886,11 @@ def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent
         JOIN task_hub_items i ON i.task_id = q.task_id
         WHERE q.queue_build_id = ?
           AND q.eligible = 1
-          AND i.status = ?
+          AND i.status IN (?, ?)
         ORDER BY q.rank ASC
         LIMIT ?
         """,
-        (queue_build_id, TASK_STATUS_OPEN, claim_limit),
+        (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW, claim_limit),
     ).fetchall()
     queue_items = [hydrate_item(dict(row)) for row in rows]
     claimed: list[dict[str, Any]] = []
@@ -905,7 +905,7 @@ def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent
         current = get_item(conn, task_id)
         if not current:
             continue
-        if str(current.get("status") or "") != TASK_STATUS_OPEN:
+        if str(current.get("status") or "") not in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
             continue
 
         assignment_id = f"asg_{uuid.uuid4().hex[:16]}"
