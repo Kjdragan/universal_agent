@@ -50,10 +50,10 @@ jobs:
             echo "--> Syncing dependencies with uv..."
             sudo -u ua bash -c "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync"
             
-            # 3. Restart Systemd Service
+            # 3. Restart Systemd Services
             echo "--> Restarting production services..."
-            # Using the existing deployment logic for production
-            sudo -u ua XDG_RUNTIME_DIR=/run/user/$(id -u ua) systemctl --user restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram universal-agent-vp-worker@vp.general.primary universal-agent-vp-worker@vp.coder.primary
+            # Standard production service names
+            sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
             
             echo "Deployment to Production complete!"
           EOF
