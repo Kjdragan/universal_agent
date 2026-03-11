@@ -81,57 +81,10 @@ jobs:
               fi
             }
 
-            run_as_root() {
-              if [ \"\$(id -u)\" -eq 0 ]; then
-                /bin/bash -lc \"\$1\"
-              elif command -v sudo >/dev/null 2>&1; then
-                sudo /bin/bash -lc \"\$1\"
-              else
-                /bin/bash -lc \"\$1\"
-              fi
-            }
-
-            ensure_native_build_deps() {
-              if command -v cc >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1; then
-                return 0
-              fi
-
-              echo '--> Installing native build prerequisites...'
-              if command -v apt-get >/dev/null 2>&1; then
-                run_as_root \"export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y build-essential pkg-config libcairo2-dev libpango1.0-dev\"
-              elif command -v dnf >/dev/null 2>&1; then
-                run_as_root \"dnf install -y gcc gcc-c++ make pkgconf-pkg-config cairo-devel pango-devel redhat-rpm-config\"
-              elif command -v yum >/dev/null 2>&1; then
-                run_as_root \"yum install -y gcc gcc-c++ make pkgconfig cairo-devel pango-devel redhat-rpm-config\"
-              elif command -v apk >/dev/null 2>&1; then
-                run_as_root \"apk add --no-cache build-base pkgconf cairo-dev pango-dev\"
-              else
-                echo 'ERROR: No supported package manager found to install C build dependencies.'
-                return 1
-              fi
-
-              if ! command -v cc >/dev/null 2>&1; then
-                echo 'ERROR: C compiler is still missing after dependency install.'
-                return 1
-              fi
-            }
-
-            ensure_native_build_deps
-
-            echo '--> Ensuring Python build tooling (maturin)...'
-            run_as_ua \"export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v maturin >/dev/null 2>&1 || uv tool install maturin\"
-
-            echo '--> Ensuring Rust build tooling (cargo/rustc)...'
-            run_as_ua \"export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v cargo >/dev/null 2>&1 || (command -v curl >/dev/null 2>&1 && curl https://sh.rustup.rs -sSf | sh -s -- -y)\"
-            if ! run_as_ua \"export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v cargo >/dev/null 2>&1\"; then
-              echo 'ERROR: cargo bootstrap failed.'
-              exit 1
-            fi
-
             echo '--> Ensuring Python 3.12 runtime for uv...'
-            run_as_ua \"export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; uv python install 3.12\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; uv python install 3.12\"
             
-            run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run --python 3.12 scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"
+            run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"
             
             echo '--> Creating bootstrap .env file...'
             run_as_ua \"echo \\\"INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'\\\" > \$STAGING_DIR/.env\"
@@ -141,7 +94,7 @@ jobs:
             run_as_ua \"echo \\\"UA_INFISICAL_ENABLED=1\\\" >> \$STAGING_DIR/.env\"
             
             echo '--> Syncing dependencies with uv...'
-            run_as_ua \"export PATH='/home/ua/.cargo/bin:\$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv sync --python 3.12\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
             
             echo '--> Restarting staging services...'
             if command -v sudo >/dev/null 2>&1; then
