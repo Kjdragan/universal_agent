@@ -653,13 +653,6 @@ export default function ToDoListDashboardPage() {
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => void handleWakeHeartbeat(item.task_id)}
-                  disabled={wakePending}
-                  className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                >
-                  Force Next Heartbeat
-                </button>
               </div>
             </article>
           ))
