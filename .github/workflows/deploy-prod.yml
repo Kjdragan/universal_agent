@@ -8,11 +8,16 @@ on:
 jobs:
   deploy-production:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Connect to Tailscale Network
-        uses: tailscale/github-action@v2
+        uses: tailscale/github-action@v4
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci-gha
+          hostname: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ secrets.VPS_SSH_HOST }}
           
       - name: Deploy to Production VPS via SSH
         env:
@@ -23,8 +28,31 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+
+          echo "--> SSH preflight (non-interactive check)..."
+          set +e
+          timeout 60s ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" "echo SSH_OK" >/tmp/ssh_preflight.out 2>/tmp/ssh_preflight.err
+          preflight_status=$?
+          set -e
+
+          if [ "$preflight_status" -ne 0 ]; then
+            echo "ERROR: SSH preflight failed with status $preflight_status"
+            cat /tmp/ssh_preflight.err || true
+            if grep -Eqi "additional check|login\\.tailscale\\.com" /tmp/ssh_preflight.err; then
+              echo "::error::Tailscale SSH interactive check detected. Ensure CI identity tag (tag:ci-gha) has SSH action=accept to target tag (tag:vps)."
+            fi
+            exit "$preflight_status"
+          fi
+
+          if ! grep -q "^SSH_OK$" /tmp/ssh_preflight.out; then
+            echo "ERROR: SSH preflight succeeded but did not return expected marker."
+            cat /tmp/ssh_preflight.out || true
+            exit 1
+          fi
+
+          rm -f /tmp/ssh_preflight.out /tmp/ssh_preflight.err
           
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" << 'EOF'
+          timeout 15m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
             
