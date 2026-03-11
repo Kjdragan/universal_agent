@@ -98,6 +98,16 @@ YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES = {
     "transcript_unavailable",
     "empty_or_low_quality_transcript",
 }
+YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS = (
+    "exit code -15",
+    "exit code: -15",
+    "terminated process",
+    "cannot write to terminated process",
+    "sigterm",
+    "sigkill",
+    "signal 15",
+    "killed",
+)
 
 
 class HookReportedTimeout(RuntimeError):
@@ -496,6 +506,9 @@ class HooksService:
     def _startup_recovery_marker_path(self, session_dir: Path) -> Path:
         return session_dir / ".hook_startup_recovery.json"
 
+    def _pending_hook_recovery_marker_path(self, session_dir: Path) -> Path:
+        return session_dir / "pending_hook_recovery.json"
+
     def _startup_recovery_allowed(self, session_dir: Path) -> bool:
         marker = self._startup_recovery_marker_path(session_dir)
         payload = self._safe_json(marker)
@@ -517,6 +530,56 @@ class HooksService:
             marker.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
         except Exception:
             logger.warning("Failed writing startup recovery marker session_id=%s", session_id)
+
+    def _write_pending_hook_recovery_marker(
+        self,
+        session_dir: Path,
+        *,
+        session_id: str,
+        reason: str,
+        expected_video_id: str,
+    ) -> Path:
+        marker = self._pending_hook_recovery_marker_path(session_dir)
+        out = {
+            "status": "dispatch_interrupted",
+            "session_id": session_id,
+            "video_id": str(expected_video_id or "").strip(),
+            "reason": str(reason or "hook_dispatch_interrupted").strip(),
+            "created_at_epoch": time.time(),
+        }
+        try:
+            marker.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception:
+            logger.warning("Failed writing pending hook recovery marker session_id=%s", session_id)
+        return marker
+
+    def _clear_pending_hook_recovery_marker(self, session_dir: Path) -> None:
+        marker = self._pending_hook_recovery_marker_path(session_dir)
+        if not marker.exists():
+            return
+        try:
+            marker.unlink()
+        except Exception:
+            logger.warning("Failed removing pending hook recovery marker path=%s", marker)
+
+    @staticmethod
+    def _is_dispatch_interruption_error(reason: str) -> bool:
+        lowered = str(reason or "").strip().lower()
+        if not lowered:
+            return False
+        return any(token in lowered for token in YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS)
+
+    def _dispatch_failure_reason(self, exc: Exception, execution_summary: Optional[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        if isinstance(exc, Exception):
+            parts.append(str(exc))
+        if isinstance(execution_summary, dict):
+            parts.append(str(execution_summary.get("reported_error_message") or ""))
+            parts.append(str(execution_summary.get("iteration_status") or ""))
+        detail = " ".join(part for part in parts if part).strip()
+        if self._is_dispatch_interruption_error(detail):
+            return "hook_dispatch_interrupted"
+        return "hook_dispatch_failed"
 
     def _build_youtube_recovery_action(self, *, session_id: str) -> Optional[HookAction]:
         session_key = self._session_key_from_session_id(session_id)
@@ -572,6 +635,40 @@ class HooksService:
         return HookAction(
             kind="agent",
             name="RecoveredPendingLocalIngest",
+            session_key=session_key,
+            to=YOUTUBE_AGENT_CANONICAL,
+            message="\n".join(message_lines),
+            deliver=True,
+        )
+
+    def _build_youtube_recovery_action_from_pending_interrupt(
+        self,
+        *,
+        session_id: str,
+        pending_payload: dict[str, Any],
+    ) -> Optional[HookAction]:
+        # Prefer the canonical session-key derived recovery action because it
+        # keeps routing deterministic after restarts.
+        action = self._build_youtube_recovery_action(session_id=session_id)
+        if action is not None:
+            return action
+
+        video_id = str(pending_payload.get("video_id") or "").strip()
+        if not video_id:
+            return None
+        session_key = self._session_key_from_session_id(session_id)
+        message_lines = [
+            "Recovered interrupted YouTube webhook run during startup backfill.",
+            f"video_url: https://www.youtube.com/watch?v={video_id}",
+            f"video_id: {video_id}",
+            "mode: auto",
+            "learning_mode: auto",
+            "allow_degraded_transcript_only: true",
+            "Resume this tutorial run and complete artifact generation.",
+        ]
+        return HookAction(
+            kind="agent",
+            name="RecoveredInterruptedHookDispatch",
             session_key=session_key,
             to=YOUTUBE_AGENT_CANONICAL,
             message="\n".join(message_lines),
@@ -636,6 +733,46 @@ class HooksService:
                 session_id=session_id,
                 severity="warning",
                 metadata={"source": "hooks", "reason": "startup_recovery"},
+            )
+
+        for _, session_dir in candidates:
+            if recovered >= self._startup_recovery_max_sessions:
+                break
+            session_id = session_dir.name
+            pending_dispatch_path = self._pending_hook_recovery_marker_path(session_dir)
+            if not pending_dispatch_path.is_file():
+                continue
+            pending_payload = self._safe_json(pending_dispatch_path)
+            if not isinstance(pending_payload, dict):
+                continue
+            pending_status = str(pending_payload.get("status") or "").strip().lower()
+            if pending_status != "dispatch_interrupted":
+                continue
+            created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
+            if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):
+                continue
+            if not self._startup_recovery_allowed(session_dir):
+                continue
+            action = self._build_youtube_recovery_action_from_pending_interrupt(
+                session_id=session_id,
+                pending_payload=pending_payload,
+            )
+            if action is None:
+                continue
+            self._record_startup_recovery_attempt(session_dir, session_id=session_id)
+            asyncio.create_task(self._dispatch_action(action))
+            recovered += 1
+            logger.warning(
+                "Queued startup recovery for interrupted youtube dispatch session_id=%s",
+                session_id,
+            )
+            self._emit_notification(
+                kind="youtube_hook_recovery_queued",
+                title="Recovered Interrupted YouTube Dispatch",
+                message=f"Queued recovery run for session {session_id}",
+                session_id=session_id,
+                severity="warning",
+                metadata={"source": "hooks", "reason": "startup_dispatch_interrupted_backfill"},
             )
 
         for _, session_dir in candidates:
@@ -2167,6 +2304,7 @@ class HooksService:
         session_workspace: Optional[Path] = None
         admitted_turn_id: Optional[str] = None
         start_ts: Optional[float] = None
+        execution_summary: dict[str, Any] = {}
         dispatch_gate_acquired = False
         dispatch_wait_started = time.time()
         pending_admitted = False
@@ -2236,6 +2374,7 @@ class HooksService:
         try:
             session = await self._resolve_or_create_webhook_session(session_id)
             session_workspace = Path(str(session.workspace_dir)).resolve()
+            self._clear_pending_hook_recovery_marker(session_workspace)
             action, ingest_metadata, should_skip_dispatch = await self._prepare_local_youtube_ingest(
                 action=action,
                 session_id=session_id,
@@ -2395,7 +2534,6 @@ class HooksService:
                         "tutorial_title": tutorial_title,
                     },
                 )
-            execution_summary: dict[str, Any] = {}
             idle_timeout_seconds = (
                 int(self._youtube_hook_idle_timeout_seconds)
                 if is_youtube_tutorial and self._youtube_hook_idle_timeout_seconds
@@ -2627,11 +2765,14 @@ class HooksService:
                     reason=f"hook_timeout_{timeout_seconds}s",
                     started_at_epoch=start_ts,
                 )
-        except Exception:
+        except Exception as exc:
+            dispatch_failure_reason = self._dispatch_failure_reason(exc, execution_summary)
+            is_interrupted_dispatch = dispatch_failure_reason == "hook_dispatch_interrupted"
             logger.exception(
-                "Failed dispatching hook action session_key=%s session_id=%s",
+                "Failed dispatching hook action session_key=%s session_id=%s reason=%s",
                 session_key,
                 session_id,
+                dispatch_failure_reason,
             )
             if session_workspace is not None:
                 state = {
@@ -2641,13 +2782,13 @@ class HooksService:
                 self._write_sync_ready_marker(
                     session_id=session_id,
                     workspace_root=session_workspace,
-                    state="dispatch_failed",
+                    state="dispatch_interrupted" if is_interrupted_dispatch else "dispatch_failed",
                     ready=True,
                     hook_name=hook_name,
                     run_source=run_source,
                     started_at_epoch=start_ts,
                     completed_at_epoch=time.time(),
-                    error="hook_dispatch_failed",
+                    error=dispatch_failure_reason,
                     execution_summary=state,
                 )
             if self._turn_finalizer:
@@ -2661,20 +2802,50 @@ class HooksService:
                             session_id,
                             admitted_turn_id,
                             "failed",
-                            "hook_dispatch_failed",
+                            dispatch_failure_reason,
                             state,
                         )
                 except Exception:
                     logger.exception("Failed finalizing errored hook turn session_id=%s", session_id)
             if is_youtube_tutorial:
-                self._emit_youtube_tutorial_failure_notification(
-                    session_id=session_id,
-                    session_key=session_key,
-                    hook_name=hook_name,
-                    expected_video_id=expected_video_id,
-                    reason="hook_dispatch_failed",
-                    started_at_epoch=start_ts,
-                )
+                if is_interrupted_dispatch:
+                    pending_marker_path = ""
+                    if session_workspace is not None:
+                        marker = self._write_pending_hook_recovery_marker(
+                            session_workspace,
+                            session_id=session_id,
+                            reason=dispatch_failure_reason,
+                            expected_video_id=expected_video_id,
+                        )
+                        pending_marker_path = str(marker)
+                    self._emit_notification(
+                        kind="youtube_tutorial_interrupted",
+                        title="YouTube Tutorial Interrupted",
+                        message=(
+                            f"Run interrupted for {expected_video_id or session_key}; "
+                            "queued for startup recovery/backfill."
+                        ),
+                        session_id=session_id,
+                        severity="warning",
+                        requires_action=True,
+                        metadata={
+                            "source": "hooks",
+                            "hook_name": hook_name,
+                            "hook_session_key": session_key,
+                            "video_id": expected_video_id or "",
+                            "reason": dispatch_failure_reason,
+                            "pending_recovery_file": pending_marker_path,
+                        },
+                    )
+                else:
+                    self._emit_youtube_tutorial_failure_notification(
+                        session_id=session_id,
+                        session_key=session_key,
+                        hook_name=hook_name,
+                        expected_video_id=expected_video_id,
+                        reason=dispatch_failure_reason,
+                        started_at_epoch=start_ts,
+                    )
         finally:
             if self._run_counter_finish:
                 try:

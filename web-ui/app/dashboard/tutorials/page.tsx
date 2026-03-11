@@ -167,6 +167,7 @@ const KIND_EMOJI: Record<string, string> = {
   youtube_playlist_dispatch_failed: "⚠️",
   youtube_tutorial_started: "▶️",
   youtube_tutorial_progress: "⏳",
+  youtube_tutorial_interrupted: "⚠️",
   youtube_tutorial_ready: "✅",
   youtube_tutorial_failed: "❌",
   youtube_ingest_failed: "❌",

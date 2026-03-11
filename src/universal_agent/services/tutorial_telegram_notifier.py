@@ -27,6 +27,7 @@ _RELEVANT_KINDS = {
     "youtube_playlist_dispatch_failed",
     "youtube_tutorial_started",
     "youtube_tutorial_progress",
+    "youtube_tutorial_interrupted",
     "youtube_tutorial_ready",
     "youtube_tutorial_failed",
     "youtube_ingest_failed",
@@ -39,6 +40,7 @@ _KIND_EMOJI: dict[str, str] = {
     "youtube_playlist_dispatch_failed": "⚠️",
     "youtube_tutorial_started": "▶️",
     "youtube_tutorial_progress": "⏳",
+    "youtube_tutorial_interrupted": "⚠️",
     "youtube_tutorial_ready": "✅",
     "youtube_tutorial_failed": "❌",
     "youtube_ingest_failed": "❌",
@@ -96,6 +98,14 @@ def _build_message(kind: str, title: str, message: str, metadata: dict[str, Any]
     elif kind == "youtube_tutorial_failed":
         video_id = str(metadata.get("video_id") or "")
         reason = str(metadata.get("error") or metadata.get("reason") or "")
+        if video_id:
+            lines.append(f"Video ID: `{video_id}`")
+        if reason:
+            lines.append(f"Reason: `{_escape(reason[:120])}`")
+
+    elif kind == "youtube_tutorial_interrupted":
+        video_id = str(metadata.get("video_id") or "")
+        reason = str(metadata.get("reason") or "")
         if video_id:
             lines.append(f"Video ID: `{video_id}`")
         if reason:

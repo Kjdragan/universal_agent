@@ -2005,7 +2005,7 @@ def test_dashboard_tutorial_notifications_hide_dismissed_by_default(client):
         metadata={"tutorial_run_path": "youtube-tutorial-creation/test-run"},
     )
     assert isinstance(notif, dict)
-    notif["status"] = "dismissed"
+    gateway_server._apply_notification_status(notif, status_value="dismissed")
 
     default_resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50")
     assert default_resp.status_code == 200
@@ -2053,6 +2053,71 @@ def test_dashboard_tutorial_notifications_include_playlist_and_proxy_alert_kinds
     ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
     for notif in created:
         assert str((notif or {}).get("id") or "") in ids
+
+
+def test_dashboard_tutorial_notifications_include_interrupted_kind(client):
+    interrupted = gateway_server._add_notification(
+        kind="youtube_tutorial_interrupted",
+        title="YouTube Tutorial Interrupted",
+        message="Run interrupted and queued for recovery.",
+        severity="warning",
+        requires_action=True,
+        metadata={"video_id": "interrupt123", "reason": "hook_dispatch_interrupted"},
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50&include_dismissed=true")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    assert str((interrupted or {}).get("id") or "") in ids
+
+
+def test_ops_telegram_status_includes_pipeline_slices(client):
+    gateway_server._add_notification(
+        kind="youtube_playlist_new_video",
+        title="New Tutorial Video Detected",
+        message="Demo video queued",
+        severity="info",
+        metadata={"video_id": "demo123"},
+    )
+    gateway_server._add_notification(
+        kind="youtube_tutorial_interrupted",
+        title="YouTube Tutorial Interrupted",
+        message="Run interrupted and queued for recovery.",
+        severity="warning",
+        requires_action=True,
+        metadata={"video_id": "demo123", "reason": "hook_dispatch_interrupted"},
+    )
+    gateway_server._add_notification(
+        kind="youtube_hook_recovery_queued",
+        title="Recovered Interrupted YouTube Dispatch",
+        message="Queued recovery run for session session_hook_demo",
+        severity="warning",
+        metadata={"reason": "startup_dispatch_interrupted_backfill"},
+    )
+
+    resp = client.get("/api/v1/ops/telegram")
+    assert resp.status_code == 200
+    payload = resp.json()
+
+    assert isinstance(payload.get("pipeline_activity"), list)
+    assert isinstance(payload.get("recent_failures"), list)
+    assert isinstance(payload.get("actionable_alerts"), list)
+    assert isinstance(payload.get("recovery_events"), list)
+    assert isinstance(payload.get("active_tutorial_runs"), list)
+    assert isinstance(payload.get("counts"), dict)
+
+    failure_kinds = {str(item.get("kind") or "") for item in payload.get("recent_failures") or []}
+    assert "youtube_tutorial_interrupted" in failure_kinds
+
+    actionable_kinds = {str(item.get("kind") or "") for item in payload.get("actionable_alerts") or []}
+    assert "youtube_tutorial_interrupted" in actionable_kinds
+
+    recovery_kinds = {str(item.get("kind") or "") for item in payload.get("recovery_events") or []}
+    assert "youtube_hook_recovery_queued" in recovery_kinds
+
+    active_kinds = {str(item.get("kind") or "") for item in payload.get("active_tutorial_runs") or []}
+    assert active_kinds.intersection({"youtube_playlist_new_video", "youtube_tutorial_interrupted"})
+    assert int((payload.get("counts") or {}).get("recent_failures") or 0) >= 1
 
 
 def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_mission(client, tmp_path, monkeypatch):

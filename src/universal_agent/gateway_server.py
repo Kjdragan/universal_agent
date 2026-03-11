@@ -10967,39 +10967,125 @@ async def ops_telegram_status(request: Request):
 
     bot_status = await _resolve_telegram_service_status()
 
-    # Recent Telegram-related notifications from activity DB
+    def _event_row(item: dict[str, Any]) -> dict[str, Any]:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        created_at = str(item.get("created_at_utc") or _utc_now_iso())
+        updated_at = str(item.get("updated_at_utc") or created_at)
+        return {
+            "id": str(item.get("id") or ""),
+            "kind": str(item.get("kind") or ""),
+            "title": str(item.get("title") or ""),
+            "message": str(item.get("summary") or item.get("full_message") or ""),
+            "severity": str(item.get("severity") or "info"),
+            "status": str(item.get("status") or "new"),
+            "requires_action": bool(item.get("requires_action")),
+            "session_id": str(item.get("session_id") or ""),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "metadata": metadata,
+        }
+
+    def _is_telegram_relevant_event(item: dict[str, Any]) -> bool:
+        kind = str(item.get("kind") or "").strip().lower()
+        source_domain = str(item.get("source_domain") or "").strip().lower()
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if source_domain in {"tutorial", "csi"}:
+            return True
+        if kind.startswith(("telegram_", "youtube_", "csi_", "rss_", "reddit_")):
+            return True
+        if any(token in kind for token in ("tutorial", "playlist", "delivery", "ingest", "recovery")):
+            return True
+        pipeline = str(metadata.get("pipeline") or "").strip().lower()
+        if pipeline.startswith("csi_") or pipeline.startswith("youtube_"):
+            return True
+        return False
+
+    tutorial_active_kinds = {
+        "youtube_playlist_new_video",
+        "youtube_tutorial_started",
+        "youtube_tutorial_progress",
+        "youtube_tutorial_interrupted",
+        "youtube_hook_recovery_queued",
+    }
+    failure_kinds = {
+        "youtube_playlist_dispatch_failed",
+        "youtube_tutorial_failed",
+        "youtube_tutorial_interrupted",
+        "youtube_ingest_failed",
+        "youtube_ingest_proxy_alert",
+        "hook_dispatch_queue_overflow",
+    }
+    recovery_kinds = {"youtube_hook_recovery_queued"}
+
     recent_notifications: list[dict[str, Any]] = []
+    pipeline_activity: list[dict[str, Any]] = []
+    recent_failures: list[dict[str, Any]] = []
+    actionable_alerts: list[dict[str, Any]] = []
+    recovery_events: list[dict[str, Any]] = []
+    active_tutorial_runs: list[dict[str, Any]] = []
     try:
-        if _activity_db_conn is not None:
-            rows = _activity_db_conn.execute(
-                """SELECT id, kind, title, summary, severity, status, created_at, metadata_json
-                   FROM activity_events
-                   WHERE (kind LIKE '%telegram%'
-                      OR kind LIKE '%tutorial%'
-                      OR kind LIKE '%youtube%'
-                      OR kind LIKE '%playlist%'
-                      OR kind LIKE '%rss%'
-                      OR kind LIKE '%reddit%'
-                      OR kind LIKE '%csi_pipeline%'
-                      OR kind LIKE '%csi_insight%'
-                      OR kind LIKE '%csi_specialist%')
-                   ORDER BY created_at DESC LIMIT 50""",
-            ).fetchall()
-            for row in rows:
-                meta = {}
-                try:
-                    meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
-                except Exception:
-                    pass
-                recent_notifications.append({
-                    "id": row["id"],
-                    "kind": row["kind"],
-                    "title": row["title"],
-                    "message": row["summary"][:200],
-                    "severity": row["severity"],
-                    "status": row["status"],
-                    "created_at": row["created_at"],
-                })
+        rows = _query_activity_events(limit=300, apply_default_window=False)
+        relevant = [item for item in rows if _is_telegram_relevant_event(item)]
+        pipeline_activity = [_event_row(item) for item in relevant[:120]]
+        recent_notifications = pipeline_activity[:50]
+
+        for entry in pipeline_activity:
+            kind = str(entry.get("kind") or "").strip().lower()
+            severity = str(entry.get("severity") or "").strip().lower()
+            status = str(entry.get("status") or "").strip().lower()
+            if (
+                kind in failure_kinds
+                or severity in {"error", "warning"}
+                or (status in {"failed", "error"} and kind.startswith("youtube_"))
+            ):
+                recent_failures.append(entry)
+            if bool(entry.get("requires_action")) and status not in {"dismissed", "resolved", "completed"}:
+                actionable_alerts.append(entry)
+            if kind in recovery_kinds or "recovery" in kind:
+                recovery_events.append(entry)
+
+        stage_map = {
+            "youtube_playlist_new_video": "queued",
+            "youtube_tutorial_started": "processing",
+            "youtube_tutorial_progress": "in_progress",
+            "youtube_tutorial_interrupted": "interrupted",
+            "youtube_hook_recovery_queued": "recovery_queued",
+        }
+        seen_run_keys: set[str] = set()
+        for entry in pipeline_activity:
+            kind = str(entry.get("kind") or "").strip().lower()
+            if kind not in tutorial_active_kinds:
+                continue
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            video_id = str(metadata.get("video_id") or metadata.get("youtube_video_id") or "").strip()
+            run_key = (
+                video_id
+                or str(entry.get("session_id") or "").strip()
+                or f"{kind}:{entry.get('id')}"
+            )
+            if not run_key or run_key in seen_run_keys:
+                continue
+            seen_run_keys.add(run_key)
+            active_tutorial_runs.append(
+                {
+                    "run_key": run_key,
+                    "session_id": str(entry.get("session_id") or "").strip(),
+                    "video_id": video_id,
+                    "title": str(metadata.get("tutorial_title") or entry.get("title") or "").strip(),
+                    "stage": stage_map.get(kind, "queued"),
+                    "kind": kind,
+                    "status": str(entry.get("status") or "new"),
+                    "severity": str(entry.get("severity") or "info"),
+                    "created_at": str(entry.get("created_at") or _utc_now_iso()),
+                    "message": str(entry.get("message") or ""),
+                }
+            )
+            if len(active_tutorial_runs) >= 20:
+                break
+
+        recent_failures = recent_failures[:40]
+        actionable_alerts = actionable_alerts[:40]
+        recovery_events = recovery_events[:40]
     except Exception as exc:
         logger.debug("Telegram ops: activity query failed: %s", exc)
 
@@ -11056,7 +11142,20 @@ async def ops_telegram_status(request: Request):
         "notifier": notifier_status,
         "channels": channels,
         "recent_notifications": recent_notifications,
+        "pipeline_activity": pipeline_activity,
+        "active_tutorial_runs": active_tutorial_runs,
+        "recent_failures": recent_failures,
+        "actionable_alerts": actionable_alerts,
+        "recovery_events": recovery_events,
         "telegram_sessions": tg_sessions,
+        "counts": {
+            "pipeline_activity": len(pipeline_activity),
+            "active_tutorial_runs": len(active_tutorial_runs),
+            "recent_failures": len(recent_failures),
+            "actionable_alerts": len(actionable_alerts),
+            "recovery_events": len(recovery_events),
+            "telegram_sessions": len(tg_sessions),
+        },
     }
 
 
@@ -14878,6 +14977,8 @@ _TUTORIAL_NOTIFICATION_KINDS = frozenset({
     "youtube_playlist_new_video",
     "youtube_playlist_dispatch_failed",
     "youtube_tutorial_started",
+    "youtube_tutorial_progress",
+    "youtube_tutorial_interrupted",
     "youtube_tutorial_ready",
     "youtube_tutorial_failed",
     "youtube_ingest_failed",
@@ -14893,6 +14994,52 @@ _TUTORIAL_NOTIFICATION_KINDS = frozenset({
 async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: bool = False):
     """Return recent notifications relevant to the YouTube tutorial pipeline."""
     clamped = max(1, min(int(limit), 200))
+    try:
+        rows = _query_activity_events(
+            limit=max(clamped * 5, 120),
+            source_domain="tutorial",
+            apply_default_window=False,
+        )
+        matching: list[dict[str, Any]] = []
+        for row in rows:
+            if str(row.get("event_class") or "") != "notification":
+                continue
+            kind = str(row.get("kind") or "").strip()
+            if kind not in _TUTORIAL_NOTIFICATION_KINDS:
+                continue
+            status = str(row.get("status") or "new")
+            if not include_dismissed and _normalize_notification_status(status) == "dismissed":
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            created_at = str(row.get("created_at_utc") or _utc_now_iso())
+            updated_at = str(row.get("updated_at_utc") or created_at)
+            full_message = str(row.get("full_message") or "")
+            matching.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "kind": kind,
+                    "title": str(row.get("title") or ""),
+                    "message": full_message,
+                    "summary": str(row.get("summary") or _activity_summary_text(full_message)),
+                    "full_message": full_message,
+                    "session_id": row.get("session_id"),
+                    "severity": str(row.get("severity") or "info"),
+                    "requires_action": bool(row.get("requires_action")),
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "channels": ["dashboard"],
+                    "email_targets": [],
+                    "metadata": metadata,
+                }
+            )
+            if len(matching) >= clamped:
+                break
+        if matching:
+            return {"notifications": matching}
+    except Exception as exc:
+        logger.debug("Tutorial notifications activity query failed; using in-memory fallback: %s", exc)
+
     matching = [
         n for n in reversed(_notifications)
         if n.get("kind") in _TUTORIAL_NOTIFICATION_KINDS

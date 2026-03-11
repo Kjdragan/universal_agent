@@ -46,6 +46,23 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+_TERMINATED_PROCESS_ERROR_TOKENS = (
+    "terminated process",
+    "cannot write to terminated process",
+    "exit code -15",
+    "exit code: -15",
+    "sigterm",
+    "sigkill",
+)
+
+
+def _is_terminated_process_error(exc: Exception) -> bool:
+    lowered = str(exc or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in _TERMINATED_PROCESS_ERROR_TOKENS)
+
+
 def _env_truthy(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -592,6 +609,14 @@ class ProcessTurnAdapter:
                         await self.reset()
                 except Exception:
                     pass
+                # Dead SDK subprocesses (common during service restarts) should
+                # be torn down so the next turn can recreate a clean client.
+                if _is_terminated_process_error(e):
+                    try:
+                        logger.warning("Resetting SDK client after terminated process error")
+                        await self.reset()
+                    except Exception:
+                        pass
             finally:
                 # Signal completion
                 await event_queue.put(AgentEvent(

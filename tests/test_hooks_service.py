@@ -286,6 +286,57 @@ async def test_youtube_started_notification_includes_title_and_video_id(hooks_se
     assert started["metadata"]["tutorial_title"] == "Building Better Pipelines"
 
 
+@pytest.mark.asyncio
+async def test_youtube_dispatch_interrupted_writes_pending_recovery_marker(hooks_service, mock_gateway, tmp_path):
+    hooks_service._youtube_ingest_mode = ""
+    notifications = []
+    hooks_service._notification_sink = notifications.append
+    hooks_service._run_gateway_execute_with_watchdogs = AsyncMock(
+        return_value={
+            "reported_error": True,
+            "reported_error_message": "Cannot write to terminated process (exit code: -15)",
+        }
+    )
+
+    workspace = tmp_path / "session_hook_yt_demo123abc4"
+    workspace.mkdir(parents=True, exist_ok=True)
+    mock_session = GatewaySession(
+        session_id="session_hook_yt_demo123abc4",
+        user_id="webhook",
+        workspace_dir=str(workspace),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
+
+    action = HookAction(
+        kind="agent",
+        name="ComposioYouTubeTrigger",
+        session_key="yt_demo123abc4",
+        to="youtube-expert",
+        message="\n".join(
+            [
+                "video_url: https://www.youtube.com/watch?v=demo123abc4",
+                "video_id: demo123abc4",
+                "title: Interrupted Tutorial",
+                "mode: explainer_plus_code",
+            ]
+        ),
+    )
+
+    await hooks_service._dispatch_action(action)
+
+    marker = workspace / "pending_hook_recovery.json"
+    assert marker.exists()
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert payload["status"] == "dispatch_interrupted"
+    assert payload["video_id"] == "demo123abc4"
+    assert payload["reason"] == "hook_dispatch_interrupted"
+
+    interrupted = next((n for n in notifications if n.get("kind") == "youtube_tutorial_interrupted"), None)
+    assert interrupted is not None
+    assert interrupted["metadata"]["reason"] == "hook_dispatch_interrupted"
+    assert not any(n.get("kind") == "youtube_tutorial_failed" for n in notifications)
+
+
 def test_is_youtube_local_ingest_target_accepts_canonical_and_alias(mock_gateway):
     with (
         patch("universal_agent.hooks_service.load_ops_config", return_value={}),
@@ -1381,6 +1432,50 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
     assert action.to == "youtube-expert"
     assert action.name == "RecoveredPendingLocalIngest"
     assert "allow_degraded_transcript_only: true" in (action.message or "")
+    marker = session_dir / ".hook_startup_recovery.json"
+    assert marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_interrupt(mock_gateway, tmp_path):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+
+    session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_3L7wPEB8sEc"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_hook_recovery.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "dispatch_interrupted",
+                "session_id": session_id,
+                "video_id": "3L7wPEB8sEc",
+                "reason": "hook_dispatch_interrupted",
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    assert recovered == 1
+    await asyncio.sleep(0.05)
+    service._dispatch_action.assert_called_once()
+    action = service._dispatch_action.call_args.args[0]
+    assert action.to == "youtube-expert"
+    assert "3L7wPEB8sEc" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
 
