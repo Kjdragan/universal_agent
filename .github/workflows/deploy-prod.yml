@@ -71,7 +71,7 @@ jobs:
               elif command -v runuser >/dev/null 2>&1; then
                 runuser -u ua -- bash -lc "$1"
               else
-                su -s /bin/bash ua -c "$1"
+                bash -lc "$1"
               fi
             }
             
