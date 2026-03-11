@@ -60,6 +60,13 @@ def test_blocks_task_stop_with_weak_synthetic_task_id():
     assert "untrusted `task_id`" in str(result.get("systemMessage", "")).lower()
 
 
+def test_blocks_task_stop_with_natural_language_task_id():
+    hooks = AgentHookSet(run_id="unit-taskstop-natural-language")
+    result = _pre_task_stop(hooks, "research-specialist")
+    assert result.get("decision") == "block"
+    assert "untrusted `task_id`" in str(result.get("systemMessage", "")).lower()
+
+
 def test_allows_task_stop_with_concrete_task_id():
     hooks = AgentHookSet(run_id="unit-taskstop-allow")
     result = _pre_task_stop(hooks, "task_01HZYQ7QF1")

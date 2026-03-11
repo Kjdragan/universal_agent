@@ -98,6 +98,9 @@ type OverviewPayload = {
     configured_every_seconds: number;
     min_interval_seconds: number;
     effective_default_every_seconds: number;
+    cron_interval_seconds?: number | null;
+    heartbeat_effective_interval_seconds?: number | null;
+    heartbeat_interval_source?: string;
     session_count: number;
     session_state_count: number;
     busy_sessions: number;
@@ -627,17 +630,23 @@ export default function ToDoListDashboardPage() {
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Heartbeat Runtime</h2>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
           <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Configured / Effective</div>
+            <div className="text-slate-500">Heartbeat Config / Effective</div>
             <div className="mt-1 text-slate-100">
-              {formatEvery(overview?.heartbeat?.configured_every_seconds)} / {formatEvery(overview?.heartbeat?.effective_default_every_seconds)}
+              {formatEvery(overview?.heartbeat?.configured_every_seconds)} / {formatEvery(overview?.heartbeat?.heartbeat_effective_interval_seconds ?? overview?.heartbeat?.effective_default_every_seconds)}
             </div>
           </div>
           <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Min Interval / Busy</div>
+            <div className="text-slate-500">Autonomous Cron / Min</div>
             <div className="mt-1 text-slate-100">
-              {formatEvery(overview?.heartbeat?.min_interval_seconds)} / {overview?.heartbeat?.busy_sessions ?? 0}
+              {formatEvery(overview?.heartbeat?.cron_interval_seconds ?? undefined)} / {formatEvery(overview?.heartbeat?.min_interval_seconds)}
+            </div>
+          </div>
+          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
+            <div className="text-slate-500">Interval Source / Busy</div>
+            <div className="mt-1 text-slate-100">
+              {overview?.heartbeat?.heartbeat_interval_source || "default"} / {overview?.heartbeat?.busy_sessions ?? 0}
             </div>
           </div>
           <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">

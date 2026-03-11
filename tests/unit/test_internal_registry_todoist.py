@@ -12,3 +12,4 @@ def test_internal_registry_includes_todoist_tools():
     assert "todoist_get_task" in names
     assert "todoist_task_action" in names
     assert "todoist_idea_action" in names
+    assert "task_hub_task_action" in names

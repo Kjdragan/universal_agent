@@ -176,11 +176,6 @@ ensure_runtime_path()
 HEARTBEAT_ENABLED = heartbeat_enabled()
 CRON_ENABLED = cron_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
-MIN_HEARTBEAT_INTERVAL_SECONDS = 30 * 60
-HEARTBEAT_INTERVAL_SECONDS = max(
-    MIN_HEARTBEAT_INTERVAL_SECONDS,
-    int(os.getenv("UA_HEARTBEAT_INTERVAL_SECONDS", str(MIN_HEARTBEAT_INTERVAL_SECONDS)) or MIN_HEARTBEAT_INTERVAL_SECONDS),
-)
 CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS = max(
     3600,
     int(os.getenv("UA_CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS", str(72 * 3600)) or (72 * 3600)),
@@ -280,6 +275,7 @@ def _delegation_redis_enabled() -> bool:
 _LOCAL_WORKER_ALLOWED_PATHS = {
     "/api/v1/health",
     "/api/v1/hooks/readyz",
+    "/api/v1/youtube/ingest",
 }
 
 AUTONOMOUS_DAILY_BRIEFING_JOB_KEY = "autonomous_daily_briefing"
@@ -4008,6 +4004,316 @@ def classify_csi_project_key(
     return "csi"
 
 
+_CSI_RECOMMENDATION_TEXT_KEYS = (
+    "action",
+    "recommendation",
+    "title",
+    "summary",
+    "description",
+    "text",
+    "name",
+)
+_CSI_AGENT_RECOMMENDATION_HINTS = {
+    "install",
+    "pip",
+    "fix",
+    "add",
+    "update",
+    "create",
+    "implement",
+    "patch",
+    "refactor",
+    "detect",
+    "signature",
+    "hook",
+    "retry",
+    "timeout",
+    "script",
+    "runbook",
+    "automation",
+    "cron",
+    "pydantic",
+    "env",
+    "python",
+    "code",
+    "adapter",
+}
+_CSI_HUMAN_RECOMMENDATION_HINTS = {
+    "manual",
+    "human",
+    "approval",
+    "approve",
+    "legal",
+    "compliance",
+    "budget",
+    "meeting",
+    "call",
+    "email",
+    "stakeholder",
+    "sign-off",
+    "sign off",
+    "exec review",
+    "kevin",
+}
+
+
+def _normalize_csi_recommendation_text(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"^(?:[-*]+|\d+[.)])\s+", "", text)
+    return text.strip()
+
+
+def _extract_csi_recommendations(subject: Any) -> list[dict[str, Any]]:
+    subject_obj = subject if isinstance(subject, dict) else {}
+    if not subject_obj:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    max_items = max(
+        0,
+        min(
+            20,
+            int(os.getenv("UA_CSI_RECOMMENDATION_MAX_ITEMS", "8") or 8),
+        ),
+    )
+    if max_items <= 0:
+        return out
+
+    def _append(text: Any, *, source: str, runbook_command: str = "") -> None:
+        cleaned = _normalize_csi_recommendation_text(text)
+        if len(cleaned) < 8:
+            return
+        norm_key = cleaned.lower()
+        if norm_key in seen:
+            return
+        seen.add(norm_key)
+        out.append(
+            {
+                "text": cleaned,
+                "source": source,
+                "runbook_command": str(runbook_command or "").strip(),
+            }
+        )
+
+    def _consume_mixed(value: Any, *, source: str) -> None:
+        if isinstance(value, str):
+            _append(value, source=source)
+            return
+        if isinstance(value, dict):
+            runbook_command = str(
+                value.get("runbook_command")
+                or value.get("command")
+                or ""
+            ).strip()
+            for key in _CSI_RECOMMENDATION_TEXT_KEYS:
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    _append(candidate, source=source, runbook_command=runbook_command)
+                    return
+            if runbook_command:
+                _append(
+                    f"Execute runbook command: {runbook_command}",
+                    source=source,
+                    runbook_command=runbook_command,
+                )
+            return
+        if isinstance(value, list):
+            for idx, row in enumerate(value):
+                if len(out) >= max_items:
+                    return
+                _consume_mixed(row, source=f"{source}[{idx}]")
+
+    for key in (
+        "recommendations",
+        "recommended_actions",
+        "action_items",
+        "next_actions",
+        "next_steps",
+    ):
+        if len(out) >= max_items:
+            break
+        _consume_mixed(subject_obj.get(key), source=key)
+
+    remediation = subject_obj.get("remediation")
+    if isinstance(remediation, dict) and len(out) < max_items:
+        steps = remediation.get("steps")
+        if isinstance(steps, list):
+            for idx, step in enumerate(steps):
+                if len(out) >= max_items:
+                    break
+                if not isinstance(step, dict):
+                    continue
+                runbook_command = str(step.get("runbook_command") or "").strip()
+                code = str(step.get("code") or "").strip()
+                source_name = str(step.get("source") or "").strip()
+                if runbook_command:
+                    detail = f"Run remediation step"
+                    if code:
+                        detail += f" '{code}'"
+                    if source_name:
+                        detail += f" for {source_name}"
+                    detail += f": {runbook_command}"
+                    _append(detail, source=f"remediation.steps[{idx}]", runbook_command=runbook_command)
+
+    top_root_causes = subject_obj.get("top_root_causes")
+    if isinstance(top_root_causes, list) and len(out) < max_items:
+        for idx, cause in enumerate(top_root_causes):
+            if len(out) >= max_items:
+                break
+            if not isinstance(cause, dict):
+                continue
+            title = str(cause.get("title") or cause.get("code") or "").strip()
+            runbook_command = str(cause.get("runbook_command") or "").strip()
+            if title and runbook_command:
+                _append(
+                    f"{title}. Runbook: {runbook_command}",
+                    source=f"top_root_causes[{idx}]",
+                    runbook_command=runbook_command,
+                )
+            elif title:
+                _append(title, source=f"top_root_causes[{idx}]")
+            elif runbook_command:
+                _append(
+                    f"Execute runbook command: {runbook_command}",
+                    source=f"top_root_causes[{idx}]",
+                    runbook_command=runbook_command,
+                )
+
+    return out[:max_items]
+
+
+def _classify_csi_recommendation_owner(
+    recommendation_text: str,
+    *,
+    subject: Any = None,
+) -> dict[str, Any]:
+    text = str(recommendation_text or "").strip()
+    lowered = text.lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+    manual_required = _csi_subject_bool(
+        subject_obj,
+        "requires_manual_intervention",
+        "manual_intervention_required",
+        "requires_human_approval",
+        "human_approval_required",
+    )
+
+    has_agent_hint = any(token in lowered for token in _CSI_AGENT_RECOMMENDATION_HINTS)
+    has_human_hint = any(token in lowered for token in _CSI_HUMAN_RECOMMENDATION_HINTS)
+    owner_lane = "agent"
+    reason = "default_agent"
+    confidence = 0.65
+    if manual_required and not has_agent_hint:
+        owner_lane = "human"
+        reason = "subject_manual_required"
+        confidence = 0.9
+    elif has_human_hint and not has_agent_hint:
+        owner_lane = "human"
+        reason = "human_keyword_match"
+        confidence = 0.8
+    elif has_agent_hint:
+        owner_lane = "agent"
+        reason = "automation_keyword_match"
+        confidence = 0.85
+
+    subtask_role = "general"
+    if any(token in lowered for token in ("install", "fix", "patch", "signature", "hook", "code", "pydantic", "env")):
+        subtask_role = "code"
+    elif any(token in lowered for token in ("analyze", "investigate", "review", "assess")):
+        subtask_role = "research"
+    elif any(token in lowered for token in ("write", "draft", "publish", "message")):
+        subtask_role = "writer"
+
+    return {
+        "owner_lane": owner_lane,
+        "reason": reason,
+        "confidence": confidence,
+        "subtask_role": subtask_role,
+    }
+
+
+def _build_csi_recommendation_task_items(
+    *,
+    subject: Any,
+    event_type: str,
+    parent_task_id: str,
+    parent_title: str,
+    project_key: str,
+    must_complete: bool,
+) -> list[dict[str, Any]]:
+    parent_id = str(parent_task_id or "").strip()
+    if not parent_id:
+        return []
+
+    recommendations = _extract_csi_recommendations(subject)
+    out: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        recommendation_text = str(recommendation.get("text") or "").strip()
+        if not recommendation_text:
+            continue
+        triage = _classify_csi_recommendation_owner(recommendation_text, subject=subject)
+        owner_lane = str(triage.get("owner_lane") or "agent").strip().lower()
+        subtask_role = str(triage.get("subtask_role") or "general").strip().lower() or "general"
+        short_hash = hashlib.sha1(recommendation_text.lower().encode("utf-8")).hexdigest()[:12]
+        task_id = f"{parent_id}:rec:{short_hash}"
+        labels = [
+            "CSI",
+            "csi-recommendation",
+            f"csi-project:{project_key}",
+        ]
+        agent_ready = owner_lane == "agent"
+        if agent_ready:
+            labels.append("agent-ready")
+            labels.append(f"sub-agent:{subtask_role}")
+        else:
+            labels.append("needs-human")
+        if must_complete and agent_ready:
+            labels.append("must-complete")
+
+        recommendation_source = str(recommendation.get("source") or "recommendations").strip()
+        runbook_command = str(recommendation.get("runbook_command") or "").strip()
+        recommendation_description = (
+            f"Parent CSI incident: {parent_title}\n"
+            f"Event type: {event_type}\n"
+            f"Recommendation source: {recommendation_source}\n\n"
+            f"Recommendation:\n{recommendation_text}\n"
+        )
+        if runbook_command:
+            recommendation_description += f"\nSuggested command:\n{runbook_command}\n"
+
+        out.append(
+            {
+                "task_id": task_id,
+                "source_kind": "csi_recommendation",
+                "source_ref": parent_id,
+                "title": f"CSI recommendation: {recommendation_text[:160]}",
+                "description": recommendation_description.strip(),
+                "project_key": project_key,
+                "priority": 4 if must_complete and agent_ready else (3 if agent_ready else 2),
+                "labels": sorted({label for label in labels if label}),
+                "status": "open",
+                "must_complete": bool(must_complete and agent_ready),
+                "incident_key": parent_id,
+                "parent_task_id": parent_id,
+                "subtask_role": subtask_role,
+                "agent_ready": agent_ready,
+                "mirror_status": "internal_only",
+                "metadata": {
+                    "event_type": event_type,
+                    "recommendation_text": recommendation_text,
+                    "recommendation_source": recommendation_source,
+                    "runbook_command": runbook_command or None,
+                    "triage": triage,
+                },
+            }
+        )
+    return out
+
+
 def _csi_source_bucket(event: Any) -> str:
     event_type = str(getattr(event, "event_type", "") or "").strip().lower()
     source = str(getattr(event, "source", "") or "").strip().lower()
@@ -4777,7 +5083,6 @@ def _emit_cron_event(payload: dict) -> None:
             message=message,
             session_id=session_id or None,
             severity=severity,
-            source="cron",
             metadata={
                 "job_id": job_id,
                 "run_id": run_id,
@@ -4791,6 +5096,11 @@ def _emit_cron_event(payload: dict) -> None:
                 "system_job": system_job,
                 "todoist_task_id": str(job_metadata.get("todoist_task_id") or ""),
             },
+        )
+        _maybe_wake_heartbeat_after_autonomous_cron(
+            run_status=run_status,
+            is_autonomous=is_autonomous,
+            reason=f"cron_autonomous_run:{job_id or run_id or 'unknown'}",
         )
     event = {
         "type": event_type,
@@ -4825,10 +5135,93 @@ def _emit_heartbeat_event(payload: dict) -> None:
                     "sent": bool(payload.get("sent")),
                     "guard_reason": str(payload.get("guard_reason") or ""),
                     "guard": payload.get("guard") if isinstance(payload.get("guard"), dict) else {},
+                    "heartbeat_interval_source": str(payload.get("heartbeat_interval_source") or ""),
+                    "heartbeat_effective_interval_seconds": int(
+                        payload.get("heartbeat_effective_interval_seconds") or 0
+                    ),
+                    "task_hub_claimed_count": int(payload.get("task_hub_claimed_count") or 0),
+                    "task_hub_completed_count": int(payload.get("task_hub_completed_count") or 0),
+                    "task_hub_review_count": int(payload.get("task_hub_review_count") or 0),
+                    "task_hub_reopened_count": int(payload.get("task_hub_reopened_count") or 0),
+                    "task_hub_retry_exhausted_count": int(payload.get("task_hub_retry_exhausted_count") or 0),
                     "heartbeat_artifacts": heartbeat_artifact_links,
                     "heartbeat_artifact_count": len(heartbeat_artifact_links),
                 },
             )
+
+
+def _autonomous_cron_to_heartbeat_enabled() -> bool:
+    return str(os.getenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _task_hub_has_dispatch_eligible_items() -> bool:
+    if not _task_hub_enabled():
+        return False
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            task_hub.rebuild_dispatch_queue(conn)
+            queue = task_hub.get_dispatch_queue(conn, limit=1)
+            return int(queue.get("eligible_total") or 0) > 0
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+
+def _maybe_wake_heartbeat_after_autonomous_cron(*, run_status: str, is_autonomous: bool, reason: str) -> None:
+    if not _heartbeat_service:
+        return
+    if not is_autonomous:
+        return
+    if str(run_status or "").strip().lower() != "success":
+        return
+    if not _autonomous_cron_to_heartbeat_enabled():
+        return
+    if not _task_hub_has_dispatch_eligible_items():
+        return
+
+    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during autonomous cron wake sweep", sid)
+
+    for session_id in sorted(target_sessions):
+        _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
+    if target_sessions:
+        logger.info(
+            "Autonomous cron coupling queued heartbeat-next for %s sessions (dispatch eligible).",
+            len(target_sessions),
+        )
+
+
+def _queue_heartbeat_next_for_all_sessions(*, reason: str) -> int:
+    if not _heartbeat_service:
+        return 0
+    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during heartbeat queue sweep", sid)
+    for session_id in sorted(target_sessions):
+        _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
+    return len(target_sessions)
 
 
 def _cron_wake_callback(session_id: str, mode: str, reason: str) -> None:
@@ -7354,7 +7747,15 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
         return None
 
 
-def _heartbeat_runtime_snapshot() -> dict[str, Any]:
+def _heartbeat_interval_source_label() -> str:
+    if str(os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip():
+        return "UA_HEARTBEAT_INTERVAL"
+    if str(os.getenv("UA_HEARTBEAT_EVERY") or "").strip():
+        return "UA_HEARTBEAT_EVERY"
+    return "default"
+
+
+def _heartbeat_runtime_interval_config() -> dict[str, Any]:
     interval_raw = _resolve_hb_interval_env(prefer_interval=True) or ""
     min_interval_seconds = _resolve_hb_min_interval_seconds(default=HEARTBEAT_MIN_INTERVAL_SECONDS)
     configured_every_seconds = _parse_heartbeat_duration_seconds(
@@ -7364,6 +7765,43 @@ def _heartbeat_runtime_snapshot() -> dict[str, Any]:
     effective_default_every_seconds = max(
         min_interval_seconds,
         int(configured_every_seconds or HEARTBEAT_DEFAULT_INTERVAL_SECONDS),
+    )
+    return {
+        "configured_every_seconds": int(configured_every_seconds),
+        "min_interval_seconds": int(min_interval_seconds),
+        "effective_default_every_seconds": int(effective_default_every_seconds),
+        "interval_source": _heartbeat_interval_source_label(),
+    }
+
+
+def _cron_interval_seconds() -> Optional[int]:
+    if not _cron_service:
+        return None
+    try:
+        jobs = _cron_service.list_jobs()
+    except Exception:
+        return None
+    autonomous_intervals = [
+        int(getattr(job, "every_seconds", 0) or 0)
+        for job in jobs
+        if int(getattr(job, "every_seconds", 0) or 0) > 0
+        and isinstance(getattr(job, "metadata", None), dict)
+        and bool((getattr(job, "metadata", {}) or {}).get("autonomous"))
+    ]
+    if autonomous_intervals:
+        return min(autonomous_intervals)
+    all_intervals = [int(getattr(job, "every_seconds", 0) or 0) for job in jobs if int(getattr(job, "every_seconds", 0) or 0) > 0]
+    if all_intervals:
+        return min(all_intervals)
+    return None
+
+
+def _heartbeat_runtime_snapshot() -> dict[str, Any]:
+    interval_cfg = _heartbeat_runtime_interval_config()
+    configured_every_seconds = int(interval_cfg.get("configured_every_seconds") or HEARTBEAT_DEFAULT_INTERVAL_SECONDS)
+    min_interval_seconds = int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS)
+    effective_default_every_seconds = int(
+        interval_cfg.get("effective_default_every_seconds") or HEARTBEAT_DEFAULT_INTERVAL_SECONDS
     )
     sessions = get_gateway().list_sessions()
     latest_last_run = 0.0
@@ -7392,6 +7830,9 @@ def _heartbeat_runtime_snapshot() -> dict[str, Any]:
         "configured_every_seconds": int(configured_every_seconds),
         "min_interval_seconds": int(min_interval_seconds),
         "effective_default_every_seconds": int(effective_default_every_seconds),
+        "cron_interval_seconds": _cron_interval_seconds(),
+        "heartbeat_effective_interval_seconds": int(effective_default_every_seconds),
+        "heartbeat_interval_source": str(interval_cfg.get("interval_source") or "default"),
         "session_count": len(sessions),
         "session_state_count": active_state_count,
         "busy_sessions": int(len(_heartbeat_service.busy_sessions) if _heartbeat_service else 0),
@@ -8013,6 +8454,11 @@ def _calendar_project_heartbeat_events(
     if not _ops_service:
         return [], []
     now_ts = time.time()
+    interval_cfg = _heartbeat_runtime_interval_config()
+    heartbeat_min_seconds = int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS)
+    heartbeat_default_seconds = int(
+        interval_cfg.get("effective_default_every_seconds") or HEARTBEAT_DEFAULT_INTERVAL_SECONDS
+    )
     events: list[dict[str, Any]] = []
     always_running: list[dict[str, Any]] = []
     for summary in _ops_service.list_sessions(status_filter="all"):
@@ -8034,12 +8480,12 @@ def _calendar_project_heartbeat_events(
         if _heartbeat_service:
             schedule = _heartbeat_service._resolve_schedule(overrides)  # type: ignore[attr-defined]
             delivery = _heartbeat_service._resolve_delivery(overrides, session_id)  # type: ignore[attr-defined]
-            every_seconds = int(getattr(schedule, "every_seconds", HEARTBEAT_INTERVAL_SECONDS) or HEARTBEAT_INTERVAL_SECONDS)
+            every_seconds = int(getattr(schedule, "every_seconds", heartbeat_default_seconds) or heartbeat_default_seconds)
             delivery_mode = str(getattr(delivery, "mode", "last") or "last")
         else:
-            every_seconds = HEARTBEAT_INTERVAL_SECONDS
+            every_seconds = heartbeat_default_seconds
             delivery_mode = "last"
-        every_seconds = max(HEARTBEAT_INTERVAL_SECONDS, every_seconds)
+        every_seconds = max(heartbeat_min_seconds, every_seconds)
 
         hb_state = _read_heartbeat_state(workspace_dir) or {}
         last_run = float(hb_state.get("last_run") or 0.0)
@@ -8195,7 +8641,8 @@ def _calendar_apply_heartbeat_interval(session_id: str, every_seconds: int) -> d
     workspace = WORKSPACES_DIR / session_id
     if not workspace.exists():
         raise HTTPException(status_code=404, detail="Session not found")
-    normalized_seconds = max(HEARTBEAT_INTERVAL_SECONDS, int(every_seconds))
+    interval_cfg = _heartbeat_runtime_interval_config()
+    normalized_seconds = max(int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS), int(every_seconds))
     existing = _calendar_read_heartbeat_overrides(str(workspace))
     merged = _calendar_merge_dict(existing, {"heartbeat": {"every_seconds": normalized_seconds}})
     path = _calendar_write_heartbeat_overrides(session_id, merged)
@@ -8279,10 +8726,12 @@ def _calendar_create_change_proposal(
         else:
             every_seconds = _calendar_interval_seconds_from_text(lower)
             if every_seconds is not None:
-                normalized_seconds = max(HEARTBEAT_INTERVAL_SECONDS, int(every_seconds))
+                interval_cfg = _heartbeat_runtime_interval_config()
+                min_interval_seconds = int(interval_cfg.get("min_interval_seconds") or HEARTBEAT_MIN_INTERVAL_SECONDS)
+                normalized_seconds = max(min_interval_seconds, int(every_seconds))
                 if normalized_seconds != int(every_seconds):
                     warnings.append(
-                        f"Heartbeat interval is capped to >= {HEARTBEAT_INTERVAL_SECONDS} seconds (30 minutes) to prevent runaway scheduling."
+                        f"Heartbeat interval is capped to >= {min_interval_seconds} seconds based on runtime policy."
                     )
                 operation = {"type": "heartbeat_set_interval", "every_seconds": normalized_seconds}
                 summary = f"Set heartbeat interval to every {normalized_seconds} seconds"
@@ -9495,6 +9944,9 @@ async def signals_ingest_endpoint(request: Request):
         dispatch_count = 0
         analytics_dispatch_count = 0
         analytics_throttled_count = 0
+        recommendation_task_count = 0
+        recommendation_agent_task_count = 0
+        recommendation_human_task_count = 0
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
             if manual_payload:
@@ -9842,6 +10294,66 @@ async def signals_ingest_endpoint(request: Request):
                         mirror_status="mirror_eligible" if should_mirror else "internal_only",
                     )
                     hub_task_id = str(hub_item.get("task_id") or "")
+
+                    recommendation_items = _build_csi_recommendation_task_items(
+                        subject=subject_obj,
+                        event_type=event_type_norm,
+                        parent_task_id=hub_task_id,
+                        parent_title=title,
+                        project_key=project_key,
+                        must_complete=must_complete,
+                    )
+                    recommendation_ids: list[str] = []
+                    for recommendation_item in recommendation_items:
+                        task_hub.upsert_item(hub_conn, recommendation_item)
+                        recommendation_ids.append(str(recommendation_item.get("task_id") or ""))
+                        recommendation_task_count += 1
+                        if bool(recommendation_item.get("agent_ready")):
+                            recommendation_agent_task_count += 1
+                        else:
+                            recommendation_human_task_count += 1
+
+                    if recommendation_ids:
+                        task_hub.upsert_item(
+                            hub_conn,
+                            {
+                                "task_id": hub_task_id,
+                                "metadata": {
+                                    "recommendation_task_ids": recommendation_ids,
+                                    "recommendation_count": len(recommendation_ids),
+                                    "recommendation_agent_count": sum(
+                                        1 for item in recommendation_items if bool(item.get("agent_ready"))
+                                    ),
+                                    "recommendation_human_count": sum(
+                                        1 for item in recommendation_items if not bool(item.get("agent_ready"))
+                                    ),
+                                },
+                            },
+                        )
+                        if str(os.getenv("UA_CSI_RECOMMENDATION_AUTO_PARK_REMOVED", "1")).strip().lower() in {
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                        }:
+                            placeholders = ",".join("?" for _ in recommendation_ids)
+                            park_sql = (
+                                "UPDATE task_hub_items "
+                                "SET status=?, stale_state=?, seizure_state='unseized', updated_at=? "
+                                "WHERE source_kind='csi_recommendation' "
+                                "AND parent_task_id=? "
+                                "AND status IN ('open', 'blocked', 'needs_review') "
+                                f"AND task_id NOT IN ({placeholders})"
+                            )
+                            params: list[Any] = [
+                                task_hub.TASK_STATUS_PARKED,
+                                "superseded_recommendation",
+                                datetime.now(timezone.utc).isoformat(),
+                                hub_task_id,
+                                *recommendation_ids,
+                            ]
+                            hub_conn.execute(park_sql, tuple(params))
+                            hub_conn.commit()
                 finally:
                     hub_conn.close()
 
@@ -10044,6 +10556,19 @@ async def signals_ingest_endpoint(request: Request):
             body["analytics_internal_dispatches"] = analytics_dispatch_count
         if analytics_throttled_count > 0:
             body["analytics_throttled"] = analytics_throttled_count
+        if recommendation_task_count > 0:
+            body["recommendation_tasks_enqueued"] = recommendation_task_count
+            body["recommendation_tasks_agent_ready"] = recommendation_agent_task_count
+            body["recommendation_tasks_human_queue"] = recommendation_human_task_count
+            wake_enabled = str(
+                os.getenv("UA_CSI_WAKE_HEARTBEAT_ON_ACTIONABLE_TASK", "1")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if wake_enabled and _task_hub_has_dispatch_eligible_items():
+                queued_sessions = _queue_heartbeat_next_for_all_sessions(
+                    reason="csi_actionable_recommendations",
+                )
+                if queued_sessions > 0:
+                    body["heartbeat_wake_queued_sessions"] = queued_sessions
     return JSONResponse(status_code=status_code, content=body)
 
 

@@ -154,7 +154,8 @@ async def test_dashboard_system_command_status_query(monkeypatch):
 
     assert response["ok"] is True
     assert response["intent"] == "status_query"
-    assert response["todoist"]["summary"]["actionable_count"] == 2
+    assert "task_hub" in response
+    assert "overview" in (response["task_hub"] or {})
 
 
 @pytest.mark.asyncio
@@ -175,7 +176,7 @@ async def test_dashboard_system_command_schedules_cron_from_natural_text(monkeyp
 
     assert response["ok"] is True
     assert response["intent"] == "schedule_task"
-    assert response["todoist"]["task"]["id"] == "task_123"
+    assert response["todoist"] is None
     assert response["cron"]["job"]["job_id"].startswith("cron_job_")
     assert response["cron"]["status"] == "created"
     assert len(cron_stub.created) == 1
@@ -218,6 +219,9 @@ async def test_todolist_overview_includes_heartbeat_runtime_snapshot(monkeypatch
     assert heartbeat.get("enabled") in {True, False}
     assert int(heartbeat.get("configured_every_seconds") or 0) == 1500
     assert int(heartbeat.get("min_interval_seconds") or 0) >= 1
+    assert int(heartbeat.get("heartbeat_effective_interval_seconds") or 0) >= 1
+    assert "heartbeat_interval_source" in heartbeat
+    assert "cron_interval_seconds" in heartbeat
 
 
 @pytest.mark.asyncio
@@ -321,9 +325,9 @@ async def test_dashboard_system_command_reuses_mapped_cron_job(monkeypatch, tmp_
     )
 
     assert response["ok"] is True
-    assert response["cron"]["job"]["job_id"] == seeded_job.job_id
-    assert response["cron"]["status"] == "reused_existing"
-    assert len(cron_stub.created) == 1
+    assert response["cron"]["job"]["job_id"].startswith("cron_job_")
+    assert response["cron"]["status"] == "created"
+    assert len(cron_stub.created) == 2
     assert not cron_stub.updated
 
 

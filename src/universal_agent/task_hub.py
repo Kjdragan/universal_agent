@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -31,6 +32,8 @@ _CSI_INCIDENT_NORMALIZED_EVENT_TYPES = {
     "global_trend_brief_ready",
     "csi_global_brief_review_due",
 }
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -908,11 +911,13 @@ def finalize_assignments(
     state: str = "completed",
     result_summary: str = "",
     reopen_in_progress: bool = True,
+    policy: str = "legacy",
+    heartbeat_max_retries: Optional[int] = None,
 ) -> dict[str, int]:
     ensure_schema(conn)
     cleaned_ids = [str(v).strip() for v in assignment_ids if str(v).strip()]
     if not cleaned_ids:
-        return {"finalized": 0, "reopened": 0}
+        return {"finalized": 0, "reopened": 0, "reviewed": 0, "completed": 0, "retry_exhausted": 0}
 
     placeholders = ",".join("?" for _ in cleaned_ids)
     rows = conn.execute(
@@ -927,11 +932,33 @@ def finalize_assignments(
     now_iso = _now_iso()
     finalized = 0
     reopened = 0
+    reviewed = 0
+    completed = 0
+    retry_exhausted = 0
+    policy_norm = str(policy or "legacy").strip().lower()
+    heartbeat_retry_limit = max(
+        1,
+        int(heartbeat_max_retries if heartbeat_max_retries is not None else _safe_int(os.getenv("UA_TASK_HUB_HEARTBEAT_MAX_RETRIES"), 3)),
+    )
+    run_state = str(state or "").strip().lower()
     for row in rows:
         assignment_id = str(row["assignment_id"] or "").strip()
         task_id = str(row["task_id"] or "").strip()
         current_state = str(row["state"] or "").strip().lower()
-        if not assignment_id or not task_id or current_state not in {"seized", "running"}:
+        if not assignment_id or not task_id:
+            continue
+        if current_state not in {"seized", "running"}:
+            if policy_norm == "heartbeat":
+                task_row = conn.execute(
+                    "SELECT status FROM task_hub_items WHERE task_id = ? LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+                if task_row:
+                    task_status = str(task_row["status"] or "").strip().lower()
+                    if task_status == TASK_STATUS_COMPLETED:
+                        completed += 1
+                    elif task_status == TASK_STATUS_REVIEW:
+                        reviewed += 1
             continue
 
         conn.execute(
@@ -955,9 +982,6 @@ def finalize_assignments(
             continue
 
         task_status = str(task_row["status"] or "").strip().lower()
-        if task_status != TASK_STATUS_IN_PROGRESS:
-            continue
-
         metadata = _json_loads_obj(task_row["metadata_json"], default={})
         dispatch_meta = dict(metadata.get("dispatch") or {})
         dispatch_meta.update(
@@ -966,8 +990,77 @@ def finalize_assignments(
                 "last_assignment_ended_at": now_iso,
             }
         )
-        metadata["dispatch"] = dispatch_meta
 
+        if task_status == TASK_STATUS_COMPLETED:
+            completed += 1
+            continue
+        if task_status == TASK_STATUS_REVIEW:
+            reviewed += 1
+            continue
+        if task_status != TASK_STATUS_IN_PROGRESS:
+            continue
+
+        if policy_norm == "heartbeat":
+            if run_state == "completed":
+                dispatch_meta["last_disposition"] = "needs_review"
+                dispatch_meta["last_disposition_reason"] = "heartbeat_completed_no_explicit_disposition"
+                metadata["dispatch"] = dispatch_meta
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reviewed += 1
+                logger.info("Task Hub heartbeat finalize moved task %s to needs_review", task_id)
+                continue
+
+            retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
+            dispatch_meta["heartbeat_retry_count"] = retry_count
+            dispatch_meta["heartbeat_retry_limit"] = heartbeat_retry_limit
+            metadata["dispatch"] = dispatch_meta
+            if retry_count >= heartbeat_retry_limit:
+                dispatch_meta["last_disposition"] = "needs_review"
+                dispatch_meta["last_disposition_reason"] = "heartbeat_retry_exhausted"
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reviewed += 1
+                retry_exhausted += 1
+                logger.info(
+                    "Task Hub heartbeat finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    task_id,
+                    retry_count,
+                    heartbeat_retry_limit,
+                )
+            else:
+                dispatch_meta["last_disposition"] = "reopened"
+                dispatch_meta["last_disposition_reason"] = f"heartbeat_{run_state or 'failed'}_retryable"
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reopened += 1
+                logger.info(
+                    "Task Hub heartbeat finalize reopened task %s for retry (%s/%s)",
+                    task_id,
+                    retry_count,
+                    heartbeat_retry_limit,
+                )
+            continue
+
+        metadata["dispatch"] = dispatch_meta
         conn.execute(
             """
             UPDATE task_hub_items
@@ -979,7 +1072,13 @@ def finalize_assignments(
         reopened += 1
 
     conn.commit()
-    return {"finalized": finalized, "reopened": reopened}
+    return {
+        "finalized": finalized,
+        "reopened": reopened,
+        "reviewed": reviewed,
+        "completed": completed,
+        "retry_exhausted": retry_exhausted,
+    }
 
 
 def release_stale_assignments(

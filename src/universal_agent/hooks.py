@@ -195,6 +195,12 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
     if lowered in {"all-tasks", "stop-all", "cancel-all"}:
         return f"Invalid bulk-stop token ({clean_id!r})."
 
+    if not any(ch.isdigit() for ch in clean_id):
+        return (
+            f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+            "task_id from TaskStarted/TaskProgress/TaskNotification."
+        )
+
     # Golden runs should use provider-generated IDs, not natural-language aliases.
     if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
         has_separator = ("_" in clean_id) or ("-" in clean_id)
@@ -402,7 +408,7 @@ def _is_heartbeat_investigation_mode() -> bool:
     run_source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
     if run_source != "heartbeat":
         return False
-    raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1") or "1").strip().lower()
+    raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "0") or "0").strip().lower()
     return raw not in {"0", "false", "no", "off", ""}
 
 
@@ -488,6 +494,37 @@ def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Opt
         bool(primary_transcript_path)
         and bool(transcript_path)
         and transcript_path != primary_transcript_path
+    )
+
+
+def _workspace_from_transcript_path(input_data: dict) -> Optional[str]:
+    transcript_path = str(input_data.get("transcript_path", "") or "").strip()
+    if not transcript_path:
+        return None
+    try:
+        candidate = Path(transcript_path).resolve()
+    except Exception:
+        return None
+
+    if candidate.name == "transcript.md":
+        parts = candidate.parts
+        if "subagent_outputs" in parts:
+            idx = parts.index("subagent_outputs")
+            return str(Path(*parts[:idx]).resolve())
+        return str(candidate.parent.resolve())
+    return None
+
+
+def _looks_like_session_workspace_path(path_value: str) -> bool:
+    try:
+        candidate = Path(path_value).resolve()
+    except Exception:
+        return False
+    if candidate.name.startswith("session_"):
+        return True
+    return (
+        (candidate / "session_policy.json").exists()
+        and (candidate / "work_products").exists()
     )
 
 
@@ -967,12 +1004,23 @@ class AgentHookSet:
         # Ensure internal research pipeline tools receive an explicit workspace hint.
         # This avoids dead-ends when ambient workspace env/context is absent.
         if normalized_tool_name in {
+            "run_research_phase",
+            "run_research_pipeline",
+            "run_report_generation",
             "mcp__internal__run_research_phase",
             "mcp__internal__run_research_pipeline",
             "mcp__internal__run_report_generation",
         } and isinstance(tool_input, dict):
-            workspace_hint = str(get_current_workspace() or self.workspace_dir or "").strip()
-            if workspace_hint and not str(tool_input.get("workspace_dir", "") or "").strip():
+            workspace_hint = (
+                _workspace_from_transcript_path(input_data)
+                or str(get_current_workspace() or "").strip()
+                or str(self.workspace_dir or "").strip()
+            )
+            if (
+                workspace_hint
+                and _looks_like_session_workspace_path(workspace_hint)
+                and not str(tool_input.get("workspace_dir", "") or "").strip()
+            ):
                 patched_tool_input = dict(tool_input)
                 patched_tool_input["workspace_dir"] = workspace_hint
                 input_data["tool_input"] = patched_tool_input

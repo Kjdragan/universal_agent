@@ -28,32 +28,60 @@ from universal_agent.utils.task_guardrails import resolve_best_task_match
 from universal_agent.hooks import StdoutToEventStream
 
 
+def _is_session_workspace(path_value: str) -> bool:
+    try:
+        candidate = Path(path_value).resolve()
+    except Exception:
+        return False
+    if candidate.name.startswith("session_"):
+        return True
+    return (
+        (candidate / "session_policy.json").exists()
+        and (candidate / "work_products").exists()
+    )
+
+
+def _infer_latest_session_workspace() -> str | None:
+    root = (Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES").resolve()
+    if not root.exists():
+        return None
+    candidates = sorted(
+        (p for p in root.iterdir() if p.is_dir() and p.name.startswith("session_")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        if _is_session_workspace(str(candidate)):
+            return str(candidate.resolve())
+    return None
+
+
 def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
     """Best-effort workspace resolution for research bridge tools."""
     explicit = str(args.get("workspace_dir", "") or "").strip()
-    if explicit and Path(explicit).exists():
+    if explicit and Path(explicit).exists() and _is_session_workspace(explicit):
         return str(Path(explicit).resolve())
 
     ctx_ws = str(_ctx_get_workspace() or "").strip()
-    if ctx_ws and Path(ctx_ws).exists():
+    if ctx_ws and Path(ctx_ws).exists() and _is_session_workspace(ctx_ws):
         return str(Path(ctx_ws).resolve())
 
     marker_ws = resolve_current_session_workspace(
         repo_root=str(Path(__file__).resolve().parents[3])
     )
-    if marker_ws and Path(marker_ws).exists():
+    if marker_ws and Path(marker_ws).exists() and _is_session_workspace(marker_ws):
         return str(Path(marker_ws).resolve())
 
     try:
         import universal_agent.main as ua_main
 
         observer_ws = str(getattr(ua_main, "OBSERVER_WORKSPACE_DIR", "") or "").strip()
-        if observer_ws and Path(observer_ws).exists():
+        if observer_ws and Path(observer_ws).exists() and _is_session_workspace(observer_ws):
             return str(Path(observer_ws).resolve())
     except Exception:
         pass
 
-    return None
+    return _infer_latest_session_workspace()
 
 
 @tool(

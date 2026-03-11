@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, Any
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
@@ -43,9 +43,11 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
-    "Investigation-only mode: do not modify repository source files or run mutating shell commands. "
-    "If you draft code, write artifacts under work_products/ or UA_ARTIFACTS_DIR only. "
     "If nothing needs attention, reply HEARTBEAT_OK."
+)
+INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS = (
+    "Investigation-only mode: do not modify repository source files or run mutating shell commands. "
+    "If you draft code, write artifacts under work_products/ or UA_ARTIFACTS_DIR only."
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
 
@@ -182,6 +184,61 @@ def _resolve_heartbeat_interval_env(
     if prefer_interval:
         return interval_raw or every_raw or None
     return every_raw or interval_raw or None
+
+
+def _heartbeat_interval_source_label(overrides: Optional[dict[str, Any]] = None) -> str:
+    schedule_overridden = False
+    if isinstance(overrides, dict):
+        for block in (overrides, overrides.get("heartbeat"), overrides.get("schedule")):
+            if not isinstance(block, dict):
+                continue
+            if any(str(block.get(key) or "").strip() for key in ("every", "every_seconds", "interval")):
+                schedule_overridden = True
+                break
+    if schedule_overridden:
+        return "workspace_override"
+    if str(os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip():
+        return "UA_HEARTBEAT_INTERVAL"
+    if str(os.getenv("UA_HEARTBEAT_EVERY") or "").strip():
+        return "UA_HEARTBEAT_EVERY"
+    return "default"
+
+
+def _resolve_heartbeat_investigation_only(default: bool = False) -> bool:
+    raw = os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY")
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _compose_heartbeat_prompt(
+    base_prompt: str,
+    *,
+    investigation_only: bool,
+    task_hub_claims: list[dict[str, Any]],
+) -> str:
+    prompt = (base_prompt or DEFAULT_HEARTBEAT_PROMPT).strip()
+    if "{ok_token}" in prompt:
+        # Placeholder replacement happens separately where schedule.ok_tokens is available.
+        pass
+    if investigation_only and "investigation-only mode" not in prompt.lower():
+        prompt = f"{prompt} {INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS}".strip()
+    if task_hub_claims:
+        task_ids = sorted(
+            {
+                str(item.get("task_id") or "").strip()
+                for item in task_hub_claims
+                if str(item.get("task_id") or "").strip()
+            }
+        )
+        prompt = (
+            f"{prompt}\n\n"
+            "Task Hub lifecycle requirement: before finishing, disposition every claimed Task Hub item using "
+            "the `task_hub_task_action` tool with one of: `review`, `complete`, `block`, `park`, `unblock`. "
+            "Do not leave claimed tasks in `in_progress`. If work is not completed, use `review`.\n"
+            f"Claimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}"
+        )
+    return prompt
 
 
 def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
@@ -865,6 +922,7 @@ class HeartbeatService:
         schedule = self._resolve_schedule(overrides)
         delivery = self._resolve_delivery(overrides, session.session_id)
         visibility = self._resolve_visibility(overrides)
+        interval_source = _heartbeat_interval_source_label(overrides)
         now = time.time()
 
         # If this is a fresh state (last_run=0), align to the previous scheduled slot
@@ -1065,6 +1123,7 @@ class HeartbeatService:
             schedule,
             delivery,
             visibility,
+            interval_source=interval_source,
         )
 
     def _session_heartbeat_lock_reason(self, session: GatewaySession, now_ts: float) -> Optional[str]:
@@ -1110,6 +1169,7 @@ class HeartbeatService:
         schedule: HeartbeatScheduleConfig,
         delivery: HeartbeatDeliveryConfig,
         visibility: HeartbeatVisibilityConfig,
+        interval_source: str = "default",
     ):
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
@@ -1118,8 +1178,17 @@ class HeartbeatService:
         run_failed = False
         task_hub_agent_id = f"heartbeat:{session.session_id}"
         task_hub_claimed: list[dict] = []
+        task_hub_finalize_result: dict[str, int] = {
+            "finalized": 0,
+            "reopened": 0,
+            "reviewed": 0,
+            "completed": 0,
+            "retry_exhausted": 0,
+        }
         task_hub_finalize_state = "completed"
         task_hub_finalize_summary = "heartbeat_run_finished"
+        task_hub_claimed_count = 0
+        completed_event_payload: Optional[dict[str, Any]] = None
         
         # Resolve wake_reason for tracing
         _wake_reason = self.last_wake_reason.get(session.session_id, "scheduled")
@@ -1181,23 +1250,13 @@ class HeartbeatService:
                 for evt in system_events
             )
             
-            # Use exec prompt for async completions, standard heartbeat otherwise
-            if has_exec_completion:
-                prompt = EXEC_EVENT_PROMPT
-                logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
-            else:
-                prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
-                if "{ok_token}" in prompt:
-                    ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
-                    prompt = prompt.replace("{ok_token}", ok_token)
-            
             # Build metadata with system events
-            heartbeat_investigation_only = str(
-                os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1")
-            ).strip().lower() not in {"0", "false", "no", "off"}
+            heartbeat_investigation_only = _resolve_heartbeat_investigation_only(default=False)
             metadata: dict = {
                 "source": "heartbeat",
                 "heartbeat_investigation_only": heartbeat_investigation_only,
+                "heartbeat_effective_interval_seconds": int(schedule.every_seconds),
+                "heartbeat_interval_source": str(interval_source or "default"),
             }
             if system_events:
                 metadata["system_events"] = system_events
@@ -1242,6 +1301,7 @@ class HeartbeatService:
                         agent_id=task_hub_agent_id,
                     )
                     dispatch_claimed_count = len(task_hub_claimed)
+                    task_hub_claimed_count = dispatch_claimed_count
                     if task_hub_claimed:
                         hub_event = {
                             "type": "task_hub_dispatch",
@@ -1291,6 +1351,22 @@ class HeartbeatService:
                 "system_event_count": len(system_events),
                 "skip_reason": guard_skip_reason or None,
             }
+
+            # Compose heartbeat prompt only after Task Hub claims are known so the
+            # model can explicitly disposition claimed items before completion.
+            if has_exec_completion:
+                base_prompt = EXEC_EVENT_PROMPT
+                logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
+            else:
+                base_prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
+                if "{ok_token}" in base_prompt:
+                    ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
+                    base_prompt = base_prompt.replace("{ok_token}", ok_token)
+            prompt = _compose_heartbeat_prompt(
+                base_prompt,
+                investigation_only=heartbeat_investigation_only,
+                task_hub_claims=task_hub_claimed,
+            )
             
             full_response = ""
             streamed_chunks: list[str] = []
@@ -1624,23 +1700,23 @@ class HeartbeatService:
             
             with open(state_path, "w") as f:
                 json.dump(state.to_dict(), f)
-            self._emit_event(
-                {
-                    "type": "heartbeat_completed",
-                    "session_id": session.session_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "ok_only": ok_only,
-                    "suppressed_reason": suppressed_reason,
-                    "sent": sent_any,
-                    "guard_reason": str((metadata.get("heartbeat_guard") or {}).get("skip_reason") or ""),
-                    "guard": metadata.get("heartbeat_guard") if isinstance(metadata.get("heartbeat_guard"), dict) else {},
-                    "artifacts": {
-                        "writes": write_paths[-50:],
-                        "work_products": work_product_paths[-50:],
-                        "bash_commands": bash_commands[-50:],
-                    },
-                }
-            )
+            completed_event_payload = {
+                "type": "heartbeat_completed",
+                "session_id": session.session_id,
+                "timestamp": datetime.now().isoformat(),
+                "ok_only": ok_only,
+                "suppressed_reason": suppressed_reason,
+                "sent": sent_any,
+                "guard_reason": str((metadata.get("heartbeat_guard") or {}).get("skip_reason") or ""),
+                "guard": metadata.get("heartbeat_guard") if isinstance(metadata.get("heartbeat_guard"), dict) else {},
+                "heartbeat_interval_source": str(interval_source or "default"),
+                "heartbeat_effective_interval_seconds": int(schedule.every_seconds),
+                "artifacts": {
+                    "writes": write_paths[-50:],
+                    "work_products": work_product_paths[-50:],
+                    "bash_commands": bash_commands[-50:],
+                },
+            }
 
         except Exception as e:
             run_failed = True
@@ -1675,21 +1751,39 @@ class HeartbeatService:
                     try:
                         conn = connect_runtime_db(get_activity_db_path())
                         conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
-                        result = task_hub.finalize_assignments(
+                        heartbeat_retry_budget = max(
+                            1,
+                            _parse_int(os.getenv("UA_TASK_HUB_HEARTBEAT_MAX_RETRIES"), 3),
+                        )
+                        task_hub_finalize_result = task_hub.finalize_assignments(
                             conn,
                             assignment_ids=assignment_ids,
                             state=task_hub_finalize_state,
                             result_summary=task_hub_finalize_summary,
                             reopen_in_progress=True,
+                            policy="heartbeat",
+                            heartbeat_max_retries=heartbeat_retry_budget,
                         )
                         logger.info(
-                            "Finalized Task Hub heartbeat claims for %s: state=%s finalized=%s reopened=%s%s",
+                            "Finalized Task Hub heartbeat claims for %s: state=%s finalized=%s completed=%s reviewed=%s reopened=%s retry_exhausted=%s%s",
                             session.session_id,
                             task_hub_finalize_state,
-                            result.get("finalized"),
-                            result.get("reopened"),
+                            task_hub_finalize_result.get("finalized"),
+                            task_hub_finalize_result.get("completed"),
+                            task_hub_finalize_result.get("reviewed"),
+                            task_hub_finalize_result.get("reopened"),
+                            task_hub_finalize_result.get("retry_exhausted"),
                             " (run_failed)" if run_failed else "",
                         )
+                        if int(task_hub_finalize_result.get("reviewed") or 0) > 0 or int(
+                            task_hub_finalize_result.get("reopened") or 0
+                        ) > 0:
+                            logger.info(
+                                "Task Hub heartbeat disposition for %s: moved_to_review=%s reopened=%s",
+                                session.session_id,
+                                int(task_hub_finalize_result.get("reviewed") or 0),
+                                int(task_hub_finalize_result.get("reopened") or 0),
+                            )
                     except Exception as exc:
                         logger.warning(
                             "Failed to finalize Task Hub heartbeat claims for %s: %s",
@@ -1699,6 +1793,19 @@ class HeartbeatService:
                     finally:
                         if conn is not None:
                             conn.close()
+            if completed_event_payload is not None:
+                completed_event_payload.update(
+                    {
+                        "task_hub_claimed_count": int(task_hub_claimed_count),
+                        "task_hub_completed_count": int(task_hub_finalize_result.get("completed") or 0),
+                        "task_hub_review_count": int(task_hub_finalize_result.get("reviewed") or 0),
+                        "task_hub_reopened_count": int(task_hub_finalize_result.get("reopened") or 0),
+                        "task_hub_retry_exhausted_count": int(
+                            task_hub_finalize_result.get("retry_exhausted") or 0
+                        ),
+                    }
+                )
+                self._emit_event(completed_event_payload)
             # Close the heartbeat Logfire span
             if _hb_span is not None:
                 try:

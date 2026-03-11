@@ -702,11 +702,54 @@ async def test_schema_guardrail_injects_canonical_rolling_window_for_research_ta
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_injects_canonical_rolling_window_for_research_agent(monkeypatch):
+    monkeypatch.setenv("USER_TIMEZONE", "America/Chicago")
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Agent",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": "Research the latest updates from the past 3 days.",
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+    assert isinstance(updated, dict)
+    assert "MANDATORY DATE WINDOW:" in updated.get("prompt", "")
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_rewrites_stale_inline_date_window_for_research_task(monkeypatch):
     monkeypatch.setenv("USER_TIMEZONE", "America/Chicago")
     result = await pre_tool_use_schema_guardrail(
         {
             "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": (
+                    "Research the latest news from the Russia-Ukraine war over the past three days "
+                    "(January 30-31, February 1, 2026)."
+                ),
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+    assert isinstance(updated, dict)
+    updated_prompt = updated.get("prompt", "")
+    assert "January 30-31, February 1, 2026" not in updated_prompt
+    assert "MANDATORY DATE WINDOW:" in updated_prompt
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_rewrites_stale_inline_date_window_for_research_agent(monkeypatch):
+    monkeypatch.setenv("USER_TIMEZONE", "America/Chicago")
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Agent",
             "tool_input": {
                 "subagent_type": "research-specialist",
                 "prompt": (

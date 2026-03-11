@@ -56,7 +56,7 @@ def test_upsert_open_refresh_does_not_clobber_in_progress_state() -> None:
         conn.close()
 
 
-def test_finalize_assignments_reopens_in_progress_items() -> None:
+def test_finalize_assignments_reopens_in_progress_items_in_legacy_mode() -> None:
     conn = _conn()
     try:
         task_hub.upsert_item(
@@ -87,11 +87,160 @@ def test_finalize_assignments_reopens_in_progress_items() -> None:
             reopen_in_progress=True,
         )
 
-        assert result == {"finalized": 1, "reopened": 1}
+        assert result["finalized"] == 1
+        assert result["reopened"] == 1
+        assert result["reviewed"] == 0
+        assert result["retry_exhausted"] == 0
         item = task_hub.get_item(conn, "task:dispatch-1")
         assert item is not None
         assert item["status"] == task_hub.TASK_STATUS_OPEN
         assert item["seizure_state"] == "unseized"
+    finally:
+        conn.close()
+
+
+def test_finalize_assignments_heartbeat_success_moves_unresolved_to_review() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:heartbeat-success",
+                "source_kind": "internal",
+                "title": "Heartbeat candidate",
+                "description": "Needs explicit disposition",
+                "project_key": "immediate",
+                "priority": 4,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+        claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:sx")
+        assignment_id = str(claimed[0]["assignment_id"])
+
+        result = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[assignment_id],
+            state="completed",
+            result_summary="heartbeat_run_finished",
+            reopen_in_progress=True,
+            policy="heartbeat",
+            heartbeat_max_retries=3,
+        )
+
+        assert result["finalized"] == 1
+        assert result["reviewed"] == 1
+        assert result["reopened"] == 0
+        item = task_hub.get_item(conn, "task:heartbeat-success")
+        assert item is not None
+        assert item["status"] == task_hub.TASK_STATUS_REVIEW
+    finally:
+        conn.close()
+
+
+def test_finalize_assignments_heartbeat_failure_retries_then_exhausts_to_review() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:heartbeat-failure",
+                "source_kind": "internal",
+                "title": "Retry candidate",
+                "description": "Should retry then review",
+                "project_key": "immediate",
+                "priority": 4,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+
+        first_claim = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:r1")
+        first_assignment = str(first_claim[0]["assignment_id"])
+        first = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[first_assignment],
+            state="failed",
+            result_summary="heartbeat_failed",
+            reopen_in_progress=True,
+            policy="heartbeat",
+            heartbeat_max_retries=2,
+        )
+        assert first["reopened"] == 1
+        assert first["retry_exhausted"] == 0
+        reopened_item = task_hub.get_item(conn, "task:heartbeat-failure")
+        assert reopened_item is not None
+        assert reopened_item["status"] == task_hub.TASK_STATUS_OPEN
+
+        second_claim = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:r2")
+        second_assignment = str(second_claim[0]["assignment_id"])
+        second = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[second_assignment],
+            state="failed",
+            result_summary="heartbeat_failed_again",
+            reopen_in_progress=True,
+            policy="heartbeat",
+            heartbeat_max_retries=2,
+        )
+        assert second["reopened"] == 0
+        assert second["reviewed"] == 1
+        assert second["retry_exhausted"] == 1
+        exhausted_item = task_hub.get_item(conn, "task:heartbeat-failure")
+        assert exhausted_item is not None
+        assert exhausted_item["status"] == task_hub.TASK_STATUS_REVIEW
+    finally:
+        conn.close()
+
+
+def test_finalize_assignments_heartbeat_keeps_explicitly_completed_items_completed() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:heartbeat-explicit-complete",
+                "source_kind": "internal",
+                "title": "Complete candidate",
+                "description": "Will be completed explicitly",
+                "project_key": "immediate",
+                "priority": 4,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+        claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:complete")
+        assignment_id = str(claimed[0]["assignment_id"])
+        task_hub.perform_task_action(
+            conn,
+            task_id="task:heartbeat-explicit-complete",
+            action="complete",
+            reason="done",
+            agent_id="heartbeat:complete",
+        )
+
+        result = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[assignment_id],
+            state="completed",
+            result_summary="heartbeat_run_finished",
+            reopen_in_progress=True,
+            policy="heartbeat",
+            heartbeat_max_retries=3,
+        )
+
+        assert result["completed"] == 1
+        assert result["reopened"] == 0
+        assert result["reviewed"] == 0
+        item = task_hub.get_item(conn, "task:heartbeat-explicit-complete")
+        assert item is not None
+        assert item["status"] == task_hub.TASK_STATUS_COMPLETED
     finally:
         conn.close()
 
@@ -132,7 +281,9 @@ def test_release_stale_assignments_abandons_old_heartbeat_claims() -> None:
             stale_after_seconds=300,
         )
 
-        assert result == {"stale_detected": 1, "finalized": 1, "reopened": 1}
+        assert result["stale_detected"] == 1
+        assert result["finalized"] == 1
+        assert result["reopened"] == 1
         row = conn.execute(
             "SELECT state, ended_at FROM task_hub_assignments WHERE assignment_id=?",
             (assignment_id,),

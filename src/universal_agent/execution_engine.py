@@ -479,9 +479,13 @@ class ProcessTurnAdapter:
                 run_source_env = str(self.config.__dict__.get("_run_source", "user") or "user")
                 request_metadata = self.config.__dict__.get("_request_metadata")
                 request_md = request_metadata if isinstance(request_metadata, dict) else {}
+                investigation_env_default = (
+                    str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "0") or "0").strip().lower()
+                    not in {"0", "false", "no", "off", ""}
+                )
                 raw_investigation_only = request_md.get(
                     "heartbeat_investigation_only",
-                    run_source_env == "heartbeat",
+                    investigation_env_default if run_source_env == "heartbeat" else False,
                 )
                 if isinstance(raw_investigation_only, bool):
                     heartbeat_investigation_only = raw_investigation_only

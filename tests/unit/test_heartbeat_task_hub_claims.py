@@ -50,12 +50,29 @@ async def test_heartbeat_finalizes_task_hub_claims(monkeypatch, tmp_path):
 
     captured_finalize: dict[str, object] = {}
 
-    def _fake_finalize(conn, *, assignment_ids, state, result_summary, reopen_in_progress=True):
+    def _fake_finalize(
+        conn,
+        *,
+        assignment_ids,
+        state,
+        result_summary,
+        reopen_in_progress=True,
+        policy="legacy",
+        heartbeat_max_retries=None,
+    ):
         captured_finalize["assignment_ids"] = list(assignment_ids)
         captured_finalize["state"] = state
         captured_finalize["result_summary"] = result_summary
         captured_finalize["reopen_in_progress"] = reopen_in_progress
-        return {"finalized": len(assignment_ids), "reopened": len(assignment_ids)}
+        captured_finalize["policy"] = policy
+        captured_finalize["heartbeat_max_retries"] = heartbeat_max_retries
+        return {
+            "finalized": len(assignment_ids),
+            "reopened": len(assignment_ids),
+            "reviewed": 0,
+            "completed": 0,
+            "retry_exhausted": 0,
+        }
 
     monkeypatch.setattr(task_hub, "finalize_assignments", _fake_finalize)
 
@@ -83,3 +100,5 @@ async def test_heartbeat_finalizes_task_hub_claims(monkeypatch, tmp_path):
     assert captured_finalize["state"] == "completed"
     assert str(captured_finalize["result_summary"]).startswith("heartbeat_run_")
     assert captured_finalize["reopen_in_progress"] is True
+    assert captured_finalize["policy"] == "heartbeat"
+    assert int(captured_finalize["heartbeat_max_retries"] or 0) >= 1

@@ -640,7 +640,7 @@ def _resolve_refined_corpus_path(task_name: Optional[str]) -> Optional[str]:
 
 def _normalize_tool_input(tool_name: str, tool_input: dict) -> Optional[dict]:
     normalized_name = (tool_name or "").lower()
-    if normalized_name == "task":
+    if normalized_name in {"task", "agent"}:
         subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
         # Strip run_in_background for sequential-pipeline subagents.
         # Research and report tasks are prerequisites for downstream steps;

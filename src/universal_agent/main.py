@@ -1206,6 +1206,12 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
                 "task_id from TaskStarted/TaskProgress/TaskNotification."
             )
 
+    if not any(ch.isdigit() for ch in clean_id):
+        return (
+            f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
+            "task_id from TaskStarted/TaskProgress/TaskNotification."
+        )
+
     # Golden runs should use provider-generated IDs, not natural-language aliases.
     if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
         has_separator = ("_" in clean_id) or ("-" in clean_id)
@@ -1333,14 +1339,50 @@ async def on_pre_tool_use_ledger(
         normalized_tool_name = str(tool_name or "").strip().lower()
 
     if normalized_tool_name in {
+        "run_research_phase",
+        "run_research_pipeline",
+        "run_report_generation",
         "mcp__internal__run_research_phase",
         "mcp__internal__run_research_pipeline",
         "mcp__internal__run_report_generation",
     } and isinstance(guard_tool_input, dict):
         from universal_agent.execution_context import get_current_workspace as _get_ws
+        from pathlib import Path
 
-        workspace_hint = str(_ctx.observer_workspace_dir or _get_ws() or "").strip()
-        if workspace_hint and not str(guard_tool_input.get("workspace_dir", "") or "").strip():
+        transcript_hint = ""
+        transcript_path = str(input_data.get("transcript_path", "") or "").strip()
+        if transcript_path:
+            try:
+                transcript_candidate = Path(transcript_path).resolve()
+                if transcript_candidate.name == "transcript.md":
+                    parts = transcript_candidate.parts
+                    if "subagent_outputs" in parts:
+                        idx = parts.index("subagent_outputs")
+                        transcript_hint = str(Path(*parts[:idx]).resolve())
+                    else:
+                        transcript_hint = str(transcript_candidate.parent.resolve())
+            except Exception:
+                transcript_hint = ""
+
+        workspace_hint = str(transcript_hint or _ctx.observer_workspace_dir or _get_ws() or "").strip()
+        looks_like_session_ws = False
+        if workspace_hint:
+            try:
+                ws_path = Path(workspace_hint).resolve()
+                looks_like_session_ws = (
+                    ws_path.name.startswith("session_")
+                    or (
+                        (ws_path / "session_policy.json").exists()
+                        and (ws_path / "work_products").exists()
+                    )
+                )
+            except Exception:
+                looks_like_session_ws = False
+        if (
+            workspace_hint
+            and looks_like_session_ws
+            and not str(guard_tool_input.get("workspace_dir", "") or "").strip()
+        ):
             patched_input = dict(guard_tool_input)
             patched_input["workspace_dir"] = workspace_hint
             input_data["tool_input"] = patched_input

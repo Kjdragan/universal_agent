@@ -66,6 +66,7 @@ from universal_agent.tools.todoist_bridge import (
     todoist_task_action_wrapper,
     todoist_idea_action_wrapper,
 )
+from universal_agent.tools.task_hub_bridge import task_hub_task_action_wrapper
 from universal_agent.tools.vp_orchestration import (
     vp_cancel_mission_wrapper,
     vp_dispatch_mission_wrapper,
@@ -114,6 +115,7 @@ def get_core_internal_tools() -> List[Callable]:
         todoist_get_task_wrapper,
         todoist_task_action_wrapper,
         todoist_idea_action_wrapper,
+        task_hub_task_action_wrapper,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,
         vp_list_missions_wrapper,
