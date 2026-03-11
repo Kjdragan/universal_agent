@@ -84,13 +84,17 @@ jobs:
             echo '--> Ensuring Python 3.12 runtime for uv...'
             run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; uv python install 3.12\"
             
-            run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"
+            DEPLOY_INFISICAL_ENV='staging-hq'
+            if ! run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"; then
+              echo '--> WARNING: staging-hq environment provisioning failed; falling back to existing dev environment for this deploy.'
+              DEPLOY_INFISICAL_ENV='dev'
+            fi
             
             echo '--> Creating bootstrap .env file...'
             run_as_ua \"echo \\\"INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'\\\" > \$STAGING_DIR/.env\"
             run_as_ua \"echo \\\"INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'\\\" >> \$STAGING_DIR/.env\"
             run_as_ua \"echo \\\"INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"INFISICAL_ENVIRONMENT='staging-hq'\\\" >> \$STAGING_DIR/.env\"
+            run_as_ua \"echo \\\"INFISICAL_ENVIRONMENT='\$DEPLOY_INFISICAL_ENV'\\\" >> \$STAGING_DIR/.env\"
             run_as_ua \"echo \\\"UA_INFISICAL_ENABLED=1\\\" >> \$STAGING_DIR/.env\"
             
             echo '--> Syncing dependencies with uv...'
