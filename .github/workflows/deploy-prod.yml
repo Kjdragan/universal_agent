@@ -84,6 +84,9 @@ jobs:
               echo "ERROR: cargo bootstrap failed."
               exit 1
             fi
+
+            echo "--> Ensuring Python 3.12 runtime for uv..."
+            run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; uv python install 3.12"
             
             # 1. Pull latest code
             echo "--> Fetching and pulling latest main branch..."
@@ -94,7 +97,7 @@ jobs:
             
             # 2. Dependency Sync
             echo "--> Syncing dependencies with uv..."
-            run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync"
+            run_as_ua "export PATH=\"/home/ua/.cargo/bin:$HOME/.cargo/bin:/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync --python 3.12"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
