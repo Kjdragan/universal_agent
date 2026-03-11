@@ -24,7 +24,10 @@ jobs:
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" << 'EOF'
+          echo "--> Checking connectivity to VPS..."
+          ping -c 3 "$SSH_HOST" || echo "Ping failed, continuing..."
+
+          ssh -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
             
@@ -41,30 +44,36 @@ jobs:
             
             cd "$STAGING_DIR"
             
-            # 1. Pull latest code
-            echo "--> Fetching and pulling latest develop branch..."
-            sudo -u ua bash -c "cd $STAGING_DIR && git fetch origin && git checkout develop && git pull origin develop"
-            
-            # 2. Provision Infisical Environment
-            echo "--> Provisioning Infisical environment..."
-            sudo -u ua bash -c "export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'; export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'; export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'; export PATH='/home/ua/.local/bin:/usr/local/bin:$PATH'; cd $STAGING_DIR && uv run scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
+            echo "--> Pulling latest code..."
+            git fetch origin develop
+            git reset --hard origin/develop
 
-            # 3. Create Bootstrap .env File
+            # Provisioning secrets requires INFISICAL_* keys in the environment
+            echo "--> Provisioning Infisical environment..."
+            # Note: We pass the GitHub Secrets into the remote shell environment
+            export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
+            export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'
+            export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'
+            export PATH="/home/ua/.local/bin:/usr/local/bin:$PATH"
+
+            # 3. Provision Infisical Environment
+            sudo -u ua bash -c "export INFISICAL_CLIENT_ID='$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.local/bin:/usr/local/bin:$PATH'; cd $STAGING_DIR && uv run scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev"
+
+            # 4. Create Bootstrap .env File
             echo "--> Creating bootstrap .env file..."
-            sudo -u ua bash -c "echo \"INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'\" > $STAGING_DIR/.env"
-            sudo -u ua bash -c "echo \"INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'\" >> $STAGING_DIR/.env"
-            sudo -u ua bash -c "echo \"INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'\" >> $STAGING_DIR/.env"
+            sudo -u ua bash -c "echo \"INFISICAL_CLIENT_ID='$INFISICAL_CLIENT_ID'\" > $STAGING_DIR/.env"
+            sudo -u ua bash -c "echo \"INFISICAL_CLIENT_SECRET='$INFISICAL_CLIENT_SECRET'\" >> $STAGING_DIR/.env"
+            sudo -u ua bash -c "echo \"INFISICAL_PROJECT_ID='$INFISICAL_PROJECT_ID'\" >> $STAGING_DIR/.env"
             sudo -u ua bash -c "echo \"INFISICAL_ENVIRONMENT='staging-hq'\" >> $STAGING_DIR/.env"
             sudo -u ua bash -c "echo \"UA_INFISICAL_ENABLED=1\" >> $STAGING_DIR/.env"
 
-            # 4. Sync Dependencies
+            # 5. Sync Dependencies
             echo "--> Syncing dependencies with uv..."
             sudo -u ua bash -c "export PATH='/home/ua/.local/bin:/usr/local/bin:$PATH'; cd $STAGING_DIR && uv sync"
             
-            # 5. Restart Systemd Services
+            # 6. Restart Systemd Services
             echo "--> Restarting staging services..."
-            # Restart multiple staging services
             sudo systemctl restart universal-agent-staging-gateway universal-agent-staging-api
             
-            echo "Deployment to Staging complete!"
+            echo "--> Deployment complete!"
           EOF
