@@ -62,12 +62,22 @@ jobs:
                 echo "Error: $PROD_DIR exists but is not a directory."
                 exit 1
               fi
-              mkdir -p "$(dirname "$PROD_DIR")"
               if [ -d "$PROD_DIR" ] && [ -n "$(ls -A "$PROD_DIR" 2>/dev/null)" ]; then
-                echo "Error: $PROD_DIR exists and is non-empty but is not a git checkout."
-                exit 1
+                echo "--> WARNING: $PROD_DIR is non-empty and not a git checkout; using /opt/universal_agent_repo instead."
+                PROD_DIR="/opt/universal_agent_repo"
+                if [ -e "$PROD_DIR" ] && [ ! -d "$PROD_DIR" ]; then
+                  echo "Error: $PROD_DIR exists but is not a directory."
+                  exit 1
+                fi
               fi
-              git clone "$REPO_URL" "$PROD_DIR"
+              if [ ! -d "$PROD_DIR/.git" ]; then
+                mkdir -p "$(dirname "$PROD_DIR")"
+                if [ -d "$PROD_DIR" ] && [ -n "$(ls -A "$PROD_DIR" 2>/dev/null)" ] && [ ! -d "$PROD_DIR/.git" ]; then
+                  echo "Error: $PROD_DIR exists and is non-empty but is not a git checkout."
+                  exit 1
+                fi
+                git clone "$REPO_URL" "$PROD_DIR"
+              fi
             fi
 
             echo "Deploying Production to $PROD_DIR..."
