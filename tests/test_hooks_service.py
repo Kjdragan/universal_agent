@@ -1001,6 +1001,78 @@ async def test_local_ingest_failure_emits_notification(mock_gateway, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_local_ingest_non_retryable_failure_stops_after_first_attempt(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="video_url: https://www.youtube.com/watch?v=V11KbKnJRmQ\nvideo_id: V11KbKnJRmQ",
+                name="RouteHook",
+                session_key="yt_route_v11_nonretry",
+                to="youtube-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_v11_nonretry"
+    session = GatewaySession(
+        session_id="session_hook_yt_route_v11_nonretry",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+    notifications: list[dict] = []
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "10",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS": "0",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+        service.config = config
+        service._call_local_youtube_ingest_worker = AsyncMock(
+            return_value={
+                "ok": False,
+                "status": "failed",
+                "error": "youtube_transcript_api_failed",
+                "failure_class": "video_unavailable",
+            }
+        )
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.1)
+
+    mock_gateway.execute.assert_not_called()
+    assert service._call_local_youtube_ingest_worker.await_count == 1
+    assert notifications
+    notification = notifications[-1]
+    assert notification["kind"] == "youtube_ingest_failed"
+    assert "video is unavailable" in notification["message"]
+    assert notification["metadata"]["failure_class"] == "video_unavailable"
+    assert notification["metadata"]["attempts"] == 1
+    assert notification["metadata"]["max_attempts"] == 10
+
+
+@pytest.mark.asyncio
 async def test_local_ingest_proxy_failure_emits_proxy_alert_notification(mock_gateway, tmp_path):
     config = HooksConfig(
         enabled=True,

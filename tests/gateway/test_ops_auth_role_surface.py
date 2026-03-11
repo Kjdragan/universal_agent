@@ -58,6 +58,30 @@ def test_local_worker_health_only_blocks_ops_surface(client, monkeypatch):
     assert health.status_code != 403
 
 
+def test_local_worker_health_only_allows_youtube_ingest_surface(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("LOCAL_WORKER"))
+    monkeypatch.delenv("UA_YOUTUBE_INGEST_TOKEN", raising=False)
+    monkeypatch.setattr(
+        gateway_server,
+        "ingest_youtube_transcript",
+        lambda **_kwargs: {
+            "ok": True,
+            "status": "succeeded",
+            "video_url": "https://www.youtube.com/watch?v=dxlyCPGCvy8",
+            "video_id": "dxlyCPGCvy8",
+            "transcript_text": "ok",
+            "transcript_chars": 2,
+        },
+    )
+
+    resp = client.post(
+        "/api/v1/youtube/ingest",
+        json={"video_id": "dxlyCPGCvy8"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("status") == "succeeded"
+
+
 def test_issue_ops_token_and_use_bearer(client, monkeypatch):
     monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("HEADQUARTERS"))
     monkeypatch.setattr(gateway_server, "OPS_TOKEN", "legacy-bootstrap-token")

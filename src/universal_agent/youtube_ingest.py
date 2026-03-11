@@ -65,6 +65,42 @@ def _classify_api_error(error: str, detail: str) -> str:
     if any(
         hint in lowered
         for hint in (
+            "video is no longer available",
+            "video unavailable",
+            "video is unavailable",
+            "this video is unavailable",
+            "this video is private",
+            "private video",
+            "has been removed by the uploader",
+            "video has been removed",
+            "not available in your country",
+        )
+    ):
+        return "video_unavailable"
+    if any(
+        hint in lowered
+        for hint in (
+            "subtitles are disabled",
+            "transcripts are disabled",
+            "no transcripts were found",
+            "no transcript available",
+            "no transcripts available",
+            "transcript is not available",
+        )
+    ):
+        return "transcript_unavailable"
+    if any(
+        hint in lowered
+        for hint in (
+            "invalid video id",
+            "video id is invalid",
+            "malformed video id",
+        )
+    ):
+        return "invalid_video_target"
+    if any(
+        hint in lowered
+        for hint in (
             "402 payment required",
             "payment required",
             "quota exceeded",

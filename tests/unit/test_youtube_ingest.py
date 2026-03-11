@@ -26,6 +26,22 @@ def test_classify_api_error_detects_proxy_auth_issue() -> None:
     assert cls == "proxy_auth_failed"
 
 
+def test_classify_api_error_detects_video_unavailable() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "youtube_transcript_api_failed",
+        "Could not retrieve transcript. The video is no longer available",
+    )
+    assert cls == "video_unavailable"
+
+
+def test_classify_api_error_detects_transcript_unavailable() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "youtube_transcript_api_failed",
+        "Subtitles are disabled for this video",
+    )
+    assert cls == "transcript_unavailable"
+
+
 def test_normalize_video_target_from_video_id() -> None:
     url, video_id = youtube_ingest.normalize_video_target(None, "dxlyCPGCvy8")
     assert video_id == "dxlyCPGCvy8"

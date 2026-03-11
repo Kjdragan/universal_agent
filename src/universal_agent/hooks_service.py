@@ -82,6 +82,15 @@ YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
 }
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
 YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
+YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
+    "invalid_video_target",
+    "video_unavailable",
+    "transcript_unavailable",
+    "empty_or_low_quality_transcript",
+    "proxy_not_configured",
+    "proxy_auth_failed",
+    "proxy_quota_or_billing",
+}
 
 
 class HookReportedTimeout(RuntimeError):
@@ -899,6 +908,16 @@ class HooksService:
                 "Without a residential proxy, YouTube WILL ban this server's datacenter IP. "
                 "Add Webshare credentials to Infisical and redeploy."
             )
+        if cls == "video_unavailable":
+            return (
+                f"video is unavailable (error={err}, failure_class={cls}). "
+                "Likely deleted/private/region-restricted; skipping retries."
+            )
+        if cls == "transcript_unavailable":
+            return (
+                f"transcript is unavailable (error={err}, failure_class={cls}). "
+                "Captions are missing/disabled for this video; skipping retries."
+            )
         return (
             f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
             f"(error={err}, failure_class={cls})"
@@ -1645,6 +1664,9 @@ class HooksService:
                             "detail": str(ingest_result.get("detail") or "")[:2000],
                         }
                     )
+                    failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
+                    if failure_class in YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES:
+                        break
                     if attempt_index < self._youtube_ingest_retries - 1:
                         delay_seconds = self._youtube_ingest_retry_delay(attempt_index)
                         if delay_seconds > 0:
