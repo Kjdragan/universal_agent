@@ -53,67 +53,43 @@ jobs:
           timeout 15m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
-            
-            resolve_prod_dir() {
-              for candidate in /opt/universal_agent /opt/universal-agent /home/ua/universal_agent /home/ua/universal-agent; do
-                if [ -d "$candidate/.git" ]; then
-                  echo "$candidate"
-                  return 0
-                fi
-              done
+            PROD_DIR="/opt/universal_agent"
+            REPO_URL="https://github.com/Kjdragan/universal_agent.git"
 
-              for base in /opt /home /root /srv /var/www; do
-                [ -d "$base" ] || continue
-                while IFS= read -r git_dir; do
-                  repo_dir="${git_dir%/.git}"
-                  origin_url="$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)"
-                  if printf '%s' "$origin_url" | grep -Eq 'Kjdragan/universal_agent(\.git)?$'; then
-                    echo "$repo_dir"
-                    return 0
-                  fi
-                done < <(find "$base" -maxdepth 5 -type d -name .git 2>/dev/null)
-              done
-
-              return 1
-            }
-
-            PROD_DIR="$(resolve_prod_dir || true)"
-            if [ -z "$PROD_DIR" ]; then
-              echo "Error: Production repository not found in expected paths:"
-              echo "  - /opt/universal_agent"
-              echo "  - /opt/universal-agent"
-              echo "  - /home/ua/universal_agent"
-              echo "  - /home/ua/universal-agent"
-              exit 1
+            if [ ! -d "$PROD_DIR/.git" ]; then
+              echo "--> Production repository missing at $PROD_DIR; bootstrapping clone..."
+              if [ -e "$PROD_DIR" ] && [ ! -d "$PROD_DIR" ]; then
+                echo "Error: $PROD_DIR exists but is not a directory."
+                exit 1
+              fi
+              mkdir -p "$(dirname "$PROD_DIR")"
+              if [ -d "$PROD_DIR" ] && [ -n "$(ls -A "$PROD_DIR" 2>/dev/null)" ]; then
+                echo "Error: $PROD_DIR exists and is non-empty but is not a git checkout."
+                exit 1
+              fi
+              git clone "$REPO_URL" "$PROD_DIR"
             fi
 
             echo "Deploying Production to $PROD_DIR..."
             
             cd "$PROD_DIR"
 
-            run_as_ua() {
-              if command -v sudo >/dev/null 2>&1; then
-                sudo -u ua /bin/bash -lc "$1"
-              elif command -v runuser >/dev/null 2>&1; then
-                runuser -u ua -- /bin/bash -lc "$1"
-              else
-                /bin/bash -lc "$1"
-              fi
-            }
-
             echo "--> Ensuring Python 3.12 runtime for uv..."
-            run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; uv python install 3.12"
+            export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
+            uv python install 3.12
             
             # 1. Pull latest code
             echo "--> Fetching and pulling latest main branch..."
-            run_as_ua "cd $PROD_DIR && git fetch origin && git checkout main && git pull origin main"
+            git fetch origin
+            git checkout main
+            git pull origin main
             
             # Note: We do NOT auto-provision production secrets from dev. 
             # Production secrets (in prod-hq) should be curated manually or via an explicit sync script.
             
             # 2. Dependency Sync
             echo "--> Syncing dependencies with uv..."
-            run_as_ua "export PATH=\"/home/ua/.local/bin:/usr/local/bin:$PATH\"; cd $PROD_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
+            uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
