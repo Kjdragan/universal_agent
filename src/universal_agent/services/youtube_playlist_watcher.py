@@ -243,6 +243,7 @@ class YouTubePlaylistWatcher:
                     seeded = True
                     self._seen_count = len(seen)
                     self._last_poll_ok = True
+                    self._last_error = ""
                     logger.info(
                         "📺 Playlist watcher seeded playlist_id=%s seen=%d",
                         playlist_id,

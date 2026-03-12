@@ -42,6 +42,37 @@ def test_classify_api_error_detects_proxy_connect_unreachable() -> None:
     assert cls == "proxy_connect_failed"
 
 
+def test_build_webshare_proxy_config_defaults_to_current_residential_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("PROXY_USERNAME", "proxy-user")
+    monkeypatch.setenv("PROXY_PASSWORD", "proxy-pass")
+    monkeypatch.delenv("WEBSHARE_PROXY_HOST", raising=False)
+    monkeypatch.delenv("PROXY_HOST", raising=False)
+    monkeypatch.delenv("WEBSHARE_PROXY_PORT", raising=False)
+    monkeypatch.delenv("PROXY_PORT", raising=False)
+
+    class FakeProxyConfig:
+        def __init__(self, **kwargs):
+            self.domain_name = kwargs["domain_name"]
+            self.proxy_port = kwargs["proxy_port"]
+            self.url = (
+                f"http://{kwargs['proxy_username']}:{kwargs['proxy_password']}"
+                f"@{kwargs['domain_name']}:{kwargs['proxy_port']}"
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "youtube_transcript_api.proxies",
+        types.SimpleNamespace(WebshareProxyConfig=FakeProxyConfig),
+    )
+
+    config, mode = youtube_ingest._build_webshare_proxy_config()
+
+    assert mode == "webshare"
+    assert config is not None
+    assert config.domain_name == "p.webshare.io"
+    assert config.proxy_port == 80
+
+
 def test_classify_api_error_detects_video_unavailable() -> None:
     cls = youtube_ingest._classify_api_error(
         "youtube_transcript_api_failed",
@@ -268,6 +299,8 @@ def test_run_extract_uses_webshare_proxy_when_env_present(monkeypatch) -> None:
     assert captured["proxy_kwargs"] == {
         "proxy_username": "proxy-user",
         "proxy_password": "proxy-pass",
+        "domain_name": "p.webshare.io",
+        "proxy_port": 80,
         "filter_ip_locations": ["us", "de"],
     }
     assert "proxy_config" in captured["init_kwargs"]
