@@ -102,6 +102,14 @@ _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
     "send to me",
 )
 
+_NOTEBOOKLM_INTENT_MARKERS = (
+    "notebooklm",
+    "notebook lm",
+    "notebooklm-mcp",
+    "notebooklm workflow",
+    "nlm cli",
+)
+
 _YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
     "youtu.be",
     "youtube.com",
@@ -460,6 +468,13 @@ def _looks_like_youtube_transcript_intent(text: Any) -> bool:
     return any(marker in candidate for marker in _YOUTUBE_TRANSCRIPT_INTENT_MARKERS)
 
 
+def _looks_like_notebooklm_intent(text: Any) -> bool:
+    candidate = str(text or "").strip().lower()
+    if not candidate:
+        return False
+    return any(marker in candidate for marker in _NOTEBOOKLM_INTENT_MARKERS)
+
+
 def _extract_hook_agent_identity(input_data: dict) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(input_data, dict):
         return None, None
@@ -748,6 +763,7 @@ class AgentHookSet:
         self._vp_dispatch_seen_this_turn = False
         self._requires_research_delegate_first = False
         self._research_delegate_seen_this_turn = False
+        self._notebooklm_intent_this_turn = False
         self._requires_youtube_skill_first = False
         self._youtube_skill_seen_this_turn = False
         self._stopped_task_ids: set[str] = set()
@@ -1202,6 +1218,10 @@ class AgentHookSet:
             and not self._is_vp_worker_lane
             and not self._is_cron_lane
         ):
+            allows_notebooklm_step = self._notebooklm_intent_this_turn and (
+                (normalized_tool_name == "skill" and requested_skill == "notebooklm-orchestration")
+                or (normalized_tool_name in ("task", "agent") and delegated_subagent == "notebooklm-operator")
+            )
             # Mixed YouTube+research turns must allow ingestion to happen before
             # the research-specialist handoff. Otherwise the turn deadlocks:
             # research guard blocks YouTube skill/subagent, and YouTube guard
@@ -1226,6 +1246,11 @@ class AgentHookSet:
                 # SDK-native progress tracker; safe before first research delegation.
                 "todowrite",
             }
+            if allows_notebooklm_step:
+                if normalized_tool_name in ("task", "agent"):
+                    self._research_delegate_seen_this_turn = True
+                return {}
+
             if allows_youtube_ingestion_step or normalized_tool_name in ALLOWED_PRE_DELEGATION_TOOLS:
                 return {}
 
@@ -1648,6 +1673,7 @@ class AgentHookSet:
             and not self._is_cron_lane
         )
         self._research_delegate_seen_this_turn = False
+        self._notebooklm_intent_this_turn = _looks_like_notebooklm_intent(prompt_text)
         self._requires_youtube_skill_first = (
             _looks_like_youtube_transcript_intent(prompt_text)
             and not self._requires_vp_tool_path

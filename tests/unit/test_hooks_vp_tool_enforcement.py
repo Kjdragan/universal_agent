@@ -352,6 +352,82 @@ def test_allows_followup_tools_after_research_specialist_delegation():
     assert second == {}
 
 
+def test_allows_notebooklm_operator_as_first_task_for_notebooklm_research_intent():
+    hooks = AgentHookSet(run_id="unit-notebooklm-delegation-allow-task")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {
+                "prompt": (
+                    "Use our NotebookLM workflow for this task. Research the latest information "
+                    "from the Russia-Ukraine war, create a report, save as PDF, and email it."
+                )
+            }
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "notebooklm-operator",
+                    "description": "NotebookLM workflow",
+                    "prompt": "Run the NotebookLM research demo.",
+                },
+            },
+            "tool-notebooklm-task",
+            {},
+        )
+    )
+
+    assert result == {}
+
+
+def test_allows_notebooklm_skill_before_operator_for_notebooklm_research_intent():
+    hooks = AgentHookSet(run_id="unit-notebooklm-delegation-allow-skill")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {
+                "prompt": (
+                    "Use our NotebookLM workflow for this task. Research the latest information "
+                    "from the Russia-Ukraine war, create a report, save as PDF, and email it."
+                )
+            }
+        )
+    )
+
+    skill_result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Skill",
+                "tool_input": {
+                    "skill": "notebooklm-orchestration",
+                    "args": "Run the NotebookLM workflow end to end.",
+                },
+            },
+            "tool-notebooklm-skill",
+            {},
+        )
+    )
+    assert skill_result == {}
+
+    task_result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "notebooklm-operator",
+                    "description": "NotebookLM workflow",
+                    "prompt": "Run the NotebookLM research demo.",
+                },
+            },
+            "tool-notebooklm-task-after-skill",
+            {},
+        )
+    )
+    assert task_result == {}
+
+
 def test_information_prompt_enforces_research_delegate_first_even_without_report():
     hooks = AgentHookSet(run_id="unit-research-delegation-info-only")
     _run(

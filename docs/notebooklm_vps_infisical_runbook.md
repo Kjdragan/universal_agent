@@ -21,6 +21,16 @@ This runbook documents the NotebookLM auth/bootstrap model for UA VPS deployment
 - `NOTEBOOKLM_AUTH_COOKIE_HEADER`
 - Optional override: `NOTEBOOKLM_PROFILE`
 
+## Required Host Tooling
+
+- Install the unified upstream package: `notebooklm-mcp-cli`
+- Required executables:
+  - `nlm`
+  - `notebooklm-mcp`
+- Recommended install for the `ua` service user:
+  - `uv tool install --force notebooklm-mcp-cli`
+- Ensure runtime PATH includes `/home/ua/.local/bin`
+
 ## Bootstrap Flow
 
 1. UA runtime initializes secrets through existing bootstrap:
@@ -33,6 +43,18 @@ This runbook documents the NotebookLM auth/bootstrap model for UA VPS deployment
    - run `nlm login --manual --file <temp> --profile vps`
    - delete temp file immediately
 4. Re-check auth and continue operations.
+
+## Post-Install Verification
+
+Run these checks as the same user that runs the UA services:
+
+```bash
+command -v nlm
+command -v notebooklm-mcp
+nlm login --check --profile vps
+```
+
+If `command -v nlm` fails, this is an installation or PATH problem, not an auth problem.
 
 ## Rotation Procedure
 

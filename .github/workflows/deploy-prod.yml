@@ -113,6 +113,10 @@ jobs:
 
             echo "--> Syncing dependencies with uv..."
             sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
+
+            echo "--> Installing NotebookLM CLI/MCP tool for ua..."
+            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
+            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; command -v nlm && command -v notebooklm-mcp"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."

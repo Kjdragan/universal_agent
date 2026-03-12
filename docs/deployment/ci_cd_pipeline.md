@@ -73,6 +73,13 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
 7. **Production deploy** is dispatched explicitly by the promotion workflow after `main` is advanced.
 
+## Deployed Runtime Tooling
+
+- Staging and production deploys install project dependencies with `uv sync`.
+- Staging and production deploys also install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
+- This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
+- The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
+
 ## Review and Promotion Rule
 
 - There is exactly one Codex review gate: the PR into `develop`.
@@ -203,3 +210,19 @@ Current production workflow behavior:
 4. rebuilds dependencies as `ua` with `uv`
 
 This is intended to self-heal stale virtualenvs created against inaccessible Python cache paths.
+
+### NotebookLM Preflight Fails With `FileNotFoundError` Or `nlm` Missing
+
+If NotebookLM auth preflight reports `auth_cli_missing:FileNotFoundError`, the runtime cannot find the external NotebookLM tool binaries.
+
+Current deploy workflow behavior:
+
+1. installs `notebooklm-mcp-cli` for the `ua` service user with `uv tool install --force notebooklm-mcp-cli`
+2. verifies both `nlm` and `notebooklm-mcp` resolve on PATH
+3. relies on `/home/ua/.local/bin` being present in the runtime PATH
+
+If this still fails on a node, verify:
+
+- `sudo -u ua env PATH=/home/ua/.local/bin:/usr/local/bin:$PATH command -v nlm`
+- `sudo -u ua env PATH=/home/ua/.local/bin:/usr/local/bin:$PATH command -v notebooklm-mcp`
+- the service process is running with `/home/ua/.local/bin` on PATH
