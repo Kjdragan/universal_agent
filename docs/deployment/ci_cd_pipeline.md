@@ -17,7 +17,7 @@ This is the only supported app deployment path in this repository.
 |------|---------|--------|
 | `Codex Review Develop PR` | Pull request to `develop` | Automated PR review |
 | `Deploy Staging` | Push to `develop` | Staging Service |
-| `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA |
+| `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA, then dispatch production deploy |
 | `Deploy Production` | Push to `main` | Production Service |
 
 ## Current Targets
@@ -71,7 +71,7 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 4. **Staging deploy** runs automatically on the merge result in `develop`.
 5. **Validate staging** against the exact merged `develop` SHA.
 6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
-7. **Production deploy** runs automatically when the promotion workflow fast-forwards `main`.
+7. **Production deploy** is dispatched explicitly by the promotion workflow after `main` is advanced.
 
 ## Review and Promotion Rule
 
@@ -79,6 +79,7 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 - There is no second Codex review on `main`.
 - Production promotion must use the exact validated `develop` SHA.
 - The promotion workflow refuses to run if `develop` has moved since the validated SHA.
+- The promotion workflow explicitly dispatches `Deploy Production`; it does not rely on workflow fan-out from the `main` fast-forward.
 - To make the review gate enforceable, configure GitHub branch protection on `develop` to require the `Codex Review Develop PR` check before merge.
 
 ## Temporary Missing-Secret Behavior
@@ -135,6 +136,16 @@ Required action:
 #### Signature: main cannot fast-forward
 
 If the workflow reports that `main` cannot fast-forward cleanly to the requested SHA, the branch history has diverged and requires manual investigation before release.
+
+#### Signature: promotion succeeded but production deploy did not start
+
+If `main` advances but no `Deploy Production` run appears, inspect the promotion workflow logs.
+
+Required checks:
+
+1. verify the promotion workflow has `actions: write` permission
+2. verify the `Dispatch production deploy workflow` step completed successfully
+3. verify `deploy-prod.yml` still supports `workflow_dispatch`
 
 ### SSH Preflight Fails Fast
 
