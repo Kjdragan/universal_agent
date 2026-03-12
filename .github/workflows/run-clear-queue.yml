@@ -29,9 +29,16 @@ jobs:
             cd \$STAGING_DIR && /opt/universal-agent-staging/.venv/bin/python scripts/clear_agent_queue.py
             
             PROD_DIR='/opt/universal_agent'
-            if [ -d \"\$PROD_DIR\" ]; then
-              echo '--> Running clear script in Production...'
+            if [ -d \"\$PROD_DIR/.venv\" ]; then
+              echo '--> Running clear script in Production (/opt/universal_agent)...'
               export PYTHONPATH='src'
-              cd \$PROD_DIR && /opt/universal_agent/.venv/bin/python scripts/clear_agent_queue.py || true
+              cd \$PROD_DIR && \$PROD_DIR/.venv/bin/python scripts/clear_agent_queue.py || true
+            fi
+            
+            PROD_REPO_DIR='/opt/universal_agent_repo'
+            if [ -d \"\$PROD_REPO_DIR/.venv\" ]; then
+              echo '--> Running clear script in Production (/opt/universal_agent_repo)...'
+              export PYTHONPATH='src'
+              cd \$PROD_REPO_DIR && \$PROD_REPO_DIR/.venv/bin/python scripts/clear_agent_queue.py || true
             fi
           "
