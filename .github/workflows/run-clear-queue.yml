@@ -1,0 +1,44 @@
+name: Run Clear Agent Queue
+on:
+  workflow_dispatch:
+jobs:
+  run-clear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale Network
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: gha-clear-${{ github.run_id }}
+          ping: ${{ secrets.VPS_SSH_HOST }}
+          
+      - name: Run Script on VPS via SSH
+        env:
+          SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          timeout 1m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" "
+            set -euo pipefail
+            STAGING_DIR='/opt/universal-agent-staging'
+            echo '--> Running clear script in Staging...'
+            run_as_ua() {
+              if command -v sudo >/dev/null 2>&1; then
+                sudo -u ua /bin/bash -lc \"\$1\"
+              elif command -v runuser >/dev/null 2>&1; then
+                runuser -u ua -- /bin/bash -lc \"\$1\"
+              else
+                /bin/bash -lc \"\$1\"
+              fi
+            }
+            run_as_ua \"export PYTHONPATH='src'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run --python 3.12 scripts/clear_agent_queue.py\"
+            
+            PROD_DIR='/opt/universal_agent'
+            if [ -d \"\$PROD_DIR\" ]; then
+              echo '--> Running clear script in Production...'
+              run_as_ua \"export PYTHONPATH='src'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$PROD_DIR && uv run --python 3.12 scripts/clear_agent_queue.py || true\"
+            fi
+          "
