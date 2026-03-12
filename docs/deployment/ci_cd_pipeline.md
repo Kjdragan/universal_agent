@@ -80,6 +80,7 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
 - The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
 - Staging deploy must execute `uv` tool installation under the real `ua` home directory (`sudo -H -u ua` / `HOME=$ua_home`) so NotebookLM tools land in the service user's tool path.
+- In the staging SSH deploy script, PATH must be quoted for remote expansion, not shipped as a literal `$PATH`, or basic commands like `getent`/`cut` can disappear from the remote shell.
 
 ## Review and Promotion Rule
 
