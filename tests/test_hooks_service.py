@@ -1390,6 +1390,97 @@ async def test_local_ingest_proxy_connect_failure_emits_proxy_alert_notification
     assert str(proxy_alert["metadata"]["result_file"]).endswith("local_ingest_result.json")
 
 
+@pytest.mark.asyncio
+async def test_local_ingest_inflight_duplicate_reports_existing_root_cause(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
+                name="RouteHook",
+                session_key="yt_route_dxlyCPGCvy8_duplicate_notify",
+                to="youtube-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_dxlyCPGCvy8_duplicate_notify"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    existing_payload = {
+        "status": "failed_local_ingest",
+        "attempt_count": 3,
+        "max_attempts": 10,
+        "last_result": {
+            "error": "youtube_transcript_api_failed",
+            "failure_class": "proxy_connect_failed",
+        },
+    }
+    existing_result_path = workspace_dir / "local_ingest_result.json"
+    existing_result_path.write_text(json.dumps(existing_payload), encoding="utf-8")
+    original_result_text = existing_result_path.read_text(encoding="utf-8")
+    session = GatewaySession(
+        session_id="session_hook_yt_route_dxlyCPGCvy8_duplicate_notify",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+    notifications: list[dict] = []
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "10",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS": "0",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+        service.config = config
+        video_key = service._youtube_ingest_video_key(
+            "https://www.youtube.com/watch?v=dxlyCPGCvy8",
+            "dxlyCPGCvy8",
+        )
+        service._youtube_ingest_inflight[video_key] = time.time() + 60
+        service._youtube_ingest_inflight_owners[video_key] = {
+            "session_id": session.session_id,
+            "workspace_root": str(workspace_dir),
+        }
+        service._call_local_youtube_ingest_worker = AsyncMock()
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.1)
+
+    service._call_local_youtube_ingest_worker.assert_not_awaited()
+    duplicate_notice = next(item for item in notifications if item.get("kind") == "youtube_ingest_failed")
+    assert duplicate_notice["title"] == "YouTube Ingest Duplicate Suppressed"
+    assert duplicate_notice["severity"] == "warning"
+    assert duplicate_notice["requires_action"] is False
+    assert duplicate_notice["metadata"]["failure_class"] == "inflight_duplicate"
+    assert duplicate_notice["metadata"]["root_failure_class"] == "proxy_connect_failed"
+    assert duplicate_notice["metadata"]["owner_session_id"] == session.session_id
+    assert duplicate_notice["metadata"]["root_result_file"] == str(existing_result_path)
+    assert "Existing root cause" in duplicate_notice["message"]
+    assert "Residential proxy CONNECT failed" in duplicate_notice["message"]
+    assert existing_result_path.read_text(encoding="utf-8") == original_result_text
+    assert not any(item.get("kind") == "youtube_ingest_proxy_alert" for item in notifications)
+
+
 def test_vps_local_worker_prefers_loopback_only(mock_gateway):
     with (
         patch("universal_agent.hooks_service.load_ops_config", return_value={}),

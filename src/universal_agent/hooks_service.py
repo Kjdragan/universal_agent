@@ -428,6 +428,7 @@ class HooksService:
             30, self._safe_int_env("UA_HOOKS_YOUTUBE_INGEST_INFLIGHT_TTL_SECONDS", 900)
         )
         self._youtube_ingest_inflight: Dict[str, float] = {}
+        self._youtube_ingest_inflight_owners: Dict[str, dict[str, str]] = {}
         self._youtube_ingest_cooldowns: Dict[str, dict[str, Any]] = {}
         self._youtube_ingest_fail_open = self._safe_bool_env(
             "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN", False
@@ -752,6 +753,53 @@ class HooksService:
                 if failure_class:
                     return failure_class
         return str(pending_payload.get("failure_class") or "").strip().lower()
+
+    def _load_existing_ingest_context(self, workspace_root: Path) -> dict[str, Any]:
+        candidates = (
+            workspace_root / "local_ingest_result.json",
+            workspace_root / "pending_local_ingest.json",
+            workspace_root / "ingestion" / "youtube_local_ingest_result.json",
+        )
+        for path in candidates:
+            if not path.is_file():
+                continue
+            payload = self._safe_json(path)
+            if not isinstance(payload, dict):
+                continue
+            failure_class = self._pending_local_ingest_failure_class(payload)
+            if not failure_class:
+                continue
+            last_result = payload.get("last_result") if isinstance(payload.get("last_result"), dict) else {}
+            attempts_used = int(payload.get("attempt_count") or len(payload.get("attempts") or []))
+            max_attempts = int(payload.get("max_attempts") or self._youtube_ingest_retries)
+            error = str(last_result.get("error") or payload.get("error") or "").strip()
+            reason = self._format_ingest_failure_reason(
+                error=error or "local_ingest_failed",
+                failure_class=failure_class,
+                attempts=attempts_used,
+                max_attempts=max_attempts,
+            )
+            return {
+                "root_error": error or "local_ingest_failed",
+                "root_failure_class": failure_class,
+                "root_reason": reason,
+                "root_result_file": str(path),
+                "root_attempts": attempts_used,
+                "root_max_attempts": max_attempts,
+            }
+        return {}
+
+    def _current_inflight_ingest_context(self, video_key: str) -> dict[str, Any]:
+        owner = self._youtube_ingest_inflight_owners.get(video_key)
+        if not isinstance(owner, dict):
+            return {}
+        workspace_raw = str(owner.get("workspace_root") or "").strip()
+        if not workspace_raw:
+            return {}
+        context = self._load_existing_ingest_context(Path(workspace_raw))
+        if context:
+            context.setdefault("owner_session_id", str(owner.get("session_id") or "").strip())
+        return context
 
     def _build_youtube_recovery_action(self, *, session_id: str) -> Optional[HookAction]:
         session_key = self._session_key_from_session_id(session_id)
@@ -1783,6 +1831,7 @@ class HooksService:
         expired_inflight = [key for key, until_epoch in self._youtube_ingest_inflight.items() if until_epoch <= now_epoch]
         for key in expired_inflight:
             self._youtube_ingest_inflight.pop(key, None)
+            self._youtube_ingest_inflight_owners.pop(key, None)
 
         expired_cooldowns = []
         for key, entry in self._youtube_ingest_cooldowns.items():
@@ -2164,6 +2213,7 @@ class HooksService:
                 "video_key": video_key,
             }
         elif self._youtube_ingest_inflight.get(video_key, 0.0) > now:
+            duplicate_context = self._current_inflight_ingest_context(video_key)
             ingest_result = {
                 "ok": False,
                 "status": "failed",
@@ -2172,8 +2222,14 @@ class HooksService:
                 "detail": f"video_key={video_key}",
                 "video_key": video_key,
             }
+            if duplicate_context:
+                ingest_result.update(duplicate_context)
         else:
             self._youtube_ingest_inflight[video_key] = now + float(self._youtube_ingest_inflight_ttl_seconds)
+            self._youtube_ingest_inflight_owners[video_key] = {
+                "session_id": session_id,
+                "workspace_root": str(Path(session_workspace).resolve()),
+            }
             try:
                 for attempt_index in range(self._youtube_ingest_retries):
                     ingest_result = await self._call_local_youtube_ingest_worker(
@@ -2202,6 +2258,7 @@ class HooksService:
                             await asyncio.sleep(delay_seconds)
             finally:
                 self._youtube_ingest_inflight.pop(video_key, None)
+                self._youtube_ingest_inflight_owners.pop(video_key, None)
 
         if not (ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded"):
             failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
@@ -2276,26 +2333,45 @@ class HooksService:
         }
         failed_ingest_result_path = ingestion_dir / "youtube_local_ingest_result.json"
         pending_path = workspace_root / "pending_local_ingest.json"
-        try:
-            self._write_text_file(failed_ingest_result_path, json.dumps(pending_payload, indent=2))
-            self._write_text_file(terminal_result_path, json.dumps(pending_payload, indent=2))
-        except Exception:
-            logger.warning(
-                "Failed writing local ingest result file session_id=%s path=%s",
-                session_id,
-                failed_ingest_result_path,
-            )
-
         attempts_used = len(errors)
         max_attempts = int(self._youtube_ingest_retries)
         failure_error = str(ingest_result.get("error") or "local_ingest_failed")
         failure_class = str(ingest_result.get("failure_class") or "")
-        failure_reason = self._format_ingest_failure_reason(
-            error=failure_error,
-            failure_class=failure_class,
-            attempts=attempts_used,
-            max_attempts=max_attempts,
+        duplicate_root_reason = str(ingest_result.get("root_reason") or "").strip()
+        duplicate_root_class = str(ingest_result.get("root_failure_class") or "").strip().lower()
+        duplicate_root_error = str(ingest_result.get("root_error") or "").strip()
+        duplicate_root_result_file = str(ingest_result.get("root_result_file") or "").strip()
+        duplicate_owner_session_id = str(ingest_result.get("owner_session_id") or "").strip()
+        preserve_existing_duplicate_state = failure_class == "inflight_duplicate" and bool(
+            duplicate_root_result_file
         )
+        if not preserve_existing_duplicate_state:
+            try:
+                self._write_text_file(failed_ingest_result_path, json.dumps(pending_payload, indent=2))
+                self._write_text_file(terminal_result_path, json.dumps(pending_payload, indent=2))
+            except Exception:
+                logger.warning(
+                    "Failed writing local ingest result file session_id=%s path=%s",
+                    session_id,
+                    failed_ingest_result_path,
+                )
+        if failure_class == "inflight_duplicate":
+            failure_reason = (
+                "duplicate ingest request suppressed because another run for this video is already in progress"
+            )
+            if duplicate_root_class:
+                failure_reason += (
+                    f". Existing root cause: {duplicate_root_reason or duplicate_root_class}"
+                )
+            elif duplicate_owner_session_id:
+                failure_reason += f" (active session_id={duplicate_owner_session_id})"
+        else:
+            failure_reason = self._format_ingest_failure_reason(
+                error=failure_error,
+                failure_class=failure_class,
+                attempts=attempts_used,
+                max_attempts=max_attempts,
+            )
         logger.error(
             "Local youtube ingest failed session_id=%s video_id=%s reason=%s pending_file=%s",
             session_id,
@@ -2307,15 +2383,20 @@ class HooksService:
         metadata = {
             "hook_youtube_ingest_mode": "local_worker",
             "hook_youtube_ingest_status": "failed_local_ingest",
-            "hook_youtube_ingest_pending_file": str(pending_path),
-            "hook_youtube_ingest_result_file": str(failed_ingest_result_path),
-            "hook_youtube_ingest_terminal_result_file": str(terminal_result_path),
+            "hook_youtube_ingest_pending_file": "" if preserve_existing_duplicate_state else str(pending_path),
+            "hook_youtube_ingest_result_file": "" if preserve_existing_duplicate_state else str(failed_ingest_result_path),
+            "hook_youtube_ingest_terminal_result_file": "" if preserve_existing_duplicate_state else str(terminal_result_path),
             "hook_youtube_ingest_error": failure_error,
             "hook_youtube_ingest_failure_class": failure_class,
             "hook_youtube_ingest_attempts": attempts_used,
             "hook_youtube_ingest_max_attempts": max_attempts,
             "hook_youtube_ingest_reason": failure_reason,
             "hook_youtube_ingest_video_key": video_key,
+            "hook_youtube_ingest_root_error": duplicate_root_error,
+            "hook_youtube_ingest_root_failure_class": duplicate_root_class,
+            "hook_youtube_ingest_root_reason": duplicate_root_reason,
+            "hook_youtube_ingest_root_result_file": duplicate_root_result_file,
+            "hook_youtube_ingest_owner_session_id": duplicate_owner_session_id,
         }
 
         should_fail_open = self._should_fail_open_ingest(
@@ -2344,10 +2425,11 @@ class HooksService:
             )
             return action, metadata, False
 
-        try:
-            self._write_text_file(pending_path, json.dumps(pending_payload, indent=2))
-        except Exception:
-            logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
+        if not preserve_existing_duplicate_state:
+            try:
+                self._write_text_file(pending_path, json.dumps(pending_payload, indent=2))
+            except Exception:
+                logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
 
         logger.warning(
             "Deferring youtube dispatch session_id=%s status=pending_local_ingest pending_file=%s",
@@ -2710,6 +2792,7 @@ class HooksService:
                 if failed_local_ingest:
                     reason = str(metadata.get("hook_youtube_ingest_reason") or "local_ingest_failed").strip()
                     failure_class = str(metadata.get("hook_youtube_ingest_failure_class") or "").strip().lower()
+                    is_duplicate = failure_class == "inflight_duplicate"
                     logger.error(
                         "Hook action failed pre-dispatch session_id=%s hook=%s reason=%s",
                         session_id,
@@ -2718,11 +2801,11 @@ class HooksService:
                     )
                     self._emit_notification(
                         kind="youtube_ingest_failed",
-                        title="YouTube Ingest Failed",
+                        title="YouTube Ingest Duplicate Suppressed" if is_duplicate else "YouTube Ingest Failed",
                         message=reason,
                         session_id=session_id,
-                        severity="error",
-                        requires_action=True,
+                        severity="warning" if is_duplicate else "error",
+                        requires_action=not is_duplicate,
                         metadata={
                             "source": "hooks",
                             "hook_name": hook_name,
@@ -2730,10 +2813,15 @@ class HooksService:
                             "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
                             "error": str(metadata.get("hook_youtube_ingest_error") or ""),
                             "failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                            "root_error": str(metadata.get("hook_youtube_ingest_root_error") or ""),
+                            "root_failure_class": str(metadata.get("hook_youtube_ingest_root_failure_class") or ""),
+                            "root_reason": str(metadata.get("hook_youtube_ingest_root_reason") or ""),
+                            "owner_session_id": str(metadata.get("hook_youtube_ingest_owner_session_id") or ""),
                             "attempts": int(metadata.get("hook_youtube_ingest_attempts") or 0),
                             "max_attempts": int(metadata.get("hook_youtube_ingest_max_attempts") or 0),
                             "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
                             "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
+                            "root_result_file": str(metadata.get("hook_youtube_ingest_root_result_file") or ""),
                         },
                     )
                     if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
