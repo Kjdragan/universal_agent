@@ -85,10 +85,6 @@ jobs:
             
             cd "$PROD_DIR"
 
-            echo "--> Ensuring Python 3.12 runtime for uv..."
-            export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
-            uv python install 3.12
-            
             # 1. Pull latest code
             echo "--> Checking out branch main in $PROD_DIR"
             cd "$PROD_DIR"
@@ -99,11 +95,16 @@ jobs:
             # Note: We do NOT auto-provision production secrets from dev. 
             # Production secrets (in prod-hq) should be curated manually or via an explicit sync script.
             
+            echo "--> Transferring ownership to service user before dependency sync..."
+            sudo chown -R ua:ua "$PROD_DIR"
+            
             # 2. Dependency Sync
+            echo "--> Ensuring Python 3.12 runtime for uv..."
+            export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
+            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv python install 3.12"
+
             echo "--> Syncing dependencies with uv..."
-            uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
-            sudo chown -R ua:ua "$PROD_DIR/.venv" || true
-            sudo chown -R ua:ua "$PROD_DIR" || true
+            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
