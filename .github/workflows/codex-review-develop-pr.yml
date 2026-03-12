@@ -42,17 +42,21 @@ jobs:
             "${{ github.event.pull_request.base.ref }}" \
             +refs/pull/${{ github.event.pull_request.number }}/head
 
-      - name: Validate Codex secret
+      - name: Detect Codex secret availability
+        id: secret-check
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::Missing required GitHub secret OPENAI_API_KEY for Codex review."
-            exit 1
+            echo "::warning::OPENAI_API_KEY is not configured. Skipping Codex review for this PR."
+            echo "codex_enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "codex_enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Generate structured output schema
+        if: ${{ steps.secret-check.outputs.codex_enabled == 'true' }}
         run: |
           set -euo pipefail
           cat <<'JSON' > codex-output-schema.json
@@ -153,6 +157,7 @@ jobs:
           JSON
 
       - name: Build Codex review prompt
+        if: ${{ steps.secret-check.outputs.codex_enabled == 'true' }}
         run: |
           set -euo pipefail
           {
@@ -183,6 +188,7 @@ jobs:
 
       - name: Run Codex structured review
         id: run-codex
+        if: ${{ steps.secret-check.outputs.codex_enabled == 'true' }}
         uses: openai/codex-action@main
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -193,7 +199,7 @@ jobs:
           model: ${{ env.CODEX_MODEL }}
 
       - name: Inspect structured Codex output
-        if: ${{ always() }}
+        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
         run: |
           if [ -s codex-output.json ]; then
             jq '.' codex-output.json || true
@@ -202,7 +208,7 @@ jobs:
           fi
 
       - name: Publish inline review comments
-        if: ${{ always() }}
+        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
         env:
           REVIEW_JSON: codex-output.json
         run: |
@@ -236,7 +242,7 @@ jobs:
           done < findings.jsonl
 
       - name: Publish overall summary comment
-        if: ${{ always() }}
+        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
         env:
           REVIEW_JSON: codex-output.json
         run: |
@@ -258,8 +264,21 @@ jobs:
             "https://api.github.com/repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
             -d "$(jq -n --arg body "$msg" '{body: $body}')" >/dev/null
 
+      - name: Publish review skipped comment
+        if: ${{ always() && steps.secret-check.outputs.codex_enabled != 'true' }}
+        run: |
+          set -euo pipefail
+          msg="**Codex automated review** was skipped because \`OPENAI_API_KEY\` is not configured in repository secrets. The PR can still proceed, but no automated Codex review was performed."
+          curl -sS \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -d "$(jq -n --arg body "$msg" '{body: $body}')" >/dev/null
+
       - name: Enforce review gate
-        if: ${{ always() }}
+        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
         env:
           REVIEW_JSON: codex-output.json
         run: |

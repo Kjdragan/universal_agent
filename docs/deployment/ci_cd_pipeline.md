@@ -81,6 +81,16 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 - The promotion workflow refuses to run if `develop` has moved since the validated SHA.
 - To make the review gate enforceable, configure GitHub branch protection on `develop` to require the `Codex Review Develop PR` check before merge.
 
+## Temporary Missing-Secret Behavior
+
+If `OPENAI_API_KEY` is not configured yet:
+
+- the `Codex Review Develop PR` workflow posts a warning comment and exits successfully
+- the PR can still merge to `develop`
+- staging and production promotion can still proceed
+
+Once `OPENAI_API_KEY` is configured, the same workflow becomes the real blocking Codex review gate again.
+
 ## Recommended GitHub Branch Protection
 
 Configure these settings in GitHub repository settings.
@@ -92,6 +102,7 @@ Configure these settings in GitHub repository settings.
 - Required status check: `Codex Review Develop PR / codex-review`
 - Require branches to be up to date before merging
 - Restrict direct pushes if you want review to be mandatory in practice
+- If `OPENAI_API_KEY` is still missing, this required check will pass in "review skipped" mode rather than enforcing a real Codex review
 
 ### `main`
 

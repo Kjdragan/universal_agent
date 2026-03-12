@@ -77,7 +77,7 @@ Typical local loop:
 When the change should be tested live on the VPS-backed staging environment:
 
 1. open a pull request from the feature branch into `develop`
-2. let Codex review the PR
+2. let Codex review the PR, or let the workflow soft-skip if `OPENAI_API_KEY` is not configured yet
 3. merge or fast-forward the feature branch into `develop`
 4. wait for the `Deploy Staging` workflow to pass
 5. validate the live staging environment
