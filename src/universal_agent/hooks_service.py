@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import Request, Response
@@ -21,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.gateway import InProcessGateway, GatewayRequest
+from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 from universal_agent.youtube_ingest import normalize_video_target
 
@@ -80,8 +82,14 @@ YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
     "workout",
     "fitness",
 }
-DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
-YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
+DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_LOCAL = "/home/kjdragan/YoutubeCodeExamples"
+DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_VPS = "/opt/universal_agent_data/tutorial_repos"
+YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {
+    "proxy_quota_or_billing",
+    "proxy_auth_failed",
+    "proxy_not_configured",
+    "proxy_connect_failed",
+}
 YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
     "invalid_video_target",
     "video_unavailable",
@@ -363,6 +371,9 @@ class HooksService:
         # local stack is offline. Use a simple cooldown to avoid log spam.
         self._forward_failures = 0
         self._forward_disabled_until_ts = 0.0
+        self._deployment_profile = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
+        if self._deployment_profile not in {"local_workstation", "standalone_node", "vps"}:
+            self._deployment_profile = "local_workstation"
         self._youtube_ingest_mode = (os.getenv("UA_HOOKS_YOUTUBE_INGEST_MODE") or "").strip().lower()
         default_ingest_url = ""
         if self._forward_youtube_manual_url.endswith("/api/v1/hooks/youtube/manual"):
@@ -378,6 +389,9 @@ class HooksService:
             ingest_urls_raw,
             fallback=self._youtube_ingest_url,
         )
+        self._youtube_ingest_urls = self._normalize_youtube_ingest_urls(self._youtube_ingest_urls)
+        if self._youtube_ingest_urls:
+            self._youtube_ingest_url = self._youtube_ingest_urls[0]
         self._youtube_ingest_token = (
             os.getenv("UA_HOOKS_YOUTUBE_INGEST_TOKEN") or self._forward_youtube_token
         ).strip()
@@ -393,8 +407,9 @@ class HooksService:
             0.0, self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS", 20.0)
         )
         self._tutorial_bootstrap_repo_root = (
-            (os.getenv("UA_TUTORIAL_BOOTSTRAP_REPO_ROOT") or "").strip()
-            or DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT
+            (os.getenv("UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT") or "").strip()
+            or (os.getenv("UA_TUTORIAL_BOOTSTRAP_REPO_ROOT") or "").strip()
+            or self._default_tutorial_bootstrap_repo_root()
         )
         self._youtube_ingest_retry_max_delay_seconds = max(
             self._youtube_ingest_retry_delay_seconds,
@@ -1038,6 +1053,14 @@ class HooksService:
         source_notification_id = str(payload.get("source_notification_id") or "").strip()
         classification = str(payload.get("classification") or "unknown_issue").strip() or "unknown_issue"
         operator_review_required = bool(payload.get("operator_review_required"))
+        recommended_next_step = sanitize_heartbeat_recommendation_text(
+            str(payload.get("recommended_next_step") or "").strip(),
+            field="next_step",
+        )
+        email_summary = sanitize_heartbeat_recommendation_text(
+            str(payload.get("email_summary") or "").strip(),
+            field="summary",
+        )
         metadata: dict[str, Any] = {
             "source": "heartbeat",
             "session_key": session_key,
@@ -1046,8 +1069,8 @@ class HooksService:
             "source_notification_id": source_notification_id,
             "classification": classification,
             "operator_review_required": operator_review_required,
-            "recommended_next_step": str(payload.get("recommended_next_step") or "").strip(),
-            "email_summary": str(payload.get("email_summary") or "").strip(),
+            "recommended_next_step": recommended_next_step,
+            "email_summary": email_summary,
             "proposed_changes": payload.get("proposed_changes") if isinstance(payload.get("proposed_changes"), list) else [],
             "unknown_rule_count": int(payload.get("unknown_rule_count") or 0),
         }
@@ -1347,6 +1370,13 @@ class HooksService:
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
                 "PROXY ALERT: Webshare credentials appear invalid; verify PROXY_USERNAME/PROXY_PASSWORD secrets."
+            )
+        if cls == "proxy_connect_failed":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Residential proxy CONNECT failed; verify Webshare host/port overrides, "
+                "proxy credentials in Infisical, and upstream proxy availability."
             )
         if cls == "proxy_not_configured":
             return (
@@ -1695,6 +1725,32 @@ class HooksService:
         for endpoint in endpoints:
             if endpoint not in deduped:
                 deduped.append(endpoint)
+        return deduped
+
+    def _default_tutorial_bootstrap_repo_root(self) -> str:
+        if self._deployment_profile == "vps":
+            return DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_VPS
+        return DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_LOCAL
+
+    @staticmethod
+    def _is_loopback_endpoint(endpoint: str) -> bool:
+        host = (urlparse(str(endpoint or "")).hostname or "").strip().lower()
+        return host in {"127.0.0.1", "localhost"}
+
+    def _normalize_youtube_ingest_urls(self, endpoints: list[str]) -> list[str]:
+        deduped: list[str] = []
+        for endpoint in endpoints:
+            value = str(endpoint or "").strip()
+            if value and value not in deduped:
+                deduped.append(value)
+        if not deduped:
+            return []
+        loopback = [endpoint for endpoint in deduped if self._is_loopback_endpoint(endpoint)]
+        non_loopback = [endpoint for endpoint in deduped if endpoint not in loopback]
+        if self._deployment_profile == "vps":
+            return loopback or deduped
+        if self._deployment_profile == "local_workstation" and loopback:
+            return loopback + non_loopback
         return deduped
 
     def _is_youtube_local_ingest_target(self, action: HookAction) -> bool:
@@ -2160,6 +2216,7 @@ class HooksService:
         workspace_root = Path(session_workspace).resolve()
         ingestion_dir = workspace_root / "ingestion"
         meta_path = ingestion_dir / "youtube_local_ingest_result.json"
+        terminal_result_path = workspace_root / "local_ingest_result.json"
 
         if ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded":
             transcript_text = str(ingest_result.get("transcript_text") or "")
@@ -2210,14 +2267,24 @@ class HooksService:
             "ingest_urls": list(self._youtube_ingest_urls),
             "min_chars": int(self._youtube_ingest_min_chars),
             "attempts": errors,
+            "attempt_results": errors,
+            "attempt_count": len(errors),
+            "max_attempts": int(self._youtube_ingest_retries),
             "last_result": ingest_result,
             "created_at_epoch": time.time(),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        failed_ingest_result_path = ingestion_dir / "youtube_local_ingest_result.json"
         pending_path = workspace_root / "pending_local_ingest.json"
         try:
-            self._write_text_file(pending_path, json.dumps(pending_payload, indent=2))
+            self._write_text_file(failed_ingest_result_path, json.dumps(pending_payload, indent=2))
+            self._write_text_file(terminal_result_path, json.dumps(pending_payload, indent=2))
         except Exception:
-            logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
+            logger.warning(
+                "Failed writing local ingest result file session_id=%s path=%s",
+                session_id,
+                failed_ingest_result_path,
+            )
 
         attempts_used = len(errors)
         max_attempts = int(self._youtube_ingest_retries)
@@ -2241,6 +2308,8 @@ class HooksService:
             "hook_youtube_ingest_mode": "local_worker",
             "hook_youtube_ingest_status": "failed_local_ingest",
             "hook_youtube_ingest_pending_file": str(pending_path),
+            "hook_youtube_ingest_result_file": str(failed_ingest_result_path),
+            "hook_youtube_ingest_terminal_result_file": str(terminal_result_path),
             "hook_youtube_ingest_error": failure_error,
             "hook_youtube_ingest_failure_class": failure_class,
             "hook_youtube_ingest_attempts": attempts_used,
@@ -2260,10 +2329,11 @@ class HooksService:
                 if self._youtube_ingest_fail_open
                 else "allow_degraded_transcript_only"
             )
+            metadata["hook_youtube_ingest_pending_file"] = ""
             fail_open_lines = [
                 "local_youtube_ingest_mode: local_worker",
                 "local_youtube_ingest_status: failed_fail_open",
-                f"local_youtube_ingest_pending_file: {pending_path}",
+                f"local_youtube_ingest_result_file: {terminal_result_path}",
                 f"local_youtube_ingest_error: {failure_error}",
                 f"local_youtube_ingest_failure_class: {failure_class}",
                 f"local_youtube_ingest_reason: {failure_reason}",
@@ -2273,6 +2343,11 @@ class HooksService:
                 update={"message": self._append_message_lines(action.message or "", fail_open_lines)}
             )
             return action, metadata, False
+
+        try:
+            self._write_text_file(pending_path, json.dumps(pending_payload, indent=2))
+        except Exception:
+            logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
 
         logger.warning(
             "Deferring youtube dispatch session_id=%s status=pending_local_ingest pending_file=%s",
@@ -2658,6 +2733,7 @@ class HooksService:
                             "attempts": int(metadata.get("hook_youtube_ingest_attempts") or 0),
                             "max_attempts": int(metadata.get("hook_youtube_ingest_max_attempts") or 0),
                             "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
+                            "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
                         },
                     )
                     if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
@@ -2666,6 +2742,12 @@ class HooksService:
                                 "CRITICAL: YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED. "
                                 "PROXY_USERNAME/PROXY_PASSWORD env vars are missing. "
                                 "All YouTube transcript requests will fail until proxy credentials are added."
+                            )
+                        elif failure_class == "proxy_connect_failed":
+                            _proxy_alert_msg = (
+                                "YouTube ingest failed because the residential proxy CONNECT path is broken. "
+                                "Check Webshare host/port overrides, proxy credentials in Infisical, "
+                                "and upstream proxy availability."
                             )
                         else:
                             _proxy_alert_msg = (
@@ -2687,6 +2769,7 @@ class HooksService:
                                 "error": str(metadata.get("hook_youtube_ingest_error") or ""),
                                 "reason": reason,
                                 "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                                "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
                             },
                         )
                 else:
@@ -2743,6 +2826,9 @@ class HooksService:
                 )
             if is_youtube_tutorial:
                 tutorial_title = str(metadata.get("tutorial_title") or "").strip()
+                ingest_status = str(metadata.get("hook_youtube_ingest_status") or "").strip().lower()
+                ingest_reason = str(metadata.get("hook_youtube_ingest_reason") or "").strip()
+                degraded_fail_open = ingest_status == "failed_fail_open"
                 if tutorial_title and expected_video_id:
                     processing_label = f"{tutorial_title} ({expected_video_id})"
                 elif tutorial_title:
@@ -2753,7 +2839,7 @@ class HooksService:
                     kind="youtube_tutorial_started",
                     title="YouTube Tutorial Pipeline Started",
                     message=(
-                        f"Processing: {processing_label}"
+                        f"{'Processing in degraded mode' if degraded_fail_open else 'Processing'}: {processing_label}"
                         f"{f' [video_id: {expected_video_id}]' if expected_video_id else ''}"
                     ),
                     session_id=session_id,
@@ -2764,8 +2850,32 @@ class HooksService:
                         "hook_session_key": session_key,
                         "video_id": expected_video_id or "",
                         "tutorial_title": tutorial_title,
+                        "ingest_status": ingest_status,
+                        "ingest_reason": ingest_reason,
+                        "ingest_failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
                     },
                 )
+                if degraded_fail_open:
+                    self._emit_notification(
+                        kind="youtube_tutorial_progress",
+                        title="YouTube Tutorial Running In Degraded Mode",
+                        message=(
+                            f"{processing_label}: local ingest failed, continuing without pre-fetched transcript."
+                            f"{f' {ingest_reason}' if ingest_reason else ''}"
+                        ),
+                        session_id=session_id,
+                        severity="warning",
+                        metadata={
+                            "source": "hooks",
+                            "hook_name": hook_name,
+                            "hook_session_key": session_key,
+                            "video_id": expected_video_id or "",
+                            "tutorial_title": tutorial_title,
+                            "ingest_status": ingest_status,
+                            "ingest_reason": ingest_reason,
+                            "ingest_failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                        },
+                    )
             idle_timeout_seconds = (
                 int(self._youtube_hook_idle_timeout_seconds)
                 if is_youtube_tutorial and self._youtube_hook_idle_timeout_seconds

@@ -1,0 +1,10 @@
+{
+  "devices": {
+    "mint-desktop": [
+      "tag:operator-workstation"
+    ],
+    "srv1360701": [
+      "tag:vps"
+    ]
+  }
+}

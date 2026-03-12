@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  Activity,
   LayoutDashboard,
   Building2,
   ShieldCheck,
@@ -52,6 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: "Operations",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/dashboard/mission-control", label: "Mission Control", icon: Activity },
       { href: "/dashboard/corporation", label: "Corporation", icon: Building2, requiresHeadquarters: true },
       { href: "/dashboard/supervisors", label: "Supervisor Agents", icon: ShieldCheck, requiresHeadquarters: true },
       { href: "/dashboard/approvals", label: "Approvals", icon: CheckCircle },

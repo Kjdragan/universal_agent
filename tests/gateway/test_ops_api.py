@@ -824,8 +824,15 @@ def test_heartbeat_investigation_completion_updates_origin_and_sends_operator_em
                 "session_key": "simone_heartbeat_ntf_1",
                 "classification": "unknown_issue",
                 "operator_review_required": True,
-                "recommended_next_step": "Review the gateway error burst before changing code.",
-                "email_summary": "Simone found a non-rule gateway error burst that needs operator review.",
+                "recommended_next_step": (
+                    "Update Tailscale ACL to permit SSH from mint-desktop to srv1360701, "
+                    "OR add workstation IP to DigitalOcean firewall, "
+                    "OR manually run DLQ replay from VPS console."
+                ),
+                "email_summary": (
+                    "VPS is healthy via Tailscale mesh but SSH is blocked by ACL policy. "
+                    "Add workstation IP to the DigitalOcean firewall if public fallback is needed."
+                ),
                 "heartbeat_investigation_summary_workspace_relpath": (
                     "session_hook_abc/work_products/heartbeat_investigation_summary.md"
                 ),
@@ -838,11 +845,17 @@ def test_heartbeat_investigation_completion_updates_origin_and_sends_operator_em
     assert updated["metadata"]["heartbeat_mediation_status"] == "investigation_completed"
     assert updated["metadata"]["heartbeat_operator_review_required"] is True
     assert updated["metadata"]["heartbeat_investigation_summary_href"]
+    assert updated["metadata"]["heartbeat_investigation_recommended_next_step"].startswith(
+        "Update Tailscale ACL/SSH policy"
+    )
+    assert "DigitalOcean" not in updated["metadata"]["heartbeat_investigation_email_summary"]
     kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
     assert "heartbeat_operator_review_required" in kinds
     assert "heartbeat_operator_review_sent" in kinds
     assert gateway_server._agentmail_service.calls
     assert gateway_server._agentmail_service.calls[0]["subject"].startswith("Simone heartbeat review required")
+    assert "DigitalOcean" not in gateway_server._agentmail_service.calls[0]["text"]
+    assert "VPS host firewall" in gateway_server._agentmail_service.calls[0]["text"]
 
 
 def test_dashboard_activity_actions_are_audited(client, monkeypatch):
@@ -1780,6 +1793,7 @@ def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
 def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, monkeypatch):
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+    monkeypatch.setattr(gateway_server, "_DEPLOYMENT_PROFILE", "vps")
 
     run_dir = artifacts_root / "youtube-tutorial-creation" / "demo-run"
     impl_dir = run_dir / "implementation"
@@ -1814,7 +1828,6 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
             "target_root": str(target_root),
             "repo_name": "demo_repo",
             "timeout_seconds": 120,
-            "execution_target": "server",
         },
     )
     assert resp.status_code == 200
@@ -1822,8 +1835,18 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
     assert payload["ok"] is True
     assert payload["execution_target"] == "server"
     assert payload["repo_name"] == "demo_repo"
+    assert payload["repo_access_mode"] == "remote_path"
+    assert payload["repo_access_hint"]
+    assert payload["execution_host"]
+    assert "repo_open_uri" not in payload
     assert "Repo ready:" in str(payload.get("stdout") or "")
     assert (target_root / "demo_repo").is_dir()
+
+    listed = client.get("/api/v1/dashboard/tutorials/bootstrap-jobs?run_path=youtube-tutorial-creation/demo-run").json()["jobs"]
+    assert len(listed) == 1
+    assert listed[0]["execution_target"] == "server"
+    assert listed[0]["repo_access_mode"] == "remote_path"
+    assert "repo_open_uri" not in listed[0]
 
 
 def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, tmp_path, monkeypatch):
@@ -2128,6 +2151,48 @@ def test_dashboard_tutorial_notifications_include_interrupted_kind(client):
     assert resp.status_code == 200
     ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
     assert str((interrupted or {}).get("id") or "") in ids
+
+
+def test_dashboard_tutorial_active_runs_include_degraded_stage(client):
+    gateway_server._add_notification(
+        kind="youtube_playlist_new_video",
+        title="New Tutorial Video Detected",
+        message="Demo video queued",
+        severity="info",
+        metadata={"video_id": "demo123", "tutorial_title": "Demo Tutorial"},
+    )
+    gateway_server._add_notification(
+        kind="youtube_tutorial_progress",
+        title="YouTube Tutorial Running In Degraded Mode",
+        message="Demo Tutorial: local ingest failed, continuing without pre-fetched transcript.",
+        severity="warning",
+        metadata={
+            "video_id": "demo123",
+            "tutorial_title": "Demo Tutorial",
+            "ingest_status": "failed_fail_open",
+            "ingest_reason": "youtube_transcript_api_failed after 1/1 attempt",
+            "ingest_failure_class": "api_unavailable",
+        },
+    )
+    resolved = gateway_server._add_notification(
+        kind="youtube_tutorial_started",
+        title="Resolved Tutorial",
+        message="Should not appear in active runs",
+        severity="info",
+        metadata={"video_id": "resolved123", "tutorial_title": "Resolved Tutorial"},
+    )
+    gateway_server._apply_notification_status(resolved, status_value="resolved")
+
+    resp = client.get("/api/v1/dashboard/tutorials/active-runs?limit=20")
+    assert resp.status_code == 200
+    runs = resp.json()["runs"]
+    assert runs
+    current = next((item for item in runs if str(item.get("video_id") or "") == "demo123"), None)
+    assert current is not None
+    assert current["stage"] == "degraded"
+    assert current["ingest_status"] == "failed_fail_open"
+    assert "local ingest failed" in str(current["message"] or "").lower()
+    assert not any(str(item.get("video_id") or "") == "resolved123" for item in runs)
 
 
 def test_ops_telegram_status_includes_pipeline_slices(client):

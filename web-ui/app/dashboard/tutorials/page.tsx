@@ -43,14 +43,35 @@ type TutorialBootstrapJob = {
   queued_at?: string;
   claimed_at?: string;
   completed_at?: string;
+  execution_target?: string;
+  execution_host?: string;
   tutorial_run_path?: string;
   repo_name?: string;
   target_root?: string;
   repo_dir?: string;
   repo_open_uri?: string;
   repo_open_hint?: string;
+  repo_access_mode?: string;
+  repo_access_hint?: string;
   worker_id?: string;
   error?: string;
+};
+
+type ActiveTutorialRun = {
+  run_key: string;
+  session_id?: string;
+  video_id?: string;
+  run_path?: string;
+  title?: string;
+  stage?: string;
+  kind?: string;
+  status?: string;
+  severity?: string;
+  created_at?: string;
+  message?: string;
+  ingest_status?: string;
+  ingest_reason?: string;
+  ingest_failure_class?: string;
 };
 
 type PipelineNotification = {
@@ -213,6 +234,7 @@ function markRunsSeen(runPaths: string[]) {
 
 export default function DashboardTutorialsPage() {
   const [runs, setRuns] = useState<TutorialRun[]>([]);
+  const [activeRuns, setActiveRuns] = useState<ActiveTutorialRun[]>([]);
   const [jobs, setJobs] = useState<TutorialReviewJob[]>([]);
   const [bootstrapJobs, setBootstrapJobs] = useState<TutorialBootstrapJob[]>([]);
   const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
@@ -240,17 +262,20 @@ export default function DashboardTutorialsPage() {
     setLoading(true);
     setError("");
     try {
-      const [runsRes, jobsRes, bootstrapRes, notifRes] = await Promise.all([
+      const [runsRes, activeRes, jobsRes, bootstrapRes, notifRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
+        fetch(`${API_BASE}/api/v1/dashboard/tutorials/active-runs?limit=40`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/review-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
       ]);
       const runsPayload = runsRes.ok ? await runsRes.json() : { runs: [] };
+      const activePayload = activeRes.ok ? await activeRes.json() : { runs: [] };
       const jobsPayload = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
       const bootstrapPayload = bootstrapRes.ok ? await bootstrapRes.json() : { jobs: [] };
       const notifPayload = notifRes.ok ? await notifRes.json() : { notifications: [] };
       setRuns(Array.isArray(runsPayload.runs) ? (runsPayload.runs as TutorialRun[]) : []);
+      setActiveRuns(Array.isArray(activePayload.runs) ? (activePayload.runs as ActiveTutorialRun[]) : []);
       setJobs(Array.isArray(jobsPayload.jobs) ? (jobsPayload.jobs as TutorialReviewJob[]) : []);
       setBootstrapJobs(
         Array.isArray(bootstrapPayload.jobs)
@@ -265,6 +290,7 @@ export default function DashboardTutorialsPage() {
     } catch (err: any) {
       setError(err?.message || "Failed to load tutorial backlog");
       setRuns([]);
+      setActiveRuns([]);
       setJobs([]);
       setBootstrapJobs([]);
       setNotifications([]);
@@ -312,13 +338,27 @@ export default function DashboardTutorialsPage() {
       const status = asText(job.status).toLowerCase();
       return status === "queued" || status === "running";
     });
-    const refreshMs = hasActiveBootstrapJobs ? 5_000 : 30_000;
+    const refreshMs = hasActiveBootstrapJobs || activeRuns.length > 0 ? 5_000 : 30_000;
     const interval = setInterval(async () => {
       try {
-        const [notifRes, bootstrapRes] = await Promise.all([
+        const [runsRes, activeRes, notifRes, bootstrapRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
+          fetch(`${API_BASE}/api/v1/dashboard/tutorials/active-runs?limit=40`),
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
         ]);
+        if (runsRes.ok) {
+          const data = await runsRes.json();
+          if (Array.isArray(data.runs)) {
+            setRuns(data.runs as TutorialRun[]);
+          }
+        }
+        if (activeRes.ok) {
+          const data = await activeRes.json();
+          if (Array.isArray(data.runs)) {
+            setActiveRuns(data.runs as ActiveTutorialRun[]);
+          }
+        }
         if (notifRes.ok) {
           const data = await notifRes.json();
           if (Array.isArray(data.notifications)) {
@@ -335,7 +375,7 @@ export default function DashboardTutorialsPage() {
       void fetchWatcherStatus();
     }, refreshMs);
     return () => clearInterval(interval);
-  }, [bootstrapJobs, fetchWatcherStatus]);
+  }, [activeRuns.length, bootstrapJobs, fetchWatcherStatus]);
 
   // Mark currently visible runs as seen after initial load
   useEffect(() => {
@@ -368,6 +408,17 @@ export default function DashboardTutorialsPage() {
     }
     return map;
   }, [bootstrapJobs]);
+
+  const activeRunStageLabel = useCallback((run: ActiveTutorialRun): string => {
+    const stage = asText(run.stage).toLowerCase();
+    if (stage === "degraded") return "Degraded";
+    if (stage === "recovery_queued") return "Recovery Queued";
+    if (stage === "interrupted") return "Interrupted";
+    if (stage === "in_progress") return "In Progress";
+    if (stage === "processing") return "Processing";
+    if (stage === "queued") return "Queued";
+    return stage || "Active";
+  }, []);
 
   // Keep only the latest notification per tutorial entity (video/run),
   // so "started" notices are replaced by newer "ready/failed" updates.
@@ -576,9 +627,11 @@ export default function DashboardTutorialsPage() {
           throw new Error(detail);
         }
         const repoDir = asText((payload as Record<string, unknown>).repo_dir);
-        const repoOpenHint = asText((payload as Record<string, unknown>).repo_open_hint);
+        const repoAccessHint =
+          asText((payload as Record<string, unknown>).repo_access_hint)
+          || asText((payload as Record<string, unknown>).repo_open_hint);
         if (repoDir) {
-          setDispatchStatus(`Repo created: ${repoDir}${repoOpenHint ? ` — ${repoOpenHint}` : ""}`);
+          setDispatchStatus(`Repo created on VPS: ${repoDir}${repoAccessHint ? ` — ${repoAccessHint}` : ""}`);
         } else {
           setDispatchStatus("Repo created successfully.");
         }
@@ -669,6 +722,67 @@ export default function DashboardTutorialsPage() {
             {watcherStatus.last_error && (
               <span className="text-rose-300" title={watcherStatus.last_error}>Error: {watcherStatus.last_error.slice(0, 60)}</span>
             )}
+          </div>
+        </section>
+      )}
+
+      {activeRuns.length > 0 && (
+        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Active Tutorial Runs ({activeRuns.length})
+            </h2>
+          </div>
+          <div className="space-y-2">
+            {activeRuns.map((run) => {
+              const stage = asText(run.stage).toLowerCase();
+              const badgeClass =
+                stage === "degraded" || stage === "interrupted"
+                  ? "border-amber-700/60 bg-amber-900/25 text-amber-200"
+                  : stage === "queued"
+                    ? "border-sky-700/60 bg-sky-900/25 text-sky-200"
+                    : "border-violet-700/60 bg-violet-900/25 text-violet-200";
+              const sessionHref = chatSessionHref(asText(run.session_id));
+              return (
+                <article
+                  key={asText(run.run_key) || `${asText(run.video_id)}-${asText(run.created_at)}`}
+                  className="rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-100">
+                        {asText(run.title) || asText(run.video_id) || asText(run.run_key)}
+                      </p>
+                      <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span className={`rounded border px-1.5 py-0.5 ${badgeClass}`}>
+                          {activeRunStageLabel(run)}
+                        </span>
+                        {asText(run.video_id) && <span>video={asText(run.video_id)}</span>}
+                        {asText(run.created_at) && <span>{timeAgo(asText(run.created_at))}</span>}
+                      </p>
+                      {asText(run.message) && (
+                        <p className="mt-1 text-xs text-slate-300">{asText(run.message)}</p>
+                      )}
+                      {asText(run.ingest_reason) && (
+                        <p className="mt-1 text-[11px] text-amber-200">
+                          Ingest: {asText(run.ingest_reason)}
+                        </p>
+                      )}
+                    </div>
+                    {sessionHref && (
+                      <a
+                        href={sessionHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded border border-violet-700/60 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-100 hover:bg-violet-900/35"
+                      >
+                        Watch
+                      </a>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </section>
       )}
@@ -798,6 +912,7 @@ export default function DashboardTutorialsPage() {
             const latestJobStatus = asText(latestJob?.status).toLowerCase();
             const latestBootstrapJob = latestBootstrapByRun.get(runPath);
             const latestBootstrapStatus = asText(latestBootstrapJob?.status).toLowerCase();
+            const latestBootstrapTarget = asText(latestBootstrapJob?.execution_target).toLowerCase() || "server";
             const bootstrapPending = latestBootstrapStatus === "queued" || latestBootstrapStatus === "running";
             const sessionHref = chatSessionHref(asText(latestJob?.session_id));
             const viewHref =
@@ -875,9 +990,9 @@ export default function DashboardTutorialsPage() {
                     {latestBootstrapStatus === "completed" || latestBootstrapStatus === "success" ? (
                       <div className="flex items-center gap-1.5">
                         <span className="rounded border border-emerald-700/60 bg-emerald-900/40 px-2 py-1 text-[11px] text-emerald-100">
-                          Repo Ready
+                          {latestBootstrapTarget === "local" ? "Repo Ready" : "Repo Ready on VPS"}
                         </span>
-                        {toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir)) && (
+                        {latestBootstrapTarget === "local" && toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir)) && (
                           <a
                             href={toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir))}
                             target="_blank"
@@ -915,14 +1030,16 @@ export default function DashboardTutorialsPage() {
                           }`}
                         title={
                           hasCreateRepoScript
-                            ? "Queue local repo creation using implementation/create_new_repo.sh via desktop worker"
+                            ? "Create the implementation repo on the VPS using implementation/create_new_repo.sh"
                             : "Create repo action (run may need bootstrap script regeneration first)"
                         }
                       >
                         {bootstrappingRunPath === runPath
-                          ? "Queueing..."
+                          ? "Creating on VPS..."
                           : bootstrapPending
-                            ? (latestBootstrapStatus === "running" ? "Creating (Local Worker)..." : "Queued (Waiting on Worker)")
+                            ? (latestBootstrapStatus === "running"
+                              ? (latestBootstrapTarget === "local" ? "Creating (Local Worker)..." : "Creating on VPS...")
+                              : (latestBootstrapTarget === "local" ? "Queued (Waiting on Worker)" : "Creating on VPS..."))
                             : "Create Repo"}
                       </button>
                     )}
@@ -973,7 +1090,7 @@ export default function DashboardTutorialsPage() {
                       }`}
                     title={asText(latestBootstrapJob.error)}
                   >
-                    Local repo bootstrap: {asText(latestBootstrapJob.status) || "unknown"} (
+                    {latestBootstrapTarget === "local" ? "Local repo bootstrap" : "VPS repo bootstrap"}: {asText(latestBootstrapJob.status) || "unknown"} (
                     {formatDate(
                       asText(latestBootstrapJob.completed_at)
                       || asText(latestBootstrapJob.claimed_at)
@@ -982,6 +1099,9 @@ export default function DashboardTutorialsPage() {
                     )
                     {asText(latestBootstrapJob.repo_dir) && (
                       <> · {asText(latestBootstrapJob.repo_dir)}</>
+                    )}
+                    {latestBootstrapTarget !== "local" && asText(latestBootstrapJob.repo_access_hint) && (
+                      <> · {asText(latestBootstrapJob.repo_access_hint)}</>
                     )}
                     {asText(latestBootstrapJob.error) && (
                       <> · {asText(latestBootstrapJob.error)}</>

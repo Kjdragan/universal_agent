@@ -19,7 +19,6 @@ This is the only supported app deployment path in this repository.
 | `Deploy Staging` | Push to `develop` | Staging Service |
 | `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA, then dispatch production deploy |
 | `Deploy Production` | Push to `main` | Production Service |
-
 ## Current Targets
 
 | Area | Staging | Production |
@@ -193,7 +192,6 @@ then CI identity is not matching the required non-interactive SSH policy. Verify
 - Ensure the auth key was created with tag identity `tag:ci-gha` (reusable + ephemeral + preauthorized).
 - Check the [Tailscale Admin Console](https://login.tailscale.com/admin/machines) to see if the GitHub Runner is joining properly.
 - Verify ACL/grants permit runner-to-VPS traffic on SSH.
-
 ### Service Startup Errors
 
 - Tailing logs on the VPS:

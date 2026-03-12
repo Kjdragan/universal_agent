@@ -124,6 +124,18 @@ def _classify_api_error(error: str, detail: str) -> str:
     if any(
         hint in lowered
         for hint in (
+            "tunnel connection failed",
+            "unable to connect to proxy",
+            "proxyerror",
+            "cannot connect to proxy",
+            "proxy connection failed",
+            "connect tunnel failed",
+        )
+    ):
+        return "proxy_connect_failed"
+    if any(
+        hint in lowered
+        for hint in (
             "requestblocked",
             "ipblocked",
             "ip has been blocked",
