@@ -1,10 +1,15 @@
-#!/usr/bin/env python3
 import sys
 import sqlite3
+import os
 from typing import Optional
 
 def _task_hub_open_conn() -> Optional[sqlite3.Connection]:
     try:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
         from universal_agent.gateway_server import _task_hub_open_conn
         return _task_hub_open_conn()
     except Exception as e:
