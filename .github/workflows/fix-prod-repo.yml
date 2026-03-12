@@ -1,0 +1,50 @@
+name: Fix Production Repo Directory
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix-repo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Connect to Tailscale Network
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: gha-fix-${{ github.run_id }}
+          ping: ${{ secrets.VPS_SSH_HOST }}
+          
+      - name: Fix Git Repo via SSH
+        env:
+          SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          timeout 5m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" 'bash -s' << 'EOF'
+            set -euo pipefail
+            
+            PROD_DIR='/opt/universal_agent'
+            echo "--> Inspecting $PROD_DIR"
+            ls -la $PROD_DIR || true
+            
+            if [ -d "$PROD_DIR" ]; then
+              echo "--> Enforcing valid git clone in $PROD_DIR..."
+              cd $PROD_DIR
+              git config --global --add safe.directory /opt/universal_agent
+              git init || true
+              git remote remove origin || true
+              git remote add origin https://github.com/Kjdragan/universal_agent.git
+              git fetch origin main
+              git reset --hard origin/main
+              # Restore permissions if needed, but assuming ua handles its own
+              chown -R ua:ua .git || true
+              echo "--> Successfully reconstituted Git repository in $PROD_DIR."
+            else
+              echo "--> Directory $PROD_DIR/.git already exists or directory is missing!"
+            fi
+            
+          EOF

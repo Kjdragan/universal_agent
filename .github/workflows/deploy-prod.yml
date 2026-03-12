@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   deploy-production:
@@ -84,22 +85,34 @@ jobs:
             
             cd "$PROD_DIR"
 
-            echo "--> Ensuring Python 3.12 runtime for uv..."
-            export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
-            uv python install 3.12
-            
             # 1. Pull latest code
-            echo "--> Fetching and pulling latest main branch..."
-            git fetch origin
-            git checkout main
-            git pull origin main
+            echo "--> Checking out branch main in $PROD_DIR"
+            cd "$PROD_DIR"
+            git config --global --add safe.directory "$PROD_DIR"
+            git fetch origin main
+            git reset --hard origin/main
             
             # Note: We do NOT auto-provision production secrets from dev. 
             # Production secrets (in prod-hq) should be curated manually or via an explicit sync script.
             
+            echo "--> Transferring ownership to service user before dependency sync..."
+            sudo chown -R ua:ua "$PROD_DIR"
+
+            echo "--> Checking whether the existing venv is usable by ua..."
+            if [ -e "$PROD_DIR/.venv/bin/python3" ]; then
+              if ! sudo -H -u ua bash -c "readlink -f \"$PROD_DIR/.venv/bin/python3\" >/dev/null 2>&1"; then
+                echo "--> Existing venv interpreter is not accessible to ua; removing stale .venv for clean rebuild..."
+                sudo rm -rf "$PROD_DIR/.venv"
+              fi
+            fi
+            
             # 2. Dependency Sync
+            echo "--> Ensuring Python 3.12 runtime for uv..."
+            export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
+            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv python install 3.12"
+
             echo "--> Syncing dependencies with uv..."
-            uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
+            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
