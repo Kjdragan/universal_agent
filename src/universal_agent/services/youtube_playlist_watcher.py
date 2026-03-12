@@ -76,8 +76,13 @@ _NON_CODE_HINT_KEYWORDS = {
 
 
 def _is_enabled() -> bool:
-    val = os.getenv("UA_YT_PLAYLIST_WATCHER_ENABLED", "1").strip().lower()
-    return val not in {"0", "false", "no", "off"}
+    raw = os.getenv("UA_YT_PLAYLIST_WATCHER_ENABLED")
+    if raw is not None and raw.strip():
+        return raw.strip().lower() not in {"0", "false", "no", "off"}
+    profile = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
+    if profile == "local_workstation":
+        return False
+    return True
 
 
 def _poll_interval() -> float:

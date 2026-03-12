@@ -26,6 +26,22 @@ def test_classify_api_error_detects_proxy_auth_issue() -> None:
     assert cls == "proxy_auth_failed"
 
 
+def test_classify_api_error_detects_proxy_connect_tunnel_failure() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "youtube_transcript_api_failed",
+        "Tunnel connection failed: 404 Not Found",
+    )
+    assert cls == "proxy_connect_failed"
+
+
+def test_classify_api_error_detects_proxy_connect_unreachable() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "yt_dlp_metadata_failed",
+        "Unable to connect to proxy",
+    )
+    assert cls == "proxy_connect_failed"
+
+
 def test_classify_api_error_detects_video_unavailable() -> None:
     cls = youtube_ingest._classify_api_error(
         "youtube_transcript_api_failed",

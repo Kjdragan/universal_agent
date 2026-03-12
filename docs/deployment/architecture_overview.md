@@ -23,6 +23,15 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units |
 | Secrets Behavior | Provision `staging-hq`; temporary fallback to `dev` if provisioning fails | No auto-clone from `dev`; production secrets remain curated separately |
 
+## Tutorial Runtime Contract
+
+The deployed VPS lane is also the default runtime for the YouTube tutorial pipeline.
+
+- Playlist watching, hook transcript ingestion, tutorial artifact generation, and tutorial repo bootstrap run on the deployed VPS checkout.
+- Tutorial repo bootstrap defaults to `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=/opt/universal_agent_data/tutorial_repos` on VPS.
+- Local workstation tutorial processing is supported only as an explicit development fallback and should not be treated as the normal deployed path.
+- VPS tutorial ingest should use loopback-first endpoint ordering, typically `http://127.0.0.1:8002/api/v1/youtube/ingest`.
+
 ## Supported Deployment Rule
 
 1. Open a PR to `develop` for Codex review of feature work.

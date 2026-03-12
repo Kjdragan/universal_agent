@@ -174,6 +174,51 @@ async def test_action_timeout_logs_and_stops_dispatch(hooks_service, mock_gatewa
     assert "Hook action timed out" in caplog.text
 
 
+def test_emit_heartbeat_investigation_completion_sanitizes_recommendation_text(mock_gateway, tmp_path):
+    notifications: list[dict] = []
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+
+    workspace_root = tmp_path / "session_hook_abc"
+    work_products = workspace_root / "work_products"
+    work_products.mkdir(parents=True)
+    (work_products / "heartbeat_investigation_summary.json").write_text(
+        json.dumps(
+            {
+                "source_notification_id": "ntf_123",
+                "classification": "infrastructure_access",
+                "operator_review_required": True,
+                "recommended_next_step": (
+                    "Update Tailscale ACL to permit SSH from mint-desktop to srv1360701, "
+                    "OR add workstation IP to DigitalOcean firewall, "
+                    "OR manually run DLQ replay from VPS console."
+                ),
+                "email_summary": (
+                    "VPS is healthy via Tailscale mesh but SSH is blocked by ACL policy. "
+                    "Add workstation IP to the DigitalOcean firewall if public fallback is needed."
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work_products / "heartbeat_investigation_summary.md").write_text(
+        "Heartbeat investigation summary.",
+        encoding="utf-8",
+    )
+
+    service._emit_heartbeat_investigation_completion(
+        session_id="session_hook_abc",
+        session_key="simone_heartbeat_ntf_123",
+        workspace_root=workspace_root,
+    )
+
+    assert notifications
+    metadata = notifications[0]["metadata"]
+    assert metadata["recommended_next_step"].startswith("Update Tailscale ACL/SSH policy")
+    assert "DigitalOcean" not in metadata["email_summary"]
+    assert "VPS host firewall" in metadata["email_summary"]
+
+
 @pytest.mark.asyncio
 async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock_gateway):
     hooks_service.config.mappings = [
@@ -1196,7 +1241,15 @@ async def test_local_ingest_api_unavailable_allow_degraded_fails_open(mock_gatew
     assert gateway_request.metadata["hook_youtube_ingest_status"] == "failed_fail_open"
     assert gateway_request.metadata["hook_youtube_ingest_failure_class"] == "api_unavailable"
     assert gateway_request.metadata["hook_youtube_ingest_fail_open_reason"] == "allow_degraded_transcript_only"
+    assert gateway_request.metadata["hook_youtube_ingest_pending_file"] == ""
+    assert (workspace_dir / "pending_local_ingest.json").exists() is False
+    assert (workspace_dir / "ingestion" / "youtube_local_ingest_result.json").exists()
+    assert (workspace_dir / "local_ingest_result.json").exists()
     assert not any(item.get("kind") == "youtube_ingest_failed" for item in notifications)
+    progress = next((item for item in notifications if item.get("kind") == "youtube_tutorial_progress"), None)
+    assert progress is not None
+    assert progress["severity"] == "warning"
+    assert progress["metadata"]["ingest_status"] == "failed_fail_open"
 
 
 @pytest.mark.asyncio
@@ -1268,6 +1321,110 @@ async def test_local_ingest_proxy_failure_emits_proxy_alert_notification(mock_ga
     proxy_alert = next(item for item in notifications if item.get("kind") == "youtube_ingest_proxy_alert")
     assert proxy_alert["severity"] == "error"
     assert proxy_alert["metadata"]["failure_class"] == "proxy_quota_or_billing"
+
+
+@pytest.mark.asyncio
+async def test_local_ingest_proxy_connect_failure_emits_proxy_alert_notification(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
+                name="RouteHook",
+                session_key="yt_route_dxlyCPGCvy8_proxy_connect_notify",
+                to="youtube-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_dxlyCPGCvy8_proxy_connect_notify"
+    session = GatewaySession(
+        session_id="session_hook_yt_route_dxlyCPGCvy8_proxy_connect_notify",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+    notifications: list[dict] = []
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "1",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS": "0",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+        service.config = config
+        service._call_local_youtube_ingest_worker = AsyncMock(
+            return_value={
+                "ok": False,
+                "status": "failed",
+                "error": "youtube_transcript_api_failed",
+                "failure_class": "proxy_connect_failed",
+            }
+        )
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.1)
+
+    proxy_alert = next(item for item in notifications if item.get("kind") == "youtube_ingest_proxy_alert")
+    assert proxy_alert["severity"] == "error"
+    assert proxy_alert["metadata"]["failure_class"] == "proxy_connect_failed"
+    assert str(proxy_alert["metadata"]["result_file"]).endswith("local_ingest_result.json")
+
+
+def test_vps_local_worker_prefers_loopback_only(mock_gateway):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_DEPLOYMENT_PROFILE": "vps",
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URLS": "http://100.95.187.38:8002/api/v1/youtube/ingest,http://127.0.0.1:8002/api/v1/youtube/ingest",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+    assert service._youtube_ingest_urls == ["http://127.0.0.1:8002/api/v1/youtube/ingest"]
+
+
+def test_local_workstation_local_worker_reorders_loopback_first(mock_gateway):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_DEPLOYMENT_PROFILE": "local_workstation",
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URLS": "http://100.95.187.38:8002/api/v1/youtube/ingest,http://127.0.0.1:8002/api/v1/youtube/ingest",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+    assert service._youtube_ingest_urls == [
+        "http://127.0.0.1:8002/api/v1/youtube/ingest",
+        "http://100.95.187.38:8002/api/v1/youtube/ingest",
+    ]
 
 
 def test_youtube_ingest_retry_attempts_capped_at_ten(mock_gateway):

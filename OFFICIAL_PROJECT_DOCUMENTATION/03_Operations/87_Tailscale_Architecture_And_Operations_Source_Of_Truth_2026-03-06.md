@@ -40,6 +40,29 @@ Tailscale is not currently the public ingress path for the main production app.
 
 Public internet entry points remain separate.
 
+## Canonical Tailnet Role Model
+
+The canonical current node-role split is:
+- `tag:vps` = server nodes only
+- `tag:operator-workstation` = human-operated admin workstations
+- `tag:ci-gha` = GitHub Actions runner identity for deploy automation
+
+The practical consequence is:
+- `mint-desktop` should be tagged `tag:operator-workstation`
+- `srv1360701` should be tagged `tag:vps`
+- operator workstation access to VPS nodes should be granted explicitly through Tailscale SSH policy rather than by tagging a workstation as a VPS
+
+This role model is now tracked in repo-managed files:
+- `infrastructure/tailscale/device_roles.json`
+- `infrastructure/tailscale/tailnet-policy.hujson`
+
+Live tailnet management helpers are:
+- `scripts/tailscale_set_device_tags.py`
+- `scripts/tailscale_apply_policy.py`
+
+These scripts are intended to keep the live tailnet aligned with the canonical role map and SSH policy.
+Their current control-plane credential source is Infisical path `prod:/tailscale` because the project could not create an additional `infra-admin` environment at the time of implementation.
+
 ## Canonical Remote Host Standard
 
 Preferred canonical remote host:
@@ -291,6 +314,13 @@ Common failure signatures:
 - `tailscale ping` failure to the MagicDNS host or tailnet IP
 - staging failure because `tailscale serve` is not enabled on the tailnet
 - interactive Tailscale SSH approval requirement during first or additional checks
+- `tailscale ping` succeeding while SSH fails with `tailnet policy does not permit you to SSH to this node`
+
+When `tailscale ping` succeeds but SSH is denied, treat the issue as a Tailscale ACL/SSH policy problem first.
+The canonical remediation order is:
+1. verify node tags match `infrastructure/tailscale/device_roles.json`
+2. apply the repo-managed policy overlay from `infrastructure/tailscale/tailnet-policy.hujson`
+3. only use public-IP allowlisting in the VPS host firewall as a fallback path
 
 ## Security and Operations Posture
 
@@ -300,6 +330,7 @@ The current Tailscale posture is:
 - keep break-glass bypass available for urgent cases
 - keep SSH auth mode switch explicit instead of scattering custom SSH behavior per script
 - keep staging private by default via tailnet routing instead of exposing additional public surfaces
+- keep Hostinger-specific public firewall handling out of normal remediation when tailnet access can be fixed directly
 
 ## Current Gaps and Follow-Up Items
 
@@ -316,6 +347,9 @@ The current Tailscale posture is:
 4. **Runbook convergence**
    - older runbooks still contain direct `100.x` SSH examples and should eventually defer more explicitly to the canonical tailnet-first workflow
 
+5. **Automation bootstrap**
+   - the live policy scripts require a Tailscale admin API token stored centrally in Infisical and should not depend on one workstation being the source of truth
+
 ## Source Files That Define Current Truth
 
 Primary implementation:
@@ -327,6 +361,10 @@ Primary implementation:
 - `scripts/tailscale_vps_preflight.sh`
 - `scripts/install_remote_workspace_sync_timer.sh`
 - `scripts/remote_workspace_sync_control.sh`
+- `scripts/tailscale_set_device_tags.py`
+- `scripts/tailscale_apply_policy.py`
+- `infrastructure/tailscale/device_roles.json`
+- `infrastructure/tailscale/tailnet-policy.hujson`
 
 Primary operational records:
 - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/27_Deployment_Runbook_2026-02-12.md`

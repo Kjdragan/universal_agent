@@ -1,0 +1,33 @@
+{
+  "tagOwners": {
+    "tag:operator-workstation": ["autogroup:admin"]
+  },
+  "ssh": [
+    {
+      "action": "accept",
+      "src": [
+        "tag:operator-workstation"
+      ],
+      "dst": [
+        "tag:vps"
+      ],
+      "users": [
+        "root",
+        "ua"
+      ]
+    },
+    {
+      "action": "accept",
+      "src": [
+        "tag:ci-gha"
+      ],
+      "dst": [
+        "tag:vps"
+      ],
+      "users": [
+        "root",
+        "ua"
+      ]
+    }
+  ]
+}

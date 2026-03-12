@@ -23,6 +23,11 @@ Current canonical implementation is primarily centered on:
 - `src/universal_agent/hooks_service.py`
 - `src/universal_agent/tgtg/config.py`
 
+Current runtime topology for the YouTube tutorial pipeline is:
+- VPS-primary for playlist watching, hook ingest, artifact generation, and repo bootstrap
+- local workstation as explicit dev fallback only
+- VPS ingest should prefer loopback `http://127.0.0.1:8002/api/v1/youtube/ingest` unless an operator intentionally overrides it
+
 ## Why the Residential Proxy Exists
 
 Some external services, especially YouTube transcript fetching from server-hosted datacenter IPs, can block or challenge requests aggressively.
@@ -150,6 +155,7 @@ The hooks service currently treats these as proxy-alert classes:
 - `proxy_quota_or_billing`
 - `proxy_auth_failed`
 - `proxy_not_configured`
+- `proxy_connect_failed`
 
 Current alert posture includes:
 - human-readable failure formatting
@@ -173,6 +179,8 @@ Alias/fallback env vars seen in code:
 
 Operational env vars:
 - `UA_YOUTUBE_INGEST_REQUIRE_PROXY`
+- `UA_HOOKS_YOUTUBE_INGEST_URLS`
+- `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT`
 - `PROXY_FILTER_IP_LOCATIONS`
 - `PROXY_LOCATIONS`
 - `YT_PROXY_FILTER_IP_LOCATIONS`
@@ -193,8 +201,13 @@ Unhealthy state indicators:
 - `proxy_not_configured`
 - `proxy_auth_failed`
 - `proxy_quota_or_billing`
+- `proxy_connect_failed`
 - repeated ingest failures with bot-block style errors
 - proxy mode unexpectedly `disabled` in an environment that requires it
+
+Operational diagnostics:
+- terminal hook ingest failures should persist `local_ingest_result.json` in the run workspace
+- use `scripts/check_youtube_ingress_readiness.py --probe-video-id <public_video_id> --json` to verify end-to-end proxy-backed ingest from the active runtime
 
 ## Cost and Safety Rules
 
@@ -238,3 +251,4 @@ The canonical residential proxy policy in Universal Agent is:
 - **never send video binary through it**
 - **treat it as a costly shared capability, not a default project-wide network path**
 - **surface misconfiguration loudly through ingest failures and hook notifications**
+- **treat `proxy_connect_failed` as a first-class proxy transport incident, not a generic API outage**

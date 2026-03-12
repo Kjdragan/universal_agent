@@ -22,6 +22,15 @@ This report is based on:
 
 ## 2. Direct answers first
 
+## Runtime note (2026-03-12)
+
+The tutorial pipeline has since been normalized to a VPS-primary topology:
+
+1. VPS is the default host for playlist watching, transcript ingestion, artifact generation, and tutorial repo bootstrap.
+2. `UA_HOOKS_YOUTUBE_INGEST_URLS` should prefer VPS loopback first, typically `http://127.0.0.1:8002/api/v1/youtube/ingest`.
+3. Local workstation tutorial processing is now a dev-only fallback rather than the normal runtime path.
+4. Terminal hook ingest failures now persist `local_ingest_result.json`, and proxy CONNECT/tunnel failures are classified as `proxy_connect_failed`.
+
 ## Is residential proxy used for YouTube RSS feed polling?
 No. RSS polling itself is direct HTTP to YouTube feeds (`videos.xml`) and does not use Webshare proxy.
 
@@ -171,11 +180,17 @@ Code:
 
 ## 5. Live VPS snapshot (current state)
 
-Environment config confirms residential-first endpoint order:
+Historical snapshot from the earlier workstation-first configuration:
 
 1. `/opt/universal_agent/.env:UA_HOOKS_YOUTUBE_INGEST_MODE=local_worker`
 2. `/opt/universal_agent/.env:UA_HOOKS_YOUTUBE_INGEST_URLS=http://100.95.187.38:8002/api/v1/youtube/ingest,http://127.0.0.1:8002/api/v1/youtube/ingest`
 3. `/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env:CSI_RSS_ANALYSIS_TRANSCRIPT_ENDPOINTS=...same order...`
+
+Current target runtime contract:
+
+1. VPS tutorial ingest should run against `http://127.0.0.1:8002/api/v1/youtube/ingest` first.
+2. Tailnet/self-IP tutorial ingest endpoints are fallback-only and should not be the first hop on VPS.
+3. Tutorial repo bootstrap defaults to the VPS target root `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=/opt/universal_agent_data/tutorial_repos`.
 
 Timer cadence (live):
 
@@ -258,6 +273,15 @@ Evidence for (4): deploy script excludes `artifacts/` and others, but not `CSI_I
    - add rsync exclude for `CSI_Ingester/development/var/`
 2. Add dashboard panel for latest markdown narrative artifacts:
    - trend markdown
+
+## 9. Current operator checks
+
+For the current VPS-primary tutorial pipeline:
+
+1. Run `uv run python scripts/check_youtube_ingress_readiness.py --json` for config-only readiness.
+2. Run `uv run python scripts/check_youtube_ingress_readiness.py --probe-video-id <public_video_id> --json` for a real ingest probe.
+3. Treat `proxy_connect_failed` as a proxy transport/config incident distinct from `proxy_auth_failed` and `proxy_quota_or_billing`.
+4. For failed hook ingest runs, inspect `local_ingest_result.json` in the run workspace before relying only on journal logs.
    - insight markdown
    - report product markdown
 3. Keep proxy-alert notifications enabled (already implemented):

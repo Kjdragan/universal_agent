@@ -121,6 +121,7 @@ from universal_agent.work_threads import (
     upsert_work_thread,
 )
 from universal_agent.hooks_service import HooksService, build_manual_youtube_action
+from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
@@ -453,7 +454,7 @@ def _tutorial_bootstrap_target_root_default() -> str:
     if configured:
         return configured
     if _DEPLOYMENT_PROFILE == "vps":
-        return "/home/kjdragan/YoutubeCodeExamples"
+        return "/opt/universal_agent_data/tutorial_repos"
     return "/home/kjdragan/YoutubeCodeExamples"
 
 
@@ -479,8 +480,24 @@ def _tutorial_bootstrap_open_metadata(repo_dir: str) -> tuple[str, str]:
     return open_uri, hint
 
 
+def _tutorial_bootstrap_execution_host() -> str:
+    return (
+        str(os.getenv("UA_SERVER_ACCESS_HOST") or "").strip()
+        or str(os.getenv("UA_FACTORY_HOSTNAME") or "").strip()
+        or str(os.getenv("HOSTNAME") or "").strip()
+        or socket.gethostname()
+    )
+
+
+def _tutorial_bootstrap_remote_access_metadata(repo_dir: str) -> tuple[str, str, str]:
+    execution_host = _tutorial_bootstrap_execution_host()
+    hint = f"SSH to {execution_host} and open {repo_dir}"
+    return execution_host, "remote_path", hint
+
+
 def _tutorial_bootstrap_enrich_job(job: dict[str, Any]) -> dict[str, Any]:
     record = dict(job)
+    execution_target = str(record.get("execution_target") or "local").strip().lower() or "local"
     repo_dir = str(record.get("repo_dir") or "").strip()
     if not repo_dir:
         target_root = str(record.get("target_root") or "").strip()
@@ -489,11 +506,19 @@ def _tutorial_bootstrap_enrich_job(job: dict[str, Any]) -> dict[str, Any]:
             repo_dir = str((Path(target_root).expanduser() / repo_name).resolve())
             record["repo_dir"] = repo_dir
     if repo_dir:
-        repo_open_uri, repo_open_hint = _tutorial_bootstrap_open_metadata(repo_dir)
-        if repo_open_uri:
-            record["repo_open_uri"] = repo_open_uri
-        if repo_open_hint:
-            record["repo_open_hint"] = repo_open_hint
+        if execution_target == "server":
+            execution_host, repo_access_mode, repo_access_hint = _tutorial_bootstrap_remote_access_metadata(repo_dir)
+            record["execution_host"] = execution_host
+            record["repo_access_mode"] = repo_access_mode
+            record["repo_access_hint"] = repo_access_hint
+            record.pop("repo_open_uri", None)
+            record.pop("repo_open_hint", None)
+        else:
+            repo_open_uri, repo_open_hint = _tutorial_bootstrap_open_metadata(repo_dir)
+            if repo_open_uri:
+                record["repo_open_uri"] = repo_open_uri
+            if repo_open_hint:
+                record["repo_open_hint"] = repo_open_hint
     return record
 
 
@@ -802,6 +827,108 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
 
     runs.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in runs[: max(1, min(limit, 1000))]]
+
+
+_TUTORIAL_ACTIVE_KINDS = frozenset({
+    "youtube_playlist_new_video",
+    "youtube_tutorial_started",
+    "youtube_tutorial_progress",
+    "youtube_tutorial_interrupted",
+    "youtube_hook_recovery_queued",
+})
+
+
+def _tutorial_activity_event_row(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    created_at = str(item.get("created_at_utc") or _utc_now_iso())
+    updated_at = str(item.get("updated_at_utc") or created_at)
+    return {
+        "id": str(item.get("id") or ""),
+        "kind": str(item.get("kind") or ""),
+        "title": str(item.get("title") or ""),
+        "message": str(item.get("summary") or item.get("full_message") or ""),
+        "severity": str(item.get("severity") or "info"),
+        "status": str(item.get("status") or "new"),
+        "requires_action": bool(item.get("requires_action")),
+        "session_id": str(item.get("session_id") or ""),
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "metadata": metadata,
+    }
+
+
+def _collect_active_tutorial_runs_from_rows(rows: list[dict[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+    stage_map = {
+        "youtube_playlist_new_video": "queued",
+        "youtube_tutorial_started": "processing",
+        "youtube_tutorial_progress": "in_progress",
+        "youtube_tutorial_interrupted": "interrupted",
+        "youtube_hook_recovery_queued": "recovery_queued",
+    }
+    active_runs: list[dict[str, Any]] = []
+    seen_run_keys: set[str] = set()
+    for item in rows:
+        entry = _tutorial_activity_event_row(item)
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind not in _TUTORIAL_ACTIVE_KINDS:
+            continue
+        normalized_status = _normalize_notification_status(str(entry.get("status") or "new"))
+        if normalized_status in {"dismissed", "resolved", "completed"}:
+            continue
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        video_id = str(metadata.get("video_id") or metadata.get("youtube_video_id") or "").strip()
+        run_path = str(metadata.get("tutorial_run_path") or metadata.get("run_path") or "").strip()
+        ingest_status = str(
+            metadata.get("ingest_status")
+            or metadata.get("hook_youtube_ingest_status")
+            or ""
+        ).strip().lower()
+        run_key = (
+            video_id
+            or run_path
+            or str(entry.get("session_id") or "").strip()
+            or f"{kind}:{entry.get('id')}"
+        )
+        if not run_key or run_key in seen_run_keys:
+            continue
+        seen_run_keys.add(run_key)
+        stage = stage_map.get(kind, "queued")
+        if stage in {"processing", "in_progress"} and ingest_status == "failed_fail_open":
+            stage = "degraded"
+        active_runs.append(
+            {
+                "run_key": run_key,
+                "session_id": str(entry.get("session_id") or "").strip(),
+                "video_id": video_id,
+                "run_path": run_path,
+                "title": str(
+                    metadata.get("tutorial_title")
+                    or metadata.get("title")
+                    or entry.get("title")
+                    or ""
+                ).strip(),
+                "stage": stage,
+                "kind": kind,
+                "status": str(entry.get("status") or "new"),
+                "severity": str(entry.get("severity") or "info"),
+                "created_at": str(entry.get("created_at") or _utc_now_iso()),
+                "message": str(entry.get("message") or ""),
+                "ingest_status": ingest_status,
+                "ingest_reason": str(
+                    metadata.get("ingest_reason")
+                    or metadata.get("hook_youtube_ingest_reason")
+                    or ""
+                ).strip(),
+                "ingest_failure_class": str(
+                    metadata.get("ingest_failure_class")
+                    or metadata.get("hook_youtube_ingest_failure_class")
+                    or ""
+                ).strip(),
+            }
+        )
+        if len(active_runs) >= max(1, min(limit, 100)):
+            break
+    return active_runs
 
 
 def _remember_tutorial_review_job(job: dict[str, Any]) -> None:
@@ -1781,7 +1908,7 @@ class TutorialBootstrapRepoRequest(BaseModel):
     target_root: Optional[str] = None
     python_version: Optional[str] = None
     timeout_seconds: int = 900
-    execution_target: str = "local"
+    execution_target: str = "server"
 
 
 class TutorialBootstrapJobClaimRequest(BaseModel):
@@ -11401,24 +11528,6 @@ async def ops_telegram_status(request: Request):
 
     bot_status = await _resolve_telegram_service_status()
 
-    def _event_row(item: dict[str, Any]) -> dict[str, Any]:
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        created_at = str(item.get("created_at_utc") or _utc_now_iso())
-        updated_at = str(item.get("updated_at_utc") or created_at)
-        return {
-            "id": str(item.get("id") or ""),
-            "kind": str(item.get("kind") or ""),
-            "title": str(item.get("title") or ""),
-            "message": str(item.get("summary") or item.get("full_message") or ""),
-            "severity": str(item.get("severity") or "info"),
-            "status": str(item.get("status") or "new"),
-            "requires_action": bool(item.get("requires_action")),
-            "session_id": str(item.get("session_id") or ""),
-            "created_at": created_at,
-            "updated_at": updated_at,
-            "metadata": metadata,
-        }
-
     def _is_telegram_relevant_event(item: dict[str, Any]) -> bool:
         kind = str(item.get("kind") or "").strip().lower()
         source_domain = str(item.get("source_domain") or "").strip().lower()
@@ -11434,13 +11543,6 @@ async def ops_telegram_status(request: Request):
             return True
         return False
 
-    tutorial_active_kinds = {
-        "youtube_playlist_new_video",
-        "youtube_tutorial_started",
-        "youtube_tutorial_progress",
-        "youtube_tutorial_interrupted",
-        "youtube_hook_recovery_queued",
-    }
     failure_kinds = {
         "youtube_playlist_dispatch_failed",
         "youtube_tutorial_failed",
@@ -11460,7 +11562,7 @@ async def ops_telegram_status(request: Request):
     try:
         rows = _query_activity_events(limit=300, apply_default_window=False)
         relevant = [item for item in rows if _is_telegram_relevant_event(item)]
-        pipeline_activity = [_event_row(item) for item in relevant[:120]]
+        pipeline_activity = [_tutorial_activity_event_row(item) for item in relevant[:120]]
         recent_notifications = pipeline_activity[:50]
 
         for entry in pipeline_activity:
@@ -11478,44 +11580,7 @@ async def ops_telegram_status(request: Request):
             if kind in recovery_kinds or "recovery" in kind:
                 recovery_events.append(entry)
 
-        stage_map = {
-            "youtube_playlist_new_video": "queued",
-            "youtube_tutorial_started": "processing",
-            "youtube_tutorial_progress": "in_progress",
-            "youtube_tutorial_interrupted": "interrupted",
-            "youtube_hook_recovery_queued": "recovery_queued",
-        }
-        seen_run_keys: set[str] = set()
-        for entry in pipeline_activity:
-            kind = str(entry.get("kind") or "").strip().lower()
-            if kind not in tutorial_active_kinds:
-                continue
-            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-            video_id = str(metadata.get("video_id") or metadata.get("youtube_video_id") or "").strip()
-            run_key = (
-                video_id
-                or str(entry.get("session_id") or "").strip()
-                or f"{kind}:{entry.get('id')}"
-            )
-            if not run_key or run_key in seen_run_keys:
-                continue
-            seen_run_keys.add(run_key)
-            active_tutorial_runs.append(
-                {
-                    "run_key": run_key,
-                    "session_id": str(entry.get("session_id") or "").strip(),
-                    "video_id": video_id,
-                    "title": str(metadata.get("tutorial_title") or entry.get("title") or "").strip(),
-                    "stage": stage_map.get(kind, "queued"),
-                    "kind": kind,
-                    "status": str(entry.get("status") or "new"),
-                    "severity": str(entry.get("severity") or "info"),
-                    "created_at": str(entry.get("created_at") or _utc_now_iso()),
-                    "message": str(entry.get("message") or ""),
-                }
-            )
-            if len(active_tutorial_runs) >= 20:
-                break
+        active_tutorial_runs = _collect_active_tutorial_runs_from_rows(relevant, limit=20)
 
         recent_failures = recent_failures[:40]
         actionable_alerts = actionable_alerts[:40]
@@ -15486,6 +15551,21 @@ async def dashboard_tutorial_runs(limit: int = 100):
     return {"runs": _list_tutorial_runs(limit=clamped_limit)}
 
 
+@app.get("/api/v1/dashboard/tutorials/active-runs")
+async def dashboard_tutorial_active_runs(limit: int = 20):
+    clamped = max(1, min(int(limit), 100))
+    try:
+        rows = _query_activity_events(
+            limit=max(clamped * 8, 160),
+            source_domain="tutorial",
+            apply_default_window=False,
+        )
+        return {"runs": _collect_active_tutorial_runs_from_rows(rows, limit=clamped)}
+    except Exception as exc:
+        logger.debug("Dashboard tutorial active-runs query failed: %s", exc)
+        return {"runs": []}
+
+
 @app.delete("/api/v1/dashboard/tutorials/runs")
 async def dashboard_tutorial_run_delete(run_path: str):
     """Delete a tutorial run directory by its relative run_path."""
@@ -15840,6 +15920,28 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             "worker_hint": _worker_hint_for(dispatch_backend),
         }
 
+    now = datetime.now(timezone.utc)
+    job_id = f"tbj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+    server_job = _remember_tutorial_bootstrap_job(
+        {
+            "job_id": job_id,
+            "status": "running",
+            "queued_at": now.isoformat(),
+            "queued_at_epoch": time.time(),
+            "started_at": now.isoformat(),
+            "execution_target": "server",
+            "execution_host": _tutorial_bootstrap_execution_host(),
+            "tutorial_run_path": run_rel,
+            "tutorial_title": title,
+            "video_id": str(manifest.get("video_id") or ""),
+            "video_url": str(manifest.get("video_url") or ""),
+            "repo_name": repo_name,
+            "target_root": target_root,
+            "python_version": python_version,
+            "timeout_seconds": timeout_seconds,
+        }
+    )
+
     args = ["bash", str(script_path), target_root, repo_name]
     if python_version:
         args.append(python_version)
@@ -15852,6 +15954,34 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             stderr=asyncio.subprocess.PIPE,
         )
     except Exception as exc:
+        updated = _remember_tutorial_bootstrap_job(
+            {
+                **server_job,
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error": f"Failed to launch bootstrap script: {exc}",
+            }
+        )
+        _add_notification(
+            kind="tutorial_repo_bootstrap_failed",
+            title="Tutorial Repo Bootstrap Failed",
+            message=f"VPS repo bootstrap failed for: {title}",
+            severity="error",
+            requires_action=True,
+            metadata={
+                "job_id": str(updated.get("job_id") or ""),
+                "tutorial_run_path": run_rel,
+                "repo_name": repo_name,
+                "repo_dir": str(updated.get("repo_dir") or ""),
+                "status": "failed",
+                "error": str(updated.get("error") or ""),
+                "execution_target": "server",
+                "execution_host": str(updated.get("execution_host") or ""),
+                "repo_access_mode": str(updated.get("repo_access_mode") or ""),
+                "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+                "source": "dashboard_tutorial_bootstrap",
+            },
+        )
         raise HTTPException(status_code=500, detail=f"Failed to launch bootstrap script: {exc}")
 
     try:
@@ -15861,6 +15991,34 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             proc.kill()
         with contextlib.suppress(Exception):
             await proc.communicate()
+        updated = _remember_tutorial_bootstrap_job(
+            {
+                **server_job,
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error": f"Bootstrap script timed out after {timeout_seconds}s",
+            }
+        )
+        _add_notification(
+            kind="tutorial_repo_bootstrap_failed",
+            title="Tutorial Repo Bootstrap Failed",
+            message=f"VPS repo bootstrap failed for: {title}",
+            severity="error",
+            requires_action=True,
+            metadata={
+                "job_id": str(updated.get("job_id") or ""),
+                "tutorial_run_path": run_rel,
+                "repo_name": repo_name,
+                "repo_dir": str(updated.get("repo_dir") or ""),
+                "status": "failed",
+                "error": str(updated.get("error") or ""),
+                "execution_target": "server",
+                "execution_host": str(updated.get("execution_host") or ""),
+                "repo_access_mode": str(updated.get("repo_access_mode") or ""),
+                "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+                "source": "dashboard_tutorial_bootstrap",
+            },
+        )
         raise HTTPException(status_code=504, detail=f"Bootstrap script timed out after {timeout_seconds}s")
 
     stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -15871,6 +16029,37 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
 
     if proc.returncode != 0:
         detail = stderr.strip() or stdout.strip() or f"Bootstrap script failed with exit code {proc.returncode}"
+        updated = _remember_tutorial_bootstrap_job(
+            {
+                **server_job,
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "repo_dir": repo_dir,
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-2000:],
+                "error": detail[-1200:],
+            }
+        )
+        _add_notification(
+            kind="tutorial_repo_bootstrap_failed",
+            title="Tutorial Repo Bootstrap Failed",
+            message=f"VPS repo bootstrap failed for: {title}",
+            severity="error",
+            requires_action=True,
+            metadata={
+                "job_id": str(updated.get("job_id") or ""),
+                "tutorial_run_path": run_rel,
+                "repo_name": repo_name,
+                "repo_dir": repo_dir,
+                "status": "failed",
+                "error": str(updated.get("error") or ""),
+                "execution_target": "server",
+                "execution_host": str(updated.get("execution_host") or ""),
+                "repo_access_mode": str(updated.get("repo_access_mode") or ""),
+                "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+                "source": "dashboard_tutorial_bootstrap",
+            },
+        )
         raise HTTPException(
             status_code=500,
             detail=detail[-1200:],
@@ -15881,16 +16070,46 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
         run_rel,
         repo_dir,
     )
-    repo_open_uri, repo_open_hint = _tutorial_bootstrap_open_metadata(repo_dir)
+    updated = _remember_tutorial_bootstrap_job(
+        {
+            **server_job,
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "repo_dir": repo_dir,
+            "stdout": stdout[-4000:],
+            "stderr": stderr[-2000:],
+            "error": "",
+        }
+    )
+    _add_notification(
+        kind="tutorial_repo_bootstrap_ready",
+        title="Tutorial Repo Created",
+        message=f"VPS repo created for: {title}",
+        severity="success",
+        metadata={
+            "job_id": str(updated.get("job_id") or ""),
+            "tutorial_run_path": run_rel,
+            "repo_name": repo_name,
+            "repo_dir": repo_dir,
+            "status": "completed",
+            "execution_target": "server",
+            "execution_host": str(updated.get("execution_host") or ""),
+            "repo_access_mode": str(updated.get("repo_access_mode") or ""),
+            "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+            "source": "dashboard_tutorial_bootstrap",
+        },
+    )
     return {
         "ok": True,
+        "job_id": job_id,
         "execution_target": "server",
+        "execution_host": str(updated.get("execution_host") or ""),
+        "repo_access_mode": str(updated.get("repo_access_mode") or ""),
+        "repo_access_hint": str(updated.get("repo_access_hint") or ""),
         "run_path": run_rel,
         "repo_name": repo_name,
         "target_root": target_root,
         "repo_dir": repo_dir,
-        "repo_open_uri": repo_open_uri,
-        "repo_open_hint": repo_open_hint,
         "stdout": stdout[-4000:],
         "stderr": stderr[-2000:],
     }
@@ -16097,13 +16316,16 @@ async def ops_tutorial_bootstrap_result(
 
     is_success = str(updated.get("status") or "") == "completed"
     title = str(updated.get("tutorial_title") or updated.get("tutorial_run_path") or "tutorial")
+    execution_target = str(updated.get("execution_target") or "local").strip().lower() or "local"
+    success_prefix = "VPS repo created" if execution_target == "server" else "Local repo created"
+    failure_prefix = "VPS repo bootstrap failed" if execution_target == "server" else "Local repo bootstrap failed"
     _add_notification(
         kind="tutorial_repo_bootstrap_ready" if is_success else "tutorial_repo_bootstrap_failed",
         title="Tutorial Repo Created" if is_success else "Tutorial Repo Bootstrap Failed",
         message=(
-            f"Local repo created for: {title}"
+            f"{success_prefix} for: {title}"
             if is_success
-            else f"Local repo bootstrap failed for: {title}"
+            else f"{failure_prefix} for: {title}"
         ),
         severity="success" if is_success else "error",
         requires_action=not is_success,
@@ -16114,7 +16336,10 @@ async def ops_tutorial_bootstrap_result(
             "repo_dir": str(updated.get("repo_dir") or ""),
             "status": str(updated.get("status") or ""),
             "error": str(updated.get("error") or ""),
-            "execution_target": "local",
+            "execution_target": execution_target,
+            "execution_host": str(updated.get("execution_host") or ""),
+            "repo_access_mode": str(updated.get("repo_access_mode") or ""),
+            "repo_access_hint": str(updated.get("repo_access_hint") or ""),
             "source": "tutorial_bootstrap_worker",
         },
     )
@@ -17188,6 +17413,11 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
         "- If possible also write work_products/heartbeat_investigation_summary.json with fields:\n"
         "  version, source_notification_id, session_key, classification, operator_review_required,\n"
         "  recommended_next_step, proposed_changes, email_summary.\n\n"
+        "provider_context:\n"
+        "- VPS provider context: Hostinger.\n"
+        "- Do not mention DigitalOcean in remediation text.\n"
+        "- If firewall fallback is relevant, say 'VPS host firewall' or 'public-IP allowlist path'.\n"
+        "- If tailscale ping works but SSH is denied, prefer Tailscale ACL/SSH remediation wording.\n\n"
         "heartbeat_summary:\n"
         f"{str(metadata.get('heartbeat_mediation_summary') or activity.get('summary') or '').strip()}\n\n"
         "heartbeat_findings_json:\n"
@@ -17290,8 +17520,14 @@ async def _notify_operator_of_heartbeat_recommendation(payload: dict[str, Any]) 
     session_key = str(metadata.get("session_key") or payload.get("session_id") or "").strip()
     summary_href = str(metadata.get("heartbeat_investigation_summary_href") or "").strip()
     findings_href = str(metadata.get("heartbeat_findings_artifact_href") or "").strip()
-    next_step = str(metadata.get("recommended_next_step") or "").strip()
-    email_summary = str(metadata.get("email_summary") or "").strip()
+    next_step = sanitize_heartbeat_recommendation_text(
+        str(metadata.get("recommended_next_step") or "").strip(),
+        field="next_step",
+    )
+    email_summary = sanitize_heartbeat_recommendation_text(
+        str(metadata.get("email_summary") or "").strip(),
+        field="summary",
+    )
     classification = str(metadata.get("classification") or "unknown_issue").strip()
     subject = f"Simone heartbeat review required: {classification}"
     body = (
@@ -17322,6 +17558,14 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
     summary_href = str(metadata.get("heartbeat_investigation_summary_href") or "").strip()
     if not summary_href and summary_rel:
         summary_href = _storage_explorer_href(scope="workspaces", path=summary_rel, preview=summary_rel)
+    recommended_next_step = sanitize_heartbeat_recommendation_text(
+        str(metadata.get("recommended_next_step") or "").strip(),
+        field="next_step",
+    )
+    email_summary = sanitize_heartbeat_recommendation_text(
+        str(metadata.get("email_summary") or "").strip(),
+        field="summary",
+    )
     update_patch = {
         "heartbeat_mediation_status": "investigation_completed",
         "heartbeat_investigation_summary_workspace_relpath": summary_rel,
@@ -17329,8 +17573,8 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
         "heartbeat_investigation_completed_at": _utc_now_iso(),
         "heartbeat_operator_review_required": operator_review_required,
         "heartbeat_investigation_classification": str(metadata.get("classification") or "").strip(),
-        "heartbeat_investigation_recommended_next_step": str(metadata.get("recommended_next_step") or "").strip(),
-        "heartbeat_investigation_email_summary": str(metadata.get("email_summary") or "").strip(),
+        "heartbeat_investigation_recommended_next_step": recommended_next_step,
+        "heartbeat_investigation_email_summary": email_summary,
     }
     _update_notification_record(origin_id, metadata_patch=update_patch, requires_action=True)
     _record_activity_audit(
@@ -17359,6 +17603,8 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
             "source": "heartbeat",
             "originating_notification_id": origin_id,
             **metadata,
+            "recommended_next_step": recommended_next_step,
+            "email_summary": email_summary,
             "heartbeat_investigation_summary_href": summary_href,
         },
     )
@@ -17369,6 +17615,8 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
                 "session_id": payload.get("session_id"),
                 "metadata": {
                     **metadata,
+                    "recommended_next_step": recommended_next_step,
+                    "email_summary": email_summary,
                     "heartbeat_investigation_summary_href": summary_href,
                 },
             }

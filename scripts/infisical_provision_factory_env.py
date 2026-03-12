@@ -67,6 +67,10 @@ _HEADQUARTERS_OVERRIDES: dict[str, str] = {
     "UA_CAPABILITY_CSI_INGEST": "1",
     "UA_AGENTMAIL_ENABLED": "1",
     "UA_YT_PLAYLIST_WATCHER_ENABLED": "1",
+    "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+    "UA_HOOKS_YOUTUBE_INGEST_URLS": "http://127.0.0.1:8002/api/v1/youtube/ingest",
+    "UA_YOUTUBE_INGEST_REQUIRE_PROXY": "1",
+    "UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT": "/opt/universal_agent_data/tutorial_repos",
 }
 
 _LOCAL_WORKER_OVERRIDES: dict[str, str] = {

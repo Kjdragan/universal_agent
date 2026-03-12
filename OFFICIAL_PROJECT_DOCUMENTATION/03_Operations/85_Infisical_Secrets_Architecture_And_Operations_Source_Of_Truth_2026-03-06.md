@@ -163,6 +163,37 @@ The `.env.sample` guidance is clear about the intended system model:
 
 This is a deliberate design choice that prevents configuration drift between environments.
 
+## Control-Plane Secrets
+
+Control-plane credentials are not the same as normal application runtime secrets.
+
+Examples include:
+- `TAILSCALE_ADMIN_API_TOKEN`
+- future infrastructure tokens such as provider, DNS, or GitHub admin credentials
+
+These secrets can modify external infrastructure and therefore should not be injected into the default VPS app runtime just because the application is running on that node.
+
+The canonical posture is:
+- Infisical remains the source of truth
+- control-plane secrets live in a dedicated infrastructure-oriented environment
+- normal UA runtime processes do not automatically receive those credentials
+
+Preferred environment for Tailscale admin automation:
+- environment: `infra-admin`
+- path: `/tailscale`
+
+Current live fallback for this project:
+- environment: `prod`
+- path: `/tailscale`
+
+This fallback is in use because the Infisical project is currently at its environment limit and could not create `infra-admin`.
+In both cases the canonical secrets are:
+- `TAILSCALE_TAILNET`
+- `TAILSCALE_ADMIN_API_TOKEN`
+
+The operational helper for writing these secrets is:
+- `scripts/infisical_upsert_secret.py`
+
 ## Provisioning and Support Scripts
 
 Key script:
@@ -181,6 +212,7 @@ This script documents and operationalizes the split between:
 
 Related setup script:
 - `scripts/install_vps_infisical_sdk.sh`
+- `scripts/infisical_upsert_secret.py`
 
 This is part of the deployment/runtime preparation path for VPS nodes.
 
@@ -232,6 +264,7 @@ The current intended policy is:
 - strict mode should protect VPS and other production-like nodes from partial or unsafe startup
 - loader logging must avoid secret disclosure
 - secret overrides loaded from Infisical should win over weaker local sources
+- control-plane secrets should be segregated from default app runtime environments when the app does not need infrastructure-admin authority
 
 ## Current Gaps and Follow-Up Items
 

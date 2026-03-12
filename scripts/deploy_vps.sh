@@ -21,7 +21,7 @@ TAILNET_STAGING_MODE="${UA_TAILNET_STAGING_MODE:-auto}"
 DEPLOY_CONFIGURE_SWAP="${UA_DEPLOY_CONFIGURE_SWAP:-true}"
 DEPLOY_MEMORY_GUARDRAILS="${UA_DEPLOY_MEMORY_GUARDRAILS:-true}"
 DEPLOY_OOM_ALERT_TIMER="${UA_DEPLOY_OOM_ALERT_TIMER:-true}"
-DEPLOY_TUTORIAL_REPO_ROOT="${UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT:-/home/kjdragan/YoutubeCodeExamples}"
+DEPLOY_TUTORIAL_REPO_ROOT="${UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT:-/opt/universal_agent_data/tutorial_repos}"
 
 if ! command -v rsync >/dev/null 2>&1; then
   echo "ERROR: rsync is required for deployment."
