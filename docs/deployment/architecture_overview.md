@@ -20,6 +20,7 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Git Branch | `develop` | `main` |
 | VPS Checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
 | Fallback Checkout | n/a | `/opt/universal_agent_repo` |
+| Gateway/API Ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, `UA_GATEWAY_URL=http://127.0.0.1:9002` | `8002` / `8001` |
 | Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units |
 | Secrets Behavior | Provision `staging-hq`; temporary fallback to `dev` if provisioning fails | No auto-clone from `dev`; production secrets remain curated separately |
 

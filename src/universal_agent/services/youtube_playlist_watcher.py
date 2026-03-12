@@ -24,15 +24,18 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
+from xml.etree import ElementTree as ET
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _YOUTUBE_API_PLAYLIST_ITEMS = "https://www.googleapis.com/youtube/v3/playlistItems"
+_YOUTUBE_RSS_FEED = "https://www.youtube.com/feeds/videos.xml"
 _STATE_FILENAME = "youtube_playlist_watcher_state.json"
 MODE_EXPLAINER_ONLY = "explainer_only"
 MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
+_ATOM_NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
 _CODE_HINT_KEYWORDS = {
     "code",
     "coding",
@@ -171,19 +174,19 @@ class YouTubePlaylistWatcher:
             return
         playlist_id = os.getenv("YT_TUTORIALS_PLAYLIST_ID", "").strip()
         api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
-        if not playlist_id or not api_key:
+        if not playlist_id:
             logger.warning(
                 "📺 YouTube playlist watcher not started: "
-                "YT_TUTORIALS_PLAYLIST_ID=%r YOUTUBE_API_KEY=%s",
+                "YT_TUTORIALS_PLAYLIST_ID=%r",
                 playlist_id or "(unset)",
-                "(set)" if api_key else "(unset)",
             )
             self._enabled = False
             return
         logger.info(
-            "📺 YouTube playlist watcher started playlist_id=%s poll_interval=%.0fs",
+            "📺 YouTube playlist watcher started playlist_id=%s poll_interval=%.0fs api_key=%s",
             playlist_id,
             _poll_interval(),
+            "(set)" if api_key else "(unset; rss fallback only)",
         )
         state = _load_state()
         seen: set[str] = set(state.get("seen_ids", []))
@@ -302,6 +305,21 @@ class YouTubePlaylistWatcher:
     async def _fetch_playlist_items(
         self, playlist_id: str, api_key: str
     ) -> Optional[list[dict[str, Any]]]:
+        api_key = str(api_key or "").strip()
+        if api_key:
+            items = await self._fetch_playlist_items_via_api(playlist_id, api_key)
+            if items is not None:
+                return items
+            logger.warning(
+                "📺 Falling back to playlist RSS feed after API failure playlist_id=%s error=%s",
+                playlist_id,
+                self._last_error or "unknown_api_error",
+            )
+        return await self._fetch_playlist_items_via_rss(playlist_id)
+
+    async def _fetch_playlist_items_via_api(
+        self, playlist_id: str, api_key: str
+    ) -> Optional[list[dict[str, Any]]]:
         items: list[dict[str, Any]] = []
         page_token = ""
         try:
@@ -317,15 +335,27 @@ class YouTubePlaylistWatcher:
                         params["pageToken"] = page_token
                     resp = await client.get(_YOUTUBE_API_PLAYLIST_ITEMS, params=params)
                     if resp.status_code == 403:
+                        failure_reason = "youtube_api_403"
+                        try:
+                            error_body = resp.json() if resp.content else {}
+                            reasons = [
+                                str(item.get("reason") or "").strip()
+                                for item in ((error_body.get("error") or {}).get("errors") or [])
+                                if isinstance(item, dict)
+                            ]
+                            if any(reason == "quotaExceeded" for reason in reasons):
+                                failure_reason = "youtube_api_quota_exceeded"
+                        except Exception:
+                            pass
                         logger.warning(
                             "📺 YouTube API quota exceeded or auth error status=%d", resp.status_code
                         )
-                        self._last_error = f"youtube_api_{resp.status_code}"
-                        return None
+                        self._last_error = failure_reason
+                        break
                     if resp.status_code >= 400:
                         logger.warning("📺 YouTube API error status=%d", resp.status_code)
                         self._last_error = f"youtube_api_{resp.status_code}"
-                        return None
+                        break
                     body = resp.json() if resp.content else {}
                     for row in body.get("items", []) or []:
                         snippet = row.get("snippet") or {}
@@ -361,6 +391,50 @@ class YouTubePlaylistWatcher:
             return items
         except Exception as exc:
             logger.warning("📺 Playlist fetch failed: %s", exc)
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            return None
+
+    async def _fetch_playlist_items_via_rss(self, playlist_id: str) -> Optional[list[dict[str, Any]]]:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(_YOUTUBE_RSS_FEED, params={"playlist_id": playlist_id})
+            if resp.status_code >= 400:
+                logger.warning("📺 Playlist RSS fetch failed status=%d", resp.status_code)
+                self._last_error = f"youtube_playlist_rss_{resp.status_code}"
+                return None
+            root = ET.fromstring(resp.text)
+            items: list[dict[str, Any]] = []
+            for entry in root.findall("atom:entry", _ATOM_NS):
+                video_id = str(entry.findtext("yt:videoId", default="", namespaces=_ATOM_NS) or "").strip()
+                if not video_id:
+                    continue
+                title = str(entry.findtext("atom:title", default="", namespaces=_ATOM_NS) or "").strip()
+                occurred_at = (
+                    str(entry.findtext("atom:published", default="", namespaces=_ATOM_NS) or "").strip()
+                    or _iso_now()
+                )
+                channel_id = str(entry.findtext("yt:channelId", default="", namespaces=_ATOM_NS) or "").strip()
+                link = ""
+                for link_node in entry.findall("atom:link", _ATOM_NS):
+                    href = str(link_node.attrib.get("href") or "").strip()
+                    rel = str(link_node.attrib.get("rel") or "").strip().lower()
+                    if href and (not rel or rel == "alternate"):
+                        link = href
+                        break
+                items.append(
+                    {
+                        "video_id": video_id,
+                        "url": link or f"https://www.youtube.com/watch?v={video_id}",
+                        "title": title,
+                        "channel_id": channel_id,
+                        "occurred_at": occurred_at,
+                        "playlist_id": playlist_id,
+                    }
+                )
+            self._last_error = ""
+            return items
+        except Exception as exc:
+            logger.warning("📺 Playlist RSS fetch failed: %s", exc)
             self._last_error = f"{type(exc).__name__}: {exc}"
             return None
 
@@ -437,7 +511,7 @@ class YouTubePlaylistWatcher:
         """Manually trigger one poll cycle. Returns result summary."""
         playlist_id = os.getenv("YT_TUTORIALS_PLAYLIST_ID", "").strip()
         api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
-        if not playlist_id or not api_key:
+        if not playlist_id:
             return {"ok": False, "reason": "missing_config"}
         state = _load_state()
         seen: set[str] = set(state.get("seen_ids", []))

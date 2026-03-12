@@ -25,6 +25,7 @@ This is the only supported app deployment path in this repository.
 |------|---------|------------|
 | Git branch | `develop` | `main` |
 | VPS checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
+| Gateway/API ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, and `UA_GATEWAY_URL=http://127.0.0.1:9002` in staging `.env` | `8002` / `8001` |
 | Legacy/fallback checkout | n/a | `/opt/universal_agent_repo` if `/opt/universal_agent` is occupied by a non-git legacy directory |
 | Runtime secrets | `staging-hq` when provisioning succeeds, otherwise temporary fallback to `dev` | production-managed secrets only; no auto-clone from `dev` |
 
