@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Connect to Tailscale Network
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           hostname: gha-fix-${{ github.run_id }}
@@ -34,6 +34,7 @@ jobs:
             if [ -d "$PROD_DIR" ] && [ ! -d "$PROD_DIR/.git" ]; then
               echo "--> Missing .git directory in $PROD_DIR. Attempting to convert to valid checkout..."
               cd $PROD_DIR
+              git config --global --add safe.directory /opt/universal_agent
               git init
               git remote add origin https://github.com/Kjdragan/universal_agent.git
               git fetch origin main
