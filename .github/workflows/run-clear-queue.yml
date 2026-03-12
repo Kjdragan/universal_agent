@@ -28,6 +28,10 @@ jobs:
             export PYTHONPATH='src'
             cd \$STAGING_DIR && /opt/universal-agent-staging/.venv/bin/python scripts/clear_agent_queue.py
             
+            echo '--> Inspecting Production Gateway Service...'
+            systemctl status universal-agent-gateway || true
+            cat /etc/systemd/system/universal-agent-gateway.service || true
+            
             PROD_DIR='/opt/universal_agent'
             if [ -d \"\$PROD_DIR/.venv\" ]; then
               echo '--> Running clear script in Production (/opt/universal_agent)...'
