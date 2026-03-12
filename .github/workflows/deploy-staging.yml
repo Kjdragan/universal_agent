@@ -64,6 +64,13 @@ jobs:
             cd \$STAGING_DIR
             git fetch origin develop
             git reset --hard origin/develop
+
+            echo '--> Transferring ownership to service user before dependency sync...'
+            if command -v sudo >/dev/null 2>&1; then
+              sudo chown -R ua:ua \$STAGING_DIR
+            else
+              chown -R ua:ua \$STAGING_DIR
+            fi
             
             echo '--> Provisioning Infisical environment...'
             export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
@@ -84,6 +91,18 @@ jobs:
                 HOME=\"\$ua_home\" /bin/bash -lc \"\$1\"
               fi
             }
+
+            echo '--> Checking whether the existing venv is usable by ua...'
+            if [ -e \"\$STAGING_DIR/.venv/bin/python3\" ]; then
+              if ! run_as_ua \"readlink -f \\\"\$STAGING_DIR/.venv/bin/python3\\\" >/dev/null 2>&1\"; then
+                echo '--> Existing venv interpreter is not accessible to ua; removing stale .venv for clean rebuild...'
+                if command -v sudo >/dev/null 2>&1; then
+                  sudo rm -rf \"\$STAGING_DIR/.venv\"
+                else
+                  rm -rf \"\$STAGING_DIR/.venv\"
+                fi
+              fi
+            fi
 
             echo '--> Ensuring Python 3.12 runtime for uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv python install 3.12\"
