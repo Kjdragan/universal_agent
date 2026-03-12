@@ -21,28 +21,79 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          timeout 1m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" "
+          timeout 15m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" 'bash -s' << 'EOF'
             set -euo pipefail
-            STAGING_DIR='/opt/universal-agent-staging'
+            
+            # Write script to temporary file on VPS
+            cat << 'PYTHON_EOF' > /tmp/clear_agent_queue.py
+          import sys
+          import sqlite3
+          import os
+          from typing import Optional
+          
+          def _task_hub_open_conn() -> Optional[sqlite3.Connection]:
+              try:
+                  from universal_agent.gateway_server import _task_hub_open_conn
+                  return _task_hub_open_conn()
+              except Exception as e:
+                  print(f"Failed to load task database connection: {e}")
+                  return None
+          
+          def clear_queue():
+              print("Connecting to the Activity/TaskHub database...")
+              conn = _task_hub_open_conn()
+              if not conn:
+                  print("Error: Could not obtain database connection.")
+                  sys.exit(1)
+                  
+              try:
+                  cursor = conn.cursor()
+                  cursor.execute("SELECT status, count(*) FROM task_hub_items GROUP BY status")
+                  print("Current DB state:")
+                  for row in cursor.fetchall():
+                      print(f"- {row[0]}: {row[1]}")
+                      
+                  cursor.execute("SELECT count(*) FROM task_hub_items WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')")
+                  count = cursor.fetchone()[0]
+                  
+                  print(f"Found {count} item(s) in the agent/personal queue.")
+                  
+                  if count == 0:
+                      print("The agent queue is already empty.")
+                      return
+          
+                  print("Force completing all pending tasks...")
+                  cursor.execute("""
+                      UPDATE task_hub_items 
+                      SET status = 'completed', updated_at = datetime('now') 
+                      WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')
+                  """)
+                  conn.commit()
+                  print(f"Successfully marked {count} task(s) as completed.")
+                  
+              except Exception as e:
+                  print(f"Runtime error during queue cleanup: {e}")
+                  sys.exit(1)
+              finally:
+                  conn.close()
+          
+          if __name__ == "__main__":
+              clear_queue()
+          PYTHON_EOF
+          
             echo '--> Running clear script in Staging...'
-            export PYTHONPATH='src'
-            cd \$STAGING_DIR && /opt/universal-agent-staging/.venv/bin/python scripts/clear_agent_queue.py
+            STAGING_DIR='/opt/universal-agent-staging'
+            if [ -d "$STAGING_DIR/.venv" ]; then
+              export PYTHONPATH="$STAGING_DIR/src"
+              if [ -f "$STAGING_DIR/.env" ]; then set -a; source "$STAGING_DIR/.env"; set +a; fi
+              "$STAGING_DIR/.venv/bin/python" /tmp/clear_agent_queue.py || true
+            fi
             
-            echo '--> Inspecting Production Gateway Service...'
-            systemctl status universal-agent-gateway || true
-            cat /etc/systemd/system/universal-agent-gateway.service || true
-            
+            echo '--> Running clear script in Production...'
             PROD_DIR='/opt/universal_agent'
-            if [ -d \"\$PROD_DIR/.venv\" ]; then
-              echo '--> Running clear script in Production (/opt/universal_agent)...'
-              export PYTHONPATH='src'
-              cd \$PROD_DIR && \$PROD_DIR/.venv/bin/python scripts/clear_agent_queue.py || true
+            if [ -d "$PROD_DIR/.venv" ]; then
+              export PYTHONPATH="$PROD_DIR/src"
+              if [ -f "$PROD_DIR/.env" ]; then set -a; source "$PROD_DIR/.env"; set +a; fi
+              "$PROD_DIR/.venv/bin/python" /tmp/clear_agent_queue.py || true
             fi
-            
-            PROD_REPO_DIR='/opt/universal_agent_repo'
-            if [ -d \"\$PROD_REPO_DIR/.venv\" ]; then
-              echo '--> Running clear script in Production (/opt/universal_agent_repo)...'
-              export PYTHONPATH='src'
-              cd \$PROD_REPO_DIR && \$PROD_REPO_DIR/.venv/bin/python scripts/clear_agent_queue.py || true
-            fi
-          "
+          EOF"
