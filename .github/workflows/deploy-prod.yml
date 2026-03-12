@@ -102,6 +102,8 @@ jobs:
             # 2. Dependency Sync
             echo "--> Syncing dependencies with uv..."
             uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
+            sudo chown -R ua:ua "$PROD_DIR/.venv" || true
+            sudo chown -R ua:ua "$PROD_DIR" || true
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
