@@ -4,11 +4,12 @@ This document defines the current supported deployment model for Universal Agent
 
 ## Git Branching Model
 
-We use branch-driven automated deployment. Feature work can happen on short-lived branches, but the only deploy branches are `develop` and `main`.
+We use branch-driven automated deployment with a single PR review gate on `develop`.
 
 - **Feature branches**: local coding and PR preparation.
+- **PR to `develop`**: Codex review gate.
 - **`develop`**: automated staging deployment target.
-- **`main`**: automated production deployment target.
+- **`main`**: automated production deployment target via exact-SHA promotion from validated `develop`.
 
 ## Environmental Mapping
 
@@ -24,7 +25,8 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 
 ## Supported Deployment Rule
 
-1. Push or merge to `develop` to deploy staging automatically.
-2. Push or merge to `main` to deploy production automatically.
-3. Do not use local-to-VPS file sync as the default deployment path.
-4. The canonical deployment runbooks live in `docs/deployment/`.
+1. Open a PR to `develop` for Codex review of feature work.
+2. Merge to `develop` to deploy staging automatically.
+3. Promote the exact validated `develop` SHA to `main` using the promotion workflow.
+4. Do not use local-to-VPS file sync as the default deployment path.
+5. The canonical deployment runbooks live in `docs/deployment/`.

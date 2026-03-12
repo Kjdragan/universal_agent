@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__REPO_ROOT__
 Environment=PYTHONPATH=__REPO_ROOT__/src
-Environment=UA_GATEWAY_PORT=8002
-ExecStart=__REPO_ROOT__/.venv/bin/python -m universal_agent.gateway_server
+Environment=UA_LOCAL_WORKER_GATEWAY_PORT=8012
+ExecStart=/bin/bash -lc 'export UA_GATEWAY_PORT="${UA_LOCAL_WORKER_GATEWAY_PORT:-8012}"; exec "__REPO_ROOT__/.venv/bin/python" -m universal_agent.gateway_server'
 Restart=always
 RestartSec=5
 

@@ -1,0 +1,72 @@
+name: Promote Validated Develop To Main
+
+on:
+  workflow_dispatch:
+    inputs:
+      develop_sha:
+        description: Exact validated develop commit SHA to promote to main
+        required: true
+        type: string
+      release_note:
+        description: Optional release note for the promotion
+        required: false
+        type: string
+
+concurrency:
+  group: promote-validated-develop-to-main
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Validate requested develop SHA
+        env:
+          TARGET_SHA: ${{ inputs.develop_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin develop main
+
+          if ! git rev-parse --verify "${TARGET_SHA}^{commit}" >/dev/null 2>&1; then
+            echo "::error::Requested SHA does not resolve to a commit: ${TARGET_SHA}"
+            exit 1
+          fi
+
+          current_develop_sha="$(git rev-parse origin/develop)"
+          current_main_sha="$(git rev-parse origin/main)"
+
+          echo "Requested develop SHA: ${TARGET_SHA}"
+          echo "Current origin/develop: ${current_develop_sha}"
+          echo "Current origin/main: ${current_main_sha}"
+
+          if [ "${TARGET_SHA}" != "${current_develop_sha}" ]; then
+            echo "::error::Refusing promotion because origin/develop has moved or the provided SHA is not the current validated develop head."
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "${current_main_sha}" "${TARGET_SHA}"; then
+            echo "::error::Refusing promotion because main cannot be fast-forwarded cleanly to the requested SHA."
+            exit 1
+          fi
+
+      - name: Fast-forward main to validated develop SHA
+        env:
+          TARGET_SHA: ${{ inputs.develop_sha }}
+        run: |
+          set -euo pipefail
+          git push origin "${TARGET_SHA}:refs/heads/main"
+
+      - name: Print promotion summary
+        run: |
+          set -euo pipefail
+          echo "Promoted develop SHA ${{ inputs.develop_sha }} to main."
+          if [ -n "${{ inputs.release_note }}" ]; then
+            echo "Release note: ${{ inputs.release_note }}"
+          fi

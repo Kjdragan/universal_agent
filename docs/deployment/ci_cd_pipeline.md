@@ -1,20 +1,23 @@
 # CI/CD Pipeline & Troubleshooting
 
-Our CI/CD pipeline is built on GitHub Actions and automates deployment to staging and production over Tailscale.
+Our CI/CD pipeline is built on GitHub Actions and automates PR review, staging validation, and production deployment over Tailscale.
 
 ## Canonical Rule
 
 This is the only supported app deployment path in this repository.
 
-- Push or merge to `develop` to deploy to staging automatically.
-- Push or merge to `main` to deploy to production automatically.
+- Open a pull request to `develop` to run Codex review on the proposed change.
+- Merge to `develop` to deploy to staging automatically.
+- Promote the exact validated `develop` SHA to `main` via the promotion workflow to deploy to production automatically.
 - Do not treat `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, or manual SSH deploy steps as the primary deployment path.
 
 ## Workflows
 
 | Name | Trigger | Target |
 |------|---------|--------|
+| `Codex Review Develop PR` | Pull request to `develop` | Automated PR review |
 | `Deploy Staging` | Push to `develop` | Staging Service |
+| `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA |
 | `Deploy Production` | Push to `main` | Production Service |
 
 ## Current Targets
@@ -28,6 +31,7 @@ This is the only supported app deployment path in this repository.
 
 ## Required GitHub Secrets
 
+- `OPENAI_API_KEY` (Codex PR review workflow)
 - `TAILSCALE_AUTHKEY` (reusable + ephemeral + preauthorized, tag identity `tag:ci-gha`)
 - `VPS_SSH_HOST`
 - `VPS_SSH_USER`
@@ -61,13 +65,50 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 
 ## Pipeline Steps
 
-1. **Connect to Tailscale** using `TAILSCALE_AUTHKEY` and `tag:ci-gha`.
-2. **Ping preflight** validates runner-to-VPS tailnet connectivity.
-3. **SSH preflight** runs `timeout 60s ssh ... "echo SSH_OK"` in batch mode.
-4. **Deploy over SSH** runs remote commands with a hard timeout (`timeout 15m`).
-5. **Staging only** provisions Infisical environment and bootstraps `.env`.
-6. **Dependency sync** runs `uv sync`.
-7. **Service restart** restarts target systemd units.
+1. **Open PR to `develop`** from a `feature/...` branch.
+2. **Codex review** runs on that PR and comments directly on the diff.
+3. **Merge to `develop`** only after review and normal checks are acceptable.
+4. **Staging deploy** runs automatically on the merge result in `develop`.
+5. **Validate staging** against the exact merged `develop` SHA.
+6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
+7. **Production deploy** runs automatically when the promotion workflow fast-forwards `main`.
+
+## Review and Promotion Rule
+
+- There is exactly one Codex review gate: the PR into `develop`.
+- There is no second Codex review on `main`.
+- Production promotion must use the exact validated `develop` SHA.
+- The promotion workflow refuses to run if `develop` has moved since the validated SHA.
+- To make the review gate enforceable, configure GitHub branch protection on `develop` to require the `Codex Review Develop PR` check before merge.
+
+## Temporary Missing-Secret Behavior
+
+If `OPENAI_API_KEY` is not configured yet:
+
+- the `Codex Review Develop PR` workflow posts a warning comment and exits successfully
+- the PR can still merge to `develop`
+- staging and production promotion can still proceed
+
+Once `OPENAI_API_KEY` is configured, the same workflow becomes the real blocking Codex review gate again.
+
+## Recommended GitHub Branch Protection
+
+Configure these settings in GitHub repository settings.
+
+### `develop`
+
+- Require a pull request before merging
+- Require status checks to pass before merging
+- Required status check: `Codex Review Develop PR / codex-review`
+- Require branches to be up to date before merging
+- Restrict direct pushes if you want review to be mandatory in practice
+- If `OPENAI_API_KEY` is still missing, this required check will pass in "review skipped" mode rather than enforcing a real Codex review
+
+### `main`
+
+- Optional: require a pull request before merging
+- Do not require the Codex review check on `main`
+- Restrict direct pushes except for trusted release operators if you want production promotion to happen only via the promotion workflow or explicit release action
 
 ## Operational Meaning
 
@@ -76,6 +117,24 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 - Production and staging both have passing workflow runs as of March 11, 2026.
 
 ## Troubleshooting
+
+### Promotion Workflow Refuses To Run
+
+If the promotion workflow fails before pushing `main`, inspect the validation step.
+
+#### Signature: develop moved
+
+If the workflow reports that `origin/develop` has moved, the staging-validated SHA is no longer the current `develop` head.
+
+Required action:
+
+1. decide whether the newer `develop` head should be staged and validated
+2. if yes, revalidate the newer SHA in staging
+3. run promotion again with the new validated SHA
+
+#### Signature: main cannot fast-forward
+
+If the workflow reports that `main` cannot fast-forward cleanly to the requested SHA, the branch history has diverged and requires manual investigation before release.
 
 ### SSH Preflight Fails Fast
 

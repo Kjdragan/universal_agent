@@ -155,6 +155,7 @@ class FactoryHeartbeat:
         return {
             "factory_id": self._config.factory_id,
             "factory_role": self._config.factory_role,
+            "deployment_profile": self._config.deployment_profile,
             "registration_status": "paused" if is_paused else "online",
             "heartbeat_latency_ms": latency_ms,
             "capabilities": self._config.capabilities,

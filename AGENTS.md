@@ -4,8 +4,8 @@
 
 This repository has exactly one supported application deployment path:
 
-1. Push or merge code to `develop` to deploy to staging automatically via GitHub Actions.
-2. Push or merge code to `main` to deploy to production automatically via GitHub Actions.
+1. Merge reviewed feature work into `develop` to deploy to staging automatically via GitHub Actions.
+2. Promote the validated `develop` SHA to `main` via the manual GitHub Actions promotion workflow to deploy to production.
 
 Canonical deployment docs:
 
@@ -23,6 +23,8 @@ Do not treat any older manual VPS deployment flow as canonical.
 
 - `develop` deploys to staging on the VPS checkout at `/opt/universal-agent-staging`.
 - `main` deploys to production on the VPS checkout at `/opt/universal_agent`, with `/opt/universal_agent_repo` as the safe fallback checkout path if the legacy directory is occupied.
+- Pull requests into `develop` are the single Codex review gate.
+- Production promotion is a direct, exact-SHA fast-forward from validated `develop` to `main`; there is no second PR review on `main`.
 - Tailscale CI access is GitHub Actions -> `TAILSCALE_AUTHKEY` -> tag identity `tag:ci-gha`.
 - Production is branch-driven and automated; do not recommend ad hoc `ssh`, `rsync`, or `git pull` as the default deployment method.
 

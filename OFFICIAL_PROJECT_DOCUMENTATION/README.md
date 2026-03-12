@@ -68,6 +68,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Infisical Factories](06_Deployment_And_Environments/02_Infisical_Factories.md)**: Continuity note for current factory/secret environment references.
 - **[CI/CD Automated Pipelines](06_Deployment_And_Environments/03_Automated_Pipelines.md)**: Continuity note for branch-driven GitHub Actions deployment.
 - **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy for feature work, staging promotion, and production release.
+- **[Local Runtime Modes](06_Deployment_And_Environments/05_Local_Runtime_Modes.md)**: Canonical split between HQ dev and the separate desktop worker lane.
 
 ### 5. [API Reference](04_API_Reference)
 

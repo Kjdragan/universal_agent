@@ -325,6 +325,7 @@ def provision(
     machine_name: str,
     machine_slug: str,
     factory_role: str,
+    deployment_profile: str | None = None,
     source_env: str = "dev",
     extra_overrides: dict[str, str] | None = None,
     dry_run: bool = False,
@@ -335,6 +336,8 @@ def provision(
         raise ValueError(f"Unknown factory role: {factory_role}. Must be one of: {', '.join(ROLE_OVERRIDES)}")
 
     overrides = dict(ROLE_OVERRIDES[role_upper])
+    if deployment_profile:
+        overrides["UA_DEPLOYMENT_PROFILE"] = deployment_profile.strip().lower()
     # Set the target environment slug in the secrets themselves so the factory
     # knows which Infisical environment to load on startup.
     overrides["INFISICAL_ENVIRONMENT"] = machine_slug
@@ -349,6 +352,8 @@ def provision(
     print(f"Source env:    {source_env}")
     print(f"Target env:    {machine_slug} ({machine_name})")
     print(f"Factory role:  {role_upper}")
+    if deployment_profile:
+        print(f"Deploy profile:{deployment_profile.strip().lower()}")
     print(f"Overrides:     {len(overrides)} keys")
     print()
 
@@ -468,6 +473,9 @@ Examples:
   # Kevin's Desktop (LOCAL_WORKER)
   %(prog)s --machine-name "Kevin's Desktop" --machine-slug kevins-desktop --factory-role LOCAL_WORKER
 
+  # Kevin's Desktop HQ Dev (HEADQUARTERS + local_workstation)
+  %(prog)s --machine-name "Kevin's Desktop HQ Dev" --machine-slug kevins-desktop-hq-dev --factory-role HEADQUARTERS --deployment-profile local_workstation
+
   # Kevin's Tablet (LOCAL_WORKER)
   %(prog)s --machine-name "Kevin's Tablet" --machine-slug kevins-tablet --factory-role LOCAL_WORKER
 
@@ -495,6 +503,12 @@ Examples:
         "--source-env",
         default="dev",
         help="Source environment to clone secrets from (default: dev)",
+    )
+    parser.add_argument(
+        "--deployment-profile",
+        choices=["local_workstation", "standalone_node", "vps"],
+        default=None,
+        help="Optional deployment profile override; defaults to the role-specific profile",
     )
     parser.add_argument(
         "--override",
@@ -534,6 +548,7 @@ Examples:
             machine_name=args.machine_name,
             machine_slug=args.machine_slug,
             factory_role=args.factory_role,
+            deployment_profile=args.deployment_profile,
             source_env=args.source_env,
             extra_overrides=extra_overrides or None,
             dry_run=args.dry_run,

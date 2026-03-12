@@ -47,6 +47,11 @@ type FactoryRegistration = {
   first_seen_at?: string;
   last_seen_at?: string;
   updated_at?: string;
+  local_control_supported?: boolean;
+  local_service_unit?: string | null;
+  local_service_scope?: string | null;
+  local_service_active?: boolean | null;
+  local_service_state?: string | null;
 };
 
 type PolicySnapshot = {
@@ -165,6 +170,7 @@ export default function DashboardCorporationPage() {
   const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
   const [expandedFactory, setExpandedFactory] = useState<string | null>(null);
   const [controllingFactory, setControllingFactory] = useState<string | null>(null);
+  const [serviceControllingFactory, setServiceControllingFactory] = useState<string | null>(null);
   const [systemTimers, setSystemTimers] = useState<any[]>([]);
 
   const load = useCallback(async (silent = false) => {
@@ -303,6 +309,32 @@ export default function DashboardCorporationPage() {
     }
   };
 
+  const controlLocalFactoryService = async (factoryId: string, action: "start" | "stop") => {
+    setServiceControllingFactory(factoryId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/factory/local-service-control`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_factory_id: factoryId, action }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        setError(`Local factory service control failed (${res.status}): ${detail}`);
+      } else {
+        await load(true);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to control local factory service.");
+    } finally {
+      setServiceControllingFactory(null);
+    }
+  };
+
+  const sameMachineWorkerRunning = useMemo(
+    () => registrations.some((row) => Boolean(row.local_control_supported) && row.local_service_active === true),
+    [registrations],
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -329,6 +361,12 @@ export default function DashboardCorporationPage() {
       {error && (
         <div className="rounded-lg border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-sm text-rose-200">
           {error}
+        </div>
+      )}
+
+      {sameMachineWorkerRunning && (
+        <div className="rounded-lg border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-sm text-amber-100">
+          Local worker is active on this desktop. Use <span className="font-medium text-amber-50">Stop Local Factory</span> in the table below if HQ development needs the API budget or local resources.
         </div>
       )}
 
@@ -509,24 +547,57 @@ export default function DashboardCorporationPage() {
                                 const currentStatus = asText(row.registration_status).toLowerCase();
                                 const isPaused = currentStatus === "paused";
                                 const isControlling = controllingFactory === row.factory_id;
+                                const isServiceControlling = serviceControllingFactory === row.factory_id;
+                                const localControlSupported = Boolean(row.local_control_supported);
+                                const localServiceState = asText(row.local_service_state).toLowerCase();
+                                const localServiceActive = row.local_service_active === true || localServiceState === "active";
                                 return (
-                                  <button
-                                    type="button"
-                                    disabled={isControlling}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      void controlFactory(row.factory_id, isPaused ? "resume" : "pause");
-                                    }}
-                                    className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-                                      isControlling
-                                        ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
-                                        : isPaused
-                                          ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
-                                          : "border-amber-700/50 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
-                                    }`}
-                                  >
-                                    {isControlling ? "..." : isPaused ? "Resume" : "Pause"}
-                                  </button>
+                                  <div className="flex min-w-[190px] flex-col gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={isControlling}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void controlFactory(row.factory_id, isPaused ? "resume" : "pause");
+                                      }}
+                                      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                        isControlling
+                                          ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                          : isPaused
+                                            ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
+                                            : "border-amber-700/50 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
+                                      }`}
+                                    >
+                                      {isControlling ? "..." : isPaused ? "Resume Intake" : "Pause Intake"}
+                                    </button>
+                                    {localControlSupported && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={isServiceControlling}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void controlLocalFactoryService(row.factory_id, localServiceActive ? "stop" : "start");
+                                          }}
+                                          className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                            isServiceControlling
+                                              ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                              : localServiceActive
+                                                ? "border-rose-700/50 bg-rose-900/30 text-rose-200 hover:bg-rose-900/50"
+                                                : "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
+                                          }`}
+                                        >
+                                          {isServiceControlling ? "..." : localServiceActive ? "Stop Local Factory" : "Start Local Factory"}
+                                        </button>
+                                        <div className="text-[11px] text-slate-500">
+                                          Service: {localServiceState || "unknown"}
+                                        </div>
+                                        <div className="text-[11px] text-slate-500">
+                                          Pause stops mission intake only. Stop turns off the local worker service to preserve desktop/API resources.
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
                                 );
                               })()
                             )}

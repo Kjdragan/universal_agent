@@ -2226,6 +2226,103 @@ def test_factory_capabilities_and_registration_endpoints(client):
     assert any(str(row.get("factory_id") or "") == "factory-local-1" for row in list_payload["registrations"])
 
 
+def test_factory_registrations_expose_same_machine_local_control_metadata(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_normalized_factory_hostname", lambda: "kevin-desktop")
+
+    async def _fake_unit_state(unit_name: str, *, user_scope: bool = False, timeout_seconds: float = 5.0) -> str:
+        assert unit_name == "universal-agent-local-factory.service"
+        assert user_scope is True
+        return "active"
+
+    monkeypatch.setattr(gateway_server, "_systemd_unit_state", _fake_unit_state)
+
+    reg_resp = client.post(
+        "/api/v1/factory/registrations",
+        json={
+            "factory_id": "kevins-desktop",
+            "factory_role": "LOCAL_WORKER",
+            "deployment_profile": "local_workstation",
+            "registration_status": "online",
+            "metadata": {"hostname": "kevin-desktop"},
+        },
+    )
+    assert reg_resp.status_code == 200
+
+    list_resp = client.get("/api/v1/factory/registrations")
+    assert list_resp.status_code == 200
+    row = next(item for item in list_resp.json()["registrations"] if item["factory_id"] == "kevins-desktop")
+    assert row["local_control_supported"] is True
+    assert row["local_service_unit"] == "universal-agent-local-factory.service"
+    assert row["local_service_scope"] == "user"
+    assert row["local_service_active"] is True
+    assert row["local_service_state"] == "active"
+
+
+def test_local_factory_service_control_updates_same_machine_worker(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_normalized_factory_hostname", lambda: "kevin-desktop")
+
+    reg_resp = client.post(
+        "/api/v1/factory/registrations",
+        json={
+            "factory_id": "kevins-desktop",
+            "factory_role": "LOCAL_WORKER",
+            "deployment_profile": "local_workstation",
+            "registration_status": "online",
+            "metadata": {"hostname": "kevin-desktop"},
+        },
+    )
+    assert reg_resp.status_code == 200
+
+    async def _fake_control(action: str) -> dict[str, object]:
+        assert action == "stop"
+        return {
+            "ok": True,
+            "unit": "universal-agent-local-factory.service",
+            "scope": "user",
+            "state": "inactive",
+            "active": False,
+        }
+
+    monkeypatch.setattr(gateway_server, "_run_local_factory_service_control", _fake_control)
+
+    control_resp = client.post(
+        "/api/v1/ops/factory/local-service-control",
+        json={"target_factory_id": "kevins-desktop", "action": "stop"},
+    )
+    assert control_resp.status_code == 200
+    payload = control_resp.json()
+    assert payload["ok"] is True
+    assert payload["local_service_active"] is False
+    assert payload["local_service_state"] == "inactive"
+
+    list_resp = client.get("/api/v1/factory/registrations")
+    row = next(item for item in list_resp.json()["registrations"] if item["factory_id"] == "kevins-desktop")
+    assert row["registration_status"] == "offline"
+
+
+def test_local_factory_service_control_rejects_remote_workers(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_normalized_factory_hostname", lambda: "kevin-desktop")
+
+    reg_resp = client.post(
+        "/api/v1/factory/registrations",
+        json={
+            "factory_id": "remote-worker",
+            "factory_role": "LOCAL_WORKER",
+            "deployment_profile": "local_workstation",
+            "registration_status": "online",
+            "metadata": {"hostname": "other-machine"},
+        },
+    )
+    assert reg_resp.status_code == 200
+
+    control_resp = client.post(
+        "/api/v1/ops/factory/local-service-control",
+        json={"target_factory_id": "remote-worker", "action": "stop"},
+    )
+    assert control_resp.status_code == 403
+    assert "same-machine LOCAL_WORKER" in control_resp.text
+
+
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
     gateway = gateway_server.get_gateway()
     conn = gateway.get_coder_vp_db_conn()
