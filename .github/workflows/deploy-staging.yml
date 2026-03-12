@@ -119,6 +119,9 @@ jobs:
             run_as_ua \"echo \\\"INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'\\\" >> \$STAGING_DIR/.env\"
             run_as_ua \"echo \\\"INFISICAL_ENVIRONMENT='\$DEPLOY_INFISICAL_ENV'\\\" >> \$STAGING_DIR/.env\"
             run_as_ua \"echo \\\"UA_INFISICAL_ENABLED=1\\\" >> \$STAGING_DIR/.env\"
+            run_as_ua \"echo \\\"UA_GATEWAY_PORT=9002\\\" >> \$STAGING_DIR/.env\"
+            run_as_ua \"echo \\\"UA_API_PORT=9001\\\" >> \$STAGING_DIR/.env\"
+            run_as_ua \"echo \\\"UA_GATEWAY_URL=http://127.0.0.1:9002\\\" >> \$STAGING_DIR/.env\"
             
             echo '--> Syncing dependencies with uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
