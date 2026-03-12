@@ -43,6 +43,14 @@ _DIGEST_KINDS = {
     "csi_specialist_hourly_synthesis",
 }
 
+# CSI specialist health notifications (suppressed as noise)
+# These are operational health metrics that don't require immediate attention
+_SPECIALIST_HEALTH_KINDS = {
+    "csi_specialist_confidence_drift",
+    "csi_specialist_evidence_stale",
+    "csi_specialist_low_signal_suppressed",
+}
+
 # Kinds that are low-value repetitive noise
 _SUPPRESSED_KINDS = {
     "csi_rss_trend_report",
@@ -50,7 +58,8 @@ _SUPPRESSED_KINDS = {
 }
 
 # Quality thresholds for high-value tier
-_HIGH_VALUE_QUALITY_THRESHOLD = 0.6
+# Raised from 60% to 75% per Kevin's feedback on 2025-03-12
+_HIGH_VALUE_QUALITY_THRESHOLD = 0.75
 _HIGH_VALUE_CONFIDENCE_THRESHOLD = 0.7
 
 
@@ -74,13 +83,18 @@ def classify_publish_tier(
     if severity_norm in ("critical", "error"):
         return "critical"
 
+    # Specialist health notifications: suppress as operational noise
+    if kind_norm in _SPECIALIST_HEALTH_KINDS:
+        return "suppressed"
+
     # High-value candidates: check quality/confidence gates
     if kind_norm in _HIGH_VALUE_CANDIDATE_KINDS:
         quality = meta.get("quality")
         if isinstance(quality, dict):
             score = float(quality.get("quality_score") or 0)
             grade = str(quality.get("quality_grade") or "")
-            if score >= _HIGH_VALUE_QUALITY_THRESHOLD or grade in ("A", "B"):
+            # Require Grade A only (not A/B) per Kevin's feedback on 2025-03-12
+            if score >= _HIGH_VALUE_QUALITY_THRESHOLD and grade == "A":
                 return "high_value"
 
         # Check notification policy for anomaly/high-value flags
@@ -92,7 +106,7 @@ def classify_publish_tier(
         # Fall through to digest if quality is low
         return "digest"
 
-    # Digest: operational status updates
+    # Digest: operational status updates (including recoveries)
     if kind_norm in _DIGEST_KINDS:
         return "digest"
 

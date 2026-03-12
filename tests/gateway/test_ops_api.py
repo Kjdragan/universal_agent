@@ -786,6 +786,65 @@ def test_dashboard_activity_send_to_simone_dispatches_hook_action(client, monkey
     assert "simone_handoff_completed" in kinds
 
 
+def test_heartbeat_investigation_completion_updates_origin_and_sends_operator_email(client, monkeypatch):
+    class _AgentMailStub:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def send_email(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"ok": True, "message_id": "msg_1"}
+
+    monkeypatch.setattr(gateway_server, "_agentmail_service", _AgentMailStub())
+    record = gateway_server._add_notification(
+        kind="autonomous_heartbeat_completed",
+        title="Autonomous Heartbeat Activity Completed",
+        message="Heartbeat detected warn findings",
+        severity="warning",
+        requires_action=True,
+        metadata={
+            "source": "heartbeat",
+            "session_id": "session_hook_abc",
+            "heartbeat_findings_artifact_href": "/storage?findings",
+            "heartbeat_unknown_rule_count": 1,
+        },
+    )
+
+    gateway_server._hook_notification_sink(
+        {
+            "kind": "heartbeat_investigation_completed",
+            "title": "Heartbeat Investigation Completed",
+            "message": "Simone completed the heartbeat investigation.",
+            "session_id": "session_hook_abc",
+            "severity": "info",
+            "requires_action": True,
+            "metadata": {
+                "source": "heartbeat",
+                "source_notification_id": record["id"],
+                "session_key": "simone_heartbeat_ntf_1",
+                "classification": "unknown_issue",
+                "operator_review_required": True,
+                "recommended_next_step": "Review the gateway error burst before changing code.",
+                "email_summary": "Simone found a non-rule gateway error burst that needs operator review.",
+                "heartbeat_investigation_summary_workspace_relpath": (
+                    "session_hook_abc/work_products/heartbeat_investigation_summary.md"
+                ),
+            },
+        }
+    )
+
+    updated = gateway_server._get_activity_event(record["id"])
+    assert updated is not None
+    assert updated["metadata"]["heartbeat_mediation_status"] == "investigation_completed"
+    assert updated["metadata"]["heartbeat_operator_review_required"] is True
+    assert updated["metadata"]["heartbeat_investigation_summary_href"]
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "heartbeat_operator_review_required" in kinds
+    assert "heartbeat_operator_review_sent" in kinds
+    assert gateway_server._agentmail_service.calls
+    assert gateway_server._agentmail_service.calls[0]["subject"].startswith("Simone heartbeat review required")
+
+
 def test_dashboard_activity_actions_are_audited(client, monkeypatch):
     class _HookDispatchStub:
         async def dispatch_internal_action(self, action_payload: dict):

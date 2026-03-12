@@ -1,5 +1,6 @@
 import time
 import urllib.parse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -153,14 +154,55 @@ def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkey
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path / "workspaces")
     monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_heartbeat_mediation_cooldowns", {})
+
+    class _HookDispatchStub:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def dispatch_internal_action(self, action_payload: dict):
+            self.calls.append(action_payload)
+            return True, "agent"
+
+    hook_stub = _HookDispatchStub()
+    monkeypatch.setattr(gateway_server, "_hooks_service", hook_stub)
 
     workspace_root = gateway_server.WORKSPACES_DIR
     workspace_root.mkdir(parents=True, exist_ok=True)
     session_ws = workspace_root / "session_abc"
     session_ws.mkdir(parents=True, exist_ok=True)
     output_file = session_ws / "work_products" / "summary.md"
+    findings_file = session_ws / "work_products" / gateway_server._HEARTBEAT_FINDINGS_FILENAME
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("# output\n", encoding="utf-8")
+    findings_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "overall_status": "warn",
+                "generated_at_utc": "2026-03-12T06:09:00Z",
+                "source": "vps_system_health_check",
+                "summary": "Gateway errors elevated",
+                "findings": [
+                    {
+                        "finding_id": "gateway_errors_elevated",
+                        "category": "gateway",
+                        "severity": "warn",
+                        "metric_key": "recent_errors_30m",
+                        "observed_value": 67,
+                        "threshold_text": ">10",
+                        "known_rule_match": True,
+                        "confidence": "high",
+                        "title": "Gateway Errors Elevated",
+                        "recommendation": "Inspect gateway logs for root cause.",
+                        "runbook_command": "journalctl -u universal-agent-gateway --since '30 min ago' --no-pager",
+                        "metadata": {"service": "universal-agent-gateway"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     session = GatewaySession(
         session_id="session_abc",
@@ -180,19 +222,81 @@ def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkey
             "sent": True,
             "artifacts": {
                 "writes": [],
-                "work_products": [str(output_file)],
+                "work_products": [str(output_file), str(findings_file)],
                 "bash_commands": [],
             },
         }
     )
 
-    latest = gateway_server._notifications[-1]
-    assert latest["kind"] == "autonomous_heartbeat_completed"
-    links = latest["metadata"]["heartbeat_artifacts"]
+    heartbeat = next(item for item in reversed(gateway_server._notifications) if item["kind"] == "autonomous_heartbeat_completed")
+    links = heartbeat["metadata"]["heartbeat_artifacts"]
     assert isinstance(links, list) and links
     assert links[0]["scope"] == "workspaces"
     assert links[0]["relative_path"].endswith("session_abc/work_products/summary.md")
     assert "scope=workspaces" in links[0]["storage_href"]
+    assert heartbeat["requires_action"] is True
+    assert heartbeat["severity"] == "warning"
+    assert heartbeat["metadata"]["heartbeat_findings_status"] == "warn"
+    assert heartbeat["metadata"]["heartbeat_findings_count"] == 1
+    assert heartbeat["metadata"]["heartbeat_mediation_status"] == "dispatched"
+    assert heartbeat["metadata"]["primary_runbook_command"].startswith("journalctl -u universal-agent-gateway")
+    assert hook_stub.calls
+    assert hook_stub.calls[0]["name"] == "AutoHeartbeatInvestigation"
+    persisted = gateway_server._get_activity_event(heartbeat["id"])
+    assert persisted is not None
+    action_ids = {str(item.get("id") or "") for item in persisted.get("actions", [])}
+    assert "copy_runbook_command" in action_ids
+    assert "open_findings" in action_ids
+
+
+def test_emit_heartbeat_event_falls_back_when_findings_missing(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path / "workspaces")
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_heartbeat_mediation_cooldowns", {})
+
+    class _HookDispatchStub:
+        async def dispatch_internal_action(self, action_payload: dict):
+            return True, "agent"
+
+    monkeypatch.setattr(gateway_server, "_hooks_service", _HookDispatchStub())
+
+    workspace_root = gateway_server.WORKSPACES_DIR
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    session_ws = workspace_root / "session_missing"
+    session_ws.mkdir(parents=True, exist_ok=True)
+    markdown = session_ws / "work_products" / gateway_server._HEARTBEAT_REPORT_FILENAME
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    markdown.write_text(
+        "Flags\n⚠️ WARN: Gateway Errors Elevated\nAction: Investigate gateway logs for root cause\nRun journalctl -u universal-agent-gateway --since '30 min ago' --no-pager\n",
+        encoding="utf-8",
+    )
+
+    session = GatewaySession(
+        session_id="session_missing",
+        user_id="tester",
+        workspace_dir=str(session_ws),
+        metadata={},
+    )
+    gateway_server._sessions[session.session_id] = session
+
+    gateway_server._emit_heartbeat_event(
+        {
+            "type": "heartbeat_completed",
+            "session_id": session.session_id,
+            "timestamp": time.time(),
+            "ok_only": False,
+            "sent": True,
+            "artifacts": {"writes": [], "work_products": [str(markdown)], "bash_commands": []},
+        }
+    )
+
+    parse_failed = next(item for item in reversed(gateway_server._notifications) if item["kind"] == "heartbeat_findings_parse_failed")
+    heartbeat = next(item for item in reversed(gateway_server._notifications) if item["kind"] == "autonomous_heartbeat_completed")
+    assert parse_failed["requires_action"] is True
+    assert heartbeat["metadata"]["heartbeat_findings"]["findings"][0]["finding_id"] == "heartbeat_findings_parse_failed"
+    assert heartbeat["metadata"]["primary_runbook_command"].startswith("Run journalctl -u universal-agent-gateway")
 
 
 def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: Path, monkeypatch):

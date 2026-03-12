@@ -49,9 +49,12 @@ class TestClassifyPublishTier:
     def test_opportunity_bundle_high_quality(self):
         tier = classify_publish_tier(
             kind="csi_opportunity_bundle_ready",
-            metadata={"quality": {"quality_score": 0.7, "quality_grade": "B"}},
+            metadata={"quality": {"quality_score": 0.8, "quality_grade": "A"}},
         )
         assert tier == "high_value"
+
+    def test_specialist_health_is_suppressed(self):
+        assert classify_publish_tier(kind="csi_specialist_low_signal_suppressed") == "suppressed"
 
     def test_recovery_is_digest(self):
         assert classify_publish_tier(kind="csi_delivery_health_recovered") == "digest"
