@@ -4,6 +4,15 @@ Last updated: 2026-03-01 America/Chicago
 Owner at handoff: Codex
 Scope: continuing CSI rebuild after packet 13 completion
 
+## Deployment Contract
+
+Current deployment is branch-driven through GitHub Actions.
+
+- `develop` is the automated staging lane.
+- `main` is the automated production lane.
+- `./scripts/deploy_vps.sh` is no longer the normal deployment path and should be treated as break-glass only.
+- Canonical deployment references are `AGENTS.md` and `docs/deployment/ci_cd_pipeline.md`.
+
 ## 1) Current State (What Is Already Done)
 
 Packets complete in source and validated:
@@ -41,9 +50,10 @@ For every packet:
 3. Run `npm --prefix web-ui run build` if UI touched.
 4. Update `docs/csi-rebuild/status.md` with validation evidence.
 5. Commit with packet-scoped message.
-6. Push.
-7. Deploy (`./scripts/deploy_vps.sh`).
+6. Push the packet branch, then promote it to `develop` for staging validation.
+7. Verify the GitHub Actions staging deploy completes successfully.
 8. Verify live service/timer state and endpoint behavior.
+9. Promote to `main` only when you intentionally want production updated.
 
 Do not combine unrelated refactors into packet commits.
 
@@ -198,7 +208,9 @@ UI:
 - `npm --prefix web-ui run build`
 
 Deploy:
-- `./scripts/deploy_vps.sh`
+- `git push origin develop`
+- verify the latest `Deploy Staging` GitHub Actions run completes before VPS checks
+- promote to `main` only for intentional production rollout
 
 Post-deploy timer checks (run on VPS):
 - `systemctl is-active csi-delivery-health-canary.timer`
@@ -217,7 +229,6 @@ Post-deploy timer checks (run on VPS):
 Before declaring handoff complete:
 - [ ] packet status in `status.md` is current
 - [ ] validation evidence lines added for latest packet
-- [ ] deploy completed on VPS
+- [ ] GitHub Actions deploy completed successfully for the intended branch
 - [ ] key CSI timers active on VPS
 - [ ] remaining packet queue (14-22) unchanged and explicit
-

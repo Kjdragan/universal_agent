@@ -3,6 +3,11 @@
 Last updated: 2026-03-01 23:30 America/Chicago
 Status owner: Codex
 
+Deployment contract note:
+- current app deployment path is GitHub Actions
+- `develop` deploys to staging and `main` deploys to production
+- any mention below of `deploy_vps.sh` reflects historical validation evidence, not the current default operator flow
+
 Handoff reference: `docs/csi-rebuild/06_packet_handoff.md`
 Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 
@@ -38,7 +43,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | Confidence method scaffold | Done | Added `csi_confidence.py` evidence model + heuristic fallback. |
 | Specialist loop confidence persistence | Done | `csi_specialist_loops` now stores `confidence_method` and `evidence_json`. |
 | Specialist loop dashboard surfacing | Done | CSI loops API/UI now show confidence method. |
-| VPS deployment (packet 4) | Done | `deploy_vps.sh` successful; gateway/api/webui/telegram/vp workers active. |
+| Historical manual VPS deployment (packet 4) | Done | Legacy `deploy_vps.sh` validation succeeded at that time; current deployment contract is GitHub Actions. |
 | Specialist quality guardrails | Done | Added low-signal suppression, stale-evidence alerts, confidence-drift alerts with cooldown dedupe. |
 | Specialist quality health summary | Done | `/api/v1/dashboard/csi/health` now returns `specialist_quality` aggregate. |
 | Specialist loop operator triage | Done | Added loop action endpoint, triage automation endpoint, and stale-loop cleanup endpoint. |

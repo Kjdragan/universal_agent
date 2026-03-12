@@ -1,5 +1,13 @@
 # 007 - CSI Persistence, Briefing, and Reminder Operations
 
+## Deployment Note
+
+This document describes current CSI runtime behavior, but references to `deploy_vps.sh` below are historical notes about legacy script behavior.
+
+- The current deployment contract for this repository is GitHub Actions.
+- Push or merge to `develop` for staging and to `main` for production.
+- Do not use `deploy_vps.sh` as the default deploy mechanism.
+
 ## Purpose
 
 This document defines the production-safe CSI runtime pattern after the quality-first trend product upgrades:

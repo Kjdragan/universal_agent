@@ -1,5 +1,14 @@
 # 92. CSI Architecture and Operations Source of Truth (2026-03-06)
 
+## Deployment Status Note
+
+The current application deployment contract for this repository is GitHub Actions, not manual VPS deploy scripts.
+
+- Push or merge to `develop` to deploy to staging.
+- Push or merge to `main` to deploy to production.
+- Treat references here to `scripts/deploy_vps.sh` or `scripts/vpsctl.sh` as legacy or break-glass tooling only.
+- See `AGENTS.md` and `docs/deployment/ci_cd_pipeline.md` for the canonical deployment path.
+
 ## Purpose
 
 This document is the canonical source of truth for the CSI subsystem as it exists today in this repository and on the VPS.
@@ -284,11 +293,12 @@ If disabled, `POST /webhooks/threads` returns an ignored status rather than proc
 ## 10. VPS Deployment Model
 
 Primary operational references:
+- `AGENTS.md`
+- `docs/deployment/ci_cd_pipeline.md`
 - `CSI_Ingester/development/deployment/systemd/csi-ingester.service`
 - `CSI_Ingester/development/deployment/systemd/csi-ingester.env.example`
 - `CSI_Ingester/documentation/06_CSI_VPS_Deployment_Runbook_v1_2026-02-22.md`
-- `scripts/vpsctl.sh`
-- `scripts/deploy_vps.sh`
+- `scripts/vpsctl.sh` for break-glass diagnostics only
 
 CSI runs on VPS as its own systemd service:
 - `csi-ingester.service`
@@ -301,8 +311,8 @@ Current service characteristics include:
 - explicit memory/task limits in the service unit
 
 CSI is also part of the broader VPS operator tooling:
-- `scripts/vpsctl.sh` includes `csi` service aliasing
-- broader deploy/status flows reference CSI alongside core UA services
+- branch-driven GitHub Actions deploys carry CSI changes with the rest of the application stack
+- `scripts/vpsctl.sh` still includes `csi` service aliasing for emergency targeted checks only
 
 ## 11. CSI Timer and Batch-Job Model
 

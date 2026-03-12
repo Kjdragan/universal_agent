@@ -1,5 +1,14 @@
 # 91. Telegram Architecture and Operations Source of Truth (2026-03-06)
 
+## Deployment Status Note
+
+The current application deployment contract for this repository is GitHub Actions, not manual VPS deploy scripts.
+
+- Push or merge to `develop` to deploy to staging.
+- Push or merge to `main` to deploy to production.
+- Treat references here to `scripts/deploy_vps.sh` or `scripts/vpsctl.sh` as legacy or break-glass operational tooling only.
+- See `AGENTS.md` and `docs/deployment/ci_cd_pipeline.md` for the canonical deployment path.
+
 ## Purpose
 
 This document is the canonical source of truth for current Telegram usage in Universal Agent.
@@ -258,16 +267,18 @@ This is an important current hardening layer for Telegram reliability.
 ## 9. VPS Runtime and Service Posture
 
 Primary operational references:
+- `AGENTS.md`
+- `docs/deployment/ci_cd_pipeline.md`
 - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
 - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/24_VPS_Service_Recovery_System_Runbook_2026-02-12.md`
-- `scripts/deploy_vps.sh`
-- `scripts/vpsctl.sh`
 - `scripts/vps_service_watchdog.sh`
+- `scripts/vpsctl.sh` for break-glass diagnostics only
 
 Current documented VPS posture:
 - Telegram runs as `universal-agent-telegram`
 - it is treated as one of the core long-running services on VPS
-- deploy/restart/status scripts include the telegram service alongside gateway/api/webui
+- normal deploy/restart for Telegram is now driven by the GitHub Actions staging/production workflows
+- `scripts/vpsctl.sh` remains available only for narrowly targeted diagnostics or emergency intervention
 
 ### Watchdog Behavior
 

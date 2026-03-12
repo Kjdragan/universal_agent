@@ -28,15 +28,13 @@ This is an execution hygiene issue, not a reason to remove sandboxing.
 ## Standard Execution Profile (Mandatory)
 
 ### A) Remote operations
-1. Use `scripts/vpsctl.sh` as the default interface.
+1. Use the GitHub Actions deployment path as the default interface for repository changes.
 2. Prefer:
-   1. `scripts/vpsctl.sh push ...`
-   2. `scripts/vpsctl.sh restart ...`
-   3. `scripts/vpsctl.sh status ...`
-   4. `scripts/vpsctl.sh logs ...`
-   5. `scripts/vpsctl.sh doctor`
-3. For multi-step remote logic, use:
-   1. `scripts/vpsctl.sh run-file <script>`
+   1. local validation and tests
+   2. `git add`, `git commit`, `git push`
+   3. promotion to `develop` for staging deploys
+   4. promotion to `main` for production deploys
+3. Use `scripts/vpsctl.sh` only for break-glass diagnostics or narrowly targeted intervention.
 4. Avoid raw multiline `ssh "... && ... | ..."` for routine operations.
 
 ### B) Git operations
@@ -48,20 +46,19 @@ This is an execution hygiene issue, not a reason to remove sandboxing.
 3. Do not use interactive git flows in automation loops.
 
 ### C) Health-check flow (post-change)
-1. `scripts/vpsctl.sh status all`
-2. `scripts/vpsctl.sh doctor`
-3. For CSI stream routes:
+1. confirm the relevant GitHub Actions deploy run completed successfully
+2. use `scripts/vpsctl.sh status all` or direct host checks only if post-deploy diagnostics are needed
+3. for CSI stream routes:
    1. check digest services/timers,
    2. verify `*_SENT=1` in journal logs.
 
 ## Required Prefix Approval Baseline
 The operating baseline should maintain persistent approvals for:
-1. `scripts/vpsctl.sh`
-2. `./scripts/deploy_vps.sh`
-3. `ssh -i ~/.ssh/id_ed25519 ...` (tailnet host)
-4. `scp -i ~/.ssh/id_ed25519 ...`
-5. `git add`, `git commit`, `git push`
-6. `uv run` (project runtime/test scripts)
+1. `git add`, `git commit`, `git push`
+2. `gh run`, if GitHub Actions inspection is part of the workflow
+3. `uv run` (project runtime/test scripts)
+4. `scripts/vpsctl.sh` for break-glass diagnostics
+5. `ssh -i ~/.ssh/id_ed25519 ...` only when direct host debugging is explicitly required
 
 If an operation falls outside this baseline, first convert it into one of these command families before introducing new ad-hoc command patterns.
 
