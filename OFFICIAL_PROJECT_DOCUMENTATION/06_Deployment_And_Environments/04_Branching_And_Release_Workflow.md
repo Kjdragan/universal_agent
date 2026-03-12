@@ -22,8 +22,9 @@ Do not use long-lived historical branches as the default development lane.
 
 GitHub Actions is the only supported application deployment path.
 
-1. Push or merge to `develop` to deploy to staging automatically.
-2. Push or merge to `main` to deploy to production automatically.
+1. Open a pull request to `develop` to run Codex review on the proposed change.
+2. Merge to `develop` to deploy to staging automatically.
+3. Promote the exact validated `develop` SHA to `main` to deploy to production automatically.
 
 Supporting references:
 
@@ -55,6 +56,15 @@ git checkout -b feature/my-change
 
 Work on the `feature/...` branch until the change is locally ready.
 
+For the main product UI and gateway, local development should happen from the repo checkout in **HQ dev mode**, not from the local worker environment.
+
+Local checkout roles:
+
+1. `/home/kjdragan/lrepos/universal_agent` = HQ dev lane
+2. `~/universal_agent_factory` = optional local worker lane
+
+If localhost starts returning role-based `403` responses on HQ dashboard pages, the repo checkout is almost certainly pointed at the worker environment instead of `kevins-desktop-hq-dev`.
+
 Typical local loop:
 
 1. code
@@ -66,19 +76,21 @@ Typical local loop:
 
 When the change should be tested live on the VPS-backed staging environment:
 
-1. merge or fast-forward the feature branch into `develop`
-2. push `develop`
-3. wait for the `Deploy Staging` workflow to pass
-4. validate the live staging environment
+1. open a pull request from the feature branch into `develop`
+2. let Codex review the PR
+3. merge or fast-forward the feature branch into `develop`
+4. wait for the `Deploy Staging` workflow to pass
+5. validate the live staging environment
 
 ### 4. Promote to Production
 
 Only after staging validation is acceptable:
 
-1. merge or fast-forward `develop` into `main`
-2. push `main`
-3. wait for the `Deploy Production` workflow to pass
-4. validate production
+1. record the exact validated `develop` commit SHA
+2. run the manual promotion workflow with that SHA
+3. let the workflow fast-forward `main` to that SHA
+4. wait for the `Deploy Production` workflow to pass
+5. validate production
 
 ## What Not To Do
 
@@ -109,13 +121,13 @@ That means:
 
 Tell the agent to:
 
-`Promote my current feature branch to develop and verify staging.`
+`Open or update a PR from my current feature branch into develop, run Codex review, merge it if acceptable, and verify staging.`
 
 ### If you want full rollout
 
 Tell the agent to:
 
-`Promote my current feature branch to develop, verify staging, then promote develop to main and verify production.`
+`Open or update a PR from my current feature branch into develop, run Codex review, merge it if acceptable, verify staging, then promote the validated develop SHA to main and verify production.`
 
 ## Summary
 
@@ -123,7 +135,83 @@ The default operating model is:
 
 1. branch from `develop`
 2. code on `feature/...`
-3. deploy and validate through `develop`
-4. release through `main`
+3. review and merge through a PR into `develop`
+4. deploy and validate through `develop`
+5. promote the exact validated `develop` SHA to `main`
+6. release through `main`
+
+## 1. One-Minute Cheat Sheet
+
+Use this if you just want the shortest correct explanation.
+
+1. Start new work from `develop`.
+2. Do your coding on a `feature/...` branch.
+3. Open a PR into `develop` when you want Codex review and staging deployment.
+4. Promote only the exact validated `develop` SHA to `main`.
+
+Short meanings:
+
+1. `feature/...` = your working branch
+2. `develop` = staging branch
+3. `main` = production branch
+
+## 2. Exact Git Commands
+
+### Start a new feature
+
+```bash
+git checkout develop
+git pull --ff-only
+git checkout -b feature/my-change
+```
+
+### Promote to staging only
+
+```bash
+git push -u origin feature/my-change
+gh pr create --base develop --head feature/my-change --fill
+```
+
+That opens the reviewed path. After the PR is approved and merged, the staging deployment pipeline runs from `develop`.
+
+### Promote to production after staging passes
+
+```bash
+gh workflow run "Promote Validated Develop To Main" -f develop_sha=<validated_sha>
+```
+
+That fast-forwards `main` to the exact validated `develop` commit and then triggers the production deployment pipeline.
+
+## 3. Branch Flow Diagram
+
+```text
+feature/my-change
+        |
+        v
+  PR to develop
+ (Codex review)
+        |
+        v
+     develop
+   (staging deploy)
+        |
+        v
+ promote exact SHA
+        |
+        v
+       main
+ (production deploy)
+```
+
+Read it this way:
+
+1. work starts on `feature/...`
+2. code review happens on the PR to `develop`
+3. live validation happens through `develop`
+4. release happens by promoting the validated `develop` SHA to `main`
+
+For local runtime mode details, see:
+
+- `OFFICIAL_PROJECT_DOCUMENTATION/06_Deployment_And_Environments/05_Local_Runtime_Modes.md`
 
 If deployment behavior changes later, update this file together with the GitHub Actions workflow documentation.

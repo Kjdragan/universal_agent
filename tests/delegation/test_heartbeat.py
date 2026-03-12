@@ -105,6 +105,7 @@ class TestFactoryHeartbeat:
         payload = hb._build_payload(latency_ms=42.5)
         assert payload["factory_id"] == "test-desktop"
         assert payload["factory_role"] == "LOCAL_WORKER"
+        assert payload["deployment_profile"] == "local_workstation"
         assert payload["registration_status"] == "online"
         assert payload["heartbeat_latency_ms"] == 42.5
         assert "hostname" in payload["metadata"]

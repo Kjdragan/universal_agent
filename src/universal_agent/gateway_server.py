@@ -218,8 +218,16 @@ if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
 
 _FACTORY_POLICY = build_factory_runtime_policy()
+_LOCAL_FACTORY_SERVICE_UNIT = "universal-agent-local-factory.service"
+_LOCAL_FACTORY_SERVICE_SCOPE = "user"
+_LOCAL_FACTORY_SERVICE_CONTROL_SCRIPT = BASE_DIR / "scripts" / "control_local_factory_service.sh"
 
 _LEGACY_RANDOM_FACTORY_ID_RE = re.compile(r"^factory-[0-9a-f]{8}$")
+
+
+def _normalize_host_label(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip("._-")
+    return slug[:80]
 
 
 def _normalized_factory_hostname() -> str:
@@ -228,8 +236,7 @@ def _normalized_factory_hostname() -> str:
         or str(os.getenv("HOSTNAME") or "").strip()
         or socket.gethostname()
     )
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("._-")
-    return slug[:80]
+    return _normalize_host_label(raw)
 
 
 def _derive_factory_id() -> str:
@@ -1427,6 +1434,7 @@ class OpsTokenIssueResponse(BaseModel):
 class FactoryRegistrationRequest(BaseModel):
     factory_id: Optional[str] = None
     factory_role: Optional[str] = None
+    deployment_profile: Optional[str] = None
     registration_status: str = "online"
     heartbeat_latency_ms: Optional[float] = None
     capabilities: list[str] = Field(default_factory=list)
@@ -10773,6 +10781,8 @@ async def list_factory_registrations(
         total = len(rows)
         rows = rows[:clamped_limit]
 
+    rows = [await _enrich_factory_registration_row(row) for row in rows]
+
     return {
         "registrations": rows,
         "count": total,
@@ -10864,6 +10874,13 @@ class FactoryControlRequest(BaseModel):
     action: str  # "pause" or "resume"
 
 
+class FactoryLocalServiceControlRequest(BaseModel):
+    """Request to control the same-machine local worker service."""
+
+    target_factory_id: str
+    action: str  # "start" or "stop"
+
+
 @app.post("/api/v1/ops/factory/control")
 async def control_factory(request: Request, payload: FactoryControlRequest):
     """Publish a system:pause_factory or system:resume_factory mission.
@@ -10904,15 +10921,11 @@ async def control_factory(request: Request, payload: FactoryControlRequest):
     _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
     _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
 
-    # Optimistically update registry status so UI reflects immediately
-    if _factory_registry is not None:
-        try:
-            existing = _factory_registry.get(payload.target_factory_id)
-            if existing:
-                new_status = "paused" if action == "pause" else "online"
-                _factory_registry.upsert({**existing, "registration_status": new_status})
-        except Exception as exc:
-            logger.warning("Failed to update registry for %s: %s", payload.target_factory_id, exc)
+    # Optimistically update registry status so UI reflects immediately.
+    _update_factory_registration_status(
+        payload.target_factory_id,
+        "paused" if action == "pause" else "online",
+    )
 
     logger.info(
         "Factory control mission published job_id=%s action=%s target=%s",
@@ -10932,6 +10945,19 @@ async def _systemd_unit_active(
     user_scope: bool = False,
     timeout_seconds: float = 5.0,
 ) -> bool:
+    return await _systemd_unit_state(
+        unit_name,
+        user_scope=user_scope,
+        timeout_seconds=timeout_seconds,
+    ) == "active"
+
+
+async def _systemd_unit_state(
+    unit_name: str,
+    *,
+    user_scope: bool = False,
+    timeout_seconds: float = 5.0,
+) -> str:
     cmd = ["systemctl"]
     if user_scope:
         cmd.append("--user")
@@ -10943,9 +10969,163 @@ async def _systemd_unit_active(
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-        return (stdout or b"").decode().strip() == "active"
+        state = (stdout or b"").decode().strip()
+        return state or "unknown"
     except Exception:
+        return "unknown"
+
+
+def _update_factory_registration_status(factory_id: str, status_value: str) -> None:
+    normalized_id = str(factory_id or "").strip()
+    if not normalized_id:
+        return
+
+    normalized_status = str(status_value or "").strip().lower() or "unknown"
+    if _factory_registry is not None:
+        try:
+            existing = _factory_registry.get(normalized_id)
+            if existing:
+                _factory_registry.upsert(
+                    {**existing, "registration_status": normalized_status},
+                    source=existing.get("source") or "api_control",
+                )
+        except Exception as exc:
+            logger.warning("Failed to update registry for %s: %s", normalized_id, exc)
+        return
+
+    with _factory_registration_lock:
+        existing = _factory_registrations.get(normalized_id)
+        if isinstance(existing, dict):
+            updated = dict(existing)
+            updated["registration_status"] = normalized_status
+            updated["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _factory_registrations[normalized_id] = updated
+
+
+def _lookup_factory_registration(factory_id: str) -> Optional[dict[str, Any]]:
+    normalized_id = str(factory_id or "").strip()
+    if not normalized_id:
+        return None
+    if _factory_registry is not None:
+        return _factory_registry.get(normalized_id)
+    with _factory_registration_lock:
+        existing = _factory_registrations.get(normalized_id)
+        return dict(existing) if isinstance(existing, dict) else None
+
+
+def _is_same_machine_local_worker(row: dict[str, Any]) -> bool:
+    if str(_FACTORY_POLICY.role or "").strip().upper() != FactoryRole.HEADQUARTERS.value:
         return False
+    if str(row.get("factory_role") or "").strip().upper() != FactoryRole.LOCAL_WORKER.value:
+        return False
+    if str(row.get("deployment_profile") or "").strip().lower() != "local_workstation":
+        return False
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    row_host = _normalize_host_label(str(metadata.get("hostname") or ""))
+    current_host = _normalized_factory_hostname()
+    if not row_host or not current_host or row_host != current_host:
+        return False
+    return True
+
+
+async def _enrich_factory_registration_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    enriched.setdefault("local_control_supported", False)
+    enriched.setdefault("local_service_unit", None)
+    enriched.setdefault("local_service_scope", None)
+    enriched.setdefault("local_service_active", None)
+    enriched.setdefault("local_service_state", None)
+
+    if not _is_same_machine_local_worker(row):
+        return enriched
+
+    state = await _systemd_unit_state(
+        _LOCAL_FACTORY_SERVICE_UNIT,
+        user_scope=(_LOCAL_FACTORY_SERVICE_SCOPE == "user"),
+    )
+    enriched.update(
+        {
+            "local_control_supported": True,
+            "local_service_unit": _LOCAL_FACTORY_SERVICE_UNIT,
+            "local_service_scope": _LOCAL_FACTORY_SERVICE_SCOPE,
+            "local_service_active": state == "active",
+            "local_service_state": state if state in {"active", "inactive", "failed", "activating", "deactivating"} else "unknown",
+        }
+    )
+    return enriched
+
+
+async def _run_local_factory_service_control(action: str) -> dict[str, Any]:
+    if not _LOCAL_FACTORY_SERVICE_CONTROL_SCRIPT.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Local factory control script missing: {_LOCAL_FACTORY_SERVICE_CONTROL_SCRIPT}",
+        )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            str(_LOCAL_FACTORY_SERVICE_CONTROL_SCRIPT),
+            "--json",
+            action,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Local factory service control timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to launch local factory service control: {exc}")
+
+    output = (stdout or b"").decode().strip()
+    err = (stderr or b"").decode().strip()
+    try:
+        payload = json.loads(output) if output else {}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid local factory service control response: {exc}")
+
+    if proc.returncode != 0:
+        detail = err or output or f"Local factory service control failed with exit code {proc.returncode}"
+        raise HTTPException(status_code=500, detail=detail[-1200:])
+
+    return payload if isinstance(payload, dict) else {}
+
+
+@app.post("/api/v1/ops/factory/local-service-control")
+async def local_factory_service_control(request: Request, payload: FactoryLocalServiceControlRequest):
+    """Control the same-machine local worker service from the HQ dashboard."""
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    action = (payload.action or "").strip().lower()
+    if action not in {"start", "stop"}:
+        raise HTTPException(status_code=400, detail=f"Invalid action: {action}. Must be 'start' or 'stop'.")
+
+    target = _lookup_factory_registration(payload.target_factory_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Unknown factory_id: {payload.target_factory_id}")
+    if not _is_same_machine_local_worker(target):
+        raise HTTPException(
+            status_code=403,
+            detail="Local service control is only supported for the same-machine LOCAL_WORKER factory.",
+        )
+
+    result = await _run_local_factory_service_control(action)
+    state = str(result.get("state") or "unknown").strip().lower()
+    active = bool(result.get("active"))
+    if action == "stop":
+        _update_factory_registration_status(payload.target_factory_id, "offline")
+
+    return {
+        "ok": bool(result.get("ok")),
+        "target_factory_id": payload.target_factory_id,
+        "action": action,
+        "local_control_supported": True,
+        "local_service_unit": str(result.get("unit") or _LOCAL_FACTORY_SERVICE_UNIT),
+        "local_service_scope": str(result.get("scope") or _LOCAL_FACTORY_SERVICE_SCOPE),
+        "local_service_active": active,
+        "local_service_state": state if state in {"active", "inactive", "failed", "activating", "deactivating"} else "unknown",
+    }
 
 
 async def _resolve_telegram_service_status() -> dict[str, Any]:
