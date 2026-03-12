@@ -29,6 +29,12 @@ type AgentQueueItem = {
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
+  metadata?: {
+    csi?: {
+      routing_state?: string;
+      human_intervention_reason?: string;
+    };
+  };
 };
 
 type PersonalQueueItem = {
@@ -42,6 +48,12 @@ type PersonalQueueItem = {
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
+  metadata?: {
+    csi?: {
+      routing_state?: string;
+      human_intervention_reason?: string;
+    };
+  };
 };
 
 type ApprovalRow = {
@@ -84,6 +96,10 @@ type OverviewPayload = {
   queue_health?: {
     dispatch_queue_size: number;
     dispatch_eligible: number;
+    threshold?: number;
+    csi_agent_actionable_open?: number;
+    csi_human_open?: number;
+    csi_incubating_hidden?: number;
     status_counts: Record<string, number>;
     source_counts: Record<string, number>;
   };
@@ -475,7 +491,7 @@ export default function ToDoListDashboardPage() {
     return rows.filter((row) => String(row.source_kind || "") !== "csi");
   }, [agentQueue, showNonCsiOnly]);
 
-  const nextActions = useMemo(() => filteredAgentItems.slice(0, 5), [filteredAgentItems]);
+  const dispatchThreshold = Number(overview?.queue_health?.threshold || 0);
 
   const renderAgentPanel = (compact = false) => (
     <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
@@ -512,45 +528,12 @@ export default function ToDoListDashboardPage() {
         </div>
       </div>
 
-      <div className="mb-3 rounded border border-slate-800 bg-slate-950/40 p-3">
-        <h3 className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-400">Next Actions</h3>
-        {nextActions.length === 0 ? (
-          <p className="text-xs text-slate-500">No eligible agent actions right now.</p>
-        ) : (
-          <div className="space-y-2">
-            {nextActions.map((item) => (
-              <div key={`next-${item.task_id}`} className="flex items-center justify-between gap-2 rounded border border-slate-800/70 bg-slate-950/60 px-2 py-1.5 text-xs">
-                <div className="min-w-0">
-                  <div className="truncate text-slate-200">{item.title}</div>
-                  <div className="text-[10px] text-slate-500">
-                    {item.project_key} · score {item.score ?? 0} ({scoreBadge(item.score)})
-                  </div>
-                </div>
-                <button
-                  onClick={() => void handleTaskAction(item.task_id, "seize")}
-                  disabled={actionPendingTaskId === item.task_id}
-                  className="rounded border border-emerald-700/60 bg-emerald-800/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-800/30 disabled:opacity-50"
-                >
-                  Seize
-                </button>
-                <button
-                  onClick={() => void handleOpenTaskHistory(item.task_id)}
-                  disabled={taskHistoryLoadingId === item.task_id}
-                  className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
-                >
-                  {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
-                </button>
-                <button
-                  onClick={() => setSelectedTaskDetails(item)}
-                  className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
-                >
-                  Inspect
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {filteredAgentItems.length > 0 && (overview?.queue_health?.dispatch_eligible || 0) === 0 ? (
+        <div className="mb-3 rounded border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+          Backlog exists, but nothing is dispatchable right now.
+          {dispatchThreshold > 0 ? ` Current agent threshold is ${dispatchThreshold}.` : ""}
+        </div>
+      ) : null}
 
       <div className="space-y-2 max-h-[56vh] overflow-y-auto pr-1">
         {filteredAgentItems.length === 0 ? (
@@ -575,7 +558,10 @@ export default function ToDoListDashboardPage() {
                 </div>
                 <div className="text-right text-[10px] text-slate-400">
                   <div>{priorityText(item.priority)}</div>
-                  <div>score {item.score ?? 0}</div>
+                  <div>score {item.score ?? 0} · Q {item.score_confidence ?? 0}</div>
+                  {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
+                    <div className="text-amber-300">below threshold {dispatchThreshold}</div>
+                  ) : null}
                   {item.collapsed_count && item.collapsed_count > 1 ? (
                     <div className="text-emerald-300">{item.collapsed_count} incident items</div>
                   ) : null}
@@ -668,7 +654,7 @@ export default function ToDoListDashboardPage() {
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
             Personal Queue ({personalQueue?.items?.length || 0})
           </h2>
-          <p className="text-xs text-slate-400">Human-visible reminders plus prioritized approvals.</p>
+          <p className="text-xs text-slate-400">Human-visible tasks plus CSI escalations and prioritized approvals.</p>
         </div>
       </div>
 
@@ -698,7 +684,17 @@ export default function ToDoListDashboardPage() {
           (personalQueue?.items || []).map((item) => (
             <article key={item.task_id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
               <div className="flex items-start justify-between gap-2">
-                <h3 className="font-semibold text-slate-200">{item.title}</h3>
+                <div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <h3 className="font-semibold text-slate-200">{item.title}</h3>
+                    {String(item.source_kind || "") === "csi" ? (
+                      <span className="rounded border border-amber-700/60 bg-amber-900/25 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">CSI Escalation</span>
+                    ) : null}
+                  </div>
+                  {String(item.source_kind || "") === "csi" && item.metadata?.csi?.human_intervention_reason ? (
+                    <p className="mt-1 text-[11px] text-amber-200">{item.metadata.csi.human_intervention_reason}</p>
+                  ) : null}
+                </div>
                 <span className="text-[10px] text-slate-400">{priorityText(item.priority)}</span>
               </div>
               {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
@@ -973,16 +969,23 @@ export default function ToDoListDashboardPage() {
 
       <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Dispatch Eligible</p>
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+            Dispatch Eligible{dispatchThreshold > 0 ? ` (>= ${dispatchThreshold})` : ""}
+          </p>
           <p className="mt-1 text-2xl font-semibold text-slate-100">{overview?.queue_health?.dispatch_eligible || 0}</p>
+          <p className="mt-1 text-[11px] text-slate-500">
+            {overview?.queue_health?.dispatch_queue_size || 0} visible agent queue item(s)
+          </p>
         </article>
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+        <Link href="/dashboard/csi#notifications" className="block rounded-lg border border-slate-800 bg-slate-900/60 p-3 transition-colors hover:border-emerald-700/60 hover:bg-slate-900/80">
           <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Open CSI Incidents</p>
           <p className="mt-1 text-2xl font-semibold text-emerald-200">{overview?.csi_incident_summary?.open_incidents || 0}</p>
-        </article>
+          <p className="mt-1 text-[11px] text-slate-500">Open CSI notifications</p>
+        </Link>
         <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Pending Approvals</p>
-          <p className="mt-1 text-2xl font-semibold text-amber-200">{approvalsHighlight?.pending_count || 0}</p>
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Human Intervention Required</p>
+          <p className="mt-1 text-2xl font-semibold text-amber-200">{overview?.queue_health?.csi_human_open || 0}</p>
+          <p className="mt-1 text-[11px] text-slate-500">CSI escalations waiting on a human</p>
         </article>
         <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
           <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active Agents</p>
@@ -1028,6 +1031,9 @@ export default function ToDoListDashboardPage() {
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Agent Efficiency</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          This measures recent agent seizure/completion activity, not total backlog depth.
+        </p>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
             <div className="text-slate-500">1h new / seized</div>

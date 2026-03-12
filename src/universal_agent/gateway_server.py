@@ -120,7 +120,7 @@ from universal_agent.work_threads import (
     update_work_thread,
     upsert_work_thread,
 )
-from universal_agent.hooks_service import HooksService
+from universal_agent.hooks_service import HooksService, build_manual_youtube_action
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
@@ -3863,6 +3863,112 @@ def _should_enqueue_csi_task(*, event_type: str, policy: dict[str, Any]) -> bool
         return bool(policy.get("requires_action"))
     # Default "proactive": strict allowlist of mission/opportunity + explicit anomaly event types.
     return str(event_type or "").strip().lower() in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
+
+
+def _csi_task_routing_decision(
+    *,
+    event_type: str,
+    subject_obj: dict[str, Any],
+    policy: dict[str, Any],
+    loop_state: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    normalized_event_type = str(event_type or "").strip().lower()
+    loop = loop_state if isinstance(loop_state, dict) else {}
+    loop_status = str(loop.get("status") or "").strip().lower()
+    confidence_target = None
+    confidence_score = None
+    follow_up_budget_remaining = None
+    try:
+        if loop.get("confidence_target") is not None:
+            confidence_target = float(loop.get("confidence_target"))
+    except Exception:
+        confidence_target = None
+    try:
+        if loop.get("confidence_score") is not None:
+            confidence_score = float(loop.get("confidence_score"))
+    except Exception:
+        confidence_score = None
+    try:
+        if loop.get("follow_up_budget_remaining") is not None:
+            follow_up_budget_remaining = int(loop.get("follow_up_budget_remaining"))
+    except Exception:
+        follow_up_budget_remaining = None
+    events_count = 0
+    try:
+        if loop.get("events_count") is not None:
+            events_count = max(0, int(loop.get("events_count") or 0))
+    except Exception:
+        events_count = 0
+
+    manual_required = _csi_subject_bool(
+        subject_obj,
+        "requires_manual_intervention",
+        "manual_intervention_required",
+        "requires_human_approval",
+        "human_approval_required",
+    )
+    explicit_maturation_signal = _csi_subject_bool(
+        subject_obj,
+        "ready_for_ua",
+        "maturation_complete",
+        "force_task_hub",
+        "force_escalation",
+    )
+    if normalized_event_type == "csi_global_brief_review_due":
+        return {
+            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+            "routing_reason": "scheduled_brief_review_due",
+            "confidence_target": confidence_target,
+            "follow_up_budget_remaining": follow_up_budget_remaining,
+            "human_intervention_reason": "Review latest CSI global trend brief.",
+        }
+    if manual_required:
+        return {
+            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+            "routing_reason": "subject_manual_intervention_required",
+            "confidence_target": confidence_target,
+            "follow_up_budget_remaining": follow_up_budget_remaining,
+            "human_intervention_reason": "CSI explicitly requested human intervention.",
+        }
+    if normalized_event_type in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}:
+        return {
+            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+            "routing_reason": "delivery_exception_hard_failure",
+            "confidence_target": confidence_target,
+            "follow_up_budget_remaining": follow_up_budget_remaining,
+            "human_intervention_reason": "CSI surfaced an operational incident that requires human intervention.",
+        }
+    if loop_status == "budget_exhausted":
+        return {
+            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+            "routing_reason": "specialist_followup_budget_exhausted",
+            "confidence_target": confidence_target,
+            "follow_up_budget_remaining": follow_up_budget_remaining,
+            "human_intervention_reason": "CSI exhausted follow-up budget before reaching target confidence.",
+        }
+    if (
+        normalized_event_type in {"opportunity_bundle_ready", "global_trend_brief_ready"}
+        and loop_status == "closed"
+        and confidence_target is not None
+        and confidence_score is not None
+        and confidence_score >= confidence_target
+        and bool(policy.get("escalates_to_ua"))
+        and (events_count > 1 or explicit_maturation_signal)
+    ):
+        return {
+            "routing_state": task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
+            "routing_reason": "confidence_target_reached",
+            "confidence_target": confidence_target,
+            "follow_up_budget_remaining": follow_up_budget_remaining,
+            "human_intervention_reason": None,
+        }
+    return {
+        "routing_state": task_hub.CSI_ROUTING_INCUBATING,
+        "routing_reason": "csi_owned_maturation_in_progress",
+        "confidence_target": confidence_target,
+        "follow_up_budget_remaining": follow_up_budget_remaining,
+        "human_intervention_reason": None,
+    }
 
 
 def _task_hub_apply_csi_routing_maintenance(conn: sqlite3.Connection) -> dict[str, int]:
@@ -9753,6 +9859,14 @@ async def lifespan(app: FastAPI):
     async def _yt_watcher_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
         if _hooks_service is None:
             return False, "hooks_service_not_ready"
+        if subpath == "youtube/manual":
+            action_payload = build_manual_youtube_action(
+                payload,
+                name="PlaylistWatcherYouTubeWebhook",
+            )
+            if action_payload is None:
+                return False, "invalid_manual_youtube_payload"
+            return await _hooks_service.dispatch_internal_action(action_payload)
         return await _hooks_service.dispatch_internal_payload(
             subpath=subpath, payload=payload, headers={"x-ua-source": "yt_playlist_watcher"}
         )
@@ -10058,11 +10172,18 @@ async def signals_ingest_endpoint(request: Request):
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
             if manual_payload:
-                ok, _reason = await _hooks_service.dispatch_internal_payload(
-                    subpath="youtube/manual",
-                    payload=manual_payload,
-                    headers={"x-csi-source": "signals_ingest"},
+                action_payload = build_manual_youtube_action(
+                    manual_payload,
+                    name="SignalsIngestYouTubeWebhook",
                 )
+                if action_payload is not None:
+                    ok, _reason = await _hooks_service.dispatch_internal_action(action_payload)
+                else:
+                    ok, _reason = await _hooks_service.dispatch_internal_payload(
+                        subpath="youtube/manual",
+                        payload=manual_payload,
+                        headers={"x-csi-source": "signals_ingest"},
+                    )
                 if ok:
                     dispatch_count += 1
                 continue
@@ -10216,22 +10337,48 @@ async def signals_ingest_endpoint(request: Request):
                 "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
                 f"{message}"
             )
+            _csi_emit_specialist_synthesis(event, full_signal_message_raw)
+            loop_state = _csi_update_specialist_loop(event, full_signal_message_raw)
+            csi_proactive_family = event_type_norm in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
+            should_enqueue_task = _should_enqueue_csi_task(
+                event_type=event_type_norm,
+                policy=policy,
+            )
+            csi_routing = _csi_task_routing_decision(
+                event_type=event_type_norm,
+                subject_obj=subject_obj,
+                policy=policy,
+                loop_state=loop_state,
+            ) if csi_proactive_family else {}
+            if csi_routing:
+                metadata["csi"] = csi_routing
+                if str(csi_routing.get("routing_state") or "") == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
+                    metadata["focus_href"] = "/dashboard/todolist?mode=personal&focus=human-tasks"
+
             if bool(policy.get("is_digest")):
                 _csi_emit_digest_notification(event, full_signal_message)
             else:
-                _add_notification(
-                    kind=notification_kind,
-                    title=title,
-                    message=full_signal_message,
-                    summary=_activity_summary_text(message, max_chars=260),
-                    full_message=full_signal_message,
-                    severity=str(policy.get("severity") or "info"),
-                    requires_action=bool(policy.get("requires_action")),
-                    metadata=metadata,
-                    created_at=event.occurred_at or event.received_at,
+                routing_state = str(csi_routing.get("routing_state") or "").strip().lower()
+                should_emit_primary_notification = not (
+                    csi_proactive_family and routing_state == task_hub.CSI_ROUTING_INCUBATING
                 )
-            _csi_emit_specialist_synthesis(event, full_signal_message_raw)
-            loop_state = _csi_update_specialist_loop(event, full_signal_message_raw)
+                if should_emit_primary_notification:
+                    primary_requires_action = bool(policy.get("requires_action"))
+                    if routing_state == task_hub.CSI_ROUTING_AGENT_ACTIONABLE:
+                        primary_requires_action = False
+                    elif routing_state == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
+                        primary_requires_action = True
+                    _add_notification(
+                        kind=notification_kind,
+                        title=title,
+                        message=full_signal_message,
+                        summary=_activity_summary_text(message, max_chars=260),
+                        full_message=full_signal_message,
+                        severity=str(policy.get("severity") or "info"),
+                        requires_action=primary_requires_action,
+                        metadata=metadata,
+                        created_at=event.occurred_at or event.received_at,
+                    )
             if loop_state.get("updated"):
                 for alert in loop_state.get("quality_alerts", []) if isinstance(loop_state.get("quality_alerts"), list) else []:
                     if not isinstance(alert, dict):
@@ -10366,7 +10513,14 @@ async def signals_ingest_endpoint(request: Request):
                 high_value=bool(policy.get("high_value")),
                 requires_action=bool(policy.get("requires_action")),
             )
-            csi_labels = ["CSI", f"csi-project:{project_key}", "agent-ready"]
+            routing_state = str(csi_routing.get("routing_state") or task_hub.CSI_ROUTING_INCUBATING).strip().lower()
+            csi_labels = ["CSI", f"csi-project:{project_key}"]
+            if routing_state == task_hub.CSI_ROUTING_AGENT_ACTIONABLE:
+                csi_labels.append("agent-ready")
+            elif routing_state == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
+                csi_labels.append("needs-human")
+            else:
+                csi_labels.append("csi-incubating")
             must_complete = bool(
                 event_type_norm in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}
             )
@@ -10378,11 +10532,7 @@ async def signals_ingest_endpoint(request: Request):
             hub_task_id = ""
             human_recommendation_task_ids: list[str] = []
             human_recommendation_preview: list[str] = []
-            should_enqueue_task = _task_hub_enabled() and _should_enqueue_csi_task(
-                event_type=event_type_norm,
-                policy=policy,
-            )
-            if not should_enqueue_task:
+            if not (_task_hub_enabled() and should_enqueue_task):
                 continue
             with _activity_store_lock:
                 hub_conn = _task_hub_open_conn()
@@ -10402,6 +10552,11 @@ async def signals_ingest_endpoint(request: Request):
                         incident_key=incident_key,
                         must_complete=must_complete,
                         mirror_status="mirror_eligible" if should_mirror else "internal_only",
+                        routing_state=routing_state,
+                        routing_reason=str(csi_routing.get("routing_reason") or ""),
+                        confidence_target=csi_routing.get("confidence_target"),
+                        follow_up_budget_remaining=csi_routing.get("follow_up_budget_remaining"),
+                        human_intervention_reason=csi_routing.get("human_intervention_reason"),
                     )
                     hub_task_id = str(hub_item.get("task_id") or "")
 
@@ -13955,6 +14110,10 @@ def _is_human_personal_queue_item(item: Any) -> bool:
     source_kind = str(item.get("source_kind") or "").strip().lower()
     if source_kind in {"csi_recommendation", "approval"}:
         return True
+    if source_kind == "csi":
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        csi_meta = metadata.get("csi") if isinstance(metadata.get("csi"), dict) else {}
+        return str(csi_meta.get("routing_state") or "").strip().lower() == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED
     labels = item.get("labels") if isinstance(item.get("labels"), list) else []
     normalized_labels = {str(label).strip().lower() for label in labels}
     if "needs-human" in normalized_labels or "human-task" in normalized_labels:

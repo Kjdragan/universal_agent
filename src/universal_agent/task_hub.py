@@ -22,6 +22,14 @@ TASK_STATUS_PARKED = "parked"
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED}
 ACTIVE_STATUSES = {TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED, TASK_STATUS_REVIEW}
 VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze"}
+CSI_ROUTING_INCUBATING = "incubating"
+CSI_ROUTING_AGENT_ACTIONABLE = "agent_actionable"
+CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED = "human_intervention_required"
+CSI_ROUTING_STATES = {
+    CSI_ROUTING_INCUBATING,
+    CSI_ROUTING_AGENT_ACTIONABLE,
+    CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+}
 
 _CSI_INCIDENT_TEMPORAL_SEGMENT_RE = re.compile(
     r"^(?:\d{6,}|\d{4}-\d{2}-\d{2}(?:t[0-9:\-+.z]+)?|\d{8,14})$",
@@ -355,6 +363,44 @@ def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
     item["agent_ready"] = bool(item.get("agent_ready"))
     item["score"] = _safe_float(item.get("score"), 0.0)
     item["score_confidence"] = _safe_float(item.get("score_confidence"), 0.0)
+    return item
+
+
+def _csi_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    csi = metadata.get("csi")
+    return dict(csi) if isinstance(csi, dict) else {}
+
+
+def _infer_csi_routing_state(item: dict[str, Any], *, threshold: Optional[float] = None) -> str:
+    source_kind = str(item.get("source_kind") or "").strip().lower()
+    if source_kind != "csi":
+        return ""
+    csi = _csi_metadata(item)
+    state = str(csi.get("routing_state") or "").strip().lower()
+    if state in CSI_ROUTING_STATES:
+        return state
+    score = _safe_float(item.get("score"), 0.0)
+    threshold_value = float(threshold if threshold is not None else current_policy().agent_threshold)
+    if bool(item.get("agent_ready")) and score >= threshold_value:
+        return CSI_ROUTING_AGENT_ACTIONABLE
+    return CSI_ROUTING_INCUBATING
+
+
+def _decorate_csi_routing(item: dict[str, Any], *, threshold: Optional[float] = None) -> dict[str, Any]:
+    source_kind = str(item.get("source_kind") or "").strip().lower()
+    if source_kind != "csi":
+        return item
+    metadata = dict(item.get("metadata") or {})
+    csi = _csi_metadata(item)
+    state = _infer_csi_routing_state(item, threshold=threshold)
+    csi["routing_state"] = state
+    if "last_maturation_at" not in csi:
+        csi["last_maturation_at"] = str(item.get("updated_at") or item.get("created_at") or "")
+    metadata["csi"] = csi
+    item["metadata"] = metadata
+    item["csi_routing_state"] = state
+    item["csi_human_intervention_reason"] = str(csi.get("human_intervention_reason") or "").strip() or None
     return item
 
 
@@ -772,7 +818,12 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
 
         item["score"] = score
         item["score_confidence"] = confidence
+        item = _decorate_csi_routing(item, threshold=policy.agent_threshold)
         item["eligible"] = eligible
+        if str(item.get("source_kind") or "").strip().lower() == "csi":
+            item["eligible"] = bool(item.get("eligible")) and (
+                str(item.get("csi_routing_state") or "") == CSI_ROUTING_AGENT_ACTIONABLE
+            )
         item["stale_state"] = stale_state
         scored.append(item)
 
@@ -824,6 +875,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
 
 def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[str, Any]:
     ensure_schema(conn)
+    policy = current_policy()
     row = conn.execute(
         "SELECT queue_build_id, built_at FROM task_hub_dispatch_queue ORDER BY built_at DESC LIMIT 1"
     ).fetchone()
@@ -850,6 +902,7 @@ def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[st
     for row in rows:
         merged = dict(row)
         item = hydrate_item(merged)
+        item = _decorate_csi_routing(item, threshold=policy.agent_threshold)
         item["rank"] = _safe_int(merged.get("rank"), 0)
         item["eligible"] = bool(_safe_int(merged.get("eligible"), 0))
         item["skip_reason"] = str(merged.get("skip_reason") or "").strip() or None
@@ -1163,7 +1216,7 @@ def finalize_assignments(
 
         if policy_norm == "heartbeat":
             if run_state == "completed":
-                dispatch_meta["last_disposition"] = "completed"
+                dispatch_meta["last_disposition"] = "needs_review"
                 dispatch_meta["last_disposition_reason"] = "heartbeat_completed_no_explicit_disposition"
                 metadata["dispatch"] = dispatch_meta
                 conn.execute(
@@ -1172,10 +1225,10 @@ def finalize_assignments(
                     SET status=?, seizure_state=?, metadata_json=?, updated_at=?
                     WHERE task_id=?
                     """,
-                    (TASK_STATUS_COMPLETED, "unseized", _json_dumps(metadata), now_iso, task_id),
+                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
                 )
-                completed += 1
-                logger.info("Task Hub heartbeat finalize moved task %s to completed", task_id)
+                reviewed += 1
+                logger.info("Task Hub heartbeat finalize moved task %s to needs_review", task_id)
                 continue
 
             retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
@@ -1320,6 +1373,7 @@ def list_agent_queue(
 ) -> dict[str, Any]:
     ensure_schema(conn)
     rebuild_dispatch_queue(conn)
+    policy = current_policy()
 
     rows = conn.execute(
         """
@@ -1341,6 +1395,13 @@ def list_agent_queue(
     ).fetchall()
 
     items = [hydrate_item(dict(row)) for row in rows]
+    items = [_decorate_csi_routing(item, threshold=policy.agent_threshold) for item in items]
+    items = [
+        item
+        for item in items
+        if str(item.get("source_kind") or "").strip().lower() != "csi"
+        or str(item.get("csi_routing_state") or "") == CSI_ROUTING_AGENT_ACTIONABLE
+    ]
     if project_key:
         project_norm = str(project_key).strip().lower()
         items = [i for i in items if str(i.get("project_key") or "").strip().lower() == project_norm]
@@ -1402,18 +1463,26 @@ def list_agent_queue(
 
 def list_personal_queue(conn: sqlite3.Connection, *, limit: int = 120) -> list[dict[str, Any]]:
     ensure_schema(conn)
+    policy = current_policy()
     rows = conn.execute(
         """
         SELECT *
         FROM task_hub_items
         WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')
-          AND agent_ready = 0
         ORDER BY must_complete DESC, priority DESC, due_at ASC, updated_at DESC
-        LIMIT ?
         """,
-        (max(1, int(limit)),),
     ).fetchall()
-    return [hydrate_item(dict(row)) for row in rows]
+    items = [_decorate_csi_routing(hydrate_item(dict(row)), threshold=policy.agent_threshold) for row in rows]
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        source_kind = str(item.get("source_kind") or "").strip().lower()
+        if source_kind == "csi":
+            if str(item.get("csi_routing_state") or "") == CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
+                filtered.append(item)
+            continue
+        if not bool(item.get("agent_ready")):
+            filtered.append(item)
+    return filtered[: max(1, int(limit))]
 
 
 def upsert_mirror_map(
@@ -1623,9 +1692,7 @@ def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
                 break
         return count
 
-    backlog_row = conn.execute(
-        "SELECT COUNT(*) AS c FROM task_hub_items WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')"
-    ).fetchone()
+    visible_agent_queue = list_agent_queue(conn, include_csi=True, collapse_csi=False, limit=5000)
     active_agents_row = conn.execute(
         "SELECT COUNT(DISTINCT agent_id) AS c FROM task_hub_assignments WHERE state IN ('seized', 'running')"
     ).fetchone()
@@ -1677,7 +1744,7 @@ def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
                 for r in rejected_rows
             ],
         },
-        "backlog_open": int((backlog_row["c"] if backlog_row else 0) or 0),
+        "backlog_open": int((visible_agent_queue.get("pagination") or {}).get("total") or 0),
     }
 
 
@@ -1777,10 +1844,29 @@ def upsert_csi_item(
     incident_key: Optional[str],
     must_complete: bool,
     mirror_status: str,
+    routing_state: str = CSI_ROUTING_INCUBATING,
+    routing_reason: str = "",
+    confidence_target: Optional[float] = None,
+    follow_up_budget_remaining: Optional[int] = None,
+    human_intervention_reason: Optional[str] = None,
 ) -> dict[str, Any]:
     ensure_schema(conn)
     key = str(incident_key or "").strip() or str(event_id).strip() or uuid.uuid4().hex
     task_id = f"csi:{key}"
+    normalized_state = str(routing_state or CSI_ROUTING_INCUBATING).strip().lower()
+    if normalized_state not in CSI_ROUTING_STATES:
+        normalized_state = CSI_ROUTING_INCUBATING
+    csi_metadata: dict[str, Any] = {
+        "routing_state": normalized_state,
+        "routing_reason": str(routing_reason or "").strip() or "ingest_default",
+        "last_maturation_at": _now_iso(),
+    }
+    if confidence_target is not None:
+        csi_metadata["confidence_target"] = float(confidence_target)
+    if follow_up_budget_remaining is not None:
+        csi_metadata["follow_up_budget_remaining"] = int(follow_up_budget_remaining)
+    if human_intervention_reason:
+        csi_metadata["human_intervention_reason"] = str(human_intervention_reason).strip()
     return upsert_item(
         conn,
         {
@@ -1795,11 +1881,12 @@ def upsert_csi_item(
             "status": TASK_STATUS_OPEN,
             "incident_key": key,
             "must_complete": must_complete,
-            "agent_ready": True,
+            "agent_ready": normalized_state == CSI_ROUTING_AGENT_ACTIONABLE,
             "mirror_status": mirror_status,
             "metadata": {
                 "event_type": event_type,
                 "source": source,
+                "csi": csi_metadata,
             },
         },
     )
@@ -1885,7 +1972,9 @@ def approvals_as_tasks(approvals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def overview(conn: sqlite3.Connection, *, approvals_pending: int = 0) -> dict[str, Any]:
     ensure_schema(conn)
     queue = get_dispatch_queue(conn, limit=500)
+    visible_agent_queue = list_agent_queue(conn, include_csi=True, collapse_csi=False, limit=500)
     activity = get_agent_activity(conn)
+    policy = current_policy()
 
     status_rows = conn.execute("SELECT status, COUNT(*) AS c FROM task_hub_items GROUP BY status").fetchall()
     status_counts = {str(r["status"] or "unknown"): int(r["c"] or 0) for r in status_rows}
@@ -1915,12 +2004,38 @@ def overview(conn: sqlite3.Connection, *, approvals_pending: int = 0) -> dict[st
         normalized = normalize_csi_incident_key(incident_key=incident_key, event_type=event_type) or incident_key
         open_csi_incident_keys.add(normalized)
 
+    csi_task_rows = conn.execute(
+        """
+        SELECT *
+        FROM task_hub_items
+        WHERE source_kind='csi'
+          AND status NOT IN (?, ?)
+        """,
+        (TASK_STATUS_COMPLETED, TASK_STATUS_PARKED),
+    ).fetchall()
+    csi_agent_actionable_open = 0
+    csi_human_open = 0
+    csi_incubating_hidden = 0
+    for row in csi_task_rows:
+        item = _decorate_csi_routing(hydrate_item(dict(row)), threshold=policy.agent_threshold)
+        state = str(item.get("csi_routing_state") or "")
+        if state == CSI_ROUTING_AGENT_ACTIONABLE:
+            csi_agent_actionable_open += 1
+        elif state == CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
+            csi_human_open += 1
+        else:
+            csi_incubating_hidden += 1
+
     return {
         "default_mode": "agent",
         "approvals_pending": int(approvals_pending or 0),
         "queue_health": {
-            "dispatch_queue_size": len(queue.get("items") or []),
+            "dispatch_queue_size": int((visible_agent_queue.get("pagination") or {}).get("total") or 0),
             "dispatch_eligible": int(queue.get("eligible_total") or 0),
+            "threshold": int(policy.agent_threshold),
+            "csi_agent_actionable_open": csi_agent_actionable_open,
+            "csi_human_open": csi_human_open,
+            "csi_incubating_hidden": csi_incubating_hidden,
             "status_counts": status_counts,
             "source_counts": source_counts,
         },

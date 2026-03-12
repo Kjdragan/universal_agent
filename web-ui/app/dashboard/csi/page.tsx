@@ -1162,7 +1162,7 @@ export default function CSIDashboard() {
                 <div className="flex flex-col gap-6 lg:col-span-1 overflow-y-auto pr-2 scrollbar-thin">
 
                     {/* Pipeline Notifications List */}
-                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 shadow-sm backdrop-blur shrink-0">
+                    <div id="notifications" className="scroll-mt-24 rounded-xl border border-slate-800 bg-slate-900/50 shadow-sm backdrop-blur shrink-0">
                         <div className="border-b border-slate-800 bg-slate-900/80 px-4 py-3 sticky top-0 z-10">
                             <h2 className="text-sm font-semibold tracking-wide text-slate-300">
                                 CSI Pipeline Notifications

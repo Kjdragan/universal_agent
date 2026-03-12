@@ -7,9 +7,11 @@ from universal_agent.gateway_server import (
     _classify_csi_recommendation_owner,
     _extract_csi_recommendations,
     _csi_event_notification_policy,
+    _csi_task_routing_decision,
     _should_enqueue_csi_task,
     classify_csi_project_key,
 )
+from universal_agent import task_hub
 
 
 def test_classify_csi_project_key_immediate_for_regression():
@@ -170,6 +172,42 @@ def test_csi_task_enqueue_anomalies_only_mode(monkeypatch):
         event_type="opportunity_bundle_ready",
         policy={"has_anomaly": False, "requires_action": True, "escalates_to_ua": True},
     ) is False
+
+
+def test_csi_task_routing_defaults_proactive_opportunity_to_incubating():
+    routing = _csi_task_routing_decision(
+        event_type="opportunity_bundle_ready",
+        subject_obj={},
+        policy={"escalates_to_ua": True, "requires_action": True},
+        loop_state={"status": "open", "confidence_target": 0.72, "confidence_score": 0.6, "follow_up_budget_remaining": 2},
+    )
+    assert routing["routing_state"] == task_hub.CSI_ROUTING_INCUBATING
+
+
+def test_csi_task_routing_marks_closed_confident_opportunity_actionable():
+    routing = _csi_task_routing_decision(
+        event_type="opportunity_bundle_ready",
+        subject_obj={},
+        policy={"escalates_to_ua": True, "requires_action": True},
+        loop_state={
+            "status": "closed",
+            "confidence_target": 0.72,
+            "confidence_score": 0.8,
+            "follow_up_budget_remaining": 1,
+            "events_count": 2,
+        },
+    )
+    assert routing["routing_state"] == task_hub.CSI_ROUTING_AGENT_ACTIONABLE
+
+
+def test_csi_task_routing_marks_review_due_human_required():
+    routing = _csi_task_routing_decision(
+        event_type="csi_global_brief_review_due",
+        subject_obj={},
+        policy={"escalates_to_ua": True, "requires_action": True},
+        loop_state=None,
+    )
+    assert routing["routing_state"] == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED
     assert _should_enqueue_csi_task(
         event_type="delivery_health_regression",
         policy={"has_anomaly": True, "requires_action": True, "escalates_to_ua": False},
