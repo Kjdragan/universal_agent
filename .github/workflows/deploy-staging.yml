@@ -69,7 +69,7 @@ jobs:
             export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
             export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'
             export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'
-            export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'
+            export PATH=\"/home/ua/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\"
 
             run_as_ua() {
               ua_home=\$(getent passwd ua | cut -d: -f6)
