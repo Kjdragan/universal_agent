@@ -62,6 +62,13 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[CSI Todoist Sync Debugging Lessons (2026-02-26)](03_Operations/77_CSI_Todoist_Sync_Debugging_Lessons_2026-02-26.md)**: Root-cause findings and hardening changes for CSI -> Todoist sync failures, including credential diagnostics and repeatable verification steps.
 - **[Daily Autonomous Briefing Reliability and Input Diagnostics (2026-02-26)](03_Operations/78_Daily_Autonomous_Briefing_Reliability_And_Input_Diagnostics_2026-02-26.md)**: Root-cause analysis and hardening changes that prevent empty/ambiguous briefings after resets and upstream ingest failures.
 
+### 4A. [Deployment and Environments](06_Deployment_And_Environments)
+
+- **[Architecture Overview](06_Deployment_And_Environments/01_Architecture_Overview.md)**: Continuity note pointing to the canonical deployment architecture docs.
+- **[Infisical Factories](06_Deployment_And_Environments/02_Infisical_Factories.md)**: Continuity note for current factory/secret environment references.
+- **[CI/CD Automated Pipelines](06_Deployment_And_Environments/03_Automated_Pipelines.md)**: Continuity note for branch-driven GitHub Actions deployment.
+- **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy for feature work, staging promotion, and production release.
+
 ### 5. [API Reference](04_API_Reference)
 
 - **[Gateway Ops API](04_API_Reference/Ops_API.md)**: Session and log management endpoints.
