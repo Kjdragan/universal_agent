@@ -90,10 +90,11 @@ jobs:
             uv python install 3.12
             
             # 1. Pull latest code
-            echo "--> Fetching and pulling latest main branch..."
-            git fetch origin
-            git checkout main
-            git pull origin main
+            echo "--> Checking out branch main in $PROD_DIR"
+            cd "$PROD_DIR"
+            git config --global --add safe.directory "$PROD_DIR"
+            git fetch origin main
+            git reset --hard origin/main
             
             # Note: We do NOT auto-provision production secrets from dev. 
             # Production secrets (in prod-hq) should be curated manually or via an explicit sync script.
