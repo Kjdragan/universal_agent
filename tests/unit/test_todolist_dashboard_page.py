@@ -27,3 +27,12 @@ def test_todolist_dashboard_includes_heartbeat_force_controls():
     assert "Run Next Heartbeat" in content
     assert "Force Next Heartbeat" in content
     assert "/api/v1/heartbeat/wake" in content
+
+
+def test_todolist_dashboard_links_csi_incidents_and_uses_detailed_queue_cards():
+    content = _PAGE.read_text(encoding="utf-8")
+    assert '/dashboard/csi#notifications' in content
+    assert "score {item.score ?? 0} · Q {item.score_confidence ?? 0}" in content
+    assert "Human Intervention Required" in content
+    assert "CSI Escalation" in content
+    assert "Next Actions" not in content

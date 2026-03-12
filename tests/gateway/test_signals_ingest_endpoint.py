@@ -87,9 +87,10 @@ def test_signals_ingest_dispatches_internal_youtube(client, monkeypatch):
     body = response.json()
     assert body["accepted"] == 1
     assert body["internal_dispatches"] == 1
-    assert len(hook_stub.calls) == 1
-    assert hook_stub.calls[0]["subpath"] == "youtube/manual"
-    assert hook_stub.calls[0]["payload"]["video_id"] == "dQw4w9WgXcQ"
+    assert hook_stub.calls == []
+    assert len(hook_stub.action_calls) == 1
+    assert hook_stub.action_calls[0]["to"] == "youtube-expert"
+    assert "video_id: dQw4w9WgXcQ" in hook_stub.action_calls[0]["message"]
 
 
 def test_signals_ingest_non_youtube_source_skips_internal_dispatch(client, monkeypatch):
@@ -887,6 +888,50 @@ def test_signals_ingest_opportunity_bundle_uses_evidence_confidence(client, monk
     assert int(evidence.get("signal_volume") or 0) >= 1
 
 
+def test_signals_ingest_incubating_csi_opportunity_stays_hidden_from_todo_and_notifications(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_csi_hidden.db").resolve()))
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "opportunity_bundle_ready"
+    payload["events"][0]["subject"] = {
+        "report_type": "opportunity_bundle",
+        "report_key": "opportunity_bundle:hidden:test",
+        "bundle_id": "bundle:hidden:test",
+        "quality_summary": {"signal_volume": 21, "freshness_minutes": 30, "coverage_score": 0.86},
+        "opportunities": [{"opportunity_id": "opp-1"}],
+    }
+    request_id = "req-hidden-opportunity"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+
+    agent_queue_resp = client.get("/api/v1/dashboard/todolist/agent-queue?include_csi=true&collapse_csi=false&limit=200")
+    assert agent_queue_resp.status_code == 200
+    agent_items = agent_queue_resp.json().get("items") or []
+    assert not [item for item in agent_items if str(item.get("source_kind") or "") == "csi"]
+
+    personal_resp = client.get("/api/v1/dashboard/todolist/personal-queue?limit=200")
+    assert personal_resp.status_code == 200
+    personal_items = personal_resp.json().get("items") or []
+    assert not [item for item in personal_items if str(item.get("source_kind") or "") == "csi"]
+
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_insight" not in kinds
+
+
 def test_signals_ingest_low_signal_suppresses_followup_and_emits_alert(client, monkeypatch):
     monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
     monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
@@ -929,6 +974,45 @@ def test_signals_ingest_low_signal_suppresses_followup_and_emits_alert(client, m
 
     kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
     assert "csi_specialist_low_signal_suppressed" in kinds
+
+
+def test_signals_ingest_review_due_routes_csi_item_to_personal_queue(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_csi_human.db").resolve()))
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "csi_global_brief_review_due"
+    payload["events"][0]["subject"] = {
+        "brief_key": "global_trend_brief:test",
+        "slot": "am0730",
+        "slot_display": "7:30 AM",
+        "timezone": "America/Chicago",
+    }
+    request_id = "req-review-due"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+
+    personal_resp = client.get("/api/v1/dashboard/todolist/personal-queue?limit=200")
+    assert personal_resp.status_code == 200
+    personal_items = personal_resp.json().get("items") or []
+    csi_items = [item for item in personal_items if str(item.get("source_kind") or "") == "csi"]
+    assert csi_items
+    csi_meta = (csi_items[0].get("metadata") or {}).get("csi") or {}
+    assert str(csi_meta.get("routing_state") or "") == "human_intervention_required"
+    assert "review" in str(csi_meta.get("human_intervention_reason") or "").lower()
 
 
 def test_signals_ingest_csi_notification_metadata_traceability_fields(client, monkeypatch):

@@ -49,6 +49,7 @@ def test_upsert_open_refresh_does_not_clobber_in_progress_state() -> None:
             incident_key="test-incident",
             must_complete=True,
             mirror_status="internal",
+            routing_state=task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
         )
 
         assert refreshed["status"] == task_hub.TASK_STATUS_IN_PROGRESS
@@ -312,6 +313,7 @@ def test_park_csi_items_not_matching_event_types() -> None:
             incident_key="incident-keep",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
         )
         task_hub.upsert_csi_item(
             conn,
@@ -326,6 +328,7 @@ def test_park_csi_items_not_matching_event_types() -> None:
             incident_key="incident-park",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
         )
 
         result = task_hub.park_csi_items_not_matching_event_types(
@@ -360,6 +363,7 @@ def test_list_agent_queue_collapses_time_suffixed_opportunity_incident_keys() ->
             incident_key="opportunity_bundle:test:2026030101",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
         )
         task_hub.upsert_csi_item(
             conn,
@@ -374,6 +378,7 @@ def test_list_agent_queue_collapses_time_suffixed_opportunity_incident_keys() ->
             incident_key="opportunity_bundle:test:2026030102",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
         )
         task_hub.upsert_csi_item(
             conn,
@@ -388,6 +393,7 @@ def test_list_agent_queue_collapses_time_suffixed_opportunity_incident_keys() ->
             incident_key="opportunity_bundle:other:2026030103",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
         )
 
         queue = task_hub.list_agent_queue(conn, include_csi=True, collapse_csi=True, limit=50)
@@ -418,6 +424,7 @@ def test_overview_counts_normalized_csi_incidents() -> None:
             incident_key="opportunity_bundle:topic-a:202603011200",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_INCUBATING,
         )
         task_hub.upsert_csi_item(
             conn,
@@ -432,6 +439,7 @@ def test_overview_counts_normalized_csi_incidents() -> None:
             incident_key="opportunity_bundle:topic-a:202603011230",
             must_complete=False,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_INCUBATING,
         )
         task_hub.upsert_csi_item(
             conn,
@@ -446,11 +454,80 @@ def test_overview_counts_normalized_csi_incidents() -> None:
             incident_key="delivery_reliability_slo_breached:csi_analytics",
             must_complete=True,
             mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+            human_intervention_reason="SLO breach requires operator review.",
         )
 
         summary = task_hub.overview(conn)
         csi_summary = summary.get("csi_incident_summary") if isinstance(summary.get("csi_incident_summary"), dict) else {}
+        queue_health = summary.get("queue_health") if isinstance(summary.get("queue_health"), dict) else {}
         assert int(csi_summary.get("open_incidents") or 0) == 2
+        assert int(queue_health.get("threshold") or 0) >= 1
+        assert int(queue_health.get("csi_incubating_hidden") or 0) == 2
+        assert int(queue_health.get("csi_human_open") or 0) == 1
+        assert int(queue_health.get("csi_agent_actionable_open") or 0) == 0
+    finally:
+        conn.close()
+
+
+def test_csi_incubating_items_are_hidden_from_agent_and_personal_queues() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-incubating",
+            event_type="opportunity_bundle_ready",
+            source="csi_analytics",
+            title="Incubating opportunity",
+            message="still maturing",
+            project_key="mission",
+            labels=["CSI"],
+            priority=3,
+            incident_key="opportunity_bundle:hidden:202603011200",
+            must_complete=False,
+            mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_INCUBATING,
+            routing_reason="csi_owned_maturation_in_progress",
+        )
+
+        agent_queue = task_hub.list_agent_queue(conn, include_csi=True, collapse_csi=False, limit=50)
+        personal_queue = task_hub.list_personal_queue(conn, limit=50)
+
+        assert not [row for row in (agent_queue.get("items") or []) if str(row.get("source_kind") or "") == "csi"]
+        assert not [row for row in personal_queue if str(row.get("source_kind") or "") == "csi"]
+    finally:
+        conn.close()
+
+
+def test_csi_human_intervention_items_surface_in_personal_queue() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_csi_item(
+            conn,
+            event_id="evt-human",
+            event_type="csi_global_brief_review_due",
+            source="csi_analytics",
+            title="Review latest CSI brief",
+            message="requires review",
+            project_key="csi",
+            labels=["CSI", "needs-human"],
+            priority=3,
+            incident_key="global_trend_brief:topic-a",
+            must_complete=False,
+            mirror_status="internal_only",
+            routing_state=task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+            routing_reason="scheduled_brief_review_due",
+            human_intervention_reason="Review latest CSI global trend brief.",
+        )
+
+        personal_queue = task_hub.list_personal_queue(conn, limit=50)
+        csi_rows = [row for row in personal_queue if str(row.get("source_kind") or "") == "csi"]
+
+        assert len(csi_rows) == 1
+        assert str(csi_rows[0].get("csi_routing_state") or "") == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED
+        assert str((((csi_rows[0].get("metadata") or {}).get("csi") or {}).get("human_intervention_reason") or "")) == (
+            "Review latest CSI global trend brief."
+        )
     finally:
         conn.close()
 

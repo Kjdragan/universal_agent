@@ -18,6 +18,7 @@ from universal_agent.hooks_service import (
     HooksConfig,
     HooksService,
     HookTransformConfig,
+    build_manual_youtube_action,
 )
 from universal_agent.gateway import InProcessGateway, GatewaySession
 
@@ -1437,6 +1438,50 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
 
 
 @pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_skips_non_retryable_pending_local_ingest(
+    mock_gateway, tmp_path
+):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+
+    session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_3L7wPEB8sEc"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_local_ingest.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "failed_local_ingest",
+                "session_id": session_id,
+                "video_url": "https://www.youtube.com/watch?v=3L7wPEB8sEc",
+                "video_id": "3L7wPEB8sEc",
+                "last_result": {"failure_class": "proxy_not_configured"},
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    assert recovered == 0
+    await asyncio.sleep(0.05)
+    service._dispatch_action.assert_not_called()
+    marker = session_dir / ".hook_startup_recovery.json"
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
 async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_interrupt(mock_gateway, tmp_path):
     with (
         patch("universal_agent.hooks_service.load_ops_config", return_value={}),
@@ -1478,6 +1523,26 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
     assert "3L7wPEB8sEc" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
+
+
+def test_build_manual_youtube_action_builds_direct_agent_payload():
+    action = build_manual_youtube_action(
+        {
+            "video_url": "https://www.youtube.com/watch?v=demo1234567",
+            "channel_id": "UCdemo-channel",
+            "title": "Python MCP automation walkthrough",
+            "mode": "auto",
+            "allow_degraded_transcript_only": True,
+        },
+        name="WatcherTestHook",
+    )
+
+    assert action is not None
+    assert action["name"] == "WatcherTestHook"
+    assert action["to"] == "youtube-expert"
+    assert action["session_key"] == "yt_UCdemo-channel_demo1234567"
+    assert "learning_mode: concept_plus_implementation" in action["message"]
+    assert "allow_degraded_transcript_only: true" in action["message"]
 
 
 def test_validate_youtube_tutorial_artifacts_allows_concept_only_without_implementation(

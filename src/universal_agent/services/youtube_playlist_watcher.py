@@ -442,6 +442,7 @@ class YouTubePlaylistWatcher:
         self._last_poll_at = _iso_now()
         self._poll_count += 1
         self._last_poll_ok = True
+        self._last_error = ""
         current_ids = [i["video_id"] for i in items if i.get("video_id")]
         new_items = [i for i in items if i.get("video_id") and i["video_id"] not in seen]
         dispatched = []

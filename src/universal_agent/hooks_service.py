@@ -178,6 +178,144 @@ def _is_youtube_agent_route(route: str | None) -> bool:
     return (route or "").strip().lower() in YOUTUBE_AGENT_ROUTE_ALIASES
 
 
+def _manual_youtube_safe_segment(value: str | None, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    safe = SESSION_ID_SANITIZE_RE.sub("_", text).strip("._-")
+    return safe or fallback
+
+
+def _manual_youtube_normalize_mode(raw_mode: Any) -> str:
+    mode = str(raw_mode or "").strip().lower()
+    if not mode:
+        return "explainer_only"
+    if mode in {"auto", "detect", "auto_detect"}:
+        return "auto"
+    if mode in {"explainer_only", "explain", "explanation", "explainer"}:
+        return "explainer_only"
+    if mode in {
+        "explainer_plus_code",
+        "plus_code",
+        "code",
+        "with_code",
+        "explainer_with_code",
+        "explain_and_code",
+    }:
+        return "explainer_plus_code"
+    return "explainer_only"
+
+
+def _manual_youtube_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _manual_youtube_probably_code(*parts: Any) -> bool:
+    tokens = " ".join(str(part or "") for part in parts).strip().lower()
+    if not tokens:
+        return False
+    has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
+    has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
+    if has_non_code and not has_code:
+        return False
+    return has_code
+
+
+def build_manual_youtube_action(
+    payload: dict[str, Any],
+    *,
+    name: str = "ManualYouTubeWebhook",
+) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+
+    video_url, video_id = normalize_video_target(
+        payload.get("video_url"),
+        payload.get("video_id"),
+    )
+    if not video_url:
+        return None
+
+    channel_id = str(payload.get("channel_id") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    mode = _manual_youtube_normalize_mode(payload.get("mode"))
+    if mode == "auto":
+        mode = (
+            "explainer_plus_code"
+            if _manual_youtube_probably_code(title, channel_id, video_url)
+            else "explainer_only"
+        )
+    learning_mode = (
+        "concept_plus_implementation"
+        if mode == "explainer_plus_code"
+        else "concept_only"
+    )
+    allow_degraded = _manual_youtube_bool(
+        payload.get("allow_degraded_transcript_only"),
+        default=True,
+    )
+    try:
+        artifacts_root = str(resolve_artifacts_dir())
+    except Exception:
+        artifacts_root = "artifacts"
+
+    channel_seg = _manual_youtube_safe_segment(channel_id, "manual")
+    if video_id:
+        video_seg = _manual_youtube_safe_segment(video_id, "manual")
+    else:
+        video_seg = hashlib.sha256(video_url.encode("utf-8", errors="replace")).hexdigest()[:12]
+    session_key = f"yt_{channel_seg}_{video_seg}"
+
+    lines = [
+        "Manual YouTube URL ingestion event received.",
+        "Route this run to the YouTube specialist.",
+        f"target_subagent: {YOUTUBE_AGENT_CANONICAL}",
+        "Ingestion first: use youtube-transcript-metadata skill for transcript+metadata.",
+        "Then use youtube-tutorial-creation for durable tutorial artifacts.",
+        "Produce durable learning artifacts in UA_ARTIFACTS_DIR.",
+        f"resolved_artifacts_root: {artifacts_root}",
+        "Path rule: do not use a literal UA_ARTIFACTS_DIR folder segment in file paths.",
+        "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
+        f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-creation/...",
+        "Required baseline artifacts: README.md, CONCEPT.md, manifest.json.",
+        "If learning_mode is concept_plus_implementation, also create IMPLEMENTATION.md and implementation/ with runnable code.",
+        "If learning_mode is concept_only, keep implementation procedural (no repo bootstrap scripts).",
+        "Create required artifacts first and keep them even if extraction fails.",
+        "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
+        f"video_url: {video_url}",
+        f"video_id: {video_id or ''}",
+        f"channel_id: {channel_id}",
+        f"title: {title}",
+        f"mode: {mode}",
+        f"learning_mode: {learning_mode}",
+        f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
+        "Set implementation_required=true only when transcript+metadata confirm software/coding content.",
+        "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
+        "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
+        "Video analysis path: use Gemini multimodal video understanding with the YouTube URL directly when available.",
+        "Use visual analysis when possible. Continue with transcript-only mode when visual processing is unavailable.",
+    ]
+    return {
+        "kind": "agent",
+        "name": str(name or "ManualYouTubeWebhook"),
+        "session_key": session_key,
+        "to": YOUTUBE_AGENT_CANONICAL,
+        "message": "\n".join(lines),
+        "deliver": True,
+    }
+
+
 class HooksService:
     def __init__(
         self,
@@ -581,6 +719,25 @@ class HooksService:
             return "hook_dispatch_interrupted"
         return "hook_dispatch_failed"
 
+    @staticmethod
+    def _pending_local_ingest_failure_class(pending_payload: dict[str, Any]) -> str:
+        if not isinstance(pending_payload, dict):
+            return ""
+        last_result = pending_payload.get("last_result")
+        if isinstance(last_result, dict):
+            failure_class = str(last_result.get("failure_class") or "").strip().lower()
+            if failure_class:
+                return failure_class
+        attempts = pending_payload.get("attempts")
+        if isinstance(attempts, list):
+            for attempt in reversed(attempts):
+                if not isinstance(attempt, dict):
+                    continue
+                failure_class = str(attempt.get("failure_class") or "").strip().lower()
+                if failure_class:
+                    return failure_class
+        return str(pending_payload.get("failure_class") or "").strip().lower()
+
     def _build_youtube_recovery_action(self, *, session_id: str) -> Optional[HookAction]:
         session_key = self._session_key_from_session_id(session_id)
         channel_key, video_id = self._youtube_parts_from_session_key(session_key)
@@ -790,6 +947,14 @@ class HooksService:
                 continue
             created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
             if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):
+                continue
+            failure_class = self._pending_local_ingest_failure_class(pending_payload)
+            if failure_class in YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES:
+                logger.info(
+                    "Skipping startup backfill for non-retryable youtube ingest session_id=%s failure_class=%s",
+                    session_id,
+                    failure_class,
+                )
                 continue
             if not self._startup_recovery_allowed(session_dir):
                 continue
