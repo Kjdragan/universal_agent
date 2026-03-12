@@ -99,6 +99,10 @@ jobs:
             
             echo '--> Syncing dependencies with uv...'
             run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
+
+            echo '--> Installing NotebookLM CLI/MCP tool for ua...'
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; uv tool install --force notebooklm-mcp-cli\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v nlm && command -v notebooklm-mcp\"
             
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then

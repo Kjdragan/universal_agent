@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -120,6 +121,25 @@ def run_auth_preflight(
     checks_attempted = 0
     seeded = False
     refreshed = False
+
+    cli_exists = bool(Path(cli).exists()) if os.path.sep in cli else bool(shutil.which(cli))
+    if not cli_exists:
+        notes.append("cli_missing")
+        errors.append("auth_cli_missing:FileNotFoundError")
+        if not seed_enabled:
+            notes.append("seed_disabled")
+        if not cookie_header:
+            notes.append("seed_cookie_missing")
+        return NotebookLMAuthPreflightResult(
+            ok=False,
+            profile=profile,
+            seeded=False,
+            refreshed=False,
+            command_path=cli,
+            checks_attempted=checks_attempted,
+            notes=tuple(notes),
+            errors=tuple(errors),
+        )
 
     check_args = [cli, "login", "--check", "--profile", profile]
     try:

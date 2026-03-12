@@ -108,3 +108,17 @@ def test_auth_preflight_never_leaks_secret_in_errors(monkeypatch, tmp_path):
 
     assert result.ok is False
     assert all(secret not in err for err in result.errors)
+
+
+def test_auth_preflight_reports_missing_cli_cleanly(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_NOTEBOOKLM_PROFILE", "vps")
+    monkeypatch.setenv("UA_NOTEBOOKLM_CLI_COMMAND", "nlm")
+    monkeypatch.delenv("NOTEBOOKLM_AUTH_COOKIE_HEADER", raising=False)
+    monkeypatch.setattr(notebooklm_runtime.shutil, "which", lambda name: None)
+
+    result = notebooklm_runtime.run_auth_preflight(str(tmp_path))
+
+    assert result.ok is False
+    assert result.checks_attempted == 0
+    assert "cli_missing" in result.notes
+    assert "auth_cli_missing:FileNotFoundError" in result.errors
