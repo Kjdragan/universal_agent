@@ -212,6 +212,41 @@ function canaryStatusClasses(status: string): string {
   return "border-emerald-700/60 bg-emerald-950/30 text-emerald-200";
 }
 
+function heartbeatMediationBadges(item: ActivityEvent | null): Array<{ label: string; classes: string }> {
+  if (!item || item.source_domain !== "heartbeat" || !item.metadata || typeof item.metadata !== "object") return [];
+  const metadata = item.metadata as Record<string, unknown>;
+  const status = String(metadata.heartbeat_mediation_status || "").trim().toLowerCase();
+  const badges: Array<{ label: string; classes: string }> = [];
+  if (status === "dispatched") {
+    badges.push({
+      label: "Auto-triage dispatched",
+      classes: "border-cyan-700/60 bg-cyan-950/30 text-cyan-200",
+    });
+  } else if (status === "investigation_completed") {
+    badges.push({
+      label: "Investigation completed",
+      classes: "border-emerald-700/60 bg-emerald-950/30 text-emerald-200",
+    });
+  } else if (status === "dispatch_failed") {
+    badges.push({
+      label: "Auto-triage failed",
+      classes: "border-rose-700/60 bg-rose-950/30 text-rose-200",
+    });
+  } else if (status === "cooldown_active") {
+    badges.push({
+      label: "Dispatch cooling down",
+      classes: "border-amber-700/60 bg-amber-950/30 text-amber-200",
+    });
+  }
+  if (Boolean(metadata.heartbeat_operator_review_required)) {
+    badges.push({
+      label: "Operator review required",
+      classes: "border-fuchsia-700/60 bg-fuchsia-950/30 text-fuchsia-200",
+    });
+  }
+  return badges;
+}
+
 export default function DashboardEventsPage() {
   const [items, setItems] = useState<ActivityEvent[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -702,6 +737,7 @@ export default function DashboardEventsPage() {
     [items, selectedId],
   );
   const selectedCanary = useMemo(() => parseDeliveryHealthPanelState(selected), [selected]);
+  const selectedHeartbeatBadges = useMemo(() => heartbeatMediationBadges(selected), [selected]);
 
   const sourceOptions = useMemo(() => {
     const values = new Set<string>();
@@ -837,9 +873,27 @@ export default function DashboardEventsPage() {
     }
   }, [applyPresetFilters, presets]);
 
+  const copyCommand = useCallback(async (command: string) => {
+    const text = String(command || "").trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setHandoffResult("Copied remediation command.");
+    } catch {
+      setHandoffResult("Unable to copy command.");
+    }
+  }, []);
+
   const openAction = useCallback(async (action: ActivityAction) => {
     if (!action) return;
     const actionId = String(action.id || "");
+    if (actionId === "copy_runbook_command") {
+      const command = String(selected?.metadata?.primary_runbook_command || "").trim();
+      if (command) {
+        await copyCommand(command);
+      }
+      return;
+    }
     if (actionId === "send_to_simone") {
       setHandoffOpen(true);
       setHandoffInstruction("");
@@ -880,18 +934,7 @@ export default function DashboardEventsPage() {
     const href = String(action.href || "").trim();
     if (!href) return;
     window.location.href = href;
-  }, [loadAudit, loadCounters, loadEvents, selected]);
-
-  const copyCommand = useCallback(async (command: string) => {
-    const text = String(command || "").trim();
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setHandoffResult("Copied remediation command.");
-    } catch {
-      setHandoffResult("Unable to copy command.");
-    }
-  }, []);
+  }, [copyCommand, loadAudit, loadCounters, loadEvents, selected]);
 
   const deleteNotification = useCallback(async (id: string, opts?: { skipConfirm?: boolean }) => {
     const eventId = String(id || "").trim();
@@ -1169,6 +1212,7 @@ export default function DashboardEventsPage() {
             const sourceStyle = SOURCE_STYLES[item.source_domain] || SOURCE_STYLES.system;
             const severityStyle = SEVERITY_STYLES[item.severity] || SEVERITY_STYLES.info;
             const active = selectedId === item.id;
+            const mediationBadges = heartbeatMediationBadges(item);
             return (
               <div key={item.id} className="relative group">
                 <button
@@ -1189,6 +1233,11 @@ export default function DashboardEventsPage() {
                     {(item.kind === "csi_delivery_health_regression" || item.kind === "csi_delivery_health_recovered") && (
                       <span className="text-[10px] uppercase text-amber-300">canary</span>
                     )}
+                    {mediationBadges.map((badge) => (
+                      <span key={`${item.id}-${badge.label}`} className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${badge.classes}`}>
+                        {badge.label}
+                      </span>
+                    ))}
                     {Boolean(item.metadata?.pinned) && (
                       <span className="text-[10px] uppercase text-amber-300">pinned</span>
                     )}
@@ -1249,6 +1298,11 @@ export default function DashboardEventsPage() {
                   <span className={`text-[10px] uppercase ${SEVERITY_STYLES[selected.severity] || SEVERITY_STYLES.info}`}>
                     {selected.severity}
                   </span>
+                  {selectedHeartbeatBadges.map((badge) => (
+                    <span key={`${selected.id}-${badge.label}`} className={`rounded border px-2 py-0.5 text-[10px] uppercase ${badge.classes}`}>
+                      {badge.label}
+                    </span>
+                  ))}
                   <span
                     className="text-[10px] text-slate-500"
                     title={`UTC: ${formatDateTimeTz(selected.created_at_utc, { timeZone: "UTC", placeholder: "--" })}`}
@@ -1274,6 +1328,11 @@ export default function DashboardEventsPage() {
                 <div className="mt-1 text-[10px] font-mono text-slate-500">
                   id: {selected.id} | kind: {selected.kind} | status: {selected.status}
                 </div>
+                {selected.source_domain === "heartbeat" && (
+                  <div className="mt-2 text-[11px] text-slate-300">
+                    Non-OK heartbeat findings are auto-routed to Simone for investigation. Manual handoff remains available.
+                  </div>
+                )}
                 {handoffResult && <div className="mt-2 text-xs text-cyan-300">{handoffResult}</div>}
               </div>
 

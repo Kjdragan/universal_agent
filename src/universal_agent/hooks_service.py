@@ -843,6 +843,73 @@ class HooksService:
         except Exception:
             logger.exception("Failed emitting hook notification payload=%s", payload)
 
+    @staticmethod
+    def _read_json_file(path: Path) -> dict[str, Any]:
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _emit_heartbeat_investigation_completion(
+        self,
+        *,
+        session_id: str,
+        session_key: str,
+        workspace_root: Optional[Path],
+    ) -> None:
+        if workspace_root is None:
+            return
+        work_products = workspace_root / "work_products"
+        json_path = work_products / "heartbeat_investigation_summary.json"
+        md_path = work_products / "heartbeat_investigation_summary.md"
+        payload = self._read_json_file(json_path) if json_path.exists() else {}
+        summary_text = ""
+        if md_path.exists():
+            try:
+                summary_text = md_path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                summary_text = ""
+        source_notification_id = str(payload.get("source_notification_id") or "").strip()
+        classification = str(payload.get("classification") or "unknown_issue").strip() or "unknown_issue"
+        operator_review_required = bool(payload.get("operator_review_required"))
+        metadata: dict[str, Any] = {
+            "source": "heartbeat",
+            "session_key": session_key,
+            "hook_session_key": session_key,
+            "hook_session_id": session_id,
+            "source_notification_id": source_notification_id,
+            "classification": classification,
+            "operator_review_required": operator_review_required,
+            "recommended_next_step": str(payload.get("recommended_next_step") or "").strip(),
+            "email_summary": str(payload.get("email_summary") or "").strip(),
+            "proposed_changes": payload.get("proposed_changes") if isinstance(payload.get("proposed_changes"), list) else [],
+            "unknown_rule_count": int(payload.get("unknown_rule_count") or 0),
+        }
+        if md_path.exists():
+            try:
+                metadata["heartbeat_investigation_summary_workspace_relpath"] = (
+                    md_path.resolve().relative_to(workspace_root.parent.resolve()).as_posix()
+                )
+            except Exception:
+                metadata["heartbeat_investigation_summary_workspace_relpath"] = ""
+        if json_path.exists():
+            try:
+                metadata["heartbeat_investigation_summary_json_workspace_relpath"] = (
+                    json_path.resolve().relative_to(workspace_root.parent.resolve()).as_posix()
+                )
+            except Exception:
+                metadata["heartbeat_investigation_summary_json_workspace_relpath"] = ""
+        self._emit_notification(
+            kind="heartbeat_investigation_completed",
+            title="Heartbeat Investigation Completed",
+            message=summary_text or "Simone completed heartbeat investigation.",
+            session_id=session_id,
+            severity="info",
+            requires_action=bool(operator_review_required),
+            metadata=metadata,
+        )
+
     def _tutorial_run_rel_path(self, run_dir: Path) -> str:
         try:
             artifacts_root = Path(str(resolve_artifacts_dir())).resolve()
@@ -2608,6 +2675,12 @@ class HooksService:
                     started_at_epoch=start_ts,
                     completed_at_epoch=time.time(),
                     execution_summary=execution_summary,
+                )
+            if str(action.name or "").strip() == "AutoHeartbeatInvestigation":
+                self._emit_heartbeat_investigation_completion(
+                    session_id=session_id,
+                    session_key=session_key,
+                    workspace_root=session_workspace,
                 )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, hook_name)
         except HookReportedTimeout as exc:

@@ -223,6 +223,19 @@ _LOCAL_FACTORY_SERVICE_SCOPE = "user"
 _LOCAL_FACTORY_SERVICE_CONTROL_SCRIPT = BASE_DIR / "scripts" / "control_local_factory_service.sh"
 
 _LEGACY_RANDOM_FACTORY_ID_RE = re.compile(r"^factory-[0-9a-f]{8}$")
+_HEARTBEAT_FINDINGS_FILENAME = "heartbeat_findings_latest.json"
+_HEARTBEAT_REPORT_FILENAME = "system_health_latest.md"
+_HEARTBEAT_INVESTIGATION_MD = "heartbeat_investigation_summary.md"
+_HEARTBEAT_INVESTIGATION_JSON = "heartbeat_investigation_summary.json"
+_HEARTBEAT_MEDIATION_DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "coverage_model": "all_non_ok_tiered",
+    "cooldown_minutes": 60,
+    "operator_email_channel": "agentmail",
+    "notify_operator_for_unknown_findings": True,
+    "notify_operator_for_known_findings": False,
+}
+_heartbeat_mediation_cooldowns: dict[str, float] = {}
 
 
 def _normalize_host_label(value: str) -> str:
@@ -5128,34 +5141,81 @@ def _emit_heartbeat_event(payload: dict) -> None:
         ok_only = bool(payload.get("ok_only"))
         if not ok_only:
             session_id = str(payload.get("session_id") or "").strip() or None
-            heartbeat_artifact_links = _heartbeat_artifact_links_from_payload(payload)
-            _add_notification(
+            findings, artifact_metadata, parse_error = _heartbeat_findings_from_artifacts(payload)
+            classification = _classify_heartbeat_mediation(findings)
+            mediation_config = _heartbeat_mediation_config()
+            dispatch_allowed, dispatch_reason = _should_dispatch_heartbeat_mediation(
+                classification["signature"],
+                mediation_config,
+            )
+            metadata = {
+                "source": "heartbeat",
+                "session_id": session_id,
+                "timestamp": str(payload.get("timestamp") or ""),
+                "suppressed_reason": str(payload.get("suppressed_reason") or ""),
+                "sent": bool(payload.get("sent")),
+                "guard_reason": str(payload.get("guard_reason") or ""),
+                "guard": payload.get("guard") if isinstance(payload.get("guard"), dict) else {},
+                "heartbeat_interval_source": str(payload.get("heartbeat_interval_source") or ""),
+                "heartbeat_effective_interval_seconds": int(
+                    payload.get("heartbeat_effective_interval_seconds") or 0
+                ),
+                "task_hub_claimed_count": int(payload.get("task_hub_claimed_count") or 0),
+                "task_hub_completed_count": int(payload.get("task_hub_completed_count") or 0),
+                "task_hub_review_count": int(payload.get("task_hub_review_count") or 0),
+                "task_hub_reopened_count": int(payload.get("task_hub_reopened_count") or 0),
+                "task_hub_retry_exhausted_count": int(payload.get("task_hub_retry_exhausted_count") or 0),
+                **artifact_metadata,
+                "heartbeat_findings": findings,
+                "heartbeat_findings_status": classification["status"],
+                "heartbeat_findings_count": int(classification["findings_count"]),
+                "heartbeat_known_rule_count": int(classification["known_rule_count"]),
+                "heartbeat_unknown_rule_count": int(classification["unknown_rule_count"]),
+                "heartbeat_mediation_summary": str(classification["summary"] or ""),
+                "heartbeat_mediation_signature": classification["signature"],
+                "heartbeat_mediation_classification": (
+                    "known_rule_only" if int(classification["unknown_rule_count"]) == 0 else "mixed_or_unknown"
+                ),
+                "heartbeat_mediation_status": "pending_dispatch" if dispatch_allowed else str(dispatch_reason or "pending"),
+                "heartbeat_mediation_dispatched_at": "",
+                "heartbeat_operator_review_required": False,
+                "primary_runbook_command": str(classification["primary_runbook_command"] or ""),
+            }
+            record = _add_notification(
                 kind="autonomous_heartbeat_completed",
                 title="Autonomous Heartbeat Activity Completed",
-                message=f"Heartbeat completed independent work for {session_id or 'session'}.",
+                message=(
+                    f"Heartbeat detected {classification['status']} findings for {session_id or 'session'}: "
+                    f"{str(classification['summary'] or 'investigation required').strip()}"
+                ),
                 session_id=session_id,
-                severity="info",
-                metadata={
-                    "source": "heartbeat",
-                    "session_id": session_id,
-                    "timestamp": str(payload.get("timestamp") or ""),
-                    "suppressed_reason": str(payload.get("suppressed_reason") or ""),
-                    "sent": bool(payload.get("sent")),
-                    "guard_reason": str(payload.get("guard_reason") or ""),
-                    "guard": payload.get("guard") if isinstance(payload.get("guard"), dict) else {},
-                    "heartbeat_interval_source": str(payload.get("heartbeat_interval_source") or ""),
-                    "heartbeat_effective_interval_seconds": int(
-                        payload.get("heartbeat_effective_interval_seconds") or 0
-                    ),
-                    "task_hub_claimed_count": int(payload.get("task_hub_claimed_count") or 0),
-                    "task_hub_completed_count": int(payload.get("task_hub_completed_count") or 0),
-                    "task_hub_review_count": int(payload.get("task_hub_review_count") or 0),
-                    "task_hub_reopened_count": int(payload.get("task_hub_reopened_count") or 0),
-                    "task_hub_retry_exhausted_count": int(payload.get("task_hub_retry_exhausted_count") or 0),
-                    "heartbeat_artifacts": heartbeat_artifact_links,
-                    "heartbeat_artifact_count": len(heartbeat_artifact_links),
-                },
+                severity=str(classification["severity"] or "warning"),
+                requires_action=True,
+                metadata=metadata,
             )
+            if parse_error:
+                _add_notification(
+                    kind="heartbeat_findings_parse_failed",
+                    title="Heartbeat Findings Parse Failed",
+                    message=f"Heartbeat findings artifact could not be parsed; fallback findings were generated. {parse_error}",
+                    session_id=session_id,
+                    severity="warning",
+                    requires_action=True,
+                    metadata={
+                        "source": "heartbeat",
+                        "activity_id": str(record.get("id") or ""),
+                        "parse_error": parse_error,
+                        "heartbeat_findings_artifact_path": str(metadata.get("heartbeat_findings_artifact_path") or ""),
+                        "heartbeat_findings_artifact_href": str(metadata.get("heartbeat_findings_artifact_href") or ""),
+                    },
+                )
+            if dispatch_allowed:
+                _spawn_background_task(_dispatch_heartbeat_to_simone(str(record.get("id") or "")))
+            else:
+                _update_notification_record(
+                    str(record.get("id") or ""),
+                    metadata_patch={"heartbeat_mediation_status": str(dispatch_reason or "suppressed")},
+                )
 
 
 def _autonomous_cron_to_heartbeat_enabled() -> bool:
@@ -5261,6 +5321,15 @@ def _broadcast_system_event(session_id: str, event: dict) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     asyncio.create_task(manager.broadcast(session_id, payload))
+
+
+def _spawn_background_task(coro: Any) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coro)
+        return
+    loop.create_task(coro)
 
 
 def _vp_event_bridge_prime_cursor_to_latest() -> None:
@@ -5577,6 +5646,8 @@ def _compact_csi_notification_message(text: str, *, max_chars: int = 1800) -> st
 def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None) -> str:
     lowered = str(kind or "").strip().lower()
     metadata = metadata if isinstance(metadata, dict) else {}
+    if lowered.startswith("autonomous_heartbeat") or str(metadata.get("source") or "").strip().lower() == "heartbeat":
+        return "heartbeat"
     if lowered.startswith("csi"):
         return "csi"
     if lowered.startswith("youtube") or "tutorial" in lowered:
@@ -5648,6 +5719,23 @@ def _activity_actions(
         actions.append({"id": "view", "label": "View", "type": "link", "href": route})
     if entity_ref.get("session_href"):
         actions.append({"id": "open_session", "label": "Open Session", "type": "link", "href": entity_ref["session_href"]})
+    findings_href = str(metadata.get("heartbeat_findings_artifact_href") or metadata.get("heartbeat_findings_storage_href") or "").strip()
+    if not findings_href:
+        findings_rel = str(metadata.get("heartbeat_findings_workspace_relpath") or "").strip()
+        if findings_rel:
+            findings_href = _storage_explorer_href(scope="workspaces", path=findings_rel, preview=findings_rel)
+    if findings_href:
+        actions.append({"id": "open_findings", "label": "Open Findings", "type": "link", "href": findings_href})
+    investigation_href = str(metadata.get("heartbeat_investigation_summary_href") or "").strip()
+    if not investigation_href:
+        investigation_rel = str(metadata.get("heartbeat_investigation_summary_workspace_relpath") or "").strip()
+        if investigation_rel:
+            investigation_href = _storage_explorer_href(scope="workspaces", path=investigation_rel, preview=investigation_rel)
+    if investigation_href:
+        actions.append({"id": "open_investigation", "label": "Open Investigation", "type": "link", "href": investigation_href})
+    runbook_command = str(metadata.get("primary_runbook_command") or "").strip()
+    if runbook_command:
+        actions.append({"id": "copy_runbook_command", "label": "Copy Runbook", "type": "action"})
     if source_domain == "csi":
         actions.append({"id": "view_csi", "label": "View in CSI", "type": "link", "href": "/dashboard/csi"})
         report_href = str(entity_ref.get("report_href") or "").strip()
@@ -7609,7 +7697,7 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         return
     metadata = payload.get("metadata")
-    _add_notification(
+    notification = _add_notification(
         kind=str(payload.get("kind") or "hook_event"),
         title=str(payload.get("title") or "Hook Event"),
         message=str(payload.get("message") or "Hook event"),
@@ -7618,6 +7706,17 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
         requires_action=bool(payload.get("requires_action")),
         metadata=metadata if isinstance(metadata, dict) else None,
     )
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind == "heartbeat_investigation_completed":
+        _spawn_background_task(
+            _process_heartbeat_investigation_notification(
+                {
+                    "notification_id": str(notification.get("id") or ""),
+                    "session_id": str(notification.get("session_id") or payload.get("session_id") or "").strip() or None,
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                }
+            )
+        )
     tutorial_telegram_notifier.maybe_send(payload)
 
 
@@ -16567,6 +16666,578 @@ def _heartbeat_artifact_links_from_payload(
                     }
                 )
     return out
+
+
+def _heartbeat_mediation_config() -> dict[str, Any]:
+    config = load_ops_config()
+    heartbeat = config.get("heartbeat_mediation")
+    if not isinstance(heartbeat, dict):
+        heartbeat = {}
+    merged = dict(_HEARTBEAT_MEDIATION_DEFAULTS)
+    merged.update({key: value for key, value in heartbeat.items() if value is not None})
+    merged["enabled"] = bool(merged.get("enabled", True))
+    merged["coverage_model"] = str(merged.get("coverage_model") or "all_non_ok_tiered").strip() or "all_non_ok_tiered"
+    try:
+        merged["cooldown_minutes"] = max(0, int(merged.get("cooldown_minutes") or 60))
+    except Exception:
+        merged["cooldown_minutes"] = 60
+    merged["operator_email_channel"] = (
+        str(merged.get("operator_email_channel") or "agentmail").strip().lower() or "agentmail"
+    )
+    merged["notify_operator_for_unknown_findings"] = bool(
+        merged.get("notify_operator_for_unknown_findings", True)
+    )
+    merged["notify_operator_for_known_findings"] = bool(
+        merged.get("notify_operator_for_known_findings", False)
+    )
+    return merged
+
+
+def _heartbeat_candidate_paths_from_links(
+    links: list[dict[str, Any]],
+    *,
+    filename: str,
+) -> list[tuple[Path, dict[str, Any]]]:
+    candidates: list[tuple[Path, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        paths: list[Path] = []
+        source_path = str(link.get("source_path") or "").strip()
+        if source_path:
+            try:
+                paths.append(Path(source_path).expanduser().resolve())
+            except Exception:
+                paths.append(Path(source_path).expanduser())
+        rel = str(link.get("relative_path") or "").strip()
+        scope = str(link.get("scope") or "").strip().lower()
+        if rel and scope == "workspaces":
+            paths.append((WORKSPACES_DIR / rel).resolve())
+        elif rel and scope == "artifacts":
+            paths.append((ARTIFACTS_DIR / rel).resolve())
+        for candidate in paths:
+            if candidate.name != filename:
+                continue
+            marker = str(candidate)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            candidates.append((candidate, link))
+    return candidates
+
+
+def _heartbeat_fallback_findings(
+    *,
+    artifact_links: list[dict[str, Any]],
+    markdown_path: Optional[Path],
+    parse_error: str,
+) -> dict[str, Any]:
+    text = ""
+    if markdown_path and markdown_path.exists():
+        try:
+            text = markdown_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            text = ""
+    warning_match = re.search(
+        r"(?:⚠️\s*)?(WARN|CRITICAL|ERROR)\s*:\s*([^\n]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    action_match = re.search(r"^Action:\s*(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
+    run_match = re.search(r"^Run\s+(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
+    summary = (
+        warning_match.group(2).strip()
+        if warning_match
+        else ("Heartbeat completed with non-OK findings, but the structured findings artifact could not be parsed.")
+    )
+    severity = "critical" if warning_match and warning_match.group(1).strip().lower() in {"critical", "error"} else "warn"
+    recommendation = action_match.group(1).strip() if action_match else parse_error
+    runbook_command = run_match.group(0).strip() if run_match else ""
+    return {
+        "version": 1,
+        "overall_status": severity,
+        "generated_at_utc": _utc_now_iso(),
+        "source": "heartbeat_fallback",
+        "summary": summary,
+        "parse_error": parse_error,
+        "findings": [
+            {
+                "finding_id": "heartbeat_findings_parse_failed",
+                "category": "heartbeat",
+                "severity": severity,
+                "metric_key": "heartbeat_parse_failed",
+                "observed_value": 1,
+                "threshold_text": "structured artifact parse required",
+                "known_rule_match": bool(runbook_command),
+                "confidence": "low",
+                "title": summary,
+                "recommendation": recommendation,
+                "runbook_command": runbook_command,
+                "metadata": {
+                    "parse_error": parse_error,
+                    "artifact_count": len(artifact_links),
+                    "markdown_path": str(markdown_path) if markdown_path else "",
+                },
+            }
+        ],
+    }
+
+
+def _heartbeat_findings_from_artifacts(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], Optional[str]]:
+    artifact_links = _heartbeat_artifact_links_from_payload(payload)
+    json_candidates = _heartbeat_candidate_paths_from_links(artifact_links, filename=_HEARTBEAT_FINDINGS_FILENAME)
+    markdown_candidates = _heartbeat_candidate_paths_from_links(artifact_links, filename=_HEARTBEAT_REPORT_FILENAME)
+    findings_path = json_candidates[0][0] if json_candidates else None
+    findings_link = json_candidates[0][1] if json_candidates else {}
+    markdown_path = markdown_candidates[0][0] if markdown_candidates else None
+    markdown_link = markdown_candidates[0][1] if markdown_candidates else {}
+
+    parse_error: Optional[str] = None
+    findings: Optional[dict[str, Any]] = None
+    if findings_path and findings_path.exists():
+        try:
+            loaded = json.loads(findings_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                findings = loaded
+            else:
+                parse_error = "heartbeat findings artifact is not a JSON object"
+        except Exception as exc:
+            parse_error = f"heartbeat findings artifact parse failed: {exc}"
+    else:
+        parse_error = "heartbeat findings artifact missing"
+
+    if not isinstance(findings, dict):
+        findings = _heartbeat_fallback_findings(
+            artifact_links=artifact_links,
+            markdown_path=markdown_path,
+            parse_error=parse_error or "unknown parse failure",
+        )
+
+    raw_findings = findings.get("findings")
+    normalized_findings = raw_findings if isinstance(raw_findings, list) else []
+    findings["findings"] = [row for row in normalized_findings if isinstance(row, dict)]
+    if not findings["findings"]:
+        findings["findings"] = _heartbeat_fallback_findings(
+            artifact_links=artifact_links,
+            markdown_path=markdown_path,
+            parse_error=parse_error or "heartbeat findings artifact contained no findings",
+        )["findings"]
+        findings["overall_status"] = findings.get("overall_status") or "warn"
+    findings["overall_status"] = str(findings.get("overall_status") or "warn").strip().lower() or "warn"
+    findings["summary"] = str(findings.get("summary") or "").strip() or "Heartbeat investigation required."
+    findings["generated_at_utc"] = str(findings.get("generated_at_utc") or _utc_now_iso())
+    findings["source"] = str(findings.get("source") or "heartbeat").strip() or "heartbeat"
+
+    artifact_path = str(findings_link.get("relative_path") or "").strip()
+    artifact_href = str(findings_link.get("storage_href") or "").strip()
+    if not artifact_path and markdown_link:
+        artifact_path = str(markdown_link.get("relative_path") or "").strip()
+        artifact_href = str(markdown_link.get("storage_href") or "").strip()
+    if not artifact_href and artifact_path:
+        scope = str(findings_link.get("scope") or markdown_link.get("scope") or "workspaces").strip().lower()
+        artifact_href = _storage_explorer_href(scope=scope or "workspaces", path=artifact_path, preview=artifact_path)
+
+    metadata: dict[str, Any] = {
+        "heartbeat_artifacts": artifact_links,
+        "heartbeat_artifact_count": len(artifact_links),
+        "heartbeat_findings_artifact_path": artifact_path,
+        "heartbeat_findings_artifact_href": artifact_href,
+        "heartbeat_findings_storage_href": artifact_href,
+    }
+    if artifact_path and str(findings_link.get("scope") or markdown_link.get("scope") or "").strip().lower() == "workspaces":
+        metadata["heartbeat_findings_workspace_relpath"] = artifact_path
+    return findings, metadata, parse_error
+
+
+def _heartbeat_findings_signature(findings: dict[str, Any]) -> str:
+    normalized = {
+        "overall_status": str(findings.get("overall_status") or "warn").strip().lower(),
+        "summary": str(findings.get("summary") or "").strip().lower(),
+        "findings": [
+            {
+                "finding_id": str(item.get("finding_id") or "").strip().lower(),
+                "title": str(item.get("title") or "").strip().lower(),
+                "severity": str(item.get("severity") or "warn").strip().lower(),
+                "runbook_command": str(item.get("runbook_command") or "").strip(),
+            }
+            for item in findings.get("findings", [])
+            if isinstance(item, dict)
+        ],
+    }
+    raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _classify_heartbeat_mediation(findings: dict[str, Any]) -> dict[str, Any]:
+    findings_list = [row for row in findings.get("findings", []) if isinstance(row, dict)]
+    severity_rank = {"ok": 0, "info": 0, "warn": 1, "warning": 1, "critical": 2, "error": 2}
+    highest = "warn"
+    primary_runbook_command = ""
+    known_rule_count = 0
+    unknown_rule_count = 0
+    for row in findings_list:
+        severity = str(row.get("severity") or "warn").strip().lower()
+        if severity_rank.get(severity, 1) > severity_rank.get(highest, 1):
+            highest = "critical" if severity in {"critical", "error"} else "warn"
+        runbook = str(row.get("runbook_command") or "").strip()
+        if runbook and not primary_runbook_command:
+            primary_runbook_command = runbook
+        if bool(row.get("known_rule_match")):
+            known_rule_count += 1
+        else:
+            unknown_rule_count += 1
+    overall = str(findings.get("overall_status") or highest or "warn").strip().lower()
+    if overall in {"warning"}:
+        overall = "warn"
+    if overall in {"error"}:
+        overall = "critical"
+    return {
+        "status": "critical" if overall == "critical" or highest == "critical" else "warn",
+        "severity": "error" if overall == "critical" or highest == "critical" else "warning",
+        "findings_count": len(findings_list),
+        "known_rule_count": known_rule_count,
+        "unknown_rule_count": unknown_rule_count,
+        "primary_runbook_command": primary_runbook_command,
+        "summary": str(findings.get("summary") or "").strip(),
+        "signature": _heartbeat_findings_signature(findings),
+    }
+
+
+def _should_dispatch_heartbeat_mediation(signature: str, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+    if not bool(config.get("enabled", True)):
+        return False, "disabled"
+    if str(config.get("coverage_model") or "all_non_ok_tiered").strip().lower() != "all_non_ok_tiered":
+        return False, "unsupported_coverage_model"
+    cooldown_seconds = max(0, int(config.get("cooldown_minutes") or 60)) * 60
+    now_ts = time.time()
+    last_ts = _heartbeat_mediation_cooldowns.get(signature)
+    if last_ts is not None and cooldown_seconds > 0 and (now_ts - last_ts) < cooldown_seconds:
+        return False, "cooldown_active"
+    _heartbeat_mediation_cooldowns[signature] = now_ts
+    return True, None
+
+
+def _notification_record_from_event(event: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(event.get("metadata") if isinstance(event.get("metadata"), dict) else {})
+    channels = ["dashboard"]
+    email_targets = list(_notification_targets().get("email_targets") or [])
+    return {
+        "id": str(event.get("id") or ""),
+        "kind": str(event.get("kind") or ""),
+        "title": str(event.get("title") or "Notification"),
+        "message": str(event.get("full_message") or event.get("summary") or ""),
+        "summary": str(event.get("summary") or ""),
+        "full_message": str(event.get("full_message") or ""),
+        "session_id": event.get("session_id"),
+        "severity": str(event.get("severity") or "info"),
+        "requires_action": bool(event.get("requires_action")),
+        "status": str(event.get("status") or "new"),
+        "created_at": str(event.get("created_at_utc") or _utc_now_iso()),
+        "updated_at": str(event.get("updated_at_utc") or _utc_now_iso()),
+        "channels": channels,
+        "email_targets": email_targets,
+        "metadata": metadata,
+    }
+
+
+def _update_notification_record(
+    notification_id: str,
+    *,
+    metadata_patch: Optional[dict[str, Any]] = None,
+    severity: Optional[str] = None,
+    requires_action: Optional[bool] = None,
+    status: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    event = _get_activity_event(notification_id)
+    if event is None:
+        return None
+    record = _notification_record_from_event(event)
+    if metadata_patch:
+        metadata = dict(record.get("metadata") if isinstance(record.get("metadata"), dict) else {})
+        metadata.update({key: value for key, value in metadata_patch.items()})
+        record["metadata"] = metadata
+    if severity is not None:
+        record["severity"] = severity
+    if requires_action is not None:
+        record["requires_action"] = bool(requires_action)
+    if status is not None:
+        record["status"] = status
+    record["updated_at"] = _utc_now_iso()
+    _replace_notification_cache_record(record)
+    _persist_notification_activity(record)
+    return record
+
+
+async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
+    activity = _get_activity_event(notification_id)
+    if activity is None:
+        return
+    metadata = activity.get("metadata") if isinstance(activity.get("metadata"), dict) else {}
+    session_id = str(activity.get("session_id") or metadata.get("session_id") or "").strip() or None
+    findings = metadata.get("heartbeat_findings")
+    if not isinstance(findings, dict):
+        return
+    classification = metadata.get("heartbeat_mediation_classification")
+    config = _heartbeat_mediation_config()
+    actor = "system:heartbeat"
+    if not _hooks_service:
+        _record_activity_audit(
+            event_id=notification_id,
+            action="heartbeat_auto_route",
+            actor=actor,
+            outcome="failed",
+            note="hooks service not initialized",
+            metadata={},
+        )
+        _update_notification_record(
+            notification_id,
+            metadata_patch={
+                "heartbeat_mediation_status": "dispatch_failed",
+                "heartbeat_mediation_failure_reason": "hooks service not initialized",
+            },
+        )
+        _add_notification(
+            kind="heartbeat_mediation_dispatch_failed",
+            title="Heartbeat Auto-Triage Failed",
+            message=f"Could not dispatch Simone for heartbeat notification {notification_id}: hooks service not initialized.",
+            session_id=session_id,
+            severity="error",
+            requires_action=True,
+            metadata={"source": "heartbeat", "activity_id": notification_id, "reason": "hooks service not initialized"},
+        )
+        return
+
+    session_suffix = re.sub(r"[^A-Za-z0-9_.-]+", "_", notification_id).strip("._-")[-48:] or "heartbeat"
+    session_key = f"simone_heartbeat_{session_suffix}"
+    findings_json = json.dumps(findings, ensure_ascii=False, indent=2)[:24000]
+    handoff_message = (
+        "Automatic heartbeat investigation handoff to Simone.\n"
+        f"activity_id: {notification_id}\n"
+        f"session_id: {session_id or ''}\n"
+        f"classification: {classification or 'unclassified'}\n"
+        f"primary_runbook_command: {str(metadata.get('primary_runbook_command') or '').strip()}\n"
+        "policy:\n"
+        "- Investigate the heartbeat finding set.\n"
+        "- Correlate the issue with session/artifact context.\n"
+        "- Determine whether this is noise, infra/config drift, or code regression.\n"
+        "- Recommend next step.\n"
+        "- Do not implement code changes or remediation automatically.\n"
+        "- Write work_products/heartbeat_investigation_summary.md.\n"
+        "- If possible also write work_products/heartbeat_investigation_summary.json with fields:\n"
+        "  version, source_notification_id, session_key, classification, operator_review_required,\n"
+        "  recommended_next_step, proposed_changes, email_summary.\n\n"
+        "heartbeat_summary:\n"
+        f"{str(metadata.get('heartbeat_mediation_summary') or activity.get('summary') or '').strip()}\n\n"
+        "heartbeat_findings_json:\n"
+        f"{findings_json}"
+    )
+    _record_activity_audit(
+        event_id=notification_id,
+        action="heartbeat_auto_route",
+        actor=actor,
+        outcome="requested",
+        note=str(metadata.get("heartbeat_mediation_summary") or "")[:500],
+        metadata={"session_key": session_key},
+    )
+    ok, reason = await _hooks_service.dispatch_internal_action(
+        {
+            "kind": "agent",
+            "name": "AutoHeartbeatInvestigation",
+            "session_key": session_key,
+            "message": handoff_message,
+            "deliver": True,
+            "timeout_seconds": 900,
+        }
+    )
+    if not ok:
+        _record_activity_audit(
+            event_id=notification_id,
+            action="heartbeat_auto_route",
+            actor=actor,
+            outcome="failed",
+            note=str(reason or "dispatch failed"),
+            metadata={"session_key": session_key},
+        )
+        _update_notification_record(
+            notification_id,
+            metadata_patch={
+                "heartbeat_mediation_status": "dispatch_failed",
+                "heartbeat_mediation_failure_reason": str(reason or "dispatch_failed"),
+                "heartbeat_mediation_session_key": session_key,
+            },
+        )
+        _add_notification(
+            kind="heartbeat_mediation_dispatch_failed",
+            title="Heartbeat Auto-Triage Failed",
+            message=f"Automatic heartbeat routing failed for {notification_id}: {reason}",
+            session_id=session_id,
+            severity="error",
+            requires_action=True,
+            metadata={
+                "source": "heartbeat",
+                "activity_id": notification_id,
+                "session_key": session_key,
+                "reason": reason,
+            },
+        )
+        return
+
+    _record_activity_audit(
+        event_id=notification_id,
+        action="heartbeat_auto_route",
+        actor=actor,
+        outcome="completed",
+        note=str(reason or "dispatched"),
+        metadata={"session_key": session_key},
+    )
+    _update_notification_record(
+        notification_id,
+        metadata_patch={
+            "heartbeat_mediation_status": "dispatched",
+            "heartbeat_mediation_session_key": session_key,
+            "heartbeat_mediation_dispatched_at": _utc_now_iso(),
+            "heartbeat_operator_review_required": bool(metadata.get("heartbeat_unknown_rule_count") or 0)
+            and bool(config.get("notify_operator_for_unknown_findings", True)),
+        },
+    )
+    _add_notification(
+        kind="heartbeat_mediation_dispatched",
+        title="Heartbeat Auto-Triage Dispatched",
+        message=f"Automatic heartbeat routing dispatched to Simone session {session_key}.",
+        session_id=session_id,
+        severity="success",
+        requires_action=False,
+        metadata={
+            "source": "heartbeat",
+            "activity_id": notification_id,
+            "session_key": session_key,
+            "classification": classification,
+        },
+    )
+
+
+async def _notify_operator_of_heartbeat_recommendation(payload: dict[str, Any]) -> tuple[bool, str]:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    config = _heartbeat_mediation_config()
+    if str(config.get("operator_email_channel") or "agentmail").strip().lower() != "agentmail":
+        return False, "unsupported_channel"
+    if _agentmail_service is None:
+        return False, "agentmail_unavailable"
+
+    event_id = str(payload.get("originating_notification_id") or "").strip()
+    session_key = str(metadata.get("session_key") or payload.get("session_id") or "").strip()
+    summary_href = str(metadata.get("heartbeat_investigation_summary_href") or "").strip()
+    findings_href = str(metadata.get("heartbeat_findings_artifact_href") or "").strip()
+    next_step = str(metadata.get("recommended_next_step") or "").strip()
+    email_summary = str(metadata.get("email_summary") or "").strip()
+    classification = str(metadata.get("classification") or "unknown_issue").strip()
+    subject = f"Simone heartbeat review required: {classification}"
+    body = (
+        "Simone completed an automatic heartbeat investigation and operator review is required.\n\n"
+        f"Activity ID: {event_id}\n"
+        f"Session key: {session_key}\n"
+        f"Classification: {classification}\n"
+        f"Recommended next step: {next_step or 'Review dashboard artifacts.'}\n\n"
+        f"Summary:\n{email_summary or 'See the linked investigation summary.'}\n\n"
+        f"Investigation summary: {summary_href or 'n/a'}\n"
+        f"Heartbeat findings: {findings_href or 'n/a'}\n"
+        f"Dashboard events: /dashboard/events\n"
+    )
+    to = str((_notification_targets().get("email_targets") or [""])[0] or "").strip()
+    if not to:
+        return False, "missing_operator_email"
+    await _agentmail_service.send_email(to=to, subject=subject, text=body, force_send=True)
+    return True, "sent"
+
+
+async def _process_heartbeat_investigation_notification(payload: dict[str, Any]) -> None:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    origin_id = str(metadata.get("source_notification_id") or "").strip()
+    if not origin_id:
+        return
+    operator_review_required = bool(metadata.get("operator_review_required"))
+    summary_rel = str(metadata.get("heartbeat_investigation_summary_workspace_relpath") or "").strip()
+    summary_href = str(metadata.get("heartbeat_investigation_summary_href") or "").strip()
+    if not summary_href and summary_rel:
+        summary_href = _storage_explorer_href(scope="workspaces", path=summary_rel, preview=summary_rel)
+    update_patch = {
+        "heartbeat_mediation_status": "investigation_completed",
+        "heartbeat_investigation_summary_workspace_relpath": summary_rel,
+        "heartbeat_investigation_summary_href": summary_href,
+        "heartbeat_investigation_completed_at": _utc_now_iso(),
+        "heartbeat_operator_review_required": operator_review_required,
+        "heartbeat_investigation_classification": str(metadata.get("classification") or "").strip(),
+        "heartbeat_investigation_recommended_next_step": str(metadata.get("recommended_next_step") or "").strip(),
+        "heartbeat_investigation_email_summary": str(metadata.get("email_summary") or "").strip(),
+    }
+    _update_notification_record(origin_id, metadata_patch=update_patch, requires_action=True)
+    _record_activity_audit(
+        event_id=origin_id,
+        action="heartbeat_auto_route",
+        actor="system:heartbeat",
+        outcome="completed",
+        note=str(metadata.get("classification") or "investigation_completed"),
+        metadata={"session_key": str(metadata.get("session_key") or "")},
+    )
+
+    should_notify = operator_review_required or bool(metadata.get("unknown_rule_count"))
+    if not should_notify:
+        return
+    _add_notification(
+        kind="heartbeat_operator_review_required",
+        title="Heartbeat Investigation Needs Review",
+        message=(
+            f"Simone completed heartbeat investigation for {origin_id}. "
+            "Review the recommendation before taking action."
+        ),
+        session_id=str(payload.get("session_id") or "").strip() or None,
+        severity="warning",
+        requires_action=True,
+        metadata={
+            "source": "heartbeat",
+            "originating_notification_id": origin_id,
+            **metadata,
+            "heartbeat_investigation_summary_href": summary_href,
+        },
+    )
+    try:
+        sent, reason = await _notify_operator_of_heartbeat_recommendation(
+            {
+                "originating_notification_id": origin_id,
+                "session_id": payload.get("session_id"),
+                "metadata": {
+                    **metadata,
+                    "heartbeat_investigation_summary_href": summary_href,
+                },
+            }
+        )
+    except Exception as exc:
+        sent = False
+        reason = str(exc)
+    if sent:
+        _update_notification_record(origin_id, metadata_patch={"heartbeat_operator_review_sent_at": _utc_now_iso()})
+        _add_notification(
+            kind="heartbeat_operator_review_sent",
+            title="Heartbeat Review Sent To Kevin",
+            message=f"Operator review summary sent for heartbeat notification {origin_id}.",
+            session_id=str(payload.get("session_id") or "").strip() or None,
+            severity="success",
+            requires_action=False,
+            metadata={"source": "heartbeat", "originating_notification_id": origin_id},
+        )
+    else:
+        _add_notification(
+            kind="heartbeat_operator_review_sent",
+            title="Heartbeat Review Email Failed",
+            message=f"Operator review email could not be sent for heartbeat notification {origin_id}: {reason}",
+            session_id=str(payload.get("session_id") or "").strip() or None,
+            severity="error",
+            requires_action=True,
+            metadata={"source": "heartbeat", "originating_notification_id": origin_id, "reason": reason},
+        )
 
 
 def _autonomous_job_artifact_links(job_id: str, *, max_files: int = 6) -> list[dict[str, str]]:

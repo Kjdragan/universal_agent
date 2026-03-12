@@ -73,6 +73,18 @@ def ops_config_schema() -> dict[str, Any]:
                 },
                 "additionalProperties": True,
             },
+            "heartbeat_mediation": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "coverage_model": {"type": "string"},
+                    "cooldown_minutes": {"type": "integer"},
+                    "operator_email_channel": {"type": "string"},
+                    "notify_operator_for_unknown_findings": {"type": "boolean"},
+                    "notify_operator_for_known_findings": {"type": "boolean"},
+                },
+                "additionalProperties": True,
+            },
             "session_policy_defaults": {
                 "type": "object",
                 "additionalProperties": True,

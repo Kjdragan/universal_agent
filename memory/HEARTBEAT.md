@@ -32,7 +32,38 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
   - Summarize as a compact table: metric | value | status (OK/WARN/CRITICAL)
   - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN, errors > 10 in 30min = WARN
   - If any metric is WARN or CRITICAL, flag it in the heartbeat response for Kevin's attention.
-  - Write the full report to `work_products/system_health_latest.md` (overwrite each cycle).
+  - Write the full human-readable report to `work_products/system_health_latest.md` (overwrite each cycle).
+  - Also write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle).
+  - The JSON contract must use this schema:
+    ```json
+    {
+      "version": 1,
+      "overall_status": "ok|warn|critical",
+      "generated_at_utc": "ISO-8601 UTC timestamp",
+      "source": "vps_system_health_check",
+      "summary": "Short one-paragraph summary of the most important finding set.",
+      "findings": [
+        {
+          "finding_id": "stable_snake_case_id",
+          "category": "gateway|system|disk|memory|cpu|dispatch|database|unknown",
+          "severity": "ok|warn|critical",
+          "metric_key": "recent_errors_30m",
+          "observed_value": 67,
+          "threshold_text": ">10",
+          "known_rule_match": true,
+          "confidence": "low|medium|high",
+          "title": "Gateway Errors Elevated",
+          "recommendation": "Inspect gateway logs for root cause.",
+          "runbook_command": "journalctl -u universal-agent-gateway --since '30 min ago' --no-pager",
+          "metadata": {
+            "service": "universal-agent-gateway"
+          }
+        }
+      ]
+    }
+    ```
+  - Include at least one `findings[]` entry whenever `overall_status` is `warn` or `critical`.
+  - Use `known_rule_match=true` only when the issue clearly maps to a stable runbookable condition. Unknown edge cases should still be emitted with `known_rule_match=false`.
 - [ ] Mission Control build kickoff
   - Confirm first concrete milestone and produce a short execution checklist.
 - [ ] AI-native freelance system progress
@@ -53,3 +84,23 @@ Checkbox semantics:
 - [ ] active
 - [x] completed/disabled
 -->
+
+## Kevin's Working Style Preferences (2025-03-12)
+
+**Proactive Improvement Suggestions:**
+Kevin explicitly stated: "I love this type of interaction. More for other elements of our project for anything that you see that needs improvement or suggestions etc. this is a great way to work together."
+
+**Key Takeaway:** 
+- Kevin WANTS agents to proactively identify improvement opportunities
+- He appreciates specific, actionable suggestions with rationale
+- This applies across ALL project elements, not just CSI
+- Agents should not wait for permission to suggest optimizations
+- When you see something that could be better, speak up!
+
+**Examples of what he likes:**
+- Noise reduction in notifications (quality over quantity)
+- Threshold adjustments based on observed patterns
+- Operational efficiency improvements
+- Any optimization that reduces friction while maintaining effectiveness
+
+**Action:** When working on any part of the system, actively look for improvement opportunities and present them with clear reasoning.

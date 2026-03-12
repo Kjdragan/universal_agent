@@ -39,7 +39,30 @@ The heartbeat is highly configurable via environment variables or a `heartbeat_c
 
 The agent can choose to perform "stealth heartbeats" where its thoughts are logged internally but not displayed to the user. This is useful for minor background tasks that don't require user attention.
 
-## 5. Implementation Files
+## 5. Non-OK Heartbeat Mediation
+
+Non-OK heartbeats no longer stop at a passive notification.
+
+Current behavior:
+
+- The heartbeat still writes a human-readable report to `work_products/system_health_latest.md`.
+- It should also write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json`.
+- The gateway classifies those findings and turns the resulting `autonomous_heartbeat_completed` notification into an actionable item.
+- Non-OK heartbeat findings are automatically routed to Simone for investigation through the hook system.
+- Simone is instructed to investigate and recommend next steps only. She is not allowed to auto-edit code, auto-run remediation shell commands, or auto-deploy in this flow.
+- If the finding is unknown or otherwise requires operator judgment, the system raises an additional review-required notification and sends Kevin an AgentMail summary.
+
+This creates a tiered flow:
+
+1. heartbeat detects the issue
+2. gateway classifies and persists it
+3. Simone investigates automatically
+4. Kevin is notified when explicit operator review is needed
+
+## 6. Implementation Files
 
 - `src/universal_agent/heartbeat_service.py`: The main service class and event collection logic.
+- `memory/HEARTBEAT.md`: Operating instructions for heartbeat-authored reports and findings artifacts.
+- `src/universal_agent/gateway_server.py`: Notification classification, mediation dispatch, and operator notification.
+- `src/universal_agent/hooks_service.py`: Hook completion handling for heartbeat investigations.
 - `src/universal_agent/main.py`: Bootstraps the service during agent initialization.
