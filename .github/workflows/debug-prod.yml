@@ -9,9 +9,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Connect to Tailscale Network
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: gha-debug-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ secrets.VPS_SSH_HOST }}
           
       - name: Fetch Logs via SSH
@@ -45,5 +46,11 @@ jobs:
             echo "universal-agent-api logs"
             echo "==========================================="
             sudo journalctl -u universal-agent-api -n 150 --no-pager || true
+
+            echo "==========================================="
+            echo "API venv interpreter"
+            echo "==========================================="
+            ls -l /opt/universal_agent/.venv/bin/python3 || true
+            readlink -f /opt/universal_agent/.venv/bin/python3 || true
 
           EOF

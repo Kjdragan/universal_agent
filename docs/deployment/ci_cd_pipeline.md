@@ -174,3 +174,21 @@ then CI identity is not matching the required non-interactive SSH policy. Verify
   sudo journalctl -u universal-agent-staging-gateway -f
   ```
 - Verify the `.env` file exists in the installation directory.
+
+### Production `uv sync` Fails With Python Interpreter Permission Errors
+
+If production deploy logs show either:
+
+- `failed to canonicalize path /opt/universal_agent/.venv/bin/python3: Permission denied`
+- `Failed to execute /opt/universal_agent/.venv/bin/python3: Permission denied`
+
+then the existing `.venv` was created against a Python interpreter path that the `ua` service user cannot traverse.
+
+Current production workflow behavior:
+
+1. chowns the repo to `ua`
+2. checks whether `ua` can resolve `.venv/bin/python3`
+3. removes `.venv` only if that check fails
+4. rebuilds dependencies as `ua` with `uv`
+
+This is intended to self-heal stale virtualenvs created against inaccessible Python cache paths.

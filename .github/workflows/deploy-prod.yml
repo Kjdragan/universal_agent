@@ -97,6 +97,14 @@ jobs:
             
             echo "--> Transferring ownership to service user before dependency sync..."
             sudo chown -R ua:ua "$PROD_DIR"
+
+            echo "--> Checking whether the existing venv is usable by ua..."
+            if [ -e "$PROD_DIR/.venv/bin/python3" ]; then
+              if ! sudo -H -u ua bash -c "readlink -f \"$PROD_DIR/.venv/bin/python3\" >/dev/null 2>&1"; then
+                echo "--> Existing venv interpreter is not accessible to ua; removing stale .venv for clean rebuild..."
+                sudo rm -rf "$PROD_DIR/.venv"
+              fi
+            fi
             
             # 2. Dependency Sync
             echo "--> Ensuring Python 3.12 runtime for uv..."
