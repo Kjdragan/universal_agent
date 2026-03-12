@@ -31,11 +31,12 @@ jobs:
             echo "--> Inspecting $PROD_DIR"
             ls -la $PROD_DIR || true
             
-            if [ -d "$PROD_DIR" ] && [ ! -d "$PROD_DIR/.git" ]; then
-              echo "--> Missing .git directory in $PROD_DIR. Attempting to convert to valid checkout..."
+            if [ -d "$PROD_DIR" ]; then
+              echo "--> Enforcing valid git clone in $PROD_DIR..."
               cd $PROD_DIR
               git config --global --add safe.directory /opt/universal_agent
-              git init
+              git init || true
+              git remote remove origin || true
               git remote add origin https://github.com/Kjdragan/universal_agent.git
               git fetch origin main
               git reset --hard origin/main
