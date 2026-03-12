@@ -26,6 +26,40 @@ async def test_poll_now_clears_stale_last_error(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_loop_seed_clears_stale_last_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=AsyncMock(return_value=(True, "agent")),
+    )
+    watcher._last_error = "youtube_api_quota_exceeded"
+    watcher._fetch_playlist_items = AsyncMock(
+        return_value=[
+            {
+                "video_id": "vid123",
+                "url": "https://www.youtube.com/watch?v=vid123",
+                "title": "Seeded via RSS",
+                "channel_id": "chan123",
+                "occurred_at": "2026-03-12T22:00:00Z",
+                "playlist_id": "PLdemo",
+            }
+        ]
+    )
+    watcher._sleep_or_stop = AsyncMock(
+        side_effect=lambda _seconds: watcher._stop_event.set() or None
+    )
+
+    await watcher._loop("PLdemo", "demo-key", set())
+
+    status = watcher.status()
+    assert status["last_poll_ok"] is True
+    assert status["last_error"] == ""
+    assert status["seen_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_playlist_items_falls_back_to_rss_when_api_quota_exceeded(monkeypatch, tmp_path):
     monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
     monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
