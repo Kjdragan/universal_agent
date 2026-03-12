@@ -72,24 +72,20 @@ jobs:
             export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'
 
             run_as_ua() {
-              ua_home=\$(getent passwd ua | cut -d: -f6)
-              if [ -z \"\$ua_home\" ]; then
-                ua_home='/home/ua'
-              fi
               if command -v sudo >/dev/null 2>&1; then
-                sudo -H -u ua env HOME=\"\$ua_home\" /bin/bash -lc \"\$1\"
+                sudo -u ua /bin/bash -lc \"\$1\"
               elif command -v runuser >/dev/null 2>&1; then
-                runuser -u ua -- env HOME=\"\$ua_home\" /bin/bash -lc \"\$1\"
+                runuser -u ua -- /bin/bash -lc \"\$1\"
               else
-                HOME=\"\$ua_home\" /bin/bash -lc \"\$1\"
+                /bin/bash -lc \"\$1\"
               fi
             }
 
             echo '--> Ensuring Python 3.12 runtime for uv...'
-            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv python install 3.12\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; uv python install 3.12\"
             
             DEPLOY_INFISICAL_ENV='staging-hq'
-            if ! run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"; then
+            if ! run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"; then
               echo '--> WARNING: staging-hq environment provisioning failed; falling back to existing dev environment for this deploy.'
               DEPLOY_INFISICAL_ENV='dev'
             fi
@@ -102,11 +98,11 @@ jobs:
             run_as_ua \"echo \\\"UA_INFISICAL_ENABLED=1\\\" >> \$STAGING_DIR/.env\"
             
             echo '--> Syncing dependencies with uv...'
-            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
 
             echo '--> Installing NotebookLM CLI/MCP tool for ua...'
-            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv tool install --force notebooklm-mcp-cli\"
-            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; command -v nlm && command -v notebooklm-mcp\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; uv tool install --force notebooklm-mcp-cli\"
+            run_as_ua \"export PATH='/home/ua/.local/bin:/usr/local/bin:\$PATH'; command -v nlm && command -v notebooklm-mcp\"
             
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then
