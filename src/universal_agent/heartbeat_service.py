@@ -60,11 +60,22 @@ def _resolve_min_interval_seconds(default: int = 30 * 60) -> int:
 
 
 MIN_INTERVAL_SECONDS = _resolve_min_interval_seconds()  # Import-time fallback; prefer runtime helper usage.
-BUSY_RETRY_DELAY = 10  # Seconds
+DEFAULT_HEARTBEAT_RETRY_BASE_SECONDS = max(
+    1,
+    int(os.getenv("UA_HEARTBEAT_RETRY_BASE_SECONDS", "10") or 10),
+)
+DEFAULT_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS = max(
+    DEFAULT_HEARTBEAT_RETRY_BASE_SECONDS,
+    int(os.getenv("UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS", "300") or 300),
+)
+DEFAULT_HEARTBEAT_CONTINUATION_DELAY_SECONDS = max(
+    1,
+    int(os.getenv("UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS", "1") or 1),
+)
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
 DEFAULT_ACK_MAX_CHARS = 300
-DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "UA_HEARTBEAT_OK"]
+DEFAULT_OK_TOKENS = ["UA_HEARTBEAT_OK", "HEARTBEAT_OK"]
 DEFAULT_FOREGROUND_COOLDOWN_SECONDS = max(
     0,
     int(os.getenv("UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS", "1800") or 1800),
@@ -126,6 +137,11 @@ class HeartbeatState:
     last_message_hash: Optional[str] = None
     last_message_ts: float = 0.0
     last_summary: Optional[dict] = None
+    retry_attempt: int = 0
+    next_retry_at: float = 0.0
+    retry_reason: Optional[str] = None
+    retry_kind: Optional[str] = None
+    last_retry_delay_seconds: float = 0.0
     
     def to_dict(self):
         return {
@@ -133,6 +149,11 @@ class HeartbeatState:
             "last_message_hash": self.last_message_hash,
             "last_message_ts": self.last_message_ts,
             "last_summary": self.last_summary,
+            "retry_attempt": self.retry_attempt,
+            "next_retry_at": self.next_retry_at,
+            "retry_reason": self.retry_reason,
+            "retry_kind": self.retry_kind,
+            "last_retry_delay_seconds": self.last_retry_delay_seconds,
         }
 
     @classmethod
@@ -142,6 +163,11 @@ class HeartbeatState:
             last_message_hash=data.get("last_message_hash"),
             last_message_ts=data.get("last_message_ts", 0.0),
             last_summary=data.get("last_summary"),
+            retry_attempt=int(data.get("retry_attempt", 0) or 0),
+            next_retry_at=float(data.get("next_retry_at", 0.0) or 0.0),
+            retry_reason=data.get("retry_reason"),
+            retry_kind=data.get("retry_kind"),
+            last_retry_delay_seconds=float(data.get("last_retry_delay_seconds", 0.0) or 0.0),
         )
 
 
@@ -544,6 +570,21 @@ def _load_json_overrides(workspace: Path) -> dict:
         return {}
     return {}
 
+
+def _persist_heartbeat_state(state_path: Path, state: HeartbeatState) -> None:
+    with open(state_path, "w") as f:
+        json.dump(state.to_dict(), f)
+
+
+def _heartbeat_retry_delay_seconds(
+    attempt: int,
+    *,
+    base_seconds: int,
+    max_backoff_seconds: int,
+) -> int:
+    bounded_attempt = max(1, int(attempt or 1))
+    return min(base_seconds * (2 ** (bounded_attempt - 1)), max_backoff_seconds)
+
 class HeartbeatService:
     def __init__(
         self,
@@ -557,6 +598,24 @@ class HeartbeatService:
         self.system_event_provider = system_event_provider
         self.event_sink = event_sink
         self.execution_timeout_seconds = _resolve_exec_timeout_seconds()
+        self.retry_base_seconds = max(
+            1,
+            _parse_int(os.getenv("UA_HEARTBEAT_RETRY_BASE_SECONDS"), DEFAULT_HEARTBEAT_RETRY_BASE_SECONDS),
+        )
+        self.max_retry_backoff_seconds = max(
+            self.retry_base_seconds,
+            _parse_int(
+                os.getenv("UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS"),
+                DEFAULT_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS,
+            ),
+        )
+        self.continuation_delay_seconds = max(
+            1,
+            _parse_int(
+                os.getenv("UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS"),
+                DEFAULT_HEARTBEAT_CONTINUATION_DELAY_SECONDS,
+            ),
+        )
         self.running = False
         self.task: Optional[asyncio.Task] = None
         self.active_sessions: Dict[str, GatewaySession] = {}
@@ -616,6 +675,66 @@ class HeartbeatService:
             self.event_sink(payload)
         except Exception as exc:
             logger.warning("Heartbeat event sink failed: %s", exc)
+
+    def _clear_retry_state(self, state: HeartbeatState) -> None:
+        state.retry_attempt = 0
+        state.next_retry_at = 0.0
+        state.retry_reason = None
+        state.retry_kind = None
+        state.last_retry_delay_seconds = 0.0
+
+    def _schedule_retry(
+        self,
+        state: HeartbeatState,
+        *,
+        session_id: str,
+        now_ts: float,
+        kind: str,
+        reason: str,
+    ) -> int:
+        attempt = state.retry_attempt + 1 if state.retry_kind == kind else 1
+        delay_seconds = _heartbeat_retry_delay_seconds(
+            attempt,
+            base_seconds=self.retry_base_seconds,
+            max_backoff_seconds=self.max_retry_backoff_seconds,
+        )
+        state.retry_attempt = attempt
+        state.next_retry_at = now_ts + delay_seconds
+        state.retry_reason = reason
+        state.retry_kind = kind
+        state.last_retry_delay_seconds = float(delay_seconds)
+        self._emit_event(
+            {
+                "type": "heartbeat_retry_scheduled",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat(),
+                "retry_kind": kind,
+                "retry_attempt": attempt,
+                "retry_reason": reason,
+                "retry_delay_seconds": delay_seconds,
+                "next_retry_at": datetime.fromtimestamp(state.next_retry_at, timezone.utc).isoformat(),
+            }
+        )
+        return delay_seconds
+
+    def _schedule_continuation_retry(
+        self,
+        state: HeartbeatState,
+        *,
+        now_ts: float,
+        reason: str,
+    ) -> None:
+        state.retry_attempt = 1
+        state.next_retry_at = now_ts + float(self.continuation_delay_seconds)
+        state.retry_reason = reason
+        state.retry_kind = "continuation"
+        state.last_retry_delay_seconds = float(self.continuation_delay_seconds)
+
+    def _consume_wake_request(self, session_id: str) -> Optional[str]:
+        wake_reason = self.last_wake_reason.pop(session_id, None)
+        self.wake_sessions.discard(session_id)
+        self.wake_next_sessions.discard(session_id)
+        return wake_reason
 
     def _resolve_schedule(self, overrides: dict) -> HeartbeatScheduleConfig:
         schedule = replace(self.default_schedule)
@@ -924,6 +1043,8 @@ class HeartbeatService:
         visibility = self._resolve_visibility(overrides)
         interval_source = _heartbeat_interval_source_label(overrides)
         now = time.time()
+        retry_due = state.next_retry_at > 0 and now >= state.next_retry_at
+        retry_pending = state.next_retry_at > now
 
         # If this is a fresh state (last_run=0), align to the previous scheduled slot
         # to prevent an immediate run on startup. The heartbeat will trigger at the
@@ -937,21 +1058,38 @@ class HeartbeatService:
              state.last_run = now - (now % schedule.every_seconds)
              # Optimization: Save this initial state so we don't recalculate on every tick if we restart
              try:
-                 with open(state_path, "w") as f:
-                     json.dump(state.to_dict(), f)
+                 _persist_heartbeat_state(state_path, state)
              except Exception:
                  pass
 
-        # Required scheduling behavior: missed windows are not backfilled.
-        # If heartbeat is locked (busy or foreground lock), consume scheduled windows.
-        # Do not consume explicit wake requests.
+        wake_requested = session.session_id in self.wake_sessions
+        wake_next = session.session_id in self.wake_next_sessions
+        queued_wake_reason = self.last_wake_reason.get(session.session_id)
+
+        scheduled_due = (now - state.last_run) >= schedule.every_seconds
+        within_active_hours = _within_active_hours(schedule, now)
         lock_reason = self._session_heartbeat_lock_reason(session, now)
+        if lock_reason == "foreground_connection_active":
+            lock_reason = None
+        explicit_wake_bypasses_lock = (wake_requested or (wake_next and scheduled_due)) and lock_reason in {
+            "foreground_run_active",
+            "foreground_cooldown_active",
+        }
+        if explicit_wake_bypasses_lock:
+            lock_reason = None
         if lock_reason:
-            if session.session_id in self.wake_sessions or session.session_id in self.wake_next_sessions:
-                return
-            elapsed = now - state.last_run
-            if elapsed >= schedule.every_seconds and _within_active_hours(schedule, now):
-                state.last_run = now
+            should_queue_retry = (wake_requested or retry_due or scheduled_due) and within_active_hours
+            if should_queue_retry:
+                wake_reason = self._consume_wake_request(session.session_id)
+                if scheduled_due and not retry_due and not wake_reason:
+                    state.last_run = now
+                delay_seconds = self._schedule_retry(
+                    state,
+                    session_id=session.session_id,
+                    now_ts=now,
+                    kind="busy",
+                    reason=lock_reason if not wake_reason else f"{lock_reason}:{wake_reason}",
+                )
                 state.last_summary = {
                     "timestamp": datetime.now().isoformat(),
                     "ok_only": True,
@@ -965,38 +1103,46 @@ class HeartbeatService:
                         "connected_targets": [],
                         "indicator_only": False,
                     },
-                    "suppressed_reason": f"{lock_reason}_skip_no_backfill",
+                    "suppressed_reason": f"{lock_reason}_retry_scheduled",
+                    "retry": {
+                        "kind": state.retry_kind,
+                        "attempt": state.retry_attempt,
+                        "delay_seconds": delay_seconds,
+                        "next_retry_at": datetime.fromtimestamp(state.next_retry_at, timezone.utc).isoformat(),
+                        "reason": state.retry_reason,
+                    },
                 }
                 try:
-                    with open(state_path, "w") as f:
-                        json.dump(state.to_dict(), f)
+                    _persist_heartbeat_state(state_path, state)
                 except Exception:
                     pass
             return
 
-        wake_requested = session.session_id in self.wake_sessions
         wake_reason = None
-        if wake_requested:
-            self.wake_sessions.discard(session.session_id)
-            wake_reason = self.last_wake_reason.pop(session.session_id, None)
-        wake_next = session.session_id in self.wake_next_sessions
+        if not retry_due and retry_pending and not wake_requested:
+            return
 
-        if not wake_requested:
-            elapsed = now - state.last_run
-            if elapsed < schedule.every_seconds:
+        if wake_requested:
+            wake_reason = self._consume_wake_request(session.session_id)
+        elif retry_due:
+            wake_reason = state.retry_reason or state.retry_kind
+        else:
+            if not scheduled_due:
                 if wake_next:
                     return
                 return
             if wake_next:
-                self.wake_next_sessions.discard(session.session_id)
-                wake_reason = self.last_wake_reason.pop(session.session_id, wake_reason)
+                wake_reason = self._consume_wake_request(session.session_id) or queued_wake_reason
 
-        if not _within_active_hours(schedule, now):
+        if not within_active_hours:
             return
+
+        if retry_due:
+            self._clear_retry_state(state)
 
         # If delivery is explicit and no targets are currently connected,
         # skip the heartbeat run to avoid burning cycles before a client attaches.
-        if not wake_requested and not wake_next and delivery.mode == "explicit":
+        if not wake_requested and not wake_next and not retry_due and delivery.mode == "explicit":
             delivery_targets = []
             for target in delivery.explicit_session_ids:
                 if target.upper() == "CURRENT":
@@ -1028,8 +1174,7 @@ class HeartbeatService:
                     "suppressed_reason": "no_connected_targets",
                 }
                 try:
-                    with open(state_path, "w") as f:
-                        json.dump(state.to_dict(), f)
+                    _persist_heartbeat_state(state_path, state)
                 except Exception:
                     pass
                 return
@@ -1080,8 +1225,7 @@ class HeartbeatService:
                     },
                     "suppressed_reason": "empty_content",
                 }
-                with open(state_path, "w") as f:
-                    json.dump(state.to_dict(), f)
+                _persist_heartbeat_state(state_path, state)
                 return
         else:
             mem_hb_file = workspace / "memory" / HEARTBEAT_FILE
@@ -1104,8 +1248,7 @@ class HeartbeatService:
                         },
                         "suppressed_reason": "empty_content",
                     }
-                    with open(state_path, "w") as f:
-                        json.dump(state.to_dict(), f)
+                    _persist_heartbeat_state(state_path, state)
                     return
         if not heartbeat_content and schedule.require_file:
             return
@@ -1124,6 +1267,7 @@ class HeartbeatService:
             delivery,
             visibility,
             interval_source=interval_source,
+            trigger_reason=wake_reason or ("retry_due" if retry_due else "scheduled"),
         )
 
     def _session_heartbeat_lock_reason(self, session: GatewaySession, now_ts: float) -> Optional[str]:
@@ -1170,12 +1314,15 @@ class HeartbeatService:
         delivery: HeartbeatDeliveryConfig,
         visibility: HeartbeatVisibilityConfig,
         interval_source: str = "default",
+        trigger_reason: str = "scheduled",
     ):
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
         keep_busy_until_collect_finishes = False
         timed_out = False
         run_failed = False
+        should_schedule_continuation = False
+        continuation_reason: Optional[str] = None
         task_hub_agent_id = f"heartbeat:{session.session_id}"
         task_hub_claimed: list[dict] = []
         task_hub_finalize_result: dict[str, int] = {
@@ -1191,7 +1338,7 @@ class HeartbeatService:
         completed_event_payload: Optional[dict[str, Any]] = None
         
         # Resolve wake_reason for tracing
-        _wake_reason = self.last_wake_reason.get(session.session_id, "scheduled")
+        _wake_reason = trigger_reason or "scheduled"
         
         # Create parent Logfire span for the entire heartbeat execution
         _hb_span = None
@@ -1264,9 +1411,63 @@ class HeartbeatService:
 
             dispatch_actionable_count: Optional[int] = None
             dispatch_claimed_count: Optional[int] = None
+            todoist_actionable_count = 0
+            todoist_brainstorm_candidates: list[dict[str, Any]] = []
+            todoist_timeout_seconds = max(
+                0.1,
+                float(os.getenv("UA_HEARTBEAT_TODOIST_TIMEOUT_SECONDS", "1.5") or 1.5),
+            )
+            todoist_brainstorm_limit = max(
+                1,
+                _parse_int(
+                    os.getenv("UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE"),
+                    DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE,
+                ),
+            )
+            try:
+                from universal_agent.services.todoist_service import TodoService
+
+                def _collect_todoist_heartbeat_payload() -> tuple[int, list[dict[str, Any]], dict[str, Any] | None]:
+                    todo_service = TodoService()
+                    todoist_summary_payload: dict[str, Any] | None = None
+                    actionable_count = 0
+                    summary_result = todo_service.heartbeat_summary()
+                    if isinstance(summary_result, dict):
+                        actionable_count = max(0, int(summary_result.get("actionable_count") or 0))
+                        if actionable_count > 0:
+                            todoist_summary_payload = summary_result
+
+                    candidate_rows: list[dict[str, Any]] = []
+                    brainstorm_method = getattr(todo_service, "heartbeat_brainstorm_candidates", None)
+                    if callable(brainstorm_method):
+                        raw_candidates = brainstorm_method(limit=todoist_brainstorm_limit)
+                        if isinstance(raw_candidates, list):
+                            candidate_rows = [item for item in raw_candidates if isinstance(item, dict)]
+                    return actionable_count, candidate_rows, todoist_summary_payload
+
+                (
+                    todoist_actionable_count,
+                    todoist_brainstorm_candidates,
+                    todoist_summary_payload,
+                ) = await asyncio.wait_for(
+                    asyncio.to_thread(_collect_todoist_heartbeat_payload),
+                    timeout=todoist_timeout_seconds,
+                )
+                if todoist_summary_payload is not None:
+                    metadata["todoist_summary"] = todoist_summary_payload
+                if todoist_brainstorm_candidates:
+                    metadata["todoist_brainstorm_candidates"] = todoist_brainstorm_candidates
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "Todoist heartbeat injection timed out for %s after %.1fs",
+                    session.session_id,
+                    todoist_timeout_seconds,
+                )
+            except Exception as exc:
+                logger.debug("Todoist heartbeat injection unavailable for %s: %s", session.session_id, exc)
             guard_policy = _heartbeat_guard_policy(
                 actionable_count=None,
-                brainstorm_candidate_count=0,
+                brainstorm_candidate_count=len(todoist_brainstorm_candidates),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
             )
@@ -1302,6 +1503,9 @@ class HeartbeatService:
                     )
                     dispatch_claimed_count = len(task_hub_claimed)
                     task_hub_claimed_count = dispatch_claimed_count
+                    should_schedule_continuation = dispatch_claimed_count > 0
+                    if should_schedule_continuation:
+                        continuation_reason = "task_hub_followup"
                     if task_hub_claimed:
                         hub_event = {
                             "type": "task_hub_dispatch",
@@ -1333,8 +1537,8 @@ class HeartbeatService:
                 metadata["system_events"] = system_events
 
             guard_policy = _heartbeat_guard_policy(
-                actionable_count=dispatch_actionable_count,
-                brainstorm_candidate_count=int(dispatch_claimed_count or 0),
+                actionable_count=int(dispatch_actionable_count or 0) + int(todoist_actionable_count or 0),
+                brainstorm_candidate_count=int(dispatch_claimed_count or 0) + len(todoist_brainstorm_candidates),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
             )
@@ -1346,8 +1550,8 @@ class HeartbeatService:
                 "max_proactive_per_cycle": int(
                     guard_policy.get("max_proactive_per_cycle") or DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE
                 ),
-                "actionable_count": int(dispatch_actionable_count or 0),
-                "brainstorm_candidate_count": int(dispatch_claimed_count or 0),
+                "actionable_count": int(dispatch_actionable_count or 0) + int(todoist_actionable_count or 0),
+                "brainstorm_candidate_count": int(dispatch_claimed_count or 0) + len(todoist_brainstorm_candidates),
                 "system_event_count": len(system_events),
                 "skip_reason": guard_skip_reason or None,
             }
@@ -1660,6 +1864,17 @@ class HeartbeatService:
                     "indicator_only": allow_indicator,
                 },
                 "suppressed_reason": suppressed_reason,
+                "retry": {
+                    "kind": state.retry_kind,
+                    "attempt": state.retry_attempt,
+                    "delay_seconds": state.last_retry_delay_seconds,
+                    "next_retry_at": (
+                        datetime.fromtimestamp(state.next_retry_at, timezone.utc).isoformat()
+                        if state.next_retry_at > 0
+                        else None
+                    ),
+                    "reason": state.retry_reason,
+                },
             }
 
             # Emit Logfire classification marker after heartbeat completes
@@ -1697,9 +1912,35 @@ class HeartbeatService:
 
             # Always update last_run to respect interval
             state.last_run = now
-            
-            with open(state_path, "w") as f:
-                json.dump(state.to_dict(), f)
+            if run_failed:
+                self._schedule_retry(
+                    state,
+                    session_id=session.session_id,
+                    now_ts=now,
+                    kind="failure",
+                    reason="heartbeat_timeout" if timed_out else "heartbeat_failed",
+                )
+            elif should_schedule_continuation:
+                self._schedule_continuation_retry(
+                    state,
+                    now_ts=now,
+                    reason=continuation_reason or "success_recheck",
+                )
+            else:
+                self._clear_retry_state(state)
+
+            state.last_summary["retry"] = {
+                "kind": state.retry_kind,
+                "attempt": state.retry_attempt,
+                "delay_seconds": state.last_retry_delay_seconds,
+                "next_retry_at": (
+                    datetime.fromtimestamp(state.next_retry_at, timezone.utc).isoformat()
+                    if state.next_retry_at > 0
+                    else None
+                ),
+                "reason": state.retry_reason,
+            }
+            _persist_heartbeat_state(state_path, state)
             completed_event_payload = {
                 "type": "heartbeat_completed",
                 "session_id": session.session_id,
@@ -1716,6 +1957,17 @@ class HeartbeatService:
                     "work_products": work_product_paths[-50:],
                     "bash_commands": bash_commands[-50:],
                 },
+                "retry": {
+                    "kind": state.retry_kind,
+                    "attempt": state.retry_attempt,
+                    "delay_seconds": state.last_retry_delay_seconds,
+                    "next_retry_at": (
+                        datetime.fromtimestamp(state.next_retry_at, timezone.utc).isoformat()
+                        if state.next_retry_at > 0
+                        else None
+                    ),
+                    "reason": state.retry_reason,
+                },
             }
 
         except Exception as e:
@@ -1731,12 +1983,17 @@ class HeartbeatService:
                     "error": str(e),
                 }
             )
-            # Update last_run even on failure to prevent rapid retry loops.
-            # The next scheduled tick will retry after the normal interval.
-            state.last_run = time.time()
+            now_ts = time.time()
+            state.last_run = now_ts
+            self._schedule_retry(
+                state,
+                session_id=session.session_id,
+                now_ts=now_ts,
+                kind="failure",
+                reason="heartbeat_failed",
+            )
             try:
-                with open(state_path, "w") as f:
-                    json.dump(state.to_dict(), f)
+                _persist_heartbeat_state(state_path, state)
             except Exception:
                 pass
         finally:

@@ -35,6 +35,29 @@ The heartbeat is highly configurable via environment variables or a `heartbeat_c
 - **`timezone`**: User-specific timezone for consistent scheduling.
 - **`ok_tokens`**: Special strings (like `HEARTBEAT_OK`) that the agent can say to indicate it has nothing to do, ending the turn without further noise.
 
+### Retry Queue and Continuation Passes
+
+Heartbeat scheduling now includes a persisted retry queue in `heartbeat_state.json`.
+
+- **Busy or foreground-locked runs** do not silently vanish. They schedule a retry with exponential backoff:
+  - `delay = min(base_retry_seconds * 2^(attempt - 1), max_retry_backoff_seconds)`
+- **Failure-driven retries** use the same exponential backoff pattern.
+- **Successful actionable runs** schedule a short continuation re-check (default 1 second) so the heartbeat can quickly pick up the next eligible proactive item instead of waiting for the full interval.
+- Retry metadata is persisted with:
+  - `retry_kind`
+  - `retry_attempt`
+  - `retry_reason`
+  - `next_retry_at`
+  - `last_retry_delay_seconds`
+
+Current defaults:
+
+- `UA_HEARTBEAT_RETRY_BASE_SECONDS=10`
+- `UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS=300`
+- `UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS=1`
+
+The normal schedule still remains the long-run cadence. The retry queue only accelerates recovery or continuation after a blocked, failed, or recently successful actionable run.
+
 ## 4. Visibility (Stealth Mode)
 
 The agent can choose to perform "stealth heartbeats" where its thoughts are logged internally but not displayed to the user. This is useful for minor background tasks that don't require user attention.
