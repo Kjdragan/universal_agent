@@ -131,6 +131,9 @@ jobs:
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv tool install --force notebooklm-mcp-cli\"
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; command -v nlm && command -v notebooklm-mcp\"
             
+            echo '--> Building web-ui Next.js application...'
+            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\\\"; if [ -d \\\"\$STAGING_DIR/web-ui\\\" ] && command -v npm >/dev/null 2>&1; then cd \\\"\$STAGING_DIR/web-ui\\\" && npm install && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi\"
+            
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then

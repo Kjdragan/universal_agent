@@ -130,6 +130,7 @@ deploy rather than editing keys in place.
 ## Deployed Runtime Tooling
 
 - Staging and production deploys install project dependencies with `uv sync`.
+- Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm install && npm run build`.
 - Staging and production deploys also install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
 - The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.

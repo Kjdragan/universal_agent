@@ -147,6 +147,9 @@ jobs:
             run_as_ua "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
             run_as_ua "export PATH=\"$PATH\"; command -v nlm && command -v notebooklm-mcp"
             
+            echo "--> Building web-ui Next.js application..."
+            run_as_ua "export PATH=\"$PATH\"; if [ -d \"$PROD_DIR/web-ui\" ] && command -v npm >/dev/null 2>&1; then cd \"$PROD_DIR/web-ui\" && npm install && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi"
+            
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
             if command -v systemctl >/dev/null 2>&1; then
