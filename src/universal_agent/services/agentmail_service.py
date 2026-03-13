@@ -886,6 +886,10 @@ class AgentMailService:
                     ON agentmail_inbox_queue(sender_email, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_agentmail_inbox_queue_thread
                     ON agentmail_inbox_queue(thread_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS agentmail_seen_messages (
+                    message_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -1446,18 +1450,45 @@ class AgentMailService:
             return None
 
     def _seen_message_id(self, message_id: str) -> bool:
-        return str(message_id or "").strip() in self._seen_message_id_set
+        clean_id = str(message_id or "").strip()
+        if not clean_id:
+            return False
+        if clean_id in self._seen_message_id_set:
+            return True
+        try:
+            self._ensure_queue_schema()
+            with self._queue_connect() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM agentmail_seen_messages WHERE message_id = ? LIMIT 1",
+                    (clean_id,)
+                ).fetchone()
+                if row:
+                    self._seen_message_id_set.add(clean_id)
+                    self._seen_message_ids.append(clean_id)
+                    return True
+        except Exception as exc:
+            logger.warning("📧 SQLite seen_messages check failed: %s", exc)
+        return False
 
     def _claim_seen_message_id(self, message_id: str) -> bool:
         clean_id = str(message_id or "").strip()
         if not clean_id:
             return False
-        if clean_id in self._seen_message_id_set:
+        if self._seen_message_id(clean_id):
             return False
         self._seen_message_ids.append(clean_id)
         self._seen_message_id_set.add(clean_id)
         if len(self._seen_message_id_set) > self._seen_message_ids.maxlen:
             self._seen_message_id_set = set(self._seen_message_ids)
+        try:
+            self._ensure_queue_schema()
+            with self._queue_connect() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO agentmail_seen_messages (message_id, created_at) VALUES (?, ?)",
+                    (clean_id, _iso_now())
+                )
+        except Exception as exc:
+            logger.warning("📧 SQLite seen_messages insert failed: %s", exc)
         return True
 
     def _release_seen_message_id(self, message_id: str) -> None:
@@ -1470,6 +1501,15 @@ class AgentMailService:
                 (mid for mid in self._seen_message_ids if mid != clean_id),
                 maxlen=self._seen_message_ids.maxlen,
             )
+        try:
+            self._ensure_queue_schema()
+            with self._queue_connect() as conn:
+                conn.execute(
+                    "DELETE FROM agentmail_seen_messages WHERE message_id = ?",
+                    (clean_id,)
+                )
+        except Exception as exc:
+            logger.warning("📧 SQLite seen_messages delete failed: %s", exc)
 
 
 class _InboundMessageEvent:
