@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
 
-from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher, _state_path
 
 
 @pytest.mark.asyncio
@@ -101,3 +102,31 @@ async def test_poll_now_works_without_api_key_when_rss_is_available(monkeypatch,
 
     assert result["ok"] is True
     watcher._fetch_playlist_items.assert_awaited_once_with("PLdemo", "")
+
+
+@pytest.mark.asyncio
+async def test_poll_now_persists_seen_ids_before_dispatch_side_effects(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    watcher = YouTubePlaylistWatcher(dispatch_fn=AsyncMock(return_value=(True, "agent")))
+    watcher._fetch_playlist_items = AsyncMock(
+        return_value=[
+            {
+                "video_id": "vid123",
+                "url": "https://www.youtube.com/watch?v=vid123",
+                "title": "Crash During Dispatch",
+                "channel_id": "chan123",
+                "occurred_at": "2026-03-12T22:00:00Z",
+                "playlist_id": "PLdemo",
+            }
+        ]
+    )
+    watcher._dispatch = AsyncMock(side_effect=RuntimeError("dispatch_crashed"))
+
+    with pytest.raises(RuntimeError, match="dispatch_crashed"):
+        await watcher.poll_now()
+
+    saved = json.loads(_state_path().read_text(encoding="utf-8"))
+    assert saved["seen_ids"] == ["vid123"]

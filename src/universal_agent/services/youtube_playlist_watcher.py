@@ -220,6 +220,19 @@ class YouTubePlaylistWatcher:
             "poll_count": self._poll_count,
         }
 
+    def _persist_seen_state(
+        self,
+        seen: set[str],
+        current_ids: list[str],
+        *,
+        timestamp_key: str,
+    ) -> set[str]:
+        if len(seen) > 1000:
+            seen = set(current_ids[:1000])
+        self._seen_count = len(seen)
+        _save_state({"seen_ids": list(seen), timestamp_key: _iso_now()})
+        return seen
+
     # ------------------------------------------------------------------
     # Poll loop
     # ------------------------------------------------------------------
@@ -241,7 +254,7 @@ class YouTubePlaylistWatcher:
                 if not seeded:
                     seen.update(current_ids)
                     seeded = True
-                    self._seen_count = len(seen)
+                    seen = self._persist_seen_state(seen, current_ids, timestamp_key="seeded_at")
                     self._last_poll_ok = True
                     self._last_error = ""
                     logger.info(
@@ -249,7 +262,6 @@ class YouTubePlaylistWatcher:
                         playlist_id,
                         len(seen),
                     )
-                    _save_state({"seen_ids": list(seen), "seeded_at": _iso_now()})
                     await self._sleep_or_stop(_poll_interval())
                     continue
 
@@ -259,7 +271,8 @@ class YouTubePlaylistWatcher:
                 for item in reversed(new_items):
                     vid = item["video_id"]
                     seen.add(vid)
-                    self._seen_count = len(seen)
+                    # Persist before side effects so restarts do not re-announce the same video.
+                    seen = self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
                     self._dispatched_total += 1
                     logger.info(
                         "📺 New playlist video detected video_id=%s title=%r",
@@ -279,11 +292,6 @@ class YouTubePlaylistWatcher:
                         },
                     )
                     await self._dispatch(item)
-
-                # Trim seen to prevent unbounded growth (keep newest 1 000)
-                if len(seen) > 1000:
-                    seen = set(current_ids[:1000])
-                _save_state({"seen_ids": list(seen), "updated_at": _iso_now()})
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -529,7 +537,8 @@ class YouTubePlaylistWatcher:
         for item in reversed(new_items):
             vid = item["video_id"]
             seen.add(vid)
-            self._seen_count = len(seen)
+            # Persist before side effects so manual poll + restart cannot duplicate notifications.
+            seen = self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
             self._dispatched_total += 1
             self._emit_notification(
                 kind="youtube_playlist_new_video",
@@ -545,9 +554,6 @@ class YouTubePlaylistWatcher:
             )
             await self._dispatch(item)
             dispatched.append(vid)
-        if len(seen) > 1000:
-            seen = set(current_ids[:1000])
-        _save_state({"seen_ids": list(seen), "updated_at": _iso_now()})
         return {
             "ok": True,
             "total_in_playlist": len(items),
