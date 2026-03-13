@@ -31,3 +31,16 @@ Do not treat any older manual VPS deployment flow as canonical.
 ## If You Change Deployment Behavior
 
 When editing `.github/workflows/deploy-staging.yml` or `.github/workflows/deploy-prod.yml`, update the canonical docs in `docs/deployment/` in the same change.
+
+## Review guidelines
+
+These guidelines apply when Codex reviews pull requests targeting `develop`.
+
+- Flag any code that logs, stores, or transmits PII or secrets without explicit redaction.
+- Verify that every new or modified API route is wrapped by the appropriate authentication/authorization middleware.
+- Flag blocking I/O (database calls, HTTP requests) that runs inside an async event loop without `await` or proper executor offloading.
+- Verify that background tasks and service loops handle exceptions so they don't silently die.
+- Flag Python code that imports secrets or API keys from environment variables directly instead of using the Infisical secret service (our canonical secrets provider — never `.env` files or `os.getenv` for secrets).
+- Flag changes that touch `.github/workflows/deploy-staging.yml` or `.github/workflows/deploy-prod.yml` if the corresponding canonical docs in `docs/deployment/` were not updated in the same PR.
+- Do not flag formatting-only issues (whitespace, line length) unless they break a linter gate.
+- Treat typos in user-facing strings or documentation as P1.

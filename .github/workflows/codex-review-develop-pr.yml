@@ -1,4 +1,15 @@
-name: Codex Review Develop PR
+name: Codex Review – develop PRs
+
+# This workflow integrates with the ChatGPT Codex Connector GitHub App.
+# The App must be installed and "Automatic reviews" enabled at:
+#   https://chatgpt.com/codex/settings/code-review
+#
+# When a PR targeting develop is opened or updated, this workflow posts
+# an @codex review request as a PR comment, which triggers the Codex
+# Connector App to run a native cloud review.
+#
+# Customise review behaviour by adding a "## Review guidelines" section
+# to AGENTS.md at the repo root or in subdirectories.
 
 on:
   pull_request:
@@ -7,299 +18,56 @@ on:
     types:
       - opened
       - reopened
-      - synchronize
       - ready_for_review
+      - synchronize
 
 concurrency:
-  group: codex-review-develop-pr-${{ github.event.pull_request.number }}
+  group: codex-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  codex-review:
-    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+  request-codex-review:
+    # Skip drafts and forks (Codex App can't reach fork secrets)
+    if: |
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       pull-requests: write
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
-      REPOSITORY: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.2-codex' }}
+      issues: write
+
     steps:
-      - name: Checkout pull request merge commit
-        uses: actions/checkout@v5
+      - name: Post @codex review request
+        uses: actions/github-script@v7
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
-          fetch-depth: 0
+          github-token: ${{ github.token }}
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
 
-      - name: Fetch base and head refs
-        run: |
-          set -euxo pipefail
-          git fetch --no-tags origin \
-            "${{ github.event.pull_request.base.ref }}" \
-            +refs/pull/${{ github.event.pull_request.number }}/head
+            // Search existing comments to avoid duplicate requests on synchronize events.
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number: pr.number, per_page: 100 }
+            );
+            const alreadyRequested = comments.some(
+              c => c.user.type === 'Bot' && c.body.includes('@codex review')
+            );
 
-      - name: Detect Codex secret availability
-        id: secret-check
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::warning::OPENAI_API_KEY is not configured. Skipping Codex review for this PR."
-            echo "codex_enabled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "codex_enabled=true" >> "$GITHUB_OUTPUT"
-
-      - name: Generate structured output schema
-        if: ${{ steps.secret-check.outputs.codex_enabled == 'true' }}
-        run: |
-          set -euo pipefail
-          cat <<'JSON' > codex-output-schema.json
-          {
-            "type": "object",
-            "properties": {
-              "findings": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "title": {
-                      "type": "string",
-                      "maxLength": 80
-                    },
-                    "body": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "confidence_score": {
-                      "type": "number",
-                      "minimum": 0,
-                      "maximum": 1
-                    },
-                    "priority": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 3
-                    },
-                    "code_location": {
-                      "type": "object",
-                      "properties": {
-                        "absolute_file_path": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "line_range": {
-                          "type": "object",
-                          "properties": {
-                            "start": {
-                              "type": "integer",
-                              "minimum": 1
-                            },
-                            "end": {
-                              "type": "integer",
-                              "minimum": 1
-                            }
-                          },
-                          "required": [
-                            "start",
-                            "end"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "absolute_file_path",
-                        "line_range"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "title",
-                    "body",
-                    "confidence_score",
-                    "priority",
-                    "code_location"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "overall_correctness": {
-                "type": "string",
-                "enum": [
-                  "patch is correct",
-                  "patch is incorrect"
-                ]
-              },
-              "overall_explanation": {
-                "type": "string",
-                "minLength": 1
-              },
-              "overall_confidence_score": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
-              }
-            },
-            "required": [
-              "findings",
-              "overall_correctness",
-              "overall_explanation",
-              "overall_confidence_score"
-            ],
-            "additionalProperties": false
-          }
-          JSON
-
-      - name: Build Codex review prompt
-        if: ${{ steps.secret-check.outputs.codex_enabled == 'true' }}
-        run: |
-          set -euo pipefail
-          {
-            printf '%s\n' "You are acting as a reviewer for a proposed code change made by another engineer."
-            printf '%s\n' "Focus on issues that impact correctness, performance, security, maintainability, or developer experience."
-            printf '%s\n' "Flag only actionable issues introduced by the pull request."
-            printf '%s\n' "When you flag an issue, provide a short, direct explanation and cite the affected file and line range."
-            printf '%s\n' "Prioritize severe issues and avoid nit-level comments unless they block understanding of the diff."
-            printf '%s\n' "After listing findings, produce an overall correctness verdict (\"patch is correct\" or \"patch is incorrect\") with a concise justification and a confidence score between 0 and 1."
-            printf '%s\n' "Ensure that file citations and line numbers are exactly correct using the tools available; if they are incorrect your comments will be rejected."
-            echo ""
-            echo "Repository: ${REPOSITORY}"
-            echo "Pull Request #: ${PR_NUMBER}"
-            echo "Base ref: ${{ github.event.pull_request.base.ref }}"
-            echo "Head ref: ${{ github.event.pull_request.head.ref }}"
-            echo "Base SHA: ${BASE_SHA}"
-            echo "Head SHA: ${HEAD_SHA}"
-            echo "Changed files:"
-            git --no-pager diff --name-status "${BASE_SHA}" "${HEAD_SHA}"
-            echo ""
-            echo "Unified diff (context=5):"
-            git --no-pager diff --unified=5 --stat=200 "${BASE_SHA}" "${HEAD_SHA}" > /tmp/diffstat.txt
-            git --no-pager diff --unified=5 "${BASE_SHA}" "${HEAD_SHA}" > /tmp/full.diff
-            cat /tmp/diffstat.txt
-            echo ""
-            cat /tmp/full.diff
-          } > codex-prompt.md
-
-      - name: Run Codex structured review
-        id: run-codex
-        if: ${{ steps.secret-check.outputs.codex_enabled == 'true' }}
-        uses: openai/codex-action@main
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: codex-prompt.md
-          output-schema-file: codex-output-schema.json
-          output-file: codex-output.json
-          sandbox: read-only
-          model: ${{ env.CODEX_MODEL }}
-
-      - name: Inspect structured Codex output
-        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
-        run: |
-          if [ -s codex-output.json ]; then
-            jq '.' codex-output.json || true
-          else
-            echo "Codex output file missing"
-          fi
-
-      - name: Publish inline review comments
-        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
-        env:
-          REVIEW_JSON: codex-output.json
-        run: |
-          set -euo pipefail
-          if [ ! -s "$REVIEW_JSON" ]; then
-            echo "No Codex output file present; skipping comment publishing."
-            exit 0
-          fi
-          findings_count=$(jq '.findings | length' "$REVIEW_JSON")
-          if [ "$findings_count" -eq 0 ]; then
-            echo "Codex returned no findings; skipping inline comments."
-            exit 0
-          fi
-          jq -c --arg commit "$HEAD_SHA" --arg repo_root "$GITHUB_WORKSPACE/" '.findings[] | {
-              body: (.title + "\n\n" + .body + "\n\nConfidence: " + (.confidence_score | tostring) + (if has("priority") then "\nPriority: P" + (.priority | tostring) else "" end)),
-              commit_id: $commit,
-              path: (.code_location.absolute_file_path | if startswith($repo_root) then .[($repo_root | length):] else . end),
-              line: .code_location.line_range.end,
-              side: "RIGHT",
-              start_line: (if .code_location.line_range.start != .code_location.line_range.end then .code_location.line_range.start else null end),
-              start_side: (if .code_location.line_range.start != .code_location.line_range.end then "RIGHT" else null end)
-            } | with_entries(select(.value != null))' "$REVIEW_JSON" > findings.jsonl
-          while IFS= read -r payload; do
-            curl -sS \
-              -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" \
-              -d "$payload" >/dev/null
-          done < findings.jsonl
-
-      - name: Publish overall summary comment
-        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
-        env:
-          REVIEW_JSON: codex-output.json
-        run: |
-          set -euo pipefail
-          if [ ! -s "$REVIEW_JSON" ]; then
-            echo "Codex output missing; skipping summary."
-            exit 0
-          fi
-          overall_state=$(jq -r '.overall_correctness' "$REVIEW_JSON")
-          overall_body=$(jq -r '.overall_explanation' "$REVIEW_JSON")
-          confidence=$(jq -r '.overall_confidence_score' "$REVIEW_JSON")
-          findings_count=$(jq '.findings | length' "$REVIEW_JSON")
-          msg="**Codex automated review**\n\nVerdict: ${overall_state}\nConfidence: ${confidence}\nFindings: ${findings_count}\n\n${overall_body}"
-          curl -sS \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            -d "$(jq -n --arg body "$msg" '{body: $body}')" >/dev/null
-
-      - name: Publish review skipped comment
-        if: ${{ always() && steps.secret-check.outputs.codex_enabled != 'true' }}
-        run: |
-          set -euo pipefail
-          msg="**Codex automated review** was skipped because \`OPENAI_API_KEY\` is not configured in repository secrets. The PR can still proceed, but no automated Codex review was performed."
-          curl -sS \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            -d "$(jq -n --arg body "$msg" '{body: $body}')" >/dev/null
-
-      - name: Enforce review gate
-        if: ${{ always() && steps.secret-check.outputs.codex_enabled == 'true' }}
-        env:
-          REVIEW_JSON: codex-output.json
-        run: |
-          set -euo pipefail
-          if [ ! -s "$REVIEW_JSON" ]; then
-            echo "::error::Codex output missing; cannot satisfy review gate."
-            exit 1
-          fi
-
-          overall_state="$(jq -r '.overall_correctness' "$REVIEW_JSON")"
-          findings_count="$(jq '.findings | length' "$REVIEW_JSON")"
-
-          echo "overall_state=${overall_state}"
-          echo "findings_count=${findings_count}"
-
-          if [ "$overall_state" != "patch is correct" ]; then
-            echo "::error::Codex marked the patch incorrect."
-            exit 1
-          fi
-
-          if [ "$findings_count" -gt 0 ]; then
-            echo "::error::Codex reported actionable findings. Resolve them before merging to develop."
-            exit 1
-          fi
+            if (!alreadyRequested || context.eventName === 'pull_request' && context.payload.action === 'opened') {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body: [
+                  '<!-- codex-auto-review -->',
+                  '@codex review',
+                  '',
+                  '> *Automated review request posted by CI for PR #' + pr.number + '.*',
+                  '> See [AGENTS.md](./AGENTS.md) for project-specific review guidelines.',
+                ].join('\n'),
+              });
+              core.info('Posted @codex review request.');
+            } else {
+              core.info('Skipped: @codex review comment already exists for this PR.');
+            }
