@@ -859,6 +859,7 @@ def _tutorial_activity_event_row(item: dict[str, Any]) -> dict[str, Any]:
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     created_at = str(item.get("created_at_utc") or _utc_now_iso())
     updated_at = str(item.get("updated_at_utc") or created_at)
+    actions = item.get("actions") if isinstance(item.get("actions"), list) else []
     return {
         "id": str(item.get("id") or ""),
         "kind": str(item.get("kind") or ""),
@@ -870,6 +871,7 @@ def _tutorial_activity_event_row(item: dict[str, Any]) -> dict[str, Any]:
         "session_id": str(item.get("session_id") or ""),
         "created_at": created_at,
         "updated_at": updated_at,
+        "actions": actions,
         "metadata": metadata,
     }
 
@@ -5994,6 +5996,44 @@ def _activity_actions(
         artifact_href = str(entity_ref.get("artifact_href") or "").strip()
         if artifact_href:
             actions.append({"id": "open_artifact", "label": "Open Artifact", "type": "link", "href": artifact_href})
+    if source_domain == "tutorial":
+        tutorial_run_path = str(metadata.get("tutorial_run_path") or metadata.get("run_path") or "").strip().strip("/")
+        tutorial_storage_href = str(
+            metadata.get("tutorial_storage_href")
+            or metadata.get("run_storage_href")
+            or ""
+        ).strip()
+        if not tutorial_storage_href and tutorial_run_path:
+            tutorial_storage_href = _storage_explorer_href(scope="artifacts", path=tutorial_run_path)
+        if tutorial_storage_href:
+            actions.append(
+                {
+                    "id": "open_tutorial_artifacts",
+                    "label": "Open Artifacts",
+                    "type": "link",
+                    "href": tutorial_storage_href,
+                }
+            )
+        review_storage_href = str(metadata.get("review_storage_href") or "").strip()
+        if review_storage_href:
+            actions.append(
+                {
+                    "id": "open_review_artifacts",
+                    "label": "Open Review",
+                    "type": "link",
+                    "href": review_storage_href,
+                }
+            )
+        repo_storage_href = str(metadata.get("repo_storage_href") or "").strip()
+        if repo_storage_href:
+            actions.append(
+                {
+                    "id": "open_repo",
+                    "label": "Open Repo",
+                    "type": "link",
+                    "href": repo_storage_href,
+                }
+            )
     if requires_action:
         actions.append({"id": "send_to_simone", "label": "Send to Simone", "type": "action"})
     if is_notification:
