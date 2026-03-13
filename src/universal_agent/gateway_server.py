@@ -13965,6 +13965,109 @@ def _approval_priority_value(record: dict[str, Any]) -> int:
     return 2
 
 
+def _task_review_status_to_approval_status(status: Any) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"completed", "approved"}:
+        return "approved"
+    if normalized in {"parked", "rejected"}:
+        return "rejected"
+    return "pending"
+
+
+def _serialize_persisted_approval(record: dict[str, Any]) -> dict[str, Any]:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    approval_id = str(record.get("approval_id") or record.get("phase_id") or "").strip()
+    title = str(record.get("title") or record.get("summary") or "Approval required").strip()
+    return {
+        "approval_id": approval_id,
+        "task_id": f"approval:{approval_id}" if approval_id else "",
+        "phase_id": record.get("phase_id"),
+        "status": _task_review_status_to_approval_status(record.get("status")),
+        "raw_status": str(record.get("status") or "pending"),
+        "title": title,
+        "summary": str(record.get("summary") or title),
+        "requested_by": record.get("requested_by"),
+        "approved_by": record.get("approved_by"),
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+        "priority": _approval_priority_value(record),
+        "focus_href": str(metadata.get("focus_href") or "/dashboard/approvals"),
+        "approval_source": "approval_record",
+        "source_kind": "approval",
+        "metadata": metadata,
+    }
+
+
+def _serialize_task_review_item(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    approval_meta = metadata.get("approval") if isinstance(metadata.get("approval"), dict) else {}
+    title = str(item.get("title") or approval_meta.get("title") or "Action required").strip()
+    summary = str(item.get("description") or title).strip() or title
+    return {
+        "approval_id": str(item.get("task_id") or ""),
+        "task_id": str(item.get("task_id") or ""),
+        "phase_id": approval_meta.get("phase_id"),
+        "status": _task_review_status_to_approval_status(item.get("status")),
+        "raw_status": str(item.get("status") or "open"),
+        "title": title,
+        "summary": summary,
+        "requested_by": str(metadata.get("owner") or item.get("source_kind") or "task_hub"),
+        "approved_by": metadata.get("approved_by"),
+        "created_at": item.get("created_at"),
+        "updated_at": item.get("updated_at"),
+        "priority": int(item.get("priority") or 1),
+        "focus_href": str(metadata.get("focus_href") or "/dashboard/todolist?mode=agent"),
+        "approval_source": "task_hub",
+        "source_kind": str(item.get("source_kind") or ""),
+        "metadata": metadata,
+    }
+
+
+def _list_ops_approvals(status: Optional[str] = None) -> list[dict[str, Any]]:
+    status_norm = str(status or "").strip().lower()
+    if status_norm == "all":
+        status_norm = ""
+
+    rows: list[dict[str, Any]] = []
+    for record in list_approvals(status=status_norm or None):
+        if isinstance(record, dict):
+            rows.append(_serialize_persisted_approval(record))
+
+    task_statuses = {
+        "pending": ("open", "in_progress", "blocked", "needs_review"),
+        "approved": ("completed",),
+        "rejected": ("parked",),
+    }.get(status_norm, ("open", "in_progress", "blocked", "needs_review", "completed", "parked"))
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            _task_hub_sync_pending_approvals(conn)
+            placeholders = ",".join("?" for _ in task_statuses)
+            query = (
+                "SELECT * FROM task_hub_items "
+                "WHERE must_complete = 1 AND source_kind != 'approval' "
+                f"AND status IN ({placeholders}) "
+                "ORDER BY priority DESC, updated_at DESC"
+            )
+            task_rows = conn.execute(query, tuple(task_statuses)).fetchall()
+        finally:
+            conn.close()
+
+    for row in task_rows:
+        rows.append(_serialize_task_review_item(task_hub.hydrate_item(dict(row))))
+
+    status_rank = {"pending": 0, "approved": 1, "rejected": 2}
+    rows.sort(
+        key=lambda item: (
+            status_rank.get(str(item.get("status") or "pending"), 9),
+            -int(item.get("priority") or 0),
+            str(item.get("updated_at") or item.get("created_at") or ""),
+        )
+    )
+    return rows
+
+
 def _parse_memory_entry_ts(entry: dict[str, Any]) -> Optional[datetime]:
     raw = entry.get("timestamp")
     if raw is None:
@@ -14411,44 +14514,7 @@ async def dashboard_todolist_dispatch_queue_rebuild():
 
 @app.get("/api/v1/dashboard/approvals/highlight")
 async def dashboard_approvals_highlight():
-    pending = list_approvals(status="pending")
-    rows = []
-    for approval in pending if isinstance(pending, list) else []:
-        rows.append(
-            {
-                "approval_id": str(approval.get("approval_id") or approval.get("phase_id") or ""),
-                "title": str(approval.get("title") or approval.get("summary") or "Approval required"),
-                "status": str(approval.get("status") or "pending"),
-                "priority": _approval_priority_value(approval),
-                "focus_href": "/dashboard/todolist?mode=personal&focus=approvals",
-                "metadata": approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {},
-                "created_at": approval.get("created_at"),
-                "updated_at": approval.get("updated_at"),
-            }
-        )
-
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            agent_queue = task_hub.list_agent_queue(conn, limit=100)
-            agent_items = agent_queue.get("items") if isinstance(agent_queue, dict) else []
-        finally:
-            conn.close()
-
-    for item in agent_items:
-        if bool(item.get("must_complete")) and str(item.get("status") or "") in ("needs_review", "blocked"):
-            rows.append({
-                "approval_id": str(item.get("task_id") or ""),
-                "title": f"Action Required: {item.get('title')}",
-                "status": str(item.get("status")),
-                "priority": 5, 
-                "focus_href": "/dashboard/todolist?mode=agent",
-                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
-                "created_at": item.get("created_at"),
-                "updated_at": item.get("updated_at"),
-            })
-
-    rows.sort(key=lambda item: int(item.get("priority") or 0), reverse=True)
+    rows = _list_ops_approvals(status="pending")
     return {
         "status": "ok",
         "pending_count": len(rows),
@@ -20359,7 +20425,7 @@ async def ops_workspaces_purge(request: Request, confirm: bool = False):
 @app.get("/api/v1/ops/approvals")
 async def ops_approvals_list(request: Request, status: Optional[str] = None):
     _require_ops_auth(request)
-    return {"approvals": list_approvals(status=status)}
+    return {"approvals": _list_ops_approvals(status=status)}
 
 
 @app.post("/api/v1/ops/approvals")
@@ -20374,14 +20440,65 @@ async def ops_approvals_update(
     request: Request, approval_id: str, payload: OpsApprovalUpdateRequest
 ):
     _require_ops_auth(request)
+    normalized_status = _task_review_status_to_approval_status(payload.status)
     record = update_approval(approval_id, payload.model_dump(exclude_none=True))
-    if record is None:
+    if record is not None:
+        for pending in _pending_gated_requests.values():
+            if pending.get("approval_id") == approval_id:
+                pending["status"] = record.get("status")
+                pending["updated_at"] = datetime.now(timezone.utc).isoformat()
+        task_id = f"approval:{approval_id}"
+        task_action = None
+        if normalized_status == "approved":
+            task_action = "complete"
+        elif normalized_status == "rejected":
+            task_action = "park"
+        if task_action:
+            with _activity_store_lock:
+                conn = _task_hub_open_conn()
+                try:
+                    if task_hub.get_item(conn, task_id):
+                        task_hub.perform_task_action(
+                            conn,
+                            task_id=task_id,
+                            action=task_action,
+                            reason=str(payload.notes or "").strip(),
+                            agent_id=(
+                                str(request.headers.get("x-ua-dashboard-owner") or "").strip()
+                                or "dashboard_operator"
+                            ),
+                        )
+                finally:
+                    conn.close()
+        return {"approval": _serialize_persisted_approval(record)}
+
+    task_action = None
+    if normalized_status == "approved":
+        task_action = "complete"
+    elif normalized_status == "rejected":
+        task_action = "park"
+    if not task_action:
         raise HTTPException(status_code=404, detail="Approval not found")
-    for pending in _pending_gated_requests.values():
-        if pending.get("approval_id") == approval_id:
-            pending["status"] = record.get("status")
-            pending["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return {"approval": record}
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            item = task_hub.get_item(conn, approval_id)
+            if not item or not bool(item.get("must_complete")):
+                raise HTTPException(status_code=404, detail="Approval not found")
+            updated_item = task_hub.perform_task_action(
+                conn,
+                task_id=approval_id,
+                action=task_action,
+                reason=str(payload.notes or "").strip(),
+                agent_id=(
+                    str(request.headers.get("x-ua-dashboard-owner") or "").strip()
+                    or "dashboard_operator"
+                ),
+            )
+        finally:
+            conn.close()
+    return {"approval": _serialize_task_review_item(updated_item)}
 
 
 @app.get("/api/v1/ops/work-threads")
