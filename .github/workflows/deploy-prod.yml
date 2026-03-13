@@ -23,6 +23,9 @@ jobs:
           SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
           SSH_USER: ${{ secrets.VPS_SSH_USER }}
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
@@ -92,15 +95,32 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             
-            # Note: We do NOT auto-provision production secrets from dev. 
-            # Production secrets (in prod-hq) should be curated manually or via an explicit sync script.
-            
             echo "--> Transferring ownership to service user before dependency sync..."
             sudo chown -R ua:ua "$PROD_DIR"
 
+            echo "--> Provisioning production Infisical environment..."
+            export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
+            export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'
+            export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'
+            export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
+
+            run_as_ua() {
+              ua_home=$(getent passwd ua | cut -d: -f6)
+              if [ -z "$ua_home" ]; then
+                ua_home='/home/ua'
+              fi
+              if command -v sudo >/dev/null 2>&1; then
+                sudo -H -u ua env HOME="$ua_home" /bin/bash -lc "$1"
+              elif command -v runuser >/dev/null 2>&1; then
+                runuser -u ua -- env HOME="$ua_home" /bin/bash -lc "$1"
+              else
+                HOME="$ua_home" /bin/bash -lc "$1"
+              fi
+            }
+
             echo "--> Checking whether the existing venv is usable by ua..."
             if [ -e "$PROD_DIR/.venv/bin/python3" ]; then
-              if ! sudo -H -u ua bash -c "readlink -f \"$PROD_DIR/.venv/bin/python3\" >/dev/null 2>&1"; then
+              if ! run_as_ua "readlink -f \"$PROD_DIR/.venv/bin/python3\" >/dev/null 2>&1"; then
                 echo "--> Existing venv interpreter is not accessible to ua; removing stale .venv for clean rebuild..."
                 sudo rm -rf "$PROD_DIR/.venv"
               fi
@@ -109,14 +129,42 @@ jobs:
             # 2. Dependency Sync
             echo "--> Ensuring Python 3.12 runtime for uv..."
             export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
-            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv python install 3.12"
+            run_as_ua "export PATH=\"$PATH\"; uv python install 3.12"
+
+            DEPLOY_INFISICAL_ENV='prod'
+            if ! run_as_ua "export INFISICAL_CLIENT_ID='$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='$INFISICAL_PROJECT_ID'; export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"; cd $PROD_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Production VPS HQ' --machine-slug prod --factory-role HEADQUARTERS --source-env dev"; then
+              echo '--> WARNING: prod Infisical provisioning failed; retaining currently configured environment for this deploy.'
+              DEPLOY_INFISICAL_ENV="$(grep -E '^INFISICAL_ENVIRONMENT=' "$PROD_DIR/.env" | tail -n1 | cut -d= -f2- | tr -d '\"' || true)"
+              if [ -z "$DEPLOY_INFISICAL_ENV" ]; then
+                DEPLOY_INFISICAL_ENV='prod'
+              fi
+            fi
+
+            echo "--> Updating bootstrap .env keys..."
+            upsert_env_key() {
+              key="$1"
+              value="$2"
+              if [ ! -f "$PROD_DIR/.env" ]; then
+                touch "$PROD_DIR/.env"
+              fi
+              if grep -q "^${key}=" "$PROD_DIR/.env"; then
+                sed -i "s#^${key}=.*#${key}=${value}#g" "$PROD_DIR/.env"
+              else
+                printf '%s=%s\n' "$key" "$value" >> "$PROD_DIR/.env"
+              fi
+            }
+            upsert_env_key "INFISICAL_CLIENT_ID" "'$INFISICAL_CLIENT_ID'"
+            upsert_env_key "INFISICAL_CLIENT_SECRET" "'$INFISICAL_CLIENT_SECRET'"
+            upsert_env_key "INFISICAL_PROJECT_ID" "'$INFISICAL_PROJECT_ID'"
+            upsert_env_key "INFISICAL_ENVIRONMENT" "'$DEPLOY_INFISICAL_ENV'"
+            upsert_env_key "UA_INFISICAL_ENABLED" "1"
 
             echo "--> Syncing dependencies with uv..."
-            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
+            run_as_ua "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
 
             echo "--> Installing NotebookLM CLI/MCP tool for ua..."
-            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
-            sudo -H -E -u ua bash -c "export PATH=\"$PATH\"; command -v nlm && command -v notebooklm-mcp"
+            run_as_ua "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
+            run_as_ua "export PATH=\"$PATH\"; command -v nlm && command -v notebooklm-mcp"
             
             # 3. Restart Systemd Services
             echo "--> Restarting production services..."
