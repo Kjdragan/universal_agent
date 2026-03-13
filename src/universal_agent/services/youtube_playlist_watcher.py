@@ -163,6 +163,10 @@ class YouTubePlaylistWatcher:
         self._seen_count: int = 0
         self._dispatched_total: int = 0
         self._poll_count: int = 0
+        # In-process dedup guard: tracks video IDs dispatched during this service
+        # lifetime so that concurrent _loop + poll_now calls never double-notify
+        # for the same video (e.g. on service restart race or manual poll overlap).
+        self._dispatched_this_session: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -273,6 +277,15 @@ class YouTubePlaylistWatcher:
                     seen.add(vid)
                     # Persist before side effects so restarts do not re-announce the same video.
                     seen = self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                    # Session-level dedup: skip notification+dispatch if already handled
+                    # this lifetime (e.g. concurrent poll_now call beat us to it).
+                    if vid in self._dispatched_this_session:
+                        logger.info(
+                            "📺 Skipping duplicate dispatch video_id=%s (already dispatched this session)",
+                            vid,
+                        )
+                        continue
+                    self._dispatched_this_session.add(vid)
                     self._dispatched_total += 1
                     logger.info(
                         "📺 New playlist video detected video_id=%s title=%r",
@@ -539,6 +552,14 @@ class YouTubePlaylistWatcher:
             seen.add(vid)
             # Persist before side effects so manual poll + restart cannot duplicate notifications.
             seen = self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+            # Session-level dedup: skip if background _loop already handled this video.
+            if vid in self._dispatched_this_session:
+                logger.info(
+                    "📺 poll_now: skipping duplicate dispatch video_id=%s (already dispatched this session)",
+                    vid,
+                )
+                continue
+            self._dispatched_this_session.add(vid)
             self._dispatched_total += 1
             self._emit_notification(
                 kind="youtube_playlist_new_video",
