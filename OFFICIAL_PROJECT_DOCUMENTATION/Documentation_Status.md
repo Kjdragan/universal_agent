@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-12
 
 ## Architecture (01_Architecture/)
 
@@ -38,6 +38,18 @@ These are the authoritative references for each subsystem. When any other docume
 | 93 | Prioritized Cleanup Plan from Canonical Review |
 | 94 | Architectural Integration Review |
 | 95 | Integration Architectural Decisions (ADRs) |
+
+## Deployment and Environment Continuity Docs
+
+| Doc | Subject |
+|-----|---------|
+| 01 | Deployment architecture continuity pointer |
+| 02 | Stage-based Infisical environment and factory bootstrap continuity |
+| 03 | Branch-driven CI/CD continuity |
+| 04 | Branching and release workflow |
+| 05 | Local HQ dev vs desktop worker runtime modes |
+| 06 | Production deploy incident |
+| 07 | Stage-based Infisical and machine bootstrap migration plan |
 
 ## Remaining Operational References
 

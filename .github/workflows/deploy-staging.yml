@@ -22,6 +22,9 @@ jobs:
           SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
           SSH_USER: ${{ secrets.VPS_SSH_USER }}
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
@@ -72,7 +75,7 @@ jobs:
               chown -R ua:ua \$STAGING_DIR
             fi
             
-            echo '--> Provisioning Infisical environment...'
+            echo '--> Preparing Infisical bootstrap...'
             export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
             export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'
             export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'
@@ -106,25 +109,38 @@ jobs:
 
             echo '--> Ensuring Python 3.12 runtime for uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv python install 3.12\"
-            
-            DEPLOY_INFISICAL_ENV='staging-hq'
-            if ! run_as_ua \"export INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'; export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Staging VPS HQ' --machine-slug staging-hq --factory-role HEADQUARTERS --source-env dev\"; then
-              echo '--> WARNING: staging-hq environment provisioning failed; falling back to existing dev environment for this deploy.'
-              DEPLOY_INFISICAL_ENV='dev'
-            fi
-            
-            echo '--> Creating bootstrap .env file...'
-            run_as_ua \"echo \\\"INFISICAL_CLIENT_ID='\$INFISICAL_CLIENT_ID'\\\" > \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"INFISICAL_CLIENT_SECRET='\$INFISICAL_CLIENT_SECRET'\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"INFISICAL_PROJECT_ID='\$INFISICAL_PROJECT_ID'\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"INFISICAL_ENVIRONMENT='\$DEPLOY_INFISICAL_ENV'\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"UA_INFISICAL_ENABLED=1\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"UA_GATEWAY_PORT=9002\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"UA_API_PORT=9001\\\" >> \$STAGING_DIR/.env\"
-            run_as_ua \"echo \\\"UA_GATEWAY_URL=http://127.0.0.1:9002\\\" >> \$STAGING_DIR/.env\"
-            
+
+            echo '--> Writing explicit staging bootstrap .env...'
+            upsert_env_key() {
+              key=\"$1\"
+              value=\"$2\"
+              if [ ! -f \"\$STAGING_DIR/.env\" ]; then
+                touch \"\$STAGING_DIR/.env\"
+              fi
+              if grep -q \"^${key}=\" \"\$STAGING_DIR/.env\"; then
+                sed -i \"s#^${key}=.*#${key}=${value}#g\" \"\$STAGING_DIR/.env\"
+              else
+                printf '%s=%s\n' \"$key\" \"$value\" >> \"\$STAGING_DIR/.env\"
+              fi
+            }
+            upsert_env_key \"INFISICAL_CLIENT_ID\" \"'\$INFISICAL_CLIENT_ID'\"
+            upsert_env_key \"INFISICAL_CLIENT_SECRET\" \"'\$INFISICAL_CLIENT_SECRET'\"
+            upsert_env_key \"INFISICAL_PROJECT_ID\" \"'\$INFISICAL_PROJECT_ID'\"
+            upsert_env_key \"INFISICAL_ENVIRONMENT\" \"'staging'\"
+            upsert_env_key \"UA_RUNTIME_STAGE\" \"'staging'\"
+            upsert_env_key \"FACTORY_ROLE\" \"'HEADQUARTERS'\"
+            upsert_env_key \"UA_DEPLOYMENT_PROFILE\" \"'vps'\"
+            upsert_env_key \"UA_MACHINE_SLUG\" \"'vps-hq-staging'\"
+            upsert_env_key \"UA_INFISICAL_ENABLED\" \"1\"
+            upsert_env_key \"UA_GATEWAY_PORT\" \"9002\"
+            upsert_env_key \"UA_API_PORT\" \"9001\"
+            upsert_env_key \"UA_GATEWAY_URL\" \"http://127.0.0.1:9002\"
+
             echo '--> Syncing dependencies with uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
+
+            echo '--> Validating staging runtime bootstrap...'
+            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && set -a && source .env && set +a && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment staging --expect-runtime-stage staging --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-staging --require UA_OPS_TOKEN --json\"
 
             echo '--> Installing NotebookLM CLI/MCP tool for ua...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv tool install --force notebooklm-mcp-cli\"

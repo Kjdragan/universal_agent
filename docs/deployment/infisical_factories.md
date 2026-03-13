@@ -1,52 +1,133 @@
-# Infisical Factory Provisioning
+# Infisical Stage Environments and Machine Bootstrap
 
-This project uses an automated "Factory" pattern to manage secrets. Rather than manual data entry, we use code to provision environments based on predefined roles.
+Universal Agent now treats Infisical environments as **stage environments**, not machine environments.
 
-## Provisioning Script
+## Canonical Stage Environments
 
-The core logic resides in `scripts/infisical_provision_factory_env.py`. This script performs the following actions:
-1.  **Identity Resolution**: Resolves the target machine's slug and project.
-2.  **Secret Cloning**: Fetches secrets from a `source` environment (usually `dev`, which acts as the shared template lane).
-3.  **Factory Overrides**: Applies role-specific overrides defined in the script (e.g., `HEADQUARTERS`, `LOCAL_WORKER`).
-4.  **Upsert**: Creates or updates the target environment in Infisical.
+The intended long-term Infisical environments are:
 
-## Usage in CI/CD
+- `development`
+- `staging`
+- `production`
 
-During a deployment, the CI/CD pipeline executes the following command on the VPS:
+These environments hold shared stage secrets and integration credentials.
 
-```bash
-uv run scripts/infisical_provision_factory_env.py \
-  --machine-name "Staging VPS HQ" \
-  --machine-slug staging-hq \
-  --factory-role HEADQUARTERS \
-  --source-env dev
-```
+The checked-in local env template is now bootstrap-only:
 
-Production provisions the existing `prod` environment the same way before restarting services:
+- `.env.sample`
 
-```bash
-uv run scripts/infisical_provision_factory_env.py \
-  --machine-name "Production VPS HQ" \
-  --machine-slug prod \
-  --factory-role HEADQUARTERS \
-  --source-env dev
-```
+It should contain only Infisical bootstrap credentials/settings and
+machine-local identity. Stage-wide runtime config belongs in Infisical.
 
-This ensures the production bootstrap `.env` points at `INFISICAL_ENVIRONMENT=prod` instead of continuing to read the shared `dev` lane.
+## Machine Identity
 
-## Naming Guidance
+Machine identity is supplied locally via bootstrap `.env` or service configuration:
 
-The current Infisical plan supports three environments, so the live lanes are:
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_RUNTIME_STAGE`
+- `UA_MACHINE_SLUG`
 
-- `dev`: shared source/template environment
-- `kevins-desktop`: Kevin's local worker environment
-- `prod`: production VPS headquarters environment
+This allows one stage environment to support:
 
-Within that limit, `prod` is the dedicated production VPS HQ lane. If the environment cap is raised later, the next naming step should be more explicit machine-role-stage slugs, but the runtime contract today is that `prod` is not a generic stage bucket and must not be treated as the shared development lane.
+- VPS headquarters runtime
+- desktop local worker runtime
+- desktop localhost headquarters development runtime
 
-## Adding New Roles
+## Deploy Workflow Contract
 
-To add a new capability or factory role:
-1.  Open `scripts/infisical_provision_factory_env.py`.
-2.  Add a new entry to the `FACTORY_OVERRIDES` dictionary.
-3.  Define the specific secrets that this role should possess or override.
+Deploy workflows must not provision machine-shaped Infisical environments during normal deploys.
+
+Instead, they:
+
+1. write a minimal bootstrap `.env`
+2. select the target stage environment
+3. write explicit machine identity values
+4. validate secret access against that stage
+5. render service env files and restart services
+
+Validation helpers added for this model:
+
+- `scripts/validate_runtime_bootstrap.py`
+- `scripts/infisical_manage_stage_env.py`
+
+### Staging VPS bootstrap
+
+- `INFISICAL_ENVIRONMENT=staging`
+- `UA_RUNTIME_STAGE=staging`
+- `FACTORY_ROLE=HEADQUARTERS`
+- `UA_DEPLOYMENT_PROFILE=vps`
+- `UA_MACHINE_SLUG=vps-hq-staging`
+
+### Production VPS bootstrap
+
+- `INFISICAL_ENVIRONMENT=production`
+- `UA_RUNTIME_STAGE=production`
+- `FACTORY_ROLE=HEADQUARTERS`
+- `UA_DEPLOYMENT_PROFILE=vps`
+- `UA_MACHINE_SLUG=vps-hq-production`
+
+## Desktop Bootstrap Modes
+
+### Localhost HQ development
+
+Use [bootstrap_local_hq_dev.sh](/home/kjdragan/lrepos/universal_agent/scripts/bootstrap_local_hq_dev.sh).
+
+This writes:
+
+- `INFISICAL_ENVIRONMENT=development`
+- `UA_RUNTIME_STAGE=development`
+- `FACTORY_ROLE=HEADQUARTERS`
+- `UA_DEPLOYMENT_PROFILE=local_workstation`
+- `UA_MACHINE_SLUG=kevins-desktop`
+
+### Desktop worker for deployed stages
+
+Use [bootstrap_local_worker_stage.sh](/home/kjdragan/lrepos/universal_agent/scripts/bootstrap_local_worker_stage.sh).
+
+This writes:
+
+- `INFISICAL_ENVIRONMENT=staging` or `production`
+- `UA_RUNTIME_STAGE=staging` or `production`
+- `FACTORY_ROLE=LOCAL_WORKER`
+- `UA_DEPLOYMENT_PROFILE=local_workstation`
+- `UA_MACHINE_SLUG=kevins-desktop`
+
+## Legacy Compatibility
+
+During migration, the runtime normalizes these old environment aliases:
+
+- `dev` -> `development`
+- `prod` -> `production`
+- `staging-hq` -> `staging`
+- `kevins-desktop-hq-dev` -> `development`
+
+Legacy machine-shaped Infisical environments should be retired after rollout completes.
+
+## CLI Policy
+
+The Infisical CLI and `.infisical.json` are approved for:
+
+- local developer ergonomics
+- non-interactive validation
+- controlled export for diagnostics
+
+They are not the authoritative deployed runtime selector.
+
+For local CLI convenience, use:
+
+- `.infisical.example.json`
+
+as the template for a local `.infisical.json`.
+
+For local bootstrap convenience, use:
+
+- `.env.sample`
+
+as the bootstrap-only template for `.env`.
+
+## Related Docs
+
+- [architecture_overview.md](/home/kjdragan/lrepos/universal_agent/docs/deployment/architecture_overview.md)
+- [ci_cd_pipeline.md](/home/kjdragan/lrepos/universal_agent/docs/deployment/ci_cd_pipeline.md)
+- [07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md](/home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)

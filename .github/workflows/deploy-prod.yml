@@ -98,7 +98,7 @@ jobs:
             echo "--> Transferring ownership to service user before dependency sync..."
             sudo chown -R ua:ua "$PROD_DIR"
 
-            echo "--> Provisioning production Infisical environment..."
+            echo "--> Preparing production Infisical bootstrap..."
             export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
             export INFISICAL_CLIENT_SECRET='${{ secrets.INFISICAL_CLIENT_SECRET }}'
             export INFISICAL_PROJECT_ID='${{ secrets.INFISICAL_PROJECT_ID }}'
@@ -131,15 +131,6 @@ jobs:
             export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
             run_as_ua "export PATH=\"$PATH\"; uv python install 3.12"
 
-            DEPLOY_INFISICAL_ENV='prod'
-            if ! run_as_ua "export INFISICAL_CLIENT_ID='$INFISICAL_CLIENT_ID'; export INFISICAL_CLIENT_SECRET='$INFISICAL_CLIENT_SECRET'; export INFISICAL_PROJECT_ID='$INFISICAL_PROJECT_ID'; export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"; cd $PROD_DIR && uv run --python 3.12 --no-project --with httpx --with python-dotenv scripts/infisical_provision_factory_env.py --machine-name 'Production VPS HQ' --machine-slug prod --factory-role HEADQUARTERS --source-env dev"; then
-              echo '--> WARNING: prod Infisical provisioning failed; retaining currently configured environment for this deploy.'
-              DEPLOY_INFISICAL_ENV="$(grep -E '^INFISICAL_ENVIRONMENT=' "$PROD_DIR/.env" | tail -n1 | cut -d= -f2- | tr -d '\"' || true)"
-              if [ -z "$DEPLOY_INFISICAL_ENV" ]; then
-                DEPLOY_INFISICAL_ENV='prod'
-              fi
-            fi
-
             echo "--> Updating bootstrap .env keys..."
             upsert_env_key() {
               key="$1"
@@ -156,11 +147,18 @@ jobs:
             upsert_env_key "INFISICAL_CLIENT_ID" "'$INFISICAL_CLIENT_ID'"
             upsert_env_key "INFISICAL_CLIENT_SECRET" "'$INFISICAL_CLIENT_SECRET'"
             upsert_env_key "INFISICAL_PROJECT_ID" "'$INFISICAL_PROJECT_ID'"
-            upsert_env_key "INFISICAL_ENVIRONMENT" "'$DEPLOY_INFISICAL_ENV'"
+            upsert_env_key "INFISICAL_ENVIRONMENT" "'production'"
+            upsert_env_key "UA_RUNTIME_STAGE" "'production'"
+            upsert_env_key "FACTORY_ROLE" "'HEADQUARTERS'"
+            upsert_env_key "UA_DEPLOYMENT_PROFILE" "'vps'"
+            upsert_env_key "UA_MACHINE_SLUG" "'vps-hq-production'"
             upsert_env_key "UA_INFISICAL_ENABLED" "1"
 
             echo "--> Syncing dependencies with uv..."
             run_as_ua "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
+
+            echo "--> Validating production runtime bootstrap..."
+            run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && set -a && source .env && set +a && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment production --expect-runtime-stage production --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-production --require UA_OPS_TOKEN --json"
 
             echo "--> Installing NotebookLM CLI/MCP tool for ua..."
             run_as_ua "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"

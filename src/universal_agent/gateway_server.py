@@ -256,6 +256,7 @@ def _normalized_factory_hostname() -> str:
 def _derive_factory_id() -> str:
     explicit = (
         str(os.getenv("UA_FACTORY_ID") or "").strip()
+        or str(os.getenv("UA_MACHINE_SLUG") or "").strip()
         or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
     )
     if explicit:
