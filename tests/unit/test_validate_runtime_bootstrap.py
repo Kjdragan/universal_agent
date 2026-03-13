@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +37,7 @@ def test_validate_runtime_bootstrap_reports_identity_json(monkeypatch, capsys):
             errors=(),
         ),
     )
+    monkeypatch.setattr(module, "_preload_bootstrap_env", lambda explicit_path: "")
     monkeypatch.setenv("INFISICAL_ENVIRONMENT", "staging")
     monkeypatch.setenv("UA_RUNTIME_STAGE", "staging")
     monkeypatch.setenv("FACTORY_ROLE", "HEADQUARTERS")
@@ -72,6 +74,71 @@ def test_validate_runtime_bootstrap_reports_identity_json(monkeypatch, capsys):
     assert payload["identity"]["machine_slug"] == "vps-hq-staging"
 
 
+def test_validate_runtime_bootstrap_preloads_bootstrap_env_file(monkeypatch, tmp_path):
+    module = _load_script_module(
+        "validate_runtime_bootstrap_preload",
+        "scripts/validate_runtime_bootstrap.py",
+    )
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "INFISICAL_ENVIRONMENT=staging",
+                "UA_RUNTIME_STAGE=staging",
+                "FACTORY_ROLE=HEADQUARTERS",
+                "UA_DEPLOYMENT_PROFILE=vps",
+                "UA_MACHINE_SLUG=vps-hq-staging",
+                "UA_OPS_TOKEN=token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _fake_initialize_runtime_secrets(profile=None, force_reload=False):
+        assert os.getenv("INFISICAL_ENVIRONMENT") == "staging"
+        assert os.getenv("UA_RUNTIME_STAGE") == "staging"
+        assert os.getenv("FACTORY_ROLE") == "HEADQUARTERS"
+        assert os.getenv("UA_DEPLOYMENT_PROFILE") == "vps"
+        assert os.getenv("UA_MACHINE_SLUG") == "vps-hq-staging"
+        assert os.getenv("UA_DOTENV_PATH") == str(env_file)
+        return SimpleNamespace(
+            source="infisical",
+            loaded_count=5,
+            strict_mode=True,
+            fallback_used=False,
+            errors=(),
+        )
+
+    monkeypatch.setattr(module, "initialize_runtime_secrets", _fake_initialize_runtime_secrets)
+    monkeypatch.setenv("INFISICAL_ENVIRONMENT", "development")
+    monkeypatch.delenv("UA_DOTENV_PATH", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_runtime_bootstrap.py",
+            "--bootstrap-env-file",
+            str(env_file),
+            "--expect-environment",
+            "staging",
+            "--expect-runtime-stage",
+            "staging",
+            "--expect-factory-role",
+            "HEADQUARTERS",
+            "--expect-deployment-profile",
+            "vps",
+            "--expect-machine-slug",
+            "vps-hq-staging",
+            "--require",
+            "UA_OPS_TOKEN",
+        ],
+    )
+
+    assert module.main() == 0
+
+
 def test_validate_runtime_bootstrap_raises_on_missing_required_key(monkeypatch):
     module = _load_script_module(
         "validate_runtime_bootstrap_missing",
@@ -89,6 +156,7 @@ def test_validate_runtime_bootstrap_raises_on_missing_required_key(monkeypatch):
             errors=(),
         ),
     )
+    monkeypatch.setattr(module, "_preload_bootstrap_env", lambda explicit_path: "")
     monkeypatch.setenv("INFISICAL_ENVIRONMENT", "production")
     monkeypatch.setenv("UA_RUNTIME_STAGE", "production")
     monkeypatch.setenv("FACTORY_ROLE", "HEADQUARTERS")
