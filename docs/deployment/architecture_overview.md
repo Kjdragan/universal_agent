@@ -22,7 +22,17 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Fallback Checkout | n/a | `/opt/universal_agent_repo` |
 | Gateway/API Ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, `UA_GATEWAY_URL=http://127.0.0.1:9002` | `8002` / `8001` |
 | Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units |
-| Secrets Behavior | Provision `staging-hq`; temporary fallback to `dev` if provisioning fails | No auto-clone from `dev`; production secrets remain curated separately |
+| Secrets Behavior | Provision `staging-hq`; temporary fallback to `dev` if provisioning fails | Provision/update `prod` with HEADQUARTERS overrides during deploy; if provisioning fails, retain the currently configured production Infisical environment |
+
+## Infisical Environment Naming
+
+The current Infisical plan is capped at three environments, so the live runtime lanes are:
+
+- `dev`: shared source/template lane; not the deployed VPS runtime.
+- `kevins-desktop`: Kevin's local worker lane.
+- `prod`: the production VPS headquarters lane.
+
+The `prod` slug is still stage-flavored, but operationally it is the dedicated production VPS HQ environment. If the environment limit is raised later, the naming model can expand to more explicit machine-role-stage slugs.
 
 ## Tutorial Runtime Contract
 
