@@ -46,6 +46,10 @@ Instead, they:
 4. validate secret access against that stage
 5. render service env files and restart services
 
+Deploys rewrite that bootstrap file from scratch each time. The checkout `.env`
+is treated as bootstrap-only and should not accumulate historical stage-wide or
+machine-specific leftovers.
+
 Validation helpers added for this model:
 
 - `scripts/validate_runtime_bootstrap.py`
