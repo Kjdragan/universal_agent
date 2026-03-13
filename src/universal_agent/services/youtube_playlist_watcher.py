@@ -199,11 +199,12 @@ class YouTubePlaylistWatcher:
 
     async def stop(self) -> None:
         self._stop_event.set()
-        if self._task:
+        task = self._task
+        if task is not None:
             try:
-                await asyncio.wait_for(self._task, timeout=10)
+                await asyncio.wait_for(task, timeout=10)
             except Exception:
-                self._task.cancel()
+                task.cancel()
             self._task = None
 
     # ------------------------------------------------------------------

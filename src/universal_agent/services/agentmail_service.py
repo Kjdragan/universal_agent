@@ -301,23 +301,26 @@ class AgentMailService:
     async def shutdown(self) -> None:
         self._ws_stop_event.set()
         self._queue_wakeup.set()
-        if self._ws_task:
+        ws_task = self._ws_task
+        if ws_task is not None:
             try:
-                await asyncio.wait_for(self._ws_task, timeout=10)
+                await asyncio.wait_for(ws_task, timeout=10)
             except Exception:
-                self._ws_task.cancel()
+                ws_task.cancel()
             self._ws_task = None
-        if self._queue_task:
+        queue_task = self._queue_task
+        if queue_task is not None:
             try:
-                await asyncio.wait_for(self._queue_task, timeout=10)
+                await asyncio.wait_for(queue_task, timeout=10)
             except Exception:
-                self._queue_task.cancel()
+                queue_task.cancel()
             self._queue_task = None
-        if self._poll_task:
+        poll_task = self._poll_task
+        if poll_task is not None:
             try:
-                await asyncio.wait_for(self._poll_task, timeout=10)
+                await asyncio.wait_for(poll_task, timeout=10)
             except Exception:
-                self._poll_task.cancel()
+                poll_task.cancel()
             self._poll_task = None
         self._started = False
         logger.info("📧 AgentMail service stopped")
@@ -516,8 +519,9 @@ class AgentMailService:
             kwargs["labels"] = [label]
 
         messages = await self._client.inboxes.messages.list(**kwargs)
+        msg_list: list[Any] = list(messages.messages if hasattr(messages, "messages") else messages)
         results = []
-        for msg in (messages.messages if hasattr(messages, "messages") else messages)[:limit]:
+        for msg in msg_list[:limit]:
             results.append({
                 "message_id": getattr(msg, "message_id", ""),
                 "thread_id": getattr(msg, "thread_id", ""),
@@ -563,8 +567,9 @@ class AgentMailService:
             kwargs["labels"] = [label]
 
         threads = await self._client.inboxes.threads.list(**kwargs)
+        thd_list: list[Any] = list(threads.threads if hasattr(threads, "threads") else threads)
         results = []
-        for thd in (threads.threads if hasattr(threads, "threads") else threads)[:limit]:
+        for thd in thd_list[:limit]:
             results.append({
                 "thread_id": getattr(thd, "thread_id", ""),
                 "subject": getattr(thd, "subject", ""),
@@ -1285,7 +1290,7 @@ class AgentMailService:
     async def _poll_inbox_once(self, *, limit: int = 25) -> None:
         self._assert_ready()
         messages = await self._client.inboxes.messages.list(inbox_id=self._inbox_id)
-        rows = list(messages.messages if hasattr(messages, "messages") else messages)
+        rows: list[Any] = list(messages.messages if hasattr(messages, "messages") else messages)
         if not rows:
             return
 
@@ -1386,17 +1391,18 @@ class AgentMailService:
             f"reply_extracted: {reply_is_extracted}",
             "",
             "--- Reply (new content) ---",
-            reply_text[:4000],
+            reply_text[:4000],  # type: ignore[misc]
         ]
         if reply_is_extracted:
             lines.append("")
             lines.append("--- Full Email Body (for reference) ---")
-            lines.append(text_body[:4000])
+            lines.append(text_body[:4000])  # type: ignore[misc]
 
         if attachments and isinstance(attachments, (list, tuple)):
             lines.append("")
             lines.append(f"--- Attachments ({len(attachments)}) ---")
-            for att in attachments[:10]:
+            att_list: list[Any] = list(attachments)  # type: ignore[arg-type]
+            for att in att_list[:10]:
                 if isinstance(att, dict):
                     fname = att.get("filename", "unnamed")
                     fsize = att.get("size", "?")
@@ -1478,7 +1484,8 @@ class AgentMailService:
             return False
         self._seen_message_ids.append(clean_id)
         self._seen_message_id_set.add(clean_id)
-        if len(self._seen_message_id_set) > self._seen_message_ids.maxlen:
+        maxlen = self._seen_message_ids.maxlen
+        if maxlen is not None and len(self._seen_message_id_set) > maxlen:
             self._seen_message_id_set = set(self._seen_message_ids)
         try:
             self._ensure_queue_schema()
