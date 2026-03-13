@@ -21,12 +21,17 @@ from __future__ import annotations
 
 import asyncio
 from email.utils import parseaddr
+import json
 import logging
 import os
 import random
+import sqlite3
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Optional
+
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,7 @@ def _extract_reply_text(text_body: str) -> str:
 
 # Type aliases matching the patterns in youtube_playlist_watcher.py
 DispatchFn = Callable[[dict[str, Any]], Coroutine[Any, Any, tuple[bool, str]]]
+DispatchAdmissionFn = Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
 NotifyFn = Callable[[dict[str, Any]], None]
 
 # Idempotency key for Simone's primary inbox
@@ -63,6 +69,12 @@ _DEFAULT_TRUSTED_SENDERS = (
     "kevinjdragan@gmail.com",
     "kevin@clearspringcg.com",
 )
+_QUEUE_STATUS_QUEUED = "queued"
+_QUEUE_STATUS_DISPATCHING = "dispatching"
+_QUEUE_STATUS_BUSY_RETRY = "busy_retry"
+_QUEUE_STATUS_COMPLETED = "completed"
+_QUEUE_STATUS_FAILED = "failed"
+_QUEUE_STATUS_CANCELLED = "cancelled"
 
 
 def _is_enabled() -> bool:
@@ -98,6 +110,25 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _safe_json_loads(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        try:
+            loaded = json.loads(text)
+        except Exception:
+            return {}
+        return dict(loaded) if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _safe_json_dumps(raw: Any) -> str:
+    return json.dumps(raw, ensure_ascii=True, separators=(",", ":"))
+
+
 def _normalize_sender_email(value: str) -> str:
     _, address = parseaddr(value or "")
     return (address or value or "").strip().lower()
@@ -127,9 +158,11 @@ class AgentMailService:
         self,
         *,
         dispatch_fn: Optional[DispatchFn] = None,
+        dispatch_with_admission_fn: Optional[DispatchAdmissionFn] = None,
         notification_sink: Optional[NotifyFn] = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
+        self._dispatch_with_admission_fn = dispatch_with_admission_fn
         self._notification_sink = notification_sink
 
         # SDK client (lazy init)
@@ -139,7 +172,9 @@ class AgentMailService:
 
         # WebSocket listener
         self._ws_task: Optional[asyncio.Task] = None
+        self._queue_task: Optional[asyncio.Task] = None
         self._ws_stop_event = asyncio.Event()
+        self._queue_wakeup = asyncio.Event()
 
         # Runtime status
         self._enabled = _is_enabled()
@@ -152,6 +187,21 @@ class AgentMailService:
         self._messages_received: int = 0
         self._drafts_created: int = 0
         self._trusted_senders: tuple[str, ...] = _trusted_sender_addresses()
+        self._last_trusted_inbound_at: Optional[str] = None
+        self._trusted_queue_retry_base_seconds = max(
+            5.0, float(os.getenv("UA_AGENTMAIL_INBOX_RETRY_BASE_SECONDS", "10") or 10)
+        )
+        self._trusted_queue_retry_max_seconds = max(
+            self._trusted_queue_retry_base_seconds,
+            float(os.getenv("UA_AGENTMAIL_INBOX_RETRY_MAX_SECONDS", "900") or 900),
+        )
+        self._trusted_queue_retry_jitter_ratio = min(
+            1.0,
+            max(0.0, float(os.getenv("UA_AGENTMAIL_INBOX_RETRY_JITTER_RATIO", "0.30") or 0.30)),
+        )
+        self._trusted_queue_poll_seconds = max(
+            1.0, float(os.getenv("UA_AGENTMAIL_INBOX_POLL_SECONDS", "5") or 5)
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -189,6 +239,7 @@ class AgentMailService:
 
         self._started = True
         self._started_at = _iso_now()
+        self._ensure_queue_schema()
         logger.info(
             "📧 AgentMail service started inbox=%s auto_send=%s ws=%s",
             self._inbox_address,
@@ -196,18 +247,29 @@ class AgentMailService:
             _ws_enabled(),
         )
 
+        if self._dispatch_with_admission_fn:
+            self._queue_task = asyncio.create_task(self._trusted_inbox_queue_loop())
+            self._queue_wakeup.set()
+
         # Start WebSocket listener if enabled
         if _ws_enabled() and self._inbox_id:
             self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def shutdown(self) -> None:
         self._ws_stop_event.set()
+        self._queue_wakeup.set()
         if self._ws_task:
             try:
                 await asyncio.wait_for(self._ws_task, timeout=10)
             except Exception:
                 self._ws_task.cancel()
             self._ws_task = None
+        if self._queue_task:
+            try:
+                await asyncio.wait_for(self._queue_task, timeout=10)
+            except Exception:
+                self._queue_task.cancel()
+            self._queue_task = None
         self._started = False
         logger.info("📧 AgentMail service stopped")
 
@@ -547,6 +609,28 @@ class AgentMailService:
                 sender, subject, thread_id, reply_is_extracted, sender_trusted,
             )
 
+            session_key = f"agentmail_{thread_id or message_id}"
+            action_payload = {
+                "kind": "agent",
+                "name": "AgentMailInbound",
+                "session_key": session_key,
+                "to": "email-handler",
+                "deliver": True,
+                "message": self._build_inbound_message(
+                    sender=sender,
+                    sender_email=sender_email,
+                    sender_role=sender_role,
+                    sender_trusted=sender_trusted,
+                    subject=subject,
+                    thread_id=thread_id,
+                    message_id=message_id,
+                    reply_text=reply_text,
+                    reply_is_extracted=reply_is_extracted,
+                    text_body=text_body,
+                    attachments=getattr(msg, "attachments", None),
+                ),
+            }
+
             # Emit notification
             self._emit_notification(
                 kind="agentmail_received",
@@ -565,8 +649,65 @@ class AgentMailService:
                 },
             )
 
-            # Trusted operator mail should get an immediate confirmation even
-            # before deeper handling completes.
+            if sender_trusted and message_id and self._dispatch_with_admission_fn:
+                self._last_trusted_inbound_at = _iso_now()
+                queue_id, created = self._queue_insert_trusted_inbound(
+                    message_id=message_id,
+                    thread_id=thread_id,
+                    sender=sender,
+                    sender_email=sender_email,
+                    subject=subject,
+                    reply_text=reply_text,
+                    text_body=text_body,
+                    session_key=session_key,
+                    action_payload=action_payload,
+                )
+                if created:
+                    try:
+                        ack_result = await self.reply(
+                            message_id=message_id,
+                            text=(
+                                "Received your email. I'm processing it now and will "
+                                "follow up here."
+                            ),
+                            html=(
+                                "<p>Received your email. I'm processing it now and will "
+                                "follow up here.</p>"
+                            ),
+                        )
+                    except Exception as exc:
+                        self._mark_queue_ack_status(
+                            queue_id=queue_id,
+                            ack_status="failed",
+                            last_error=str(exc),
+                        )
+                        logger.warning(
+                            "📧 Trusted inbound ack failed message_id=%s: %s",
+                            message_id,
+                            exc,
+                        )
+                    else:
+                        self._mark_queue_ack_status(
+                            queue_id=queue_id,
+                            ack_status="sent",
+                            ack_message_id=str(ack_result.get("message_id") or ""),
+                        )
+                self._emit_notification(
+                    kind="agentmail_trusted_queued",
+                    title="Trusted Email Queued",
+                    message=f"Queued trusted inbound email from {sender_email}",
+                    severity="info",
+                    metadata={
+                        "message_id": message_id,
+                        "thread_id": thread_id,
+                        "queue_id": queue_id,
+                        "sender_email": sender_email,
+                        "subject": subject,
+                    },
+                )
+                self._queue_wakeup.set()
+                return
+
             if sender_trusted and message_id:
                 try:
                     await self.reply(
@@ -589,26 +730,6 @@ class AgentMailService:
 
             # Dispatch through hooks pipeline if dispatch_fn available
             if self._dispatch_fn:
-                action_payload = {
-                    "kind": "agent",
-                    "name": "AgentMailInbound",
-                    "session_key": f"agentmail_{thread_id or message_id}",
-                    "to": "email-handler",
-                    "deliver": True,
-                    "message": self._build_inbound_message(
-                        sender=sender,
-                        sender_email=sender_email,
-                        sender_role=sender_role,
-                        sender_trusted=sender_trusted,
-                        subject=subject,
-                        thread_id=thread_id,
-                        message_id=message_id,
-                        reply_text=reply_text,
-                        reply_is_extracted=reply_is_extracted,
-                        text_body=text_body,
-                        attachments=getattr(msg, "attachments", None),
-                    ),
-                }
                 try:
                     ok, reason = await self._dispatch_fn(action_payload)
                     if ok:
@@ -630,11 +751,428 @@ class AgentMailService:
             logger.exception("📧 Error handling inbound email: %s", exc)
 
     # ------------------------------------------------------------------
+    # Trusted inbox queue
+    # ------------------------------------------------------------------
+
+    def _queue_connect(self) -> sqlite3.Connection:
+        conn = connect_runtime_db(get_activity_db_path())
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _ensure_queue_schema(self) -> None:
+        with self._queue_connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS agentmail_inbox_queue (
+                    queue_id TEXT PRIMARY KEY,
+                    message_id TEXT NOT NULL UNIQUE,
+                    thread_id TEXT,
+                    sender TEXT NOT NULL,
+                    sender_email TEXT NOT NULL,
+                    sender_role TEXT NOT NULL DEFAULT 'external',
+                    subject TEXT NOT NULL DEFAULT '',
+                    session_key TEXT NOT NULL,
+                    action_payload_json TEXT NOT NULL DEFAULT '{}',
+                    reply_text TEXT NOT NULL DEFAULT '',
+                    full_body TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT,
+                    last_attempt_at TEXT,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    ack_status TEXT NOT NULL DEFAULT 'not_sent',
+                    ack_message_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_agentmail_inbox_queue_status_next
+                    ON agentmail_inbox_queue(status, next_attempt_at, created_at);
+                CREATE INDEX IF NOT EXISTS idx_agentmail_inbox_queue_sender
+                    ON agentmail_inbox_queue(sender_email, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agentmail_inbox_queue_thread
+                    ON agentmail_inbox_queue(thread_id, created_at DESC);
+                """
+            )
+
+    def _queue_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "queue_id": str(row["queue_id"]),
+            "message_id": str(row["message_id"]),
+            "thread_id": str(row["thread_id"] or ""),
+            "sender": str(row["sender"] or ""),
+            "sender_email": str(row["sender_email"] or ""),
+            "sender_role": str(row["sender_role"] or "external"),
+            "subject": str(row["subject"] or ""),
+            "session_key": str(row["session_key"] or ""),
+            "reply_text": str(row["reply_text"] or ""),
+            "full_body": str(row["full_body"] or ""),
+            "status": str(row["status"] or _QUEUE_STATUS_QUEUED),
+            "attempt_count": int(row["attempt_count"] or 0),
+            "next_attempt_at": str(row["next_attempt_at"] or ""),
+            "last_attempt_at": str(row["last_attempt_at"] or ""),
+            "last_error": str(row["last_error"] or ""),
+            "ack_status": str(row["ack_status"] or "not_sent"),
+            "ack_message_id": str(row["ack_message_id"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "action_payload": _safe_json_loads(row["action_payload_json"]),
+        }
+
+    def _trusted_queue_overview(self) -> dict[str, Any]:
+        self._ensure_queue_schema()
+        with self._queue_connect() as conn:
+            counts = conn.execute(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM agentmail_inbox_queue
+                GROUP BY status
+                """
+            ).fetchall()
+            queue_depth = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM agentmail_inbox_queue
+                WHERE status IN (?, ?, ?)
+                """,
+                (_QUEUE_STATUS_QUEUED, _QUEUE_STATUS_BUSY_RETRY, _QUEUE_STATUS_DISPATCHING),
+            ).fetchone()[0]
+            oldest_pending = conn.execute(
+                """
+                SELECT created_at
+                FROM agentmail_inbox_queue
+                WHERE status IN (?, ?, ?)
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (_QUEUE_STATUS_QUEUED, _QUEUE_STATUS_BUSY_RETRY, _QUEUE_STATUS_DISPATCHING),
+            ).fetchone()
+        by_status = {str(row["status"]): int(row["total"] or 0) for row in counts}
+        return {
+            "queue_depth": int(queue_depth or 0),
+            "oldest_pending_request_at": str(oldest_pending["created_at"]) if oldest_pending else "",
+            "busy_retry_total": int(by_status.get(_QUEUE_STATUS_BUSY_RETRY, 0)),
+            "completed_total": int(by_status.get(_QUEUE_STATUS_COMPLETED, 0)),
+            "failed_total": int(by_status.get(_QUEUE_STATUS_FAILED, 0)),
+        }
+
+    def list_inbox_queue(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+        sender: str | None = None,
+        trusted_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        self._ensure_queue_schema()
+        clauses: list[str] = []
+        params: list[Any] = []
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status:
+            clauses.append("status = ?")
+            params.append(normalized_status)
+        normalized_sender = _normalize_sender_email(sender or "")
+        if normalized_sender:
+            clauses.append("sender_email = ?")
+            params.append(normalized_sender)
+        if trusted_only:
+            clauses.append("sender_role = 'trusted_operator'")
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"""
+            SELECT *
+            FROM agentmail_inbox_queue
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(int(limit or 50), 200)))
+        with self._queue_connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._queue_row_to_dict(row) for row in rows]
+
+    def get_inbox_queue_item(self, queue_id: str) -> Optional[dict[str, Any]]:
+        self._ensure_queue_schema()
+        with self._queue_connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agentmail_inbox_queue WHERE queue_id = ? LIMIT 1",
+                (str(queue_id or "").strip(),),
+            ).fetchone()
+        return self._queue_row_to_dict(row) if row else None
+
+    def retry_inbox_queue_item(self, queue_id: str) -> Optional[dict[str, Any]]:
+        queue_id = str(queue_id or "").strip()
+        if not queue_id:
+            return None
+        now = _iso_now()
+        self._ensure_queue_schema()
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET status = ?, next_attempt_at = ?, updated_at = ?, last_error = ''
+                WHERE queue_id = ? AND status NOT IN (?, ?)
+                """,
+                (
+                    _QUEUE_STATUS_QUEUED,
+                    now,
+                    now,
+                    queue_id,
+                    _QUEUE_STATUS_COMPLETED,
+                    _QUEUE_STATUS_CANCELLED,
+                ),
+            )
+        self._queue_wakeup.set()
+        return self.get_inbox_queue_item(queue_id)
+
+    def cancel_inbox_queue_item(self, queue_id: str) -> Optional[dict[str, Any]]:
+        queue_id = str(queue_id or "").strip()
+        if not queue_id:
+            return None
+        now = _iso_now()
+        self._ensure_queue_schema()
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET status = ?, updated_at = ?
+                WHERE queue_id = ? AND status NOT IN (?, ?)
+                """,
+                (
+                    _QUEUE_STATUS_CANCELLED,
+                    now,
+                    queue_id,
+                    _QUEUE_STATUS_COMPLETED,
+                    _QUEUE_STATUS_CANCELLED,
+                ),
+            )
+        return self.get_inbox_queue_item(queue_id)
+
+    def _queue_insert_trusted_inbound(
+        self,
+        *,
+        message_id: str,
+        thread_id: str,
+        sender: str,
+        sender_email: str,
+        subject: str,
+        reply_text: str,
+        text_body: str,
+        session_key: str,
+        action_payload: dict[str, Any],
+    ) -> tuple[str, bool]:
+        self._ensure_queue_schema()
+        existing = self._find_queue_item_by_message_id(message_id)
+        if existing:
+            return str(existing.get("queue_id") or ""), False
+        queue_id = f"amq_{uuid.uuid4().hex}"
+        now = _iso_now()
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agentmail_inbox_queue (
+                    queue_id, message_id, thread_id, sender, sender_email, sender_role,
+                    subject, session_key, action_payload_json, reply_text, full_body,
+                    status, attempt_count, next_attempt_at, last_attempt_at, last_error,
+                    ack_status, ack_message_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'trusted_operator', ?, ?, ?, ?, ?, ?, 0, ?, '', '', 'not_sent', '', ?, ?)
+                """,
+                (
+                    queue_id,
+                    message_id,
+                    thread_id,
+                    sender,
+                    sender_email,
+                    subject,
+                    session_key,
+                    _safe_json_dumps(action_payload),
+                    reply_text,
+                    text_body,
+                    _QUEUE_STATUS_QUEUED,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        return queue_id, True
+
+    def _find_queue_item_by_message_id(self, message_id: str) -> Optional[dict[str, Any]]:
+        with self._queue_connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agentmail_inbox_queue WHERE message_id = ? LIMIT 1",
+                (str(message_id or "").strip(),),
+            ).fetchone()
+        return self._queue_row_to_dict(row) if row else None
+
+    def _mark_queue_ack_status(
+        self,
+        *,
+        queue_id: str,
+        ack_status: str,
+        ack_message_id: str = "",
+        last_error: str = "",
+    ) -> None:
+        now = _iso_now()
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET ack_status = ?, ack_message_id = ?, last_error = ?, updated_at = ?
+                WHERE queue_id = ?
+                """,
+                (ack_status, ack_message_id, last_error, now, queue_id),
+            )
+
+    def _claim_queue_item(self, *, queue_id: str, expected_status: str) -> bool:
+        now = _iso_now()
+        with self._queue_connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET status = ?, updated_at = ?, last_attempt_at = ?
+                WHERE queue_id = ? AND status = ?
+                """,
+                (_QUEUE_STATUS_DISPATCHING, now, now, queue_id, expected_status),
+            )
+            return int(cur.rowcount or 0) > 0
+
+    def _complete_queue_item(self, queue_id: str, *, attempts: int) -> None:
+        now = _iso_now()
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET status = ?, updated_at = ?, next_attempt_at = NULL, last_error = '', attempt_count = ?
+                WHERE queue_id = ?
+                """,
+                (_QUEUE_STATUS_COMPLETED, now, int(attempts), queue_id),
+            )
+
+    def _fail_queue_item(self, queue_id: str, *, error: str, attempts: int) -> None:
+        now = _iso_now()
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET status = ?, updated_at = ?, next_attempt_at = NULL, attempt_count = ?, last_error = ?
+                WHERE queue_id = ?
+                """,
+                (_QUEUE_STATUS_FAILED, now, int(attempts), str(error or ""), queue_id),
+            )
+
+    def _retry_queue_item(self, queue_id: str, *, error: str, attempts: int) -> None:
+        now_ts = time.time()
+        base_delay = self._trusted_queue_retry_base_seconds * (2 ** max(0, attempts - 1))
+        capped_delay = min(self._trusted_queue_retry_max_seconds, base_delay)
+        jitter = random.uniform(0.0, capped_delay * self._trusted_queue_retry_jitter_ratio)
+        next_attempt = datetime.fromtimestamp(now_ts + capped_delay + jitter, tz=timezone.utc)
+        with self._queue_connect() as conn:
+            conn.execute(
+                """
+                UPDATE agentmail_inbox_queue
+                SET status = ?, updated_at = ?, next_attempt_at = ?, attempt_count = ?, last_error = ?
+                WHERE queue_id = ?
+                """,
+                (
+                    _QUEUE_STATUS_BUSY_RETRY,
+                    _iso_now(),
+                    next_attempt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    int(attempts),
+                    str(error or ""),
+                    queue_id,
+                ),
+            )
+
+    async def _trusted_inbox_queue_loop(self) -> None:
+        while not self._ws_stop_event.is_set():
+            try:
+                processed = await self._process_due_queue_items(limit=5)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.exception("📧 Trusted inbox queue loop error: %s", exc)
+                processed = 0
+            if processed > 0:
+                continue
+            self._queue_wakeup.clear()
+            stop_wait = asyncio.create_task(self._ws_stop_event.wait())
+            wake_wait = asyncio.create_task(self._queue_wakeup.wait())
+            try:
+                done, pending = await asyncio.wait(
+                    {stop_wait, wake_wait},
+                    timeout=self._trusted_queue_poll_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                if stop_wait in done and stop_wait.result():
+                    return
+            finally:
+                for task in (stop_wait, wake_wait):
+                    if not task.done():
+                        task.cancel()
+
+    async def _process_due_queue_items(self, *, limit: int) -> int:
+        if not self._dispatch_with_admission_fn:
+            return 0
+        now = _iso_now()
+        with self._queue_connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM agentmail_inbox_queue
+                WHERE status IN (?, ?)
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (_QUEUE_STATUS_QUEUED, _QUEUE_STATUS_BUSY_RETRY, now, max(1, int(limit))),
+            ).fetchall()
+        processed = 0
+        for row in rows:
+            payload = self._queue_row_to_dict(row)
+            if not self._claim_queue_item(
+                queue_id=str(payload["queue_id"]),
+                expected_status=str(payload["status"]),
+            ):
+                continue
+            processed += 1
+            attempts = int(payload.get("attempt_count") or 0) + 1
+            try:
+                result = await self._dispatch_with_admission_fn(dict(payload.get("action_payload") or {}))
+            except Exception as exc:
+                self._fail_queue_item(str(payload["queue_id"]), error=str(exc), attempts=attempts)
+                logger.exception(
+                    "📧 Trusted inbox dispatch failed queue_id=%s: %s",
+                    payload["queue_id"],
+                    exc,
+                )
+                continue
+
+            decision = str(result.get("decision") or "").strip().lower()
+            if decision == "accepted":
+                self._complete_queue_item(str(payload["queue_id"]), attempts=attempts)
+                continue
+            if decision in {"busy", "duplicate_in_progress"}:
+                reason = str(result.get("reason") or decision)
+                self._retry_queue_item(
+                    str(payload["queue_id"]),
+                    error=reason,
+                    attempts=attempts,
+                )
+                continue
+            self._fail_queue_item(
+                str(payload["queue_id"]),
+                error=str(result.get("error") or result.get("reason") or decision or "dispatch_failed"),
+                attempts=attempts,
+            )
+        return processed
+
+    # ------------------------------------------------------------------
     # Ops status
     # ------------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
         """Return service status for ops endpoint."""
+        queue = self._trusted_queue_overview()
         return {
             "enabled": self._enabled,
             "started": self._started,
@@ -649,6 +1187,12 @@ class AgentMailService:
             "drafts_created": self._drafts_created,
             "trusted_sender_count": len(self._trusted_senders),
             "trusted_senders": list(self._trusted_senders),
+            "trusted_requests_queued_total": queue["queue_depth"],
+            "trusted_requests_busy_retry_total": queue["busy_retry_total"],
+            "trusted_requests_completed_total": queue["completed_total"],
+            "trusted_requests_failed_total": queue["failed_total"],
+            "oldest_pending_request_at": queue["oldest_pending_request_at"],
+            "last_inbound_trusted_at": self._last_trusted_inbound_at,
             "last_error": self._last_error,
         }
 

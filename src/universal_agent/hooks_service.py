@@ -1599,6 +1599,19 @@ class HooksService:
         asyncio.create_task(self._dispatch_action(action))
         return True, action.kind
 
+    async def dispatch_internal_action_with_admission(
+        self,
+        action_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Dispatch a trusted in-process hook action and return admission/execution result."""
+        if not self.config.enabled:
+            return {"decision": "failed", "reason": "hooks_disabled", "error": "hooks_disabled"}
+        try:
+            action = HookAction.model_validate(action_payload)
+        except Exception:
+            return {"decision": "failed", "reason": "invalid_action", "error": "invalid_action"}
+        return await self._dispatch_action(action)
+
     def _extract_action_field(self, message: str, key: str) -> str:
         if not message:
             return ""
@@ -2641,19 +2654,19 @@ class HooksService:
 
         return re.sub(r'\{\{\s*([^}]+)\s*\}\}', replacer, template)
 
-    async def _dispatch_action(self, action: HookAction):
+    async def _dispatch_action(self, action: HookAction) -> dict[str, Any]:
         logger.info("Dispatching hook action kind=%s", action.kind)
         if action.kind == "wake":
             logger.info("Wake hook action is not implemented yet; dropping action")
-            return
+            return {"decision": "failed", "reason": "wake_not_supported", "error": "wake_not_supported"}
         if action.kind != "agent":
             logger.warning("Unsupported hook action kind=%s", action.kind)
-            return
+            return {"decision": "failed", "reason": "unsupported_action_kind", "error": "unsupported_action_kind"}
 
         session_key = (action.session_key or "").strip()
         if not session_key:
             logger.warning("Hook agent action missing session_key")
-            return
+            return {"decision": "failed", "reason": "missing_session_key", "error": "missing_session_key"}
 
         session_id = self._session_id_from_key(session_key)
         timeout_seconds = (
@@ -2715,7 +2728,7 @@ class HooksService:
                     state["suppressed_count"] = suppressed_count + 1
                     state["last_pending"] = candidate_pending
                     self._dispatch_overflow_state[session_id] = state
-                    return
+                    return {"decision": "failed", "reason": "dispatch_queue_overflow", "error": "dispatch_queue_overflow"}
 
                 note_suffix = ""
                 if suppressed_count > 0:
@@ -2742,7 +2755,7 @@ class HooksService:
                     "suppressed_count": 0,
                     "last_pending": candidate_pending,
                 }
-                return
+                return {"decision": "failed", "reason": "dispatch_queue_overflow", "error": "dispatch_queue_overflow"}
             self._agent_dispatch_pending_count = candidate_pending
             pending_admitted = True
         await self._agent_dispatch_gate.acquire()
@@ -2866,7 +2879,12 @@ class HooksService:
                         session_id,
                         hook_name,
                     )
-                return
+                return {
+                    "decision": "failed",
+                    "reason": str(metadata.get("hook_youtube_ingest_reason") or "pre_dispatch_deferred"),
+                    "error": str(metadata.get("hook_youtube_ingest_error") or metadata.get("hook_youtube_ingest_reason") or "pre_dispatch_deferred"),
+                    "failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                }
 
             user_input = self._build_agent_user_input(action)
             if not user_input:
@@ -2882,7 +2900,7 @@ class HooksService:
                         error="missing_message",
                     )
                 logger.warning("Hook agent action missing message session_key=%s", session_key)
-                return
+                return {"decision": "failed", "reason": "missing_message", "error": "missing_message"}
 
             request = GatewayRequest(user_input=user_input, metadata=metadata)
             if self._turn_admitter:
@@ -2896,7 +2914,12 @@ class HooksService:
                         decision,
                         admitted_turn_id or "",
                     )
-                    return
+                    return {
+                        "decision": decision,
+                        "turn_id": admitted_turn_id,
+                        "reason": decision,
+                        "session_id": session_id,
+                    }
 
             if self._run_counter_start:
                 self._run_counter_start(session_id, run_source)
@@ -3046,6 +3069,13 @@ class HooksService:
                     workspace_root=session_workspace,
                 )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, hook_name)
+            return {
+                "decision": "accepted",
+                "turn_id": admitted_turn_id,
+                "status": "completed",
+                "session_id": session_id,
+                "execution_summary": execution_summary,
+            }
         except HookReportedTimeout as exc:
             logger.error(
                 "Hook action reported timeout session_key=%s session_id=%s detail=%s",
@@ -3095,6 +3125,13 @@ class HooksService:
                     reason="agent_reported_timeout",
                     started_at_epoch=start_ts,
                 )
+            return {
+                "decision": "failed",
+                "turn_id": admitted_turn_id,
+                "reason": "agent_reported_timeout",
+                "error": str(exc),
+                "session_id": session_id,
+            }
         except HookIdleTimeout as exc:
             logger.error(
                 "Hook action idle timed out session_key=%s session_id=%s detail=%s",
@@ -3148,6 +3185,13 @@ class HooksService:
                     reason=f"hook_idle_timeout_{idle_seconds}s",
                     started_at_epoch=start_ts,
                 )
+            return {
+                "decision": "failed",
+                "turn_id": admitted_turn_id,
+                "reason": f"hook_idle_timeout_{int(self._youtube_hook_idle_timeout_seconds or 0)}s",
+                "error": str(exc),
+                "session_id": session_id,
+            }
         except asyncio.TimeoutError:
             logger.error(
                 "Hook action timed out session_key=%s session_id=%s timeout_seconds=%s",
@@ -3201,6 +3245,13 @@ class HooksService:
                     reason=f"hook_timeout_{timeout_seconds}s",
                     started_at_epoch=start_ts,
                 )
+            return {
+                "decision": "failed",
+                "turn_id": admitted_turn_id,
+                "reason": f"hook_timeout_{timeout_seconds}s",
+                "error": f"hook_timeout_{timeout_seconds}s",
+                "session_id": session_id,
+            }
         except Exception as exc:
             dispatch_failure_reason = self._dispatch_failure_reason(exc, execution_summary)
             is_interrupted_dispatch = dispatch_failure_reason == "hook_dispatch_interrupted"
@@ -3282,6 +3333,13 @@ class HooksService:
                         reason=dispatch_failure_reason,
                         started_at_epoch=start_ts,
                     )
+            return {
+                "decision": "failed",
+                "turn_id": admitted_turn_id,
+                "reason": dispatch_failure_reason,
+                "error": str(exc),
+                "session_id": session_id,
+            }
         finally:
             if self._run_counter_finish:
                 try:

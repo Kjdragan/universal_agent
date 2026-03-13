@@ -42,7 +42,7 @@ The current trusted inbound sender list defaults to:
 - `kevinjdragan@gmail.com`
 - `kevin@clearspringcg.com`
 
-Trusted inbound mail from those addresses is treated as operator mail. It receives an immediate in-thread acknowledgement from the transport layer and is then routed into the normal email handling flow with trusted sender metadata attached.
+Trusted inbound mail from those addresses is treated as operator mail. It receives an immediate in-thread acknowledgement from the transport layer, is persisted to a durable inbox queue, and is retried with exponential backoff when Simone is busy before being routed into the normal email handling flow.
 
 ## Identities and Routing Rules
 
@@ -185,12 +185,33 @@ Current behavior:
 - if the env var is unset, the three Kevin addresses above are used as the default allowlist
 - sender trust is determined in runtime transport logic, not by LLM prompt interpretation
 - trusted inbound mail gets an immediate acknowledgement reply before the deeper handler work continues
+- trusted inbound mail is stored in `agentmail_inbox_queue` inside the activity DB before dispatch is attempted
+- when the target session is busy, the queue item moves to retry mode and is re-attempted with exponential backoff instead of being dropped
 - trusted sender metadata is attached to the internal payload:
   - `sender_email`
   - `sender_role`
   - `sender_trusted`
 
 This closes the gap where unsolicited direct mail from one of Kevin's valid addresses could be treated like generic external mail.
+
+### Trusted Inbox Queue and Retry Behavior
+
+Implementation:
+- `AgentMailService._queue_insert_trusted_inbound(...)`
+- `AgentMailService._trusted_inbox_queue_loop(...)`
+- `HooksService.dispatch_internal_action_with_admission(...)`
+
+Current behavior:
+- trusted inbound messages are persisted before work admission is attempted
+- if the hook dispatch path reports `busy`, the queue item is not discarded
+- the queue retries with exponential backoff and jitter until Simone is free
+- queue state is visible through ops endpoints:
+  - `GET /api/v1/ops/agentmail/inbox-queue`
+  - `GET /api/v1/ops/agentmail/inbox-queue/{queue_id}`
+  - `POST /api/v1/ops/agentmail/inbox-queue/{queue_id}/retry-now`
+  - `POST /api/v1/ops/agentmail/inbox-queue/{queue_id}/cancel`
+
+This is the current production answer to unsolicited direct mail from Kevin: queue first, acknowledge immediately, retry until admitted.
 
 ### Routing to the Email Handler Agent
 
