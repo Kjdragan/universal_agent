@@ -28,8 +28,8 @@ if str(SRC_ROOT) not in sys.path:
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.youtube_ingest import _parse_proxy_locations
 
-CANONICAL_WEBSHARE_HOST = "p.webshare.io"
-STALE_WEBSHARE_HOST = "proxy.webshare.io"
+CANONICAL_WEBSHARE_HOST = "proxy.webshare.io"
+STALE_WEBSHARE_HOST = "p.webshare.io"
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -125,7 +125,7 @@ def _validate_settings(settings: dict[str, Any]) -> list[dict[str, str]]:
             _issue(
                 "warning",
                 "stale_proxy_host_override",
-                "WEBSHARE proxy host resolves to proxy.webshare.io (stale). Prefer p.webshare.io:80.",
+                "WEBSHARE proxy host resolves to p.webshare.io (stale). Prefer proxy.webshare.io:80.",
             )
         )
 
@@ -169,7 +169,7 @@ def _validate_settings(settings: dict[str, Any]) -> list[dict[str, str]]:
             _issue(
                 "warning",
                 "non_default_proxy_port",
-                f"Proxy port is set to {port}. Canonical default is 80 for p.webshare.io.",
+                f"Proxy port is set to {port}. Canonical default is 80 for proxy.webshare.io.",
             )
         )
 

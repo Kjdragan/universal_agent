@@ -30,7 +30,7 @@ The tutorial pipeline has since been normalized to a VPS-primary topology:
 2. `UA_HOOKS_YOUTUBE_INGEST_URLS` should prefer VPS loopback first, typically `http://127.0.0.1:8002/api/v1/youtube/ingest`.
 3. Local workstation tutorial processing is now a dev-only fallback rather than the normal runtime path.
 4. Terminal hook ingest failures now persist `local_ingest_result.json`, and proxy CONNECT/tunnel failures are classified as `proxy_connect_failed`.
-5. The current default Webshare residential endpoint is `p.webshare.io:80`. The older `proxy.webshare.io:80` host is stale for this path and can surface as `Tunnel connection failed: 404 Not Found`.
+5. The current default Webshare residential endpoint is `proxy.webshare.io:80`. The older `p.webshare.io:80` host is stale for this path and can surface as DNS failures (`NXDOMAIN`).
 
 ## Is residential proxy used for YouTube RSS feed polling?
 No. RSS polling itself is direct HTTP to YouTube feeds (`videos.xml`) and does not use Webshare proxy.

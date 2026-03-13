@@ -178,10 +178,10 @@ Alias/fallback env vars seen in code:
 - `WEBSHARE_PROXY_LOCATIONS`
 
 Canonical default Webshare residential endpoint:
-- `p.webshare.io:80`
+- `proxy.webshare.io:80`
 
 Operational note:
-- `proxy.webshare.io:80` is a stale default for the residential ingest path and may surface as proxy CONNECT failures such as `Tunnel connection failed: 404 Not Found`.
+- `p.webshare.io:80` is a stale default for the residential ingest path and may surface as DNS failures (`NXDOMAIN`).
 
 Operational env vars:
 - `UA_YOUTUBE_INGEST_REQUIRE_PROXY`

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import threading
 import os
 import sqlite3
 import subprocess
@@ -476,11 +477,44 @@ def main() -> int:
         default="/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env",
     )
     args = parser.parse_args()
-    code, summary = asyncio.run(_run_once(args))
+    code, summary = _run_once_sync(args)
     print("CSI_AUTO_REMEDIATE", json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
     return int(code)
 
 
+def _run_once_sync(args: argparse.Namespace) -> tuple[int, dict]:
+    """Run async remediation safely even if a loop is already active."""
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop and running_loop.is_running():
+        result: dict[str, tuple[int, dict]] = {}
+        error: list[BaseException] = []
+
+        def _thread_runner() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                result["value"] = loop.run_until_complete(_run_once(args))
+            except BaseException as exc:  # pragma: no cover - defensive path
+                error.append(exc)
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=_thread_runner, daemon=True)
+        thread.start()
+        thread.join()
+        if error:
+            raise error[0]
+        return result.get("value", (1, {"status": "failed", "error": "thread_runner_no_result"}))
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run_once(args))
+    finally:
+        loop.close()
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -43,8 +43,8 @@ from universal_agent.youtube_ingest import _classify_api_error, _parse_proxy_loc
 DEFAULT_HTTP_URL = "http://api.ipify.org?format=json"
 DEFAULT_HTTPS_URL = "https://api.ipify.org?format=json"
 DEFAULT_YOUTUBE_URL = "https://www.youtube.com/generate_204"
-STALE_WEBSHARE_HOST = "proxy.webshare.io"
-CANONICAL_WEBSHARE_HOST = "p.webshare.io"
+STALE_WEBSHARE_HOST = "p.webshare.io"
+CANONICAL_WEBSHARE_HOST = "proxy.webshare.io"
 
 
 def _load_local_env() -> None:
@@ -94,8 +94,8 @@ def _resolve_proxy_settings() -> dict[str, Any]:
     warnings: list[str] = []
     if host.strip().lower() == STALE_WEBSHARE_HOST:
         warnings.append(
-            "Resolved proxy host is proxy.webshare.io, which is stale for the residential ingest path. "
-            "Expected default is p.webshare.io:80."
+            "Resolved proxy host is p.webshare.io, which currently fails DNS resolution on VPS. "
+            "Expected default is proxy.webshare.io:80."
         )
     return {
         "username": username,
