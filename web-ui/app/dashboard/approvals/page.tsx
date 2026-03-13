@@ -7,13 +7,20 @@ const API_BASE = "/api/dashboard/gateway";
 
 type Approval = {
     approval_id: string;
+    task_id?: string;
     phase_id?: string;
     status: string;
+    raw_status?: string;
+    title?: string;
     summary?: string;
     requested_by?: string;
     approved_by?: string;
     created_at?: string;
     updated_at?: string;
+    priority?: number;
+    focus_href?: string;
+    approval_source?: string;
+    source_kind?: string;
     metadata?: Record<string, unknown>;
 };
 
@@ -161,19 +168,37 @@ export default function ApprovalsPage() {
                                         {approval.status}
                                     </span>
                                 </div>
-                                {approval.summary && (
-                                    <p className="mt-1.5 text-sm text-slate-300">{approval.summary}</p>
+                                {(approval.title || approval.summary) && (
+                                    <p className="mt-1.5 text-sm text-slate-300">
+                                        {approval.title || approval.summary}
+                                    </p>
+                                )}
+                                {approval.summary && approval.summary !== approval.title && (
+                                    <p className="mt-1 text-xs text-slate-400">{approval.summary}</p>
                                 )}
                                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
                                     {approval.requested_by && <span>Requested by: {approval.requested_by}</span>}
                                     {approval.approved_by && <span>Decided by: {approval.approved_by}</span>}
                                     {approval.created_at && <span>Created: {approval.created_at}</span>}
+                                    {approval.updated_at && <span>Updated: {approval.updated_at}</span>}
                                     {approval.phase_id && <span>Phase: {approval.phase_id}</span>}
+                                    {approval.priority !== undefined && <span>Priority: {approval.priority}</span>}
+                                    {approval.raw_status && <span>Task status: {approval.raw_status}</span>}
+                                    {approval.approval_source && <span>Source: {approval.approval_source}</span>}
                                 </div>
                             </div>
 
-                            {approval.status === "pending" && (
-                                <div className="flex shrink-0 gap-2">
+                            <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                {approval.focus_href && (
+                                    <Link
+                                        href={approval.focus_href}
+                                        className="rounded border border-cyan-800/70 bg-cyan-900/20 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/35"
+                                    >
+                                        Open
+                                    </Link>
+                                )}
+                                {approval.status === "pending" && (
+                                    <>
                                     <button
                                         type="button"
                                         onClick={() => updateApproval(approval.approval_id, "approved")}
@@ -190,8 +215,9 @@ export default function ApprovalsPage() {
                                     >
                                         Reject
                                     </button>
-                                </div>
-                            )}
+                                    </>
+                                )}
+                            </div>
                         </div>
                     </article>
                 ))}

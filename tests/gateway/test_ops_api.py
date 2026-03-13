@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from universal_agent import gateway_server
+from universal_agent import task_hub
 from universal_agent.ops_service import OpsService
 from universal_agent.gateway import InProcessGateway
 from universal_agent.gateway import GatewaySessionSummary
@@ -4325,3 +4326,119 @@ def test_ops_work_thread_rejects_invalid_decision(client):
     )
     assert resp.status_code == 400
     assert "Unsupported decision" in resp.text
+
+
+def test_ops_approvals_list_includes_task_hub_action_items(client):
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": "csi_action_1",
+                    "source_kind": "csi_recommendation",
+                    "title": "CSI recommendation: replay delivery DLQ",
+                    "description": "Run the replay command and verify recovery.",
+                    "project_key": "immediate",
+                    "priority": 5,
+                    "status": task_hub.TASK_STATUS_REVIEW,
+                    "must_complete": True,
+                    "agent_ready": True,
+                    "metadata": {"focus_href": "/dashboard/todolist?mode=agent"},
+                },
+            )
+        finally:
+            conn.close()
+
+    resp = client.get("/api/v1/ops/approvals?status=pending")
+    assert resp.status_code == 200
+    approvals = resp.json()["approvals"]
+    task_row = next(item for item in approvals if item["approval_id"] == "csi_action_1")
+    assert task_row["approval_source"] == "task_hub"
+    assert task_row["status"] == "pending"
+    assert task_row["focus_href"] == "/dashboard/todolist?mode=agent"
+
+    highlight = client.get("/api/v1/dashboard/approvals/highlight")
+    assert highlight.status_code == 200
+    assert highlight.json()["pending_count"] >= 1
+    assert any(item["approval_id"] == "csi_action_1" for item in highlight.json()["approvals"])
+
+
+def test_ops_approvals_update_routes_task_hub_items(client):
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": "csi_action_approve",
+                    "source_kind": "csi_recommendation",
+                    "title": "CSI recommendation: approve action",
+                    "description": "Operator confirmed this recommendation.",
+                    "project_key": "immediate",
+                    "priority": 5,
+                    "status": task_hub.TASK_STATUS_REVIEW,
+                    "must_complete": True,
+                    "agent_ready": True,
+                },
+            )
+        finally:
+            conn.close()
+
+    resp = client.patch(
+        "/api/v1/ops/approvals/csi_action_approve",
+        json={"status": "approved", "notes": "Handled by operator"},
+    )
+    assert resp.status_code == 200
+    approval = resp.json()["approval"]
+    assert approval["approval_source"] == "task_hub"
+    assert approval["status"] == "approved"
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            item = task_hub.get_item(conn, "csi_action_approve")
+            assert item is not None
+            assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+        finally:
+            conn.close()
+
+
+def test_ops_approvals_update_retires_mirrored_pending_approval_task(client):
+    create_resp = client.post(
+        "/api/v1/ops/approvals",
+        json={
+            "approval_id": "approval_sync_1",
+            "summary": "Approve prod deploy",
+            "requested_by": "ops",
+            "status": "pending",
+        },
+    )
+    assert create_resp.status_code == 200
+
+    client.get("/api/v1/ops/approvals?status=pending")
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            mirrored = task_hub.get_item(conn, "approval:approval_sync_1")
+            assert mirrored is not None
+            assert mirrored["status"] == task_hub.TASK_STATUS_OPEN
+        finally:
+            conn.close()
+
+    update_resp = client.patch(
+        "/api/v1/ops/approvals/approval_sync_1",
+        json={"status": "approved", "notes": "Approved from dashboard"},
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["approval"]["status"] == "approved"
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            mirrored = task_hub.get_item(conn, "approval:approval_sync_1")
+            assert mirrored is not None
+            assert mirrored["status"] == task_hub.TASK_STATUS_COMPLETED
+        finally:
+            conn.close()
