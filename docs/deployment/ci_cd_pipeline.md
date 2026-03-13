@@ -115,6 +115,8 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 
 The bootstrap file written by deploys is intentionally minimal. Stage-shared
 runtime config and secrets are loaded from Infisical after bootstrap validation.
+Current deploy workflows serialize that bootstrap file deterministically during
+deploy rather than editing keys in place.
 
 ## Deployed Runtime Tooling
 
