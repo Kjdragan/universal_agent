@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -16,6 +17,7 @@ class FactoryRole(str, Enum):
 
 
 _ALLOWED_LLM_PROVIDER_OVERRIDES = {"ZAI", "ANTHROPIC", "OPENAI", "OLLAMA"}
+_VALID_RUNTIME_STAGES = {"development", "staging", "production"}
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,29 @@ def _env_flag(name: str, default: bool) -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def resolve_runtime_stage(raw_stage: Optional[str] = None) -> Optional[str]:
+    raw = str(raw_stage or os.getenv("UA_RUNTIME_STAGE") or "").strip().lower()
+    if not raw:
+        return None
+    if raw in _VALID_RUNTIME_STAGES:
+        return raw
+    raise ValueError(
+        f"Unsupported UA_RUNTIME_STAGE={raw!r}; expected one of: "
+        + ", ".join(sorted(_VALID_RUNTIME_STAGES))
+    )
+
+
+def resolve_machine_slug(raw_slug: Optional[str] = None) -> str:
+    raw = (
+        str(raw_slug or "").strip()
+        or str(os.getenv("UA_MACHINE_SLUG") or "").strip()
+        or str(os.getenv("UA_FACTORY_ID") or "").strip()
+        or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
+        or socket.gethostname()
+    )
+    return raw
 
 
 def resolve_factory_role(raw_role: Optional[str] = None) -> FactoryRole:

@@ -27,17 +27,24 @@ This is the only supported app deployment path in this repository.
 | VPS checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
 | Gateway/API ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, and `UA_GATEWAY_URL=http://127.0.0.1:9002` in staging `.env` | `8002` / `8001` |
 | Legacy/fallback checkout | n/a | `/opt/universal_agent_repo` if `/opt/universal_agent` is occupied by a non-git legacy directory |
-| Runtime secrets | `staging-hq` when provisioning succeeds, otherwise temporary fallback to `dev` | `prod` when provisioning succeeds; if provisioning fails, retain the currently configured production Infisical environment |
+| Runtime secrets | `staging` via explicit bootstrap `.env` plus stage secret validation | `production` via explicit bootstrap `.env` plus stage secret validation |
 
 ## Infisical Runtime Lanes
 
-The current project is capped at three Infisical environments, so the runtime lanes are:
+The runtime model is stage-based:
 
-- `dev`: source/template lane used by provisioning.
-- `kevins-desktop`: Kevin's local worker lane.
-- `prod`: production VPS headquarters lane.
+- `development`
+- `staging`
+- `production`
 
-The production deployment workflow provisions `prod` with HEADQUARTERS overrides and then writes `INFISICAL_ENVIRONMENT='prod'` into the production bootstrap `.env`. The important distinction is that production no longer reads `dev`, even though the `prod` slug is not as machine-explicit as an ideal future naming scheme.
+Machine identity is written locally during bootstrap and validated during deploy:
+
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_RUNTIME_STAGE`
+- `UA_MACHINE_SLUG`
+
+Deploy workflows must not provision machine-shaped Infisical environments during normal deploys.
 
 ## Required GitHub Secrets
 
@@ -82,6 +89,24 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 5. **Validate staging** against the exact merged `develop` SHA.
 6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
 7. **Production deploy** is dispatched explicitly by the promotion workflow after `main` is advanced.
+
+## Bootstrap Identity Written By Deploys
+
+### Staging VPS
+
+- `INFISICAL_ENVIRONMENT=staging`
+- `UA_RUNTIME_STAGE=staging`
+- `FACTORY_ROLE=HEADQUARTERS`
+- `UA_DEPLOYMENT_PROFILE=vps`
+- `UA_MACHINE_SLUG=vps-hq-staging`
+
+### Production VPS
+
+- `INFISICAL_ENVIRONMENT=production`
+- `UA_RUNTIME_STAGE=production`
+- `FACTORY_ROLE=HEADQUARTERS`
+- `UA_DEPLOYMENT_PROFILE=vps`
+- `UA_MACHINE_SLUG=vps-hq-production`
 
 ## Deployed Runtime Tooling
 

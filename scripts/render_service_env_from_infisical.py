@@ -39,6 +39,16 @@ def _render_lines(entries: list[tuple[str, list[str]]], allow_missing: bool) -> 
     return lines
 
 
+def _runtime_identity_entries() -> list[tuple[str, list[str]]]:
+    return [
+        ("INFISICAL_ENVIRONMENT", ["INFISICAL_ENVIRONMENT"]),
+        ("UA_RUNTIME_STAGE", ["UA_RUNTIME_STAGE", "INFISICAL_ENVIRONMENT"]),
+        ("FACTORY_ROLE", ["FACTORY_ROLE"]),
+        ("UA_DEPLOYMENT_PROFILE", ["UA_DEPLOYMENT_PROFILE"]),
+        ("UA_MACHINE_SLUG", ["UA_MACHINE_SLUG"]),
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Render a service-specific env file from Infisical-backed runtime env.",
@@ -60,6 +70,11 @@ def main() -> int:
         action="store_true",
         help="Allow unresolved entries and write empty values instead of failing.",
     )
+    parser.add_argument(
+        "--include-runtime-identity",
+        action="store_true",
+        help="Also emit stage/bootstrap identity keys alongside requested entries.",
+    )
     args = parser.parse_args()
 
     if not args.entry:
@@ -69,6 +84,8 @@ def main() -> int:
     initialize_runtime_secrets(profile=args.profile, force_reload=True)
 
     entries = [_parse_entry(raw) for raw in args.entry]
+    if args.include_runtime_identity:
+        entries.extend(_runtime_identity_entries())
     lines = _render_lines(entries, allow_missing=bool(args.allow_missing))
 
     output_path = Path(args.output).expanduser().resolve()
@@ -81,4 +98,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Provision a new Infisical environment for a factory deployment.
+"""Legacy helper for machine-shaped Infisical environments.
 
-Clones all secrets from a source environment (default: ``dev``) into a new
-machine-specific environment, applying a set of factory-role overrides.
+This script predates the stage-based Infisical model. It is retained as an
+admin/break-glass helper for historical machine-shaped environments, but new
+deployments should use the canonical stage environments (`development`,
+`staging`, `production`) with machine-local bootstrap identity instead.
 
-Usage examples::
+Legacy usage examples::
 
     # Create "Kevin's Desktop" environment (LOCAL_WORKER)
     python scripts/infisical_provision_factory_env.py \
@@ -31,8 +33,10 @@ Prerequisites:
       must be set (via .env or shell environment).
     - ``httpx`` must be installed (included in UA deps).
 
-The script is idempotent: if the environment already exists it skips
-creation and proceeds to upsert secrets with the override map applied.
+For the canonical stage-based workflow, prefer:
+- `scripts/infisical_manage_stage_env.py`
+- `scripts/bootstrap_local_hq_dev.sh`
+- `scripts/bootstrap_local_worker_stage.sh`
 """
 
 from __future__ import annotations

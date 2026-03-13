@@ -71,6 +71,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy for feature work, staging promotion, and production release.
 - **[Local Runtime Modes](06_Deployment_And_Environments/05_Local_Runtime_Modes.md)**: Canonical split between HQ dev and the separate desktop worker lane.
 - **[Production Deploy Incident (2026-03-12)](06_Deployment_And_Environments/06_Production_Deploy_Incident_2026-03-12.md)**: Root cause, fix, verification, and prevention notes for the March 12 production `.venv` deployment regression.
+- **[Stage-Based Infisical and Machine Bootstrap Migration Plan (2026-03-12)](06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)**: Living migration record for stage environments, machine-local bootstrap identity, and CI/CD runtime validation.
 
 ### 5. [API Reference](04_API_Reference)
 

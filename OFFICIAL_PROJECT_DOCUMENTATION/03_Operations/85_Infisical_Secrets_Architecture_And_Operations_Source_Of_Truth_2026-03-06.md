@@ -4,7 +4,7 @@
 
 This document is the canonical source of truth for how Universal Agent loads, trusts, and operationalizes secrets from Infisical.
 
-It describes the runtime bootstrap model, the strict-versus-fallback behavior by deployment profile, the difference between bootstrap credentials and runtime secrets, and the scripts/operators involved in provisioning and validating Infisical-backed environments.
+It describes the runtime bootstrap model, the strict-versus-fallback behavior by deployment profile, the difference between bootstrap credentials and runtime secrets, and the scripts/operators involved in validating stage-based Infisical environments.
 
 ## Executive Summary
 
@@ -24,6 +24,20 @@ The critical distinction is:
 - `.env` contains **bootstrap information** and local dev knobs
 - **Infisical is the intended system of record for real runtime secrets**
 
+As of March 12, 2026, the intended Infisical environment model is stage-based:
+
+- `development`
+- `staging`
+- `production`
+
+Machine identity is no longer supposed to be encoded in the Infisical
+environment slug. Runtime identity is carried by bootstrap keys such as:
+
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_RUNTIME_STAGE`
+- `UA_MACHINE_SLUG`
+
 ## Core Model
 
 ## Bootstrap Credentials vs Runtime Secrets
@@ -37,6 +51,10 @@ These bootstrap values include:
 - optionally `INFISICAL_ENVIRONMENT`
 - optionally `INFISICAL_SECRET_PATH`
 - optionally `INFISICAL_API_URL`
+- `UA_RUNTIME_STAGE`
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_MACHINE_SLUG`
 
 These are not the same as application secrets like API keys and service tokens.
 
@@ -136,15 +154,20 @@ CSI now has an optional Infisical-first bootstrap (`csi_ingester/infisical_boots
 
 ## Environment Variables
 
-Canonical Infisical env surface from `.env.sample`:
+Canonical bootstrap env surface from `.env.sample`:
 - `UA_INFISICAL_ENABLED`
 - `UA_INFISICAL_STRICT`
 - `UA_INFISICAL_ALLOW_DOTENV_FALLBACK`
 - `INFISICAL_CLIENT_ID`
 - `INFISICAL_CLIENT_SECRET`
 - `INFISICAL_PROJECT_ID`
+- `INFISICAL_API_URL`
 - `INFISICAL_ENVIRONMENT`
 - `INFISICAL_SECRET_PATH`
+- `UA_RUNTIME_STAGE`
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_MACHINE_SLUG`
 - `UA_DOTENV_PATH`
 
 ### Current Intended Model
@@ -156,10 +179,11 @@ Canonical Infisical env surface from `.env.sample`:
 
 ## Operational Meaning of `.env.sample` Guidance
 
-The `.env.sample` guidance is clear about the intended system model:
+The `.env.sample` guidance is now intentionally narrow:
 - local and VPS both use the same Infisical-backed secret authority
-- raw secrets should be added to Infisical rather than copied into `.env`
-- Infisical-loaded values are intended to win over raw values present in `.env`
+- `.env.sample` is bootstrap-only
+- raw runtime secrets should be added to Infisical rather than copied into `.env`
+- machine-local identity belongs in bootstrap
 
 This is a deliberate design choice that prevents configuration drift between environments.
 
@@ -183,10 +207,12 @@ Preferred environment for Tailscale admin automation:
 - path: `/tailscale`
 
 Current live fallback for this project:
-- environment: `prod`
+- environment: `production`
 - path: `/tailscale`
 
-This fallback is in use because the Infisical project is currently at its environment limit and could not create `infra-admin`.
+This fallback is in use because the Infisical project remains limited to the
+three canonical stage environments and does not currently dedicate a separate
+`infra-admin` environment.
 In both cases the canonical secrets are:
 - `TAILSCALE_TAILNET`
 - `TAILSCALE_ADMIN_API_TOKEN`
@@ -196,19 +222,22 @@ The operational helper for writing these secrets is:
 
 ## Provisioning and Support Scripts
 
-Key script:
+Current stage-admin helpers:
+
+- `scripts/infisical_manage_stage_env.py`
+- `scripts/validate_runtime_bootstrap.py`
+
+Legacy helper:
+
 - `scripts/infisical_provision_factory_env.py`
 
-Purpose:
-- create or update machine-specific Infisical environments
-- clone from a source environment
-- apply role-specific override maps
-- keep environment provisioning idempotent
+Current intended purpose:
 
-This script documents and operationalizes the split between:
-- a shared source environment such as `dev`
-- machine-specific target environments such as `kevins-desktop`
-- runtime policy overrides by role
+- validate stage environments
+- compare or back up stage secrets
+- synchronize stage-level defaults under operator control
+- write explicit bootstrap identity per machine instead of creating
+  machine-specific Infisical environments
 
 Related setup script:
 - `scripts/install_vps_infisical_sdk.sh`
@@ -238,6 +267,7 @@ A healthy Infisical-backed runtime should satisfy all of the following:
 - runtime source is `infisical` in normal production conditions
 - secret values are present in process env without being duplicated into raw `.env`
 - production nodes are not silently booting from local fallback when strict mode is expected
+- runtime identity matches the expected stage/profile/role bootstrap contract
 
 ## Failure Modes to Watch
 
@@ -286,6 +316,8 @@ Primary implementation:
 - `src/universal_agent/delegation/bridge_main.py`
 
 Provisioning/support:
+- `scripts/infisical_manage_stage_env.py`
+- `scripts/validate_runtime_bootstrap.py`
 - `scripts/infisical_provision_factory_env.py`
 - `scripts/install_vps_infisical_sdk.sh`
 - `.env.sample`
@@ -301,3 +333,4 @@ The canonical Infisical story in Universal Agent is:
 - **VPS and production-like nodes should fail closed if Infisical cannot load**
 - **local workstations may fall back to dotenv only when explicitly allowed**
 - **the loader is designed to stay resilient via SDK-first, REST-fallback bootstrap**
+- **stage selection belongs to `INFISICAL_ENVIRONMENT`; machine identity belongs to bootstrap**

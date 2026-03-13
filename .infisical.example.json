@@ -1,0 +1,8 @@
+{
+  "workspaceId": "replace-with-your-infisical-project-id",
+  "defaultEnvironment": "development",
+  "gitBranchToEnvironmentMapping": {
+    "develop": "staging",
+    "main": "production"
+  }
+}

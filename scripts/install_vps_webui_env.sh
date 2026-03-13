@@ -29,6 +29,7 @@ tmp_env="$(runuser -u "$APP_USER" -- mktemp /tmp/ua-webui-env.XXXXXX)"
 runuser -u "$APP_USER" -- env PYTHONPATH="$APP_ROOT/src" "$PY_BIN" \
   "$APP_ROOT/scripts/render_service_env_from_infisical.py" \
   --profile vps \
+  --include-runtime-identity \
   --output "$tmp_env" \
   --entry "UA_DASHBOARD_OPS_TOKEN=UA_DASHBOARD_OPS_TOKEN,UA_OPS_TOKEN"
 if id -u "$APP_USER" >/dev/null 2>&1; then

@@ -5,6 +5,8 @@ from universal_agent.runtime_role import (
     build_factory_runtime_policy,
     normalize_llm_provider_override,
     resolve_factory_role,
+    resolve_machine_slug,
+    resolve_runtime_stage,
 )
 
 
@@ -55,3 +57,11 @@ def test_capability_overrides(monkeypatch):
     assert worker_with_overrides.delegation_mode == "publish_and_listen"
     assert worker_with_overrides.can_publish_delegations is True
     assert worker_with_overrides.gateway_mode == "health_only"  # Should remain unchanged
+
+
+def test_runtime_stage_and_machine_slug_helpers(monkeypatch):
+    monkeypatch.setenv("UA_RUNTIME_STAGE", "staging")
+    monkeypatch.setenv("UA_MACHINE_SLUG", "kevins-desktop")
+
+    assert resolve_runtime_stage() == "staging"
+    assert resolve_machine_slug() == "kevins-desktop"

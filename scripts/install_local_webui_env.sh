@@ -24,6 +24,7 @@ echo "Rendering $WEBUI_ENV_FILE from Infisical-backed runtime env..."
 env PYTHONPATH="$APP_ROOT/src" "$PY_BIN" \
   "$APP_ROOT/scripts/render_service_env_from_infisical.py" \
   --profile "$DEPLOY_PROFILE" \
+  --include-runtime-identity \
   --output "$tmp_env" \
   --entry "UA_DASHBOARD_OPS_TOKEN=UA_DASHBOARD_OPS_TOKEN,UA_OPS_TOKEN"
 

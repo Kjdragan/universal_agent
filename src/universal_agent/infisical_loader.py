@@ -7,9 +7,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from universal_agent.runtime_role import resolve_machine_slug, resolve_runtime_stage
+
 logger = logging.getLogger(__name__)
 
 _VALID_DEPLOYMENT_PROFILES = {"local_workstation", "standalone_node", "vps"}
+_VALID_RUNTIME_STAGES = {"development", "staging", "production"}
+_LEGACY_INFISICAL_ENV_ALIASES = {
+    "dev": "development",
+    "prod": "production",
+    "staging-hq": "staging",
+    "kevins-desktop-hq-dev": "development",
+}
 _BOOTSTRAP_LOCK = threading.Lock()
 _BOOTSTRAP_RESULT: SecretBootstrapResult | None = None
 
@@ -21,6 +30,10 @@ class SecretBootstrapResult:
     strict_mode: bool
     loaded_count: int
     fallback_used: bool
+    environment: str = ""
+    runtime_stage: str = ""
+    machine_slug: str = ""
+    deployment_profile: str = ""
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -40,6 +53,29 @@ def _resolve_profile(profile: str | None) -> str:
     if candidate in _VALID_DEPLOYMENT_PROFILES:
         return candidate
     return "local_workstation"
+
+
+def _normalize_infisical_environment(raw_environment: str | None) -> str:
+    raw = str(raw_environment or "").strip()
+    if not raw:
+        return "development"
+    lowered = raw.lower()
+    return _LEGACY_INFISICAL_ENV_ALIASES.get(lowered, lowered)
+
+
+def _resolve_runtime_stage_for_bootstrap(
+    environment: str,
+    *,
+    profile: str,
+) -> str:
+    explicit = str(os.getenv("UA_RUNTIME_STAGE") or "").strip()
+    if explicit:
+        return resolve_runtime_stage(explicit) or ""
+    if environment in _VALID_RUNTIME_STAGES:
+        return environment
+    if profile == "vps":
+        return "production"
+    return "development"
 
 
 def _strict_mode_for_profile(profile: str) -> bool:
@@ -111,7 +147,8 @@ def _fetch_infisical_secrets() -> dict[str, str]:
     client_id = str(os.getenv("INFISICAL_CLIENT_ID") or "").strip()
     client_secret = str(os.getenv("INFISICAL_CLIENT_SECRET") or "").strip()
     project_id = str(os.getenv("INFISICAL_PROJECT_ID") or "").strip()
-    environment = str(os.getenv("INFISICAL_ENVIRONMENT") or "dev").strip() or "dev"
+    environment = _normalize_infisical_environment(os.getenv("INFISICAL_ENVIRONMENT"))
+    os.environ["INFISICAL_ENVIRONMENT"] = environment
     secret_path = str(os.getenv("INFISICAL_SECRET_PATH") or "/").strip() or "/"
     api_url = str(os.getenv("INFISICAL_API_URL") or "https://app.infisical.com").strip() or "https://app.infisical.com"
     api_url = api_url.rstrip("/")
@@ -260,6 +297,15 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
 
         resolved_profile = _resolve_profile(profile)
         strict_mode = _strict_mode_for_profile(resolved_profile)
+        normalized_environment = _normalize_infisical_environment(os.getenv("INFISICAL_ENVIRONMENT"))
+        os.environ["INFISICAL_ENVIRONMENT"] = normalized_environment
+        runtime_stage = _resolve_runtime_stage_for_bootstrap(
+            normalized_environment,
+            profile=resolved_profile,
+        )
+        os.environ["UA_RUNTIME_STAGE"] = runtime_stage
+        machine_slug = resolve_machine_slug()
+        os.environ["UA_MACHINE_SLUG"] = machine_slug
         infisical_enabled = _env_flag("UA_INFISICAL_ENABLED", default=True)
         allow_dotenv_fallback = _env_flag(
             "UA_INFISICAL_ALLOW_DOTENV_FALLBACK",
@@ -274,11 +320,23 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
         if infisical_enabled:
             try:
                 secret_values = _fetch_infisical_secrets()
-                loaded_count = _inject_environment_values(secret_values, overwrite=True)
+                loaded_count = _inject_environment_values(secret_values, overwrite=False)
                 source = "infisical"
+                normalized_environment = _normalize_infisical_environment(os.getenv("INFISICAL_ENVIRONMENT"))
+                os.environ["INFISICAL_ENVIRONMENT"] = normalized_environment
+                runtime_stage = _resolve_runtime_stage_for_bootstrap(
+                    normalized_environment,
+                    profile=resolved_profile,
+                )
+                os.environ["UA_RUNTIME_STAGE"] = runtime_stage
+                machine_slug = resolve_machine_slug()
+                os.environ["UA_MACHINE_SLUG"] = machine_slug
                 logger.info(
-                    "Infisical runtime secret bootstrap succeeded: profile=%s loaded=%d",
+                    "Infisical runtime secret bootstrap succeeded: profile=%s env=%s stage=%s machine=%s loaded=%d",
                     resolved_profile,
+                    normalized_environment,
+                    runtime_stage,
+                    machine_slug,
                     loaded_count,
                 )
             except Exception as exc:
@@ -300,6 +358,10 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
                     strict_mode=True,
                     loaded_count=0,
                     fallback_used=False,
+                    environment=normalized_environment,
+                    runtime_stage=runtime_stage,
+                    machine_slug=machine_slug,
+                    deployment_profile=resolved_profile,
                     errors=tuple(errors or ["InfisicalBootstrapUnavailable"]),
                 )
                 _BOOTSTRAP_RESULT = failure
@@ -319,6 +381,10 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
             strict_mode=strict_mode,
             loaded_count=max(0, int(loaded_count)),
             fallback_used=fallback_used,
+            environment=normalized_environment,
+            runtime_stage=runtime_stage,
+            machine_slug=machine_slug,
+            deployment_profile=resolved_profile,
             errors=tuple(errors),
         )
         _BOOTSTRAP_RESULT = result

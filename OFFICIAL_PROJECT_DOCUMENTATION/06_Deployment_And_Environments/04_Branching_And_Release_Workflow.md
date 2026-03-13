@@ -63,7 +63,7 @@ Local checkout roles:
 1. `/home/kjdragan/lrepos/universal_agent` = HQ dev lane
 2. `~/universal_agent_factory` = optional local worker lane
 
-If localhost starts returning role-based `403` responses on HQ dashboard pages, the repo checkout is almost certainly pointed at the worker environment instead of `kevins-desktop-hq-dev`.
+If localhost starts returning role-based `403` responses on HQ dashboard pages, the repo checkout is almost certainly no longer bootstrapped as `development + HEADQUARTERS + local_workstation`.
 
 Typical local loop:
 

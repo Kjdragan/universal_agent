@@ -4,20 +4,21 @@ Last updated: March 12, 2026
 
 ## Purpose
 
-This document explains the two different local runtime lanes on Kevin's desktop.
-
-They are intentionally different and should not be collapsed into one checkout.
+This document explains the two supported local runtime lanes on Kevin's
+desktop under the stage-based Infisical model.
 
 ## The Two Local Lanes
 
 ### 1. HQ Dev Lane
 
-Use this for normal application development.
+Use this for normal localhost application development.
 
 - checkout: `/home/kjdragan/lrepos/universal_agent`
-- Infisical environment: `kevins-desktop-hq-dev`
+- Infisical environment: `development`
+- runtime stage: `development`
 - factory role: `HEADQUARTERS`
 - deployment profile: `local_workstation`
+- machine slug: `kevins-desktop`
 - expected local ports:
   - web UI: `3000`
   - gateway: `8002`
@@ -30,60 +31,59 @@ This is the lane that should serve:
 - `/dashboard/telegram`
 - `/dashboard/corporation`
 
-### 2. Desktop Worker Lane
-
-Use this only when you want the desktop to participate in the factory fleet as a worker.
-
-- checkout: `~/universal_agent_factory`
-- Infisical environment: `kevins-desktop`
-- factory role: `LOCAL_WORKER`
-- deployment profile: `local_workstation`
-- systemd user service: `universal-agent-local-factory.service`
-
-This lane is not the full headquarters dashboard runtime.
-
-## Important Rule
-
-Do not point the main repo checkout at `kevins-desktop`.
-
-If you do, localhost behaves like `LOCAL_WORKER` and the gateway correctly blocks most HQ dashboard routes with `403`.
-
-## Bootstrap Commands
-
-### HQ Dev
+Bootstrap with:
 
 ```bash
 bash scripts/bootstrap_local_hq_dev.sh
 ```
 
-If the Infisical workspace cannot create another environment yet, use the current fallback:
+### 2. Desktop Worker Lane
+
+Use this only when you want the desktop to participate in staging or
+production as a local worker.
+
+- checkout: `~/universal_agent_factory`
+- Infisical environment: `staging` or `production`
+- runtime stage: `staging` or `production`
+- factory role: `LOCAL_WORKER`
+- deployment profile: `local_workstation`
+- machine slug: `kevins-desktop`
+- systemd user service: `universal-agent-local-factory.service`
+
+Bootstrap with:
 
 ```bash
-TARGET_ENV=dev bash scripts/bootstrap_local_hq_dev.sh
+bash scripts/bootstrap_local_worker_stage.sh --stage staging
 ```
 
-That keeps the repo checkout in HQ mode while the workspace remains under the current environment quota.
-
-### Desktop Worker
+or:
 
 ```bash
-bash scripts/deploy_local_factory.sh \
-  --infisical-client-id ... \
-  --infisical-client-secret ... \
-  --infisical-project-id ... \
-  --infisical-environment kevins-desktop
+bash scripts/bootstrap_local_worker_stage.sh --stage production
 ```
+
+## Important Rule
+
+Do not point the main repo checkout at a worker bootstrap.
+
+If localhost starts returning role-based `403` responses on HQ dashboard
+pages, the repo checkout is almost certainly no longer bootstrapped as:
+
+- `INFISICAL_ENVIRONMENT=development`
+- `FACTORY_ROLE=HEADQUARTERS`
+- `UA_DEPLOYMENT_PROFILE=local_workstation`
 
 ## Corporation Page Controls
 
-When HQ dev is running on the same machine as the desktop worker, the Corporation page shows two different controls:
+When HQ dev is running on the same machine as the desktop worker, the
+Corporation page shows two different controls:
 
 1. `Pause Intake`
    - logical delegation pause only
    - worker keeps running and heartbeating
 2. `Stop Local Factory`
    - stops `universal-agent-local-factory.service`
-   - use this when HQ development needs the local resources or shared coding/API budget
+   - use this when HQ development needs the local resources or shared budget
 
 ## Worker Port Isolation
 
@@ -91,7 +91,7 @@ HQ dev keeps the standard local gateway port:
 
 - `8002`
 
-Worker-only local gateway and tunnel helpers use:
+Worker-only helpers can use:
 
 - `8012`
 

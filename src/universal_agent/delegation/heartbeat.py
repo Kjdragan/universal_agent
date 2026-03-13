@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from universal_agent.feature_flags import coder_vp_enabled, vp_enabled_ids
-from universal_agent.runtime_role import build_factory_runtime_policy
+from universal_agent.runtime_role import build_factory_runtime_policy, resolve_machine_slug, resolve_runtime_stage
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +50,14 @@ class HeartbeatConfig:
         ops_token = str(os.getenv("UA_OPS_TOKEN") or "").strip()
         factory_id = (
             str(os.getenv("UA_FACTORY_ID") or "").strip()
-            or str(os.getenv("INFISICAL_ENVIRONMENT") or "").strip()
+            or str(os.getenv("UA_MACHINE_SLUG") or "").strip()
             or socket.gethostname()
         )
         factory_role = str(os.getenv("FACTORY_ROLE") or "LOCAL_WORKER").strip()
         deployment_profile = str(
             os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation"
         ).strip()
+        runtime_stage = resolve_runtime_stage() or str(os.getenv("INFISICAL_ENVIRONMENT") or "").strip()
         interval = float(os.getenv("UA_HEARTBEAT_INTERVAL_SECONDS", "60") or 60)
 
         policy = build_factory_runtime_policy(factory_role)
@@ -99,6 +100,8 @@ class HeartbeatConfig:
             ).strip(),
             "ua_enable_heartbeat": str(os.getenv("UA_ENABLE_HEARTBEAT") or "").strip(),
             "ua_enable_cron": str(os.getenv("UA_ENABLE_CRON") or "").strip(),
+            "ua_runtime_stage": runtime_stage,
+            "ua_machine_slug": resolve_machine_slug(),
         }
 
         return cls(

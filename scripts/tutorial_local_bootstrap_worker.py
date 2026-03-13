@@ -32,6 +32,7 @@ from universal_agent.delegation.redis_bus import (
     RedisMissionBus,
 )
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
+from universal_agent.runtime_role import resolve_machine_slug
 
 
 def _now() -> str:
@@ -149,8 +150,9 @@ def _registration_endpoint(base_url: str) -> str:
 def _factory_id_from_env() -> str:
     return (
         str(os.getenv("UA_FACTORY_ID") or "").strip()
+        or str(os.getenv("UA_MACHINE_SLUG") or "").strip()
         or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
-        or socket.gethostname()
+        or resolve_machine_slug()
     )
 
 

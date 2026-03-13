@@ -1,102 +1,114 @@
-# Infisical Factories
+# Infisical Stage Environments and Factory Bootstrap
 
-Because Universal Agent operates via a fleet of distinct "Agents" or "Capabilities" (known as **Factories**), every deployment node requires careful secret curation.
+Last updated: March 12, 2026
 
-## The Factory Secret Model
+## Purpose
 
-Instead of an engineer manually logging into the Infisical Dashboard to create `staging-hq` and pasting fifty different API keys by hand, we use **Automated Factory Provisioning**.
+This continuity note explains the current secret/bootstrap model after the
+stage-based Infisical refactor.
 
-We have three primary Factory Roles (defined in `scripts/infisical_provision_factory_env.py`):
-1.  **HEADQUARTERS:** The main dispatcher. Needs cron jobs, VP Coder dispatching, signaling engines, etc.
-2.  **LOCAL_WORKER:** A satellite node (like a desktop or tablet) that processes tasks but disables redundant ingress like CSI monitoring to avoid duplicating work.
-3.  **STANDALONE_NODE:** A deeply isolated node that doesn't talk to the primary Redis delegation bus.
+Canonical deploy details live in:
 
-## Local Desktop Split
+- `docs/deployment/architecture_overview.md`
+- `docs/deployment/ci_cd_pipeline.md`
+- `docs/deployment/infisical_factories.md`
 
-Kevin's desktop now has two intentional local environments:
+The living migration record for this refactor lives in:
 
-1. `kevins-desktop`
-   - role: `LOCAL_WORKER`
-   - deployment profile: `local_workstation`
-   - checkout: `~/universal_agent_factory`
-2. `kevins-desktop-hq-dev`
-   - role: `HEADQUARTERS`
-   - deployment profile: `local_workstation`
-   - checkout: `/home/kjdragan/lrepos/universal_agent`
+- `06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md`
 
-Do not point the main repo checkout at `kevins-desktop` anymore. That makes localhost behave like a worker and blocks HQ-only dashboard routes by design.
+## Current Model
 
-Current constraint as of March 12, 2026:
+Infisical environments now represent deployment stage, not machine identity.
 
-- the Infisical project has reached its environment limit
-- preferred dedicated HQ dev env: `kevins-desktop-hq-dev`
-- temporary operational fallback: bootstrap the repo checkout against `dev` while keeping `UA_DEPLOYMENT_PROFILE=local_workstation`
+Canonical environments:
 
-### How Provisioning Works
+1. `development`
+2. `staging`
+3. `production`
 
-When a new environment is needed (for example, when the CI/CD pipeline deploys Staging for the first time), the pipeline runs the provisioning script:
+Machine identity is provided by local bootstrap and service env files:
 
-```bash
-python scripts/infisical_provision_factory_env.py \
-  --machine-name "Staging VPS HQ" \
-  --machine-slug staging-hq \
-  --factory-role HEADQUARTERS \
-  --source-env dev 
-```
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_RUNTIME_STAGE`
+- `UA_MACHINE_SLUG`
 
-Local HQ development uses the same script with an explicit deployment profile override:
+## Runtime Split
 
-```bash
-python scripts/infisical_provision_factory_env.py \
-  --machine-name "Kevin's Desktop HQ Dev" \
-  --machine-slug kevins-desktop-hq-dev \
-  --factory-role HEADQUARTERS \
-  --deployment-profile local_workstation \
-  --source-env dev
-```
+### VPS headquarters nodes
 
-**Under the Hood:**
-1. The script authenticates with Infisical.
-2. It lists all secrets in the **Source Environment** (e.g., `dev`).
-3. It creates the **Target Environment** (e.g., `staging-hq`) if it doesn't exist.
-4. It clones all secrets from `dev` directly into `staging-hq`.
-5. *Crucially*, it applies the **Factory Overrides**. For `HEADQUARTERS`, it enforces variables like `UA_ENABLE_CRON=1` and `FACTORY_ROLE=HEADQUARTERS`. It overwrites the target secrets with these configurations.
+- staging VPS:
+  - `INFISICAL_ENVIRONMENT=staging`
+  - `UA_RUNTIME_STAGE=staging`
+  - `FACTORY_ROLE=HEADQUARTERS`
+  - `UA_DEPLOYMENT_PROFILE=vps`
 
-## Benefits for Development
+- production VPS:
+  - `INFISICAL_ENVIRONMENT=production`
+  - `UA_RUNTIME_STAGE=production`
+  - `FACTORY_ROLE=HEADQUARTERS`
+  - `UA_DEPLOYMENT_PROFILE=vps`
 
-Because of this automated cloning, developers never have to worry about creating new secrets across three environments. 
-If you add a new API Key (e.g., `STRIPE_API_KEY`) to the `dev` environment locally, the next time the Staging Pipeline runs, it automatically provisions that key into `staging-hq`.
+### Kevin desktop lanes
 
-Production environments, however, are typically kept isolated from this rapid cloning (e.g. `prod-hq`), so developers must intentionally add highly sensitive live production keys to the `prod-hq` environment manually, preserving a strict security boundary.
+- localhost HQ development:
+  - `INFISICAL_ENVIRONMENT=development`
+  - `UA_RUNTIME_STAGE=development`
+  - `FACTORY_ROLE=HEADQUARTERS`
+  - `UA_DEPLOYMENT_PROFILE=local_workstation`
+  - checkout: `/home/kjdragan/lrepos/universal_agent`
 
-## Local HQ Bootstrap
+- deployed-stage local worker:
+  - `INFISICAL_ENVIRONMENT=staging` or `production`
+  - `UA_RUNTIME_STAGE=staging` or `production`
+  - `FACTORY_ROLE=LOCAL_WORKER`
+  - `UA_DEPLOYMENT_PROFILE=local_workstation`
 
-After the `kevins-desktop-hq-dev` environment exists, bootstrap the repo checkout into HQ dev mode with:
+## Bootstrap Scripts
+
+### Localhost HQ dev
 
 ```bash
 bash scripts/bootstrap_local_hq_dev.sh
 ```
 
-Temporary fallback if the dedicated HQ dev environment cannot be created yet:
+This now always bootstraps the repo checkout as:
+
+- `development`
+- `HEADQUARTERS`
+- `local_workstation`
+- `UA_MACHINE_SLUG=kevins-desktop`
+
+### Desktop local worker
 
 ```bash
-TARGET_ENV=dev bash scripts/bootstrap_local_hq_dev.sh
+bash scripts/bootstrap_local_worker_stage.sh --stage staging
 ```
 
-That script:
+or:
 
-1. writes the repo-root `.env` for `kevins-desktop-hq-dev`
-2. renders `web-ui/.env.local`
-3. verifies the runtime resolves to `FACTORY_ROLE=HEADQUARTERS`
-4. warns if the separate local worker service is still running
+```bash
+bash scripts/bootstrap_local_worker_stage.sh --stage production
+```
 
-## Local Worker Service Control
+This keeps the desktop worker stage-switchable without introducing
+machine-specific Infisical environments.
 
-The Corporation page now exposes two different controls for the same-machine desktop worker:
+## Important Rule
 
-1. `Pause Intake` / `Resume Intake`
-   - keeps the bridge alive
-   - only changes mission consumption
-2. `Stop Local Factory` / `Start Local Factory`
-   - controls `universal-agent-local-factory.service`
-   - intended for preserving desktop/API budget during HQ development
+Do not treat `kevins-desktop` or `kevins-desktop-hq-dev` as canonical
+Infisical environments anymore. Those names exist only as temporary alias
+compatibility during migration.
+
+## Admin Tooling
+
+Stage environment administration now belongs to:
+
+- `scripts/infisical_manage_stage_env.py`
+
+The older helper:
+
+- `scripts/infisical_provision_factory_env.py`
+
+is now legacy and should not be the normal path for stage configuration.

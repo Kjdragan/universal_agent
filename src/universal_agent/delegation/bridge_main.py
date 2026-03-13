@@ -40,6 +40,7 @@ from universal_agent.delegation.redis_vp_bridge import BridgeConfig, RedisVpBrid
 from universal_agent.delegation.redis_vp_result_bridge import RedisVpResultBridge
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.runtime_role import resolve_machine_slug
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,9 @@ def _redis_url_from_env() -> str:
 def _factory_id() -> str:
     return (
         str(os.getenv("UA_FACTORY_ID") or "").strip()
+        or str(os.getenv("UA_MACHINE_SLUG") or "").strip()
         or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
-        or socket.gethostname()
+        or resolve_machine_slug()
     )
 
 

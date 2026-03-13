@@ -22,17 +22,28 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Fallback Checkout | n/a | `/opt/universal_agent_repo` |
 | Gateway/API Ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, `UA_GATEWAY_URL=http://127.0.0.1:9002` | `8002` / `8001` |
 | Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units |
-| Secrets Behavior | Provision `staging-hq`; temporary fallback to `dev` if provisioning fails | Provision/update `prod` with HEADQUARTERS overrides during deploy; if provisioning fails, retain the currently configured production Infisical environment |
+| Secrets Behavior | Bootstrap into stage env `staging` and validate stage secrets; machine identity is written locally in `.env` | Bootstrap into stage env `production` and validate stage secrets; machine identity is written locally in `.env` |
 
 ## Infisical Environment Naming
 
-The current Infisical plan is capped at three environments, so the live runtime lanes are:
+The runtime contract now treats Infisical environments as stage lanes, not machine lanes:
 
-- `dev`: shared source/template lane; not the deployed VPS runtime.
-- `kevins-desktop`: Kevin's local worker lane.
-- `prod`: the production VPS headquarters lane.
+- `development`
+- `staging`
+- `production`
 
-The `prod` slug is still stage-flavored, but operationally it is the dedicated production VPS HQ environment. If the environment limit is raised later, the naming model can expand to more explicit machine-role-stage slugs.
+Machine identity is provided by bootstrap values written on each machine:
+
+- `FACTORY_ROLE`
+- `UA_DEPLOYMENT_PROFILE`
+- `UA_RUNTIME_STAGE`
+- `UA_MACHINE_SLUG`
+
+This lets the same stage environment support:
+
+- VPS headquarters runtime
+- desktop local worker runtime
+- desktop localhost headquarters development runtime
 
 ## Tutorial Runtime Contract
 
@@ -42,6 +53,20 @@ The deployed VPS lane is also the default runtime for the YouTube tutorial pipel
 - Tutorial repo bootstrap defaults to `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=/opt/universal_agent_data/tutorial_repos` on VPS.
 - Local workstation tutorial processing is supported only as an explicit development fallback and should not be treated as the normal deployed path.
 - VPS tutorial ingest should use loopback-first endpoint ordering, typically `http://127.0.0.1:8002/api/v1/youtube/ingest`.
+
+## Local Runtime Contract
+
+Kevin's desktop has two supported runtime modes:
+
+- localhost headquarters development:
+  - `INFISICAL_ENVIRONMENT=development`
+  - `FACTORY_ROLE=HEADQUARTERS`
+  - `UA_DEPLOYMENT_PROFILE=local_workstation`
+
+- deployed-stage local worker:
+  - `INFISICAL_ENVIRONMENT=staging` or `production`
+  - `FACTORY_ROLE=LOCAL_WORKER`
+  - `UA_DEPLOYMENT_PROFILE=local_workstation`
 
 ## Supported Deployment Rule
 
