@@ -10166,7 +10166,17 @@ async def lifespan(app: FastAPI):
             logger.info("⏸️ Todoist<->Chron reconciliation loop disabled (UA_TODOIST_CHRON_RECONCILE_ENABLED)")
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
-    
+
+    # Start the session reaper (TTL-based cleanup for admin and VP sessions)
+    try:
+        get_gateway().start_reaper()
+        logger.info("🧹 Session reaper started (admin TTL=%ss, VP TTL=%ss)",
+            os.getenv("UA_SESSION_ADMIN_TTL_SECONDS", "600"),
+            os.getenv("UA_SESSION_VP_INACTIVITY_TTL_SECONDS", "900"),
+        )
+    except Exception as _reaper_exc:
+        logger.warning("Failed to start session reaper: %s", _reaper_exc)
+
     # Always enabled Ops Service
     _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)
     
@@ -10354,6 +10364,10 @@ async def lifespan(app: FastAPI):
         await _heartbeat_service.stop()
     if _cron_service:
         await _cron_service.stop()
+    try:
+        await get_gateway().stop_reaper()
+    except Exception as _stop_reaper_exc:
+        logger.debug("Session reaper stop error: %s", _stop_reaper_exc)
         
     if main_module.runtime_db_conn:
         main_module.runtime_db_conn.close()
