@@ -16,6 +16,28 @@ if str(SRC_ROOT) not in sys.path:
 from universal_agent.infisical_loader import initialize_runtime_secrets
 
 
+def _resolve_bootstrap_env_file(explicit_path: str) -> Path:
+    if explicit_path:
+        return Path(explicit_path).expanduser().resolve()
+    dotenv_path_raw = str(os.getenv("UA_DOTENV_PATH") or "").strip()
+    if dotenv_path_raw:
+        return Path(dotenv_path_raw).expanduser().resolve()
+    return REPO_ROOT / ".env"
+
+
+def _preload_bootstrap_env(explicit_path: str) -> str:
+    env_path = _resolve_bootstrap_env_file(explicit_path)
+    if not env_path.exists() or not env_path.is_file():
+        return ""
+    try:
+        from dotenv import load_dotenv
+    except Exception as exc:  # pragma: no cover - defensive fallback only
+        raise RuntimeError("python-dotenv is required for bootstrap validation") from exc
+    load_dotenv(env_path, override=True)
+    os.environ["UA_DOTENV_PATH"] = str(env_path)
+    return str(env_path)
+
+
 def _identity_snapshot() -> dict[str, Any]:
     return {
         "infisical_environment": str(os.getenv("INFISICAL_ENVIRONMENT") or "").strip(),
@@ -42,9 +64,11 @@ def main() -> int:
     parser.add_argument("--expect-factory-role", default="")
     parser.add_argument("--expect-deployment-profile", default="")
     parser.add_argument("--expect-machine-slug", default="")
+    parser.add_argument("--bootstrap-env-file", default="")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
+    bootstrap_env_file = _preload_bootstrap_env(args.bootstrap_env_file)
     result = initialize_runtime_secrets(profile=args.profile, force_reload=True)
     identity = _identity_snapshot()
 
@@ -69,6 +93,7 @@ def main() -> int:
             "strict_mode": result.strict_mode,
             "fallback_used": result.fallback_used,
             "errors": list(result.errors),
+            "dotenv_path": bootstrap_env_file,
         },
         "identity": identity,
     }
