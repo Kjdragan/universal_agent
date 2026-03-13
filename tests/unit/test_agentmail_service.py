@@ -19,9 +19,10 @@ _BASE_ENV = {
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch):
+def _env(monkeypatch, tmp_path):
     for k, v in _BASE_ENV.items():
         monkeypatch.setenv(k, v)
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "activity_state.db"))
 
 
 @pytest.fixture
@@ -92,6 +93,31 @@ async def service(mock_agentmail_client):
     await svc._ensure_inbox()
     svc._enabled = True
     svc._started = True
+
+    yield svc
+    await svc.shutdown()
+
+
+@pytest.fixture
+async def service_with_queue(mock_agentmail_client, monkeypatch, tmp_path):
+    from universal_agent.services.agentmail_service import AgentMailService
+
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "activity_state.db"))
+    dispatch_fn = AsyncMock(return_value=(True, "agent"))
+    dispatch_with_admission_fn = AsyncMock(return_value={"decision": "accepted", "status": "completed"})
+
+    svc = AgentMailService(
+        dispatch_fn=dispatch_fn,
+        dispatch_with_admission_fn=dispatch_with_admission_fn,
+        notification_sink=MagicMock(),
+    )
+    svc._client = mock_agentmail_client
+    await svc._ensure_inbox()
+    svc._enabled = True
+    svc._started = True
+    svc._ensure_queue_schema()
+    svc._queue_task = asyncio.create_task(svc._trusted_inbox_queue_loop())
+    svc._queue_wakeup.set()
 
     yield svc
     await svc.shutdown()
@@ -309,6 +335,89 @@ class TestTrustedInboundHandling:
         assert "sender_email: random@example.com" in dispatch_payload["message"]
         assert "sender_role: external" in dispatch_payload["message"]
         assert "sender_trusted: False" in dispatch_payload["message"]
+
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_queue_completes_when_service_with_queue_is_free(
+        self, service_with_queue, mock_agentmail_client
+    ):
+        class _Message:
+            from_ = "Kevin Dragan <kevin@clearspringcg.com>"
+            subject = "Please investigate"
+            thread_id = "thd_queue_001"
+            message_id = "msg_queue_001"
+            text = "please investigate this directly"
+            html = "<p>please investigate this directly</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service_with_queue._handle_inbound_email(_Event())
+        await asyncio.sleep(0.2)
+
+        items = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)
+        assert len(items) == 1
+        assert items[0]["status"] == "completed"
+        assert items[0]["ack_status"] == "sent"
+        assert items[0]["sender_role"] == "trusted_operator"
+        service_with_queue._dispatch_with_admission_fn.assert_awaited_once()
+        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_queue_retries_when_busy(
+        self, service_with_queue, mock_agentmail_client, monkeypatch
+    ):
+        service_with_queue._dispatch_with_admission_fn = AsyncMock(
+            side_effect=[
+                {"decision": "busy", "reason": "busy"},
+                {"decision": "accepted", "status": "completed"},
+            ]
+        )
+        monkeypatch.setattr(
+            service_with_queue,
+            "_trusted_queue_retry_base_seconds",
+            0.01,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            service_with_queue,
+            "_trusted_queue_retry_max_seconds",
+            0.01,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            service_with_queue,
+            "_trusted_queue_retry_jitter_ratio",
+            0.0,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            service_with_queue,
+            "_trusted_queue_poll_seconds",
+            0.01,
+            raising=False,
+        )
+
+        class _Message:
+            from_ = "Kevin Dragan <kevin.dragan@outlook.com>"
+            subject = "Retry me"
+            thread_id = "thd_queue_002"
+            message_id = "msg_queue_002"
+            text = "hello"
+            html = "<p>hello</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service_with_queue._handle_inbound_email(_Event())
+        await asyncio.sleep(0.25)
+
+        item = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)[0]
+        assert item["status"] == "completed"
+        assert item["attempt_count"] == 2
+        assert service_with_queue._dispatch_with_admission_fn.await_count == 2
+        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
 
 
 class TestTrustedSenderHelpers:

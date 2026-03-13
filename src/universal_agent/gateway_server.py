@@ -10083,8 +10083,18 @@ async def lifespan(app: FastAPI):
             return False, "hooks_service_not_ready"
         return await _hooks_service.dispatch_internal_action(action_payload)
 
+    async def _agentmail_dispatch_with_admission_fn(action_payload: dict) -> dict[str, Any]:
+        if _hooks_service is None:
+            return {
+                "decision": "failed",
+                "reason": "hooks_service_not_ready",
+                "error": "hooks_service_not_ready",
+            }
+        return await _hooks_service.dispatch_internal_action_with_admission(action_payload)
+
     _agentmail_service = AgentMailService(
         dispatch_fn=_agentmail_dispatch_fn,
+        dispatch_with_admission_fn=_agentmail_dispatch_with_admission_fn,
         notification_sink=_hook_notification_sink,
     )
     try:
@@ -16327,6 +16337,57 @@ async def ops_agentmail_status(request: Request):
     if _agentmail_service is None:
         return {"enabled": False, "reason": "not_initialized"}
     return _agentmail_service.status()
+
+
+@app.get("/api/v1/ops/agentmail/inbox-queue")
+async def ops_agentmail_inbox_queue(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    status = request.query_params.get("status")
+    sender = request.query_params.get("sender")
+    trusted_only = str(request.query_params.get("trusted_only", "")).strip().lower() in {"1", "true", "yes", "on"}
+    limit = min(200, max(1, int(request.query_params.get("limit", "50"))))
+    items = _agentmail_service.list_inbox_queue(
+        limit=limit,
+        status=status,
+        sender=sender,
+        trusted_only=trusted_only,
+    )
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+@app.get("/api/v1/ops/agentmail/inbox-queue/{queue_id}")
+async def ops_agentmail_inbox_queue_item(request: Request, queue_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    item = _agentmail_service.get_inbox_queue_item(queue_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inbox queue item not found")
+    return {"ok": True, "item": item}
+
+
+@app.post("/api/v1/ops/agentmail/inbox-queue/{queue_id}/retry-now")
+async def ops_agentmail_retry_inbox_queue_item(request: Request, queue_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    item = _agentmail_service.retry_inbox_queue_item(queue_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inbox queue item not found")
+    return {"ok": True, "item": item}
+
+
+@app.post("/api/v1/ops/agentmail/inbox-queue/{queue_id}/cancel")
+async def ops_agentmail_cancel_inbox_queue_item(request: Request, queue_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    item = _agentmail_service.cancel_inbox_queue_item(queue_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inbox queue item not found")
+    return {"ok": True, "item": item}
 
 
 @app.get("/api/v1/ops/agentmail/messages")

@@ -48,7 +48,7 @@ async def test_hook_dispatch_tracks_turn_lifecycle(monkeypatch):
     )
 
     action = HookAction(kind="agent", session_key="yt_test_123", message="run hook")
-    await service._dispatch_action(action)
+    result = await service._dispatch_action(action)
 
     assert admitted and admitted[0][0] == "session_hook_yt_test_123"
     assert starts == [("session_hook_yt_test_123", "webhook")]
@@ -58,6 +58,8 @@ async def test_hook_dispatch_tracks_turn_lifecycle(monkeypatch):
     assert finalized[0][1] == "turn_hook_1"
     assert finalized[0][2] == "completed"
     assert finalized[0][4].get("tool_calls") == 1
+    assert result["decision"] == "accepted"
+    assert result["turn_id"] == "turn_hook_1"
 
 
 @pytest.mark.asyncio
@@ -79,7 +81,34 @@ async def test_hook_dispatch_skips_when_turn_not_admitted(monkeypatch):
     )
 
     action = HookAction(kind="agent", session_key="yt_test_busy", message="run hook")
-    await service._dispatch_action(action)
+    result = await service._dispatch_action(action)
 
     assert gateway.execute_calls == 0
     assert starts == []
+    assert result["decision"] == "busy"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_action_with_admission_returns_structured_result(monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+
+    async def admit(session_id: str, request):
+        return {"decision": "accepted", "turn_id": "turn_hook_direct"}
+
+    service = HooksService(gateway, turn_admitter=admit)
+    service.config.enabled = True
+
+    result = await service.dispatch_internal_action_with_admission(
+        {
+            "kind": "agent",
+            "session_key": "agentmail_thd_123",
+            "message": "hello from inbox",
+        }
+    )
+
+    assert result["decision"] == "accepted"
+    assert result["turn_id"] == "turn_hook_direct"
+    assert gateway.execute_calls == 1
