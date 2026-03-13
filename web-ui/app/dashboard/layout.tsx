@@ -18,6 +18,7 @@ import {
   Radio,
   GraduationCap,
   Clock,
+  HeartPulse,
   Settings,
   Wrench,
   FolderOpen,
@@ -59,6 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/approvals", label: "Approvals", icon: CheckCircle },
       { href: "/dashboard/todolist", label: "To Do List", icon: ListTodo },
       { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },
+      { href: "/dashboard/heartbeats", label: "Heartbeats", icon: HeartPulse },
     ],
   },
   {

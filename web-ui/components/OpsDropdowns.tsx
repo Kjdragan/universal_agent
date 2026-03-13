@@ -2076,11 +2076,89 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
   );
 }
 
-export function HeartbeatWidget() {
+export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
   const { heartbeatState, selected } = useOps();
   const currentChatSessionId = useAgentStore((s) => s.currentSession?.session_id ?? null);
   const heartbeatSessionId = currentChatSessionId || selected;
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  if (variant === "full") {
+    return (
+      <div className="flex flex-col space-y-6">
+        <div className="p-6 bg-card/10 rounded-xl border border-border/40 space-y-4">
+          <div className="flex items-center justify-between border-b border-border/40 pb-4">
+            <h2 className="text-sm font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+              <span className="text-primary/60">💓</span> System Heartbeat
+              <span className="text-xs text-muted-foreground/60 font-normal font-mono">({heartbeatState.status})</span>
+            </h2>
+          </div>
+          <div className="text-sm space-y-3">
+            {!heartbeatSessionId && <div className="text-muted-foreground">Select a session to view heartbeat.</div>}
+            {heartbeatSessionId && (
+              <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                <div>
+                    <span className="text-muted-foreground block mb-1">Session</span>
+                    <span className="font-mono text-xs">{heartbeatSessionId}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block mb-1">Last run</span>
+                  <span className="font-mono text-xs">
+                    {heartbeatState.last_run ? formatDateTimeTz(heartbeatState.last_run) : "--"}
+                  </span>
+                </div>
+                <div>
+                    <span className="text-muted-foreground block mb-1">Running</span>
+                    <span className="font-mono text-xs">{heartbeatState.busy ? "yes" : "no"}</span>
+                </div>
+                {(() => {
+                  const raw = heartbeatState.last_summary_raw;
+                  if (!raw || typeof raw !== "object") return null;
+                  const summary = raw as { sent?: boolean; suppressed_reason?: string };
+                  return (<>
+                    <div>
+                        <span className="text-muted-foreground block mb-1">Delivered</span>
+                        <span className="font-mono text-xs">{summary.sent ? "yes" : "no"}</span>
+                    </div>
+                    <div>
+                        <span className="text-muted-foreground block mb-1">Suppressed</span>
+                        <span className="font-mono text-xs">{summary.suppressed_reason ?? "--"}</span>
+                    </div>
+                  </>);
+                })()}
+                
+                <div className="col-span-2 mt-4">
+                    <span className="text-muted-foreground block mb-2">Last summary text</span>
+                    {heartbeatState.skip_marker && (
+                      <div className="text-xs text-amber-400 mb-2">{heartbeatState.skip_marker}</div>
+                    )}
+                    <div className="text-xs font-mono whitespace-pre-wrap bg-slate-950/50 p-4 rounded-lg border border-border/40">{heartbeatState.last_summary_text ?? "(none)"}</div>
+                </div>
+
+                {(() => {
+                  const raw = heartbeatState.last_summary_raw;
+                  if (!raw || typeof raw !== "object") return null;
+                  const artifacts = (raw as { artifacts?: { writes?: string[]; work_products?: string[] } }).artifacts;
+                  const writes = artifacts?.writes; const wp = artifacts?.work_products;
+                  if ((!writes || writes.length === 0) && (!wp || wp.length === 0)) return null;
+                  return (
+                    <div className="col-span-2 space-y-2 mt-2">
+                      <div className="text-muted-foreground font-semibold">Artifacts</div>
+                      <div className="grid grid-cols-2 gap-4">
+                          {writes && writes.length > 0 && <div className="text-xs font-mono whitespace-pre-wrap bg-slate-950/30 p-2 border border-border/20 rounded">{"writes:\n" + writes.slice(-5).join("\n")}</div>}
+                          {wp && wp.length > 0 && <div className="text-xs font-mono whitespace-pre-wrap bg-slate-950/30 p-2 border border-border/20 rounded">{"work_products:\n" + wp.slice(-5).join("\n")}</div>}
+                      </div>
+                    </div>
+                  );
+                })()}
+                {heartbeatState.error && <div className="col-span-2 text-xs text-amber-500 mt-2 p-2 bg-amber-500/10 border border-amber-500/20 rounded">{heartbeatState.error}</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
       <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => setIsCollapsed(!isCollapsed)}>
@@ -2139,3 +2217,4 @@ export function HeartbeatWidget() {
     </div>
   );
 }
+
