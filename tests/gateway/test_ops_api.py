@@ -1839,6 +1839,7 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
     assert payload["repo_access_mode"] == "remote_path"
     assert payload["repo_access_hint"]
     assert payload["execution_host"]
+    assert payload["repo_storage_href"] == ""
     assert "repo_open_uri" not in payload
     assert "Repo ready:" in str(payload.get("stdout") or "")
     assert (target_root / "demo_repo").is_dir()
@@ -1847,7 +1848,55 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
     assert len(listed) == 1
     assert listed[0]["execution_target"] == "server"
     assert listed[0]["repo_access_mode"] == "remote_path"
+    assert listed[0]["repo_storage_href"] == ""
     assert "repo_open_uri" not in listed[0]
+
+
+def test_dashboard_tutorial_bootstrap_repo_vps_default_root_uses_artifacts_dir(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+    monkeypatch.setattr(gateway_server, "_DEPLOYMENT_PROFILE", "vps")
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "default-root-run"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "title": "Default Root Run",
+                "video_id": "default123",
+                "status": "full",
+                "implementation_required": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (impl_dir / "create_new_repo.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "TARGET_ROOT=\"${1:?}\"\n"
+        "REPO_NAME=\"${2:?}\"\n"
+        "mkdir -p \"$TARGET_ROOT/$REPO_NAME\"\n"
+        "echo \"Repo ready: $TARGET_ROOT/$REPO_NAME\"\n",
+        encoding="utf-8",
+    )
+
+    resp = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={
+            "run_path": "youtube-tutorial-creation/default-root-run",
+            "repo_name": "default_root_repo",
+            "timeout_seconds": 120,
+        },
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    expected_root = str((artifacts_root / "tutorial_repos").resolve())
+    expected_repo_dir = str((artifacts_root / "tutorial_repos" / "default_root_repo").resolve())
+    assert payload["target_root"] == expected_root
+    assert payload["repo_dir"] == expected_repo_dir
+    assert payload["repo_storage_href"]
+    assert (artifacts_root / "tutorial_repos" / "default_root_repo").is_dir()
 
 
 def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, tmp_path, monkeypatch):
@@ -4328,14 +4377,30 @@ def test_ops_work_thread_rejects_invalid_decision(client):
     assert "Unsupported decision" in resp.text
 
 
-def test_ops_approvals_list_includes_task_hub_action_items(client):
+def test_ops_approvals_list_includes_only_human_signoff_items(client):
     with gateway_server._activity_store_lock:
         conn = gateway_server._task_hub_open_conn()
         try:
+            task_hub.upsert_csi_item(
+                conn,
+                event_id="evt-human-approval",
+                event_type="delivery_reliability_slo_breached",
+                source="csi_analytics",
+                title="CSI Reliability SLO Breached",
+                message="Delivery reliability dropped below SLO and requires operator review.",
+                project_key="immediate",
+                labels=["CSI", "needs-human", "must-complete"],
+                priority=5,
+                incident_key="csi_parent_human",
+                must_complete=True,
+                mirror_status="internal_only",
+                routing_state=task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+                human_intervention_reason="Operator review required for SLO breach.",
+            )
             task_hub.upsert_item(
                 conn,
                 {
-                    "task_id": "csi_action_1",
+                    "task_id": "csi_action_agent",
                     "source_kind": "csi_recommendation",
                     "title": "CSI recommendation: replay delivery DLQ",
                     "description": "Run the replay command and verify recovery.",
@@ -4344,7 +4409,10 @@ def test_ops_approvals_list_includes_task_hub_action_items(client):
                     "status": task_hub.TASK_STATUS_REVIEW,
                     "must_complete": True,
                     "agent_ready": True,
-                    "metadata": {"focus_href": "/dashboard/todolist?mode=agent"},
+                    "metadata": {
+                        "focus_href": "/dashboard/todolist?mode=agent",
+                        "triage": {"owner_lane": "agent"},
+                    },
                 },
             )
         finally:
@@ -4353,15 +4421,17 @@ def test_ops_approvals_list_includes_task_hub_action_items(client):
     resp = client.get("/api/v1/ops/approvals?status=pending")
     assert resp.status_code == 200
     approvals = resp.json()["approvals"]
-    task_row = next(item for item in approvals if item["approval_id"] == "csi_action_1")
+    task_row = next(item for item in approvals if item["summary"].startswith("Delivery reliability dropped below SLO"))
     assert task_row["approval_source"] == "task_hub"
     assert task_row["status"] == "pending"
-    assert task_row["focus_href"] == "/dashboard/todolist?mode=agent"
+    assert task_row["focus_href"] == "/dashboard/todolist?mode=personal&focus=approvals"
+    assert not any(item["approval_id"] == "csi_action_agent" for item in approvals)
 
     highlight = client.get("/api/v1/dashboard/approvals/highlight")
     assert highlight.status_code == 200
     assert highlight.json()["pending_count"] >= 1
-    assert any(item["approval_id"] == "csi_action_1" for item in highlight.json()["approvals"])
+    assert any(item["summary"].startswith("Delivery reliability dropped below SLO") for item in highlight.json()["approvals"])
+    assert not any(item["approval_id"] == "csi_action_agent" for item in highlight.json()["approvals"])
 
 
 def test_ops_approvals_update_routes_task_hub_items(client):
@@ -4371,22 +4441,27 @@ def test_ops_approvals_update_routes_task_hub_items(client):
             task_hub.upsert_item(
                 conn,
                 {
-                    "task_id": "csi_action_approve",
-                    "source_kind": "csi_recommendation",
-                    "title": "CSI recommendation: approve action",
-                    "description": "Operator confirmed this recommendation.",
+                    "task_id": "csi_human_approve",
+                    "source_kind": "csi",
+                    "title": "CSI Reliability SLO Breached",
+                    "description": "Operator confirmed the parent incident handling.",
                     "project_key": "immediate",
                     "priority": 5,
                     "status": task_hub.TASK_STATUS_REVIEW,
                     "must_complete": True,
-                    "agent_ready": True,
+                    "agent_ready": False,
+                    "metadata": {
+                        "csi": {
+                            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+                        }
+                    },
                 },
             )
         finally:
             conn.close()
 
     resp = client.patch(
-        "/api/v1/ops/approvals/csi_action_approve",
+        "/api/v1/ops/approvals/csi_human_approve",
         json={"status": "approved", "notes": "Handled by operator"},
     )
     assert resp.status_code == 200
@@ -4397,7 +4472,7 @@ def test_ops_approvals_update_routes_task_hub_items(client):
     with gateway_server._activity_store_lock:
         conn = gateway_server._task_hub_open_conn()
         try:
-            item = task_hub.get_item(conn, "csi_action_approve")
+            item = task_hub.get_item(conn, "csi_human_approve")
             assert item is not None
             assert item["status"] == task_hub.TASK_STATUS_COMPLETED
         finally:

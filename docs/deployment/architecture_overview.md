@@ -50,7 +50,7 @@ This lets the same stage environment support:
 The deployed VPS lane is also the default runtime for the YouTube tutorial pipeline.
 
 - Playlist watching, hook transcript ingestion, tutorial artifact generation, and tutorial repo bootstrap run on the deployed VPS checkout.
-- Tutorial repo bootstrap defaults to `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=/opt/universal_agent_data/tutorial_repos` on VPS.
+- Tutorial repo bootstrap defaults to `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=<UA_ARTIFACTS_DIR>/tutorial_repos` on VPS.
 - Local workstation tutorial processing is supported only as an explicit development fallback and should not be treated as the normal deployed path.
 - VPS tutorial ingest should use loopback-first endpoint ordering, typically `http://127.0.0.1:8002/api/v1/youtube/ingest`.
 

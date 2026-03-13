@@ -191,7 +191,7 @@ Current target runtime contract:
 
 1. VPS tutorial ingest should run against `http://127.0.0.1:8002/api/v1/youtube/ingest` first.
 2. Tailnet/self-IP tutorial ingest endpoints are fallback-only and should not be the first hop on VPS.
-3. Tutorial repo bootstrap defaults to the VPS target root `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=/opt/universal_agent_data/tutorial_repos`.
+3. Tutorial repo bootstrap defaults to the VPS target root `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=<UA_ARTIFACTS_DIR>/tutorial_repos`.
 
 Timer cadence (live):
 

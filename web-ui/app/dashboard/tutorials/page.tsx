@@ -51,6 +51,8 @@ type TutorialBootstrapJob = {
   repo_dir?: string;
   repo_open_uri?: string;
   repo_open_hint?: string;
+  repo_storage_href?: string;
+  repo_storage_hint?: string;
   repo_access_mode?: string;
   repo_access_hint?: string;
   worker_id?: string;
@@ -627,11 +629,14 @@ export default function DashboardTutorialsPage() {
           throw new Error(detail);
         }
         const repoDir = asText((payload as Record<string, unknown>).repo_dir);
+        const repoStorageHref = asText((payload as Record<string, unknown>).repo_storage_href);
         const repoAccessHint =
           asText((payload as Record<string, unknown>).repo_access_hint)
           || asText((payload as Record<string, unknown>).repo_open_hint);
         if (repoDir) {
-          setDispatchStatus(`Repo created on VPS: ${repoDir}${repoAccessHint ? ` — ${repoAccessHint}` : ""}`);
+          setDispatchStatus(
+            `Repo created on VPS: ${repoDir}${repoStorageHref ? " — open it in File Browser below." : repoAccessHint ? ` — ${repoAccessHint}` : ""}`,
+          );
         } else {
           setDispatchStatus("Repo created successfully.");
         }
@@ -820,6 +825,8 @@ export default function DashboardTutorialsPage() {
                 const kindEmoji = KIND_EMOJI[n.kind];
                 const videoUrl = typeof n.metadata?.video_url === "string" ? n.metadata.video_url : "";
                 const videoId = notificationVideoId(n);
+                const repoStorageHref = asText(n.metadata?.repo_storage_href as string);
+                const repoDir = asText(n.metadata?.repo_dir as string);
                 return (
                   <div
                     key={n.id}
@@ -854,6 +861,19 @@ export default function DashboardTutorialsPage() {
                       )}
                       {videoUrl && (
                         <a href={videoUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 block text-[10px] text-cyan-300 underline underline-offset-2 opacity-80 hover:opacity-100">Watch video →</a>
+                      )}
+                      {repoStorageHref && (
+                        <Link
+                          href={repoStorageHref}
+                          className="mt-0.5 block text-[10px] text-cyan-300 underline underline-offset-2 opacity-80 hover:opacity-100"
+                        >
+                          Open VPS Repo →
+                        </Link>
+                      )}
+                      {repoDir && !repoStorageHref && (
+                        <p className="mt-0.5 truncate text-[10px] opacity-80">
+                          Repo: <span className="font-mono text-slate-100">{repoDir}</span>
+                        </p>
                       )}
                     </div>
                     <button
@@ -1003,6 +1023,15 @@ export default function DashboardTutorialsPage() {
                             Open Folder
                           </a>
                         )}
+                        {latestBootstrapTarget !== "local" && asText(latestBootstrapJob?.repo_storage_href) && (
+                          <Link
+                            href={asText(latestBootstrapJob?.repo_storage_href)}
+                            className="rounded border border-cyan-700/60 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/40"
+                            title={asText(latestBootstrapJob?.repo_storage_hint) || "Open repo in File Browser"}
+                          >
+                            Open in File Browser
+                          </Link>
+                        )}
                         {asText(latestBootstrapJob?.repo_dir) && (
                           <div className="group relative flex items-center">
                             <span
@@ -1102,6 +1131,9 @@ export default function DashboardTutorialsPage() {
                     )}
                     {latestBootstrapTarget !== "local" && asText(latestBootstrapJob.repo_access_hint) && (
                       <> · {asText(latestBootstrapJob.repo_access_hint)}</>
+                    )}
+                    {latestBootstrapTarget !== "local" && asText(latestBootstrapJob.repo_storage_href) && (
+                      <> · File Browser available</>
                     )}
                     {asText(latestBootstrapJob.error) && (
                       <> · {asText(latestBootstrapJob.error)}</>
