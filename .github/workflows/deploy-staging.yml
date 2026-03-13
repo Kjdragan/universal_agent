@@ -119,24 +119,24 @@ jobs:
             import os
             from pathlib import Path
 
-            env_path = Path(os.environ["STAGING_DIR"]) / ".env"
+            env_path = Path(os.environ[\"STAGING_DIR\"]) / \".env\"
             bootstrap = {
-                "INFISICAL_CLIENT_ID": os.environ["INFISICAL_CLIENT_ID"],
-                "INFISICAL_CLIENT_SECRET": os.environ["INFISICAL_CLIENT_SECRET"],
-                "INFISICAL_PROJECT_ID": os.environ["INFISICAL_PROJECT_ID"],
-                "INFISICAL_ENVIRONMENT": "staging",
-                "UA_RUNTIME_STAGE": "staging",
-                "FACTORY_ROLE": "HEADQUARTERS",
-                "UA_DEPLOYMENT_PROFILE": "vps",
-                "UA_MACHINE_SLUG": "vps-hq-staging",
-                "UA_INFISICAL_ENABLED": "1",
-                "UA_GATEWAY_PORT": "9002",
-                "UA_API_PORT": "9001",
-                "UA_GATEWAY_URL": "http://127.0.0.1:9002",
+                \"INFISICAL_CLIENT_ID\": os.environ[\"INFISICAL_CLIENT_ID\"],
+                \"INFISICAL_CLIENT_SECRET\": os.environ[\"INFISICAL_CLIENT_SECRET\"],
+                \"INFISICAL_PROJECT_ID\": os.environ[\"INFISICAL_PROJECT_ID\"],
+                \"INFISICAL_ENVIRONMENT\": \"staging\",
+                \"UA_RUNTIME_STAGE\": \"staging\",
+                \"FACTORY_ROLE\": \"HEADQUARTERS\",
+                \"UA_DEPLOYMENT_PROFILE\": \"vps\",
+                \"UA_MACHINE_SLUG\": \"vps-hq-staging\",
+                \"UA_INFISICAL_ENABLED\": \"1\",
+                \"UA_GATEWAY_PORT\": \"9002\",
+                \"UA_API_PORT\": \"9001\",
+                \"UA_GATEWAY_URL\": \"http://127.0.0.1:9002\",
             }
             env_path.write_text(
-                "".join(f"{key}={json.dumps(str(value))}\n" for key, value in bootstrap.items()),
-                encoding="utf-8",
+                \"\".join(f\"{key}={json.dumps(str(value))}\\n\" for key, value in bootstrap.items()),
+                encoding=\"utf-8\",
             )
             PY
             if command -v sudo >/dev/null 2>&1; then
