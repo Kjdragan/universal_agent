@@ -852,8 +852,14 @@ class AgentHookSet:
             logger=logger,
         )
 
-    async def on_pre_compact_capture(self, input_data: dict, context: dict) -> dict:
+    async def on_pre_compact_capture(self, input_data: dict, *args, **kwargs) -> dict:
         """PreCompact hook to capture compaction events in CLI/harness."""
+        context = kwargs.get("context", {})
+        if not context and args:
+            for value in reversed(args):
+                if isinstance(value, dict):
+                    context = value
+                    break
         return await pre_compact_context_capture_hook(input_data, context)
 
     async def on_pre_tool_use_workspace_guard(self, input_data: dict, tool_use_id: object, context: dict) -> dict:

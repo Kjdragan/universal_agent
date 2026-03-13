@@ -1,6 +1,7 @@
 import time
 import urllib.parse
 import json
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -297,6 +298,237 @@ def test_emit_heartbeat_event_falls_back_when_findings_missing(tmp_path: Path, m
     assert parse_failed["requires_action"] is True
     assert heartbeat["metadata"]["heartbeat_findings"]["findings"][0]["finding_id"] == "heartbeat_findings_parse_failed"
     assert heartbeat["metadata"]["primary_runbook_command"].startswith("Run journalctl -u universal-agent-gateway")
+
+
+def test_emit_heartbeat_event_accepts_legacy_findings_filename(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path / "workspaces")
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_heartbeat_mediation_cooldowns", {})
+
+    class _HookDispatchStub:
+        async def dispatch_internal_action(self, action_payload: dict):
+            return True, "agent"
+
+    monkeypatch.setattr(gateway_server, "_hooks_service", _HookDispatchStub())
+
+    workspace_root = gateway_server.WORKSPACES_DIR
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    session_ws = workspace_root / "session_legacy_findings"
+    session_ws.mkdir(parents=True, exist_ok=True)
+    findings_file = session_ws / "work_products" / "heartbeat_findings.json"
+    findings_file.parent.mkdir(parents=True, exist_ok=True)
+    findings_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "overall_status": "warn",
+                "generated_at_utc": "2026-03-13T14:49:00Z",
+                "source": "heartbeat",
+                "summary": "Gateway errors elevated",
+                "findings": [
+                    {
+                        "finding_id": "gateway_errors_elevated",
+                        "category": "gateway",
+                        "severity": "warn",
+                        "metric_key": "recent_errors_30m",
+                        "observed_value": 20,
+                        "threshold_text": ">10",
+                        "known_rule_match": True,
+                        "confidence": "high",
+                        "title": "Gateway Errors Elevated",
+                        "recommendation": "Inspect gateway logs for root cause.",
+                        "runbook_command": "journalctl -u universal-agent-gateway --since '30 min ago' --no-pager",
+                        "metadata": {"service": "universal-agent-gateway"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    session = GatewaySession(
+        session_id="session_legacy_findings",
+        user_id="tester",
+        workspace_dir=str(session_ws),
+        metadata={},
+    )
+    gateway_server._sessions[session.session_id] = session
+
+    gateway_server._emit_heartbeat_event(
+        {
+            "type": "heartbeat_completed",
+            "session_id": session.session_id,
+            "timestamp": time.time(),
+            "ok_only": False,
+            "sent": True,
+            "artifacts": {"writes": [], "work_products": [str(findings_file)], "bash_commands": []},
+        }
+    )
+
+    assert not any(item["kind"] == "heartbeat_findings_parse_failed" for item in gateway_server._notifications)
+    heartbeat = next(item for item in reversed(gateway_server._notifications) if item["kind"] == "autonomous_heartbeat_completed")
+    assert heartbeat["metadata"]["heartbeat_findings"]["findings"][0]["finding_id"] == "gateway_errors_elevated"
+
+
+def test_agentmail_trusted_heartbeat_request_queues_wake(monkeypatch):
+    class _HeartbeatStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def register_session(self, session):
+            return None
+
+        def request_heartbeat_now(self, session_id: str, reason: str = "wake"):
+            self.calls.append((session_id, reason))
+
+    class _GatewayStub:
+        def list_sessions(self):
+            return []
+
+    notifications: list[dict] = []
+
+    def _capture_notification(**kwargs):
+        notifications.append(kwargs)
+        return kwargs
+
+    heartbeat_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", heartbeat_stub)
+    monkeypatch.setattr(gateway_server, "_sessions", {"session_1": object(), "session_2": object()})
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+    monkeypatch.setattr(gateway_server, "_add_notification", _capture_notification)
+    monkeypatch.setattr(gateway_server, "_agentmail_heartbeat_wake_seen_ids", gateway_server.deque(maxlen=1024))
+    monkeypatch.setattr(gateway_server, "_agentmail_heartbeat_wake_seen_set", set())
+
+    payload = {
+        "name": "AgentMailInbound",
+        "message": (
+            "sender_trusted: True\n"
+            "sender_email: kevinjdragan@gmail.com\n"
+            "thread_id: thd_123\n"
+            "message_id: <msg_123>\n"
+            "subject: Re: Simone heartbeat review required\n\n"
+            "--- Reply (new content) ---\n"
+            "Run another heartbeat and check if it is running properly now.\n"
+        ),
+    }
+
+    result = gateway_server._maybe_trigger_heartbeat_from_agentmail_action(payload)
+
+    assert result["triggered"] is True
+    assert result["count"] == 2
+    assert len(heartbeat_stub.calls) == 2
+    assert all(reason == "agentmail_trusted_heartbeat_request" for _, reason in heartbeat_stub.calls)
+    assert notifications
+    assert notifications[0]["kind"] == "agentmail_heartbeat_wake_queued"
+
+
+def test_agentmail_heartbeat_request_requires_trusted_sender(monkeypatch):
+    payload = {
+        "name": "AgentMailInbound",
+        "message": (
+            "sender_trusted: False\n"
+            "sender_email: kevinjdragan@gmail.com\n"
+            "message_id: <msg_124>\n"
+            "subject: Re: Simone heartbeat review required\n\n"
+            "--- Reply (new content) ---\n"
+            "Run another heartbeat.\n"
+        ),
+    }
+
+    result = gateway_server._maybe_trigger_heartbeat_from_agentmail_action(payload)
+    assert result["triggered"] is False
+    assert result["reason"] == "not_requested"
+
+
+def test_agentmail_heartbeat_request_dedupes_by_message_id(monkeypatch):
+    class _HeartbeatStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def register_session(self, session):
+            return None
+
+        def request_heartbeat_now(self, session_id: str, reason: str = "wake"):
+            self.calls.append((session_id, reason))
+
+    class _GatewayStub:
+        def list_sessions(self):
+            return []
+
+    heartbeat_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", heartbeat_stub)
+    monkeypatch.setattr(gateway_server, "_sessions", {"session_1": object()})
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+    monkeypatch.setattr(gateway_server, "_add_notification", lambda **kwargs: kwargs)
+    monkeypatch.setattr(gateway_server, "_agentmail_heartbeat_wake_seen_ids", gateway_server.deque(maxlen=1024))
+    monkeypatch.setattr(gateway_server, "_agentmail_heartbeat_wake_seen_set", set())
+
+    payload = {
+        "name": "AgentMailInbound",
+        "message": (
+            "sender_trusted: True\n"
+            "sender_email: kevinjdragan@gmail.com\n"
+            "thread_id: thd_124\n"
+            "message_id: <msg_125>\n"
+            "subject: Re: Simone heartbeat review required\n\n"
+            "--- Reply (new content) ---\n"
+            "Please rerun heartbeat now.\n"
+        ),
+    }
+
+    first = gateway_server._maybe_trigger_heartbeat_from_agentmail_action(payload)
+    second = gateway_server._maybe_trigger_heartbeat_from_agentmail_action(payload)
+
+    assert first["triggered"] is True
+    assert second["triggered"] is False
+    assert second["reason"] == "duplicate_message_id"
+    assert len(heartbeat_stub.calls) == 1
+
+
+def test_process_heartbeat_investigation_notification_includes_origin_findings_href(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_notify_operator(payload):
+        captured.update(payload)
+        return True, "sent"
+
+    monkeypatch.setattr(
+        gateway_server,
+        "_get_activity_event",
+        lambda _event_id: {
+            "id": "ntf_origin",
+            "metadata": {
+                "heartbeat_findings_artifact_href": "/storage?scope=workspaces&path=session/work_products/heartbeat_findings_latest.json",
+            },
+        },
+    )
+    monkeypatch.setattr(gateway_server, "_update_notification_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gateway_server, "_record_activity_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gateway_server, "_add_notification", lambda **kwargs: kwargs)
+    monkeypatch.setattr(gateway_server, "_notify_operator_of_heartbeat_recommendation", _fake_notify_operator)
+
+    asyncio.run(
+        gateway_server._process_heartbeat_investigation_notification(
+            {
+                "session_id": "session_test",
+                "metadata": {
+                    "source_notification_id": "ntf_origin",
+                    "operator_review_required": True,
+                    "classification": "known_rule_only",
+                    "recommended_next_step": "rerun heartbeat",
+                    "email_summary": "summary",
+                },
+            }
+        )
+    )
+
+    assert captured["originating_notification_id"] == "ntf_origin"
+    assert (
+        captured["metadata"]["heartbeat_findings_artifact_href"]
+        == "/storage?scope=workspaces&path=session/work_products/heartbeat_findings_latest.json"
+    )
 
 
 def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: Path, monkeypatch):

@@ -15,16 +15,20 @@ Env vars:
     UA_AGENTMAIL_WS_ENABLED        — 1 = start WebSocket listener for inbound email
     UA_AGENTMAIL_WS_RECONNECT_BASE_DELAY — base backoff seconds (default 2)
     UA_AGENTMAIL_WS_RECONNECT_MAX_DELAY  — max backoff seconds (default 120)
+    UA_AGENTMAIL_WS_FAIL_OPEN_STATUS_CODES — comma-delimited HTTP statuses that disable WS and rely on polling
+    UA_AGENTMAIL_WS_FAIL_OPEN_AFTER_ATTEMPTS — reconnect attempts before fail-open (default 3)
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from email.utils import parseaddr
 import json
 import logging
 import os
 import random
+import re
 import sqlite3
 import time
 import uuid
@@ -61,6 +65,7 @@ def _extract_reply_text(text_body: str) -> str:
 DispatchFn = Callable[[dict[str, Any]], Coroutine[Any, Any, tuple[bool, str]]]
 DispatchAdmissionFn = Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
 NotifyFn = Callable[[dict[str, Any]], None]
+TrustedIngressFn = Callable[[dict[str, Any]], Any]
 
 # Idempotency key for Simone's primary inbox
 _INBOX_CLIENT_ID = "ua-simone-primary"
@@ -160,10 +165,12 @@ class AgentMailService:
         dispatch_fn: Optional[DispatchFn] = None,
         dispatch_with_admission_fn: Optional[DispatchAdmissionFn] = None,
         notification_sink: Optional[NotifyFn] = None,
+        trusted_ingress_fn: Optional[TrustedIngressFn] = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._dispatch_with_admission_fn = dispatch_with_admission_fn
         self._notification_sink = notification_sink
+        self._trusted_ingress_fn = trusted_ingress_fn
 
         # SDK client (lazy init)
         self._client: Any = None
@@ -173,6 +180,7 @@ class AgentMailService:
         # WebSocket listener
         self._ws_task: Optional[asyncio.Task] = None
         self._queue_task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None
         self._ws_stop_event = asyncio.Event()
         self._queue_wakeup = asyncio.Event()
 
@@ -182,10 +190,42 @@ class AgentMailService:
         self._started_at: Optional[str] = None
         self._ws_connected = False
         self._ws_reconnect_count = 0
+        self._ws_last_status_code: Optional[int] = None
+        self._ws_fail_opened = False
         self._last_error: str = ""
         self._messages_sent: int = 0
         self._messages_received: int = 0
         self._drafts_created: int = 0
+        ws_fail_open_statuses_raw = (
+            os.getenv("UA_AGENTMAIL_WS_FAIL_OPEN_STATUS_CODES", "401,403,429")
+            .strip()
+        )
+        ws_fail_open_statuses: set[int] = set()
+        for token in ws_fail_open_statuses_raw.split(","):
+            clean = str(token or "").strip()
+            if not clean:
+                continue
+            try:
+                ws_fail_open_statuses.add(int(clean))
+            except ValueError:
+                continue
+        self._ws_fail_open_status_codes = (
+            ws_fail_open_statuses if ws_fail_open_statuses else {401, 403, 429}
+        )
+        self._ws_fail_open_after_attempts = max(
+            1,
+            int(os.getenv("UA_AGENTMAIL_WS_FAIL_OPEN_AFTER_ATTEMPTS", "3") or 3),
+        )
+        self._inbound_poll_enabled = (
+            os.getenv("UA_AGENTMAIL_INBOUND_POLL_ENABLED", "1").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self._inbound_poll_interval_seconds = max(
+            15.0,
+            float(os.getenv("UA_AGENTMAIL_INBOUND_POLL_INTERVAL_SECONDS", "60") or 60),
+        )
+        self._seen_message_ids: deque[str] = deque(maxlen=2000)
+        self._seen_message_id_set: set[str] = set()
         self._trusted_senders: tuple[str, ...] = _trusted_sender_addresses()
         self._last_trusted_inbound_at: Optional[str] = None
         self._trusted_queue_retry_base_seconds = max(
@@ -251,6 +291,9 @@ class AgentMailService:
             self._queue_task = asyncio.create_task(self._trusted_inbox_queue_loop())
             self._queue_wakeup.set()
 
+        if self._inbound_poll_enabled and self._dispatch_fn:
+            self._poll_task = asyncio.create_task(self._inbox_poll_loop())
+
         # Start WebSocket listener if enabled
         if _ws_enabled() and self._inbox_id:
             self._ws_task = asyncio.create_task(self._ws_loop())
@@ -270,6 +313,12 @@ class AgentMailService:
             except Exception:
                 self._queue_task.cancel()
             self._queue_task = None
+        if self._poll_task:
+            try:
+                await asyncio.wait_for(self._poll_task, timeout=10)
+            except Exception:
+                self._poll_task.cancel()
+            self._poll_task = None
         self._started = False
         logger.info("📧 AgentMail service stopped")
 
@@ -544,11 +593,37 @@ class AgentMailService:
             except Exception as exc:
                 self._ws_connected = False
                 self._ws_reconnect_count += 1
-                self._last_error = f"ws_error: {type(exc).__name__}: {exc}"
-                logger.warning(
-                    "📧 WebSocket disconnected (%s), reconnecting in %.0fs (attempt #%d)",
-                    exc, delay, self._ws_reconnect_count,
-                )
+                status_code = self._extract_ws_status_code(exc)
+                self._ws_last_status_code = status_code
+                if (
+                    status_code in self._ws_fail_open_status_codes
+                    and self._ws_reconnect_count >= self._ws_fail_open_after_attempts
+                ):
+                    self._ws_fail_opened = True
+                    self._last_error = f"ws_fail_open_status_{status_code}"
+                    logger.warning(
+                        "📧 WebSocket fail-open activated after status=%s reconnect attempts=%d; "
+                        "stopping WS listener and relying on inbound polling.",
+                        status_code,
+                        self._ws_reconnect_count,
+                    )
+                    return
+                if status_code is not None:
+                    self._last_error = f"ws_status_{status_code}"
+                    logger.warning(
+                        "📧 WebSocket disconnected status=%s, reconnecting in %.0fs (attempt #%d)",
+                        status_code,
+                        delay,
+                        self._ws_reconnect_count,
+                    )
+                else:
+                    self._last_error = f"ws_disconnect:{type(exc).__name__}"
+                    logger.warning(
+                        "📧 WebSocket disconnected (%s), reconnecting in %.0fs (attempt #%d)",
+                        type(exc).__name__,
+                        delay,
+                        self._ws_reconnect_count,
+                    )
                 # Exponential backoff with jitter
                 jitter = random.uniform(0, delay * 0.3)
                 try:
@@ -584,6 +659,8 @@ class AgentMailService:
 
     async def _handle_inbound_email(self, event: Any) -> None:
         """Process an inbound email event and dispatch through hooks."""
+        message_id = ""
+        claimed_message = False
         try:
             msg = event.message
             sender = getattr(msg, "from_", "unknown")
@@ -596,9 +673,15 @@ class AgentMailService:
             sender_trusted = sender_role == "trusted_operator"
             subject = getattr(msg, "subject", "(no subject)")
             thread_id = getattr(msg, "thread_id", "")
-            message_id = getattr(msg, "message_id", "")
+            message_id = str(getattr(msg, "message_id", "") or "").strip()
             text_body = getattr(msg, "text", "") or ""
             html_body = getattr(msg, "html", "") or ""
+
+            if message_id:
+                claimed_message = self._claim_seen_message_id(message_id)
+                if not claimed_message:
+                    logger.debug("📧 Skipping duplicate inbound message_id=%s", message_id)
+                    return
 
             # Extract clean reply content (strips quoted thread history)
             reply_text = _extract_reply_text(text_body)
@@ -630,6 +713,16 @@ class AgentMailService:
                     attachments=getattr(msg, "attachments", None),
                 ),
             }
+
+            if sender_trusted and self._trusted_ingress_fn:
+                try:
+                    self._trusted_ingress_fn(dict(action_payload))
+                except Exception as exc:
+                    logger.warning(
+                        "📧 Trusted inbound pre-dispatch hook failed message_id=%s: %s",
+                        message_id,
+                        exc,
+                    )
 
             # Emit notification
             self._emit_notification(
@@ -748,6 +841,8 @@ class AgentMailService:
                         message_id, exc,
                     )
         except Exception as exc:
+            if message_id and claimed_message:
+                self._release_seen_message_id(message_id)
             logger.exception("📧 Error handling inbound email: %s", exc)
 
     # ------------------------------------------------------------------
@@ -1166,6 +1261,58 @@ class AgentMailService:
             )
         return processed
 
+    async def _inbox_poll_loop(self) -> None:
+        while not self._ws_stop_event.is_set():
+            try:
+                await self._poll_inbox_once(limit=25)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("📧 Inbound poll loop failed: %s", exc)
+            try:
+                await asyncio.wait_for(
+                    self._ws_stop_event.wait(),
+                    timeout=self._inbound_poll_interval_seconds,
+                )
+                return
+            except asyncio.TimeoutError:
+                continue
+
+    async def _poll_inbox_once(self, *, limit: int = 25) -> None:
+        self._assert_ready()
+        messages = await self._client.inboxes.messages.list(inbox_id=self._inbox_id)
+        rows = list(messages.messages if hasattr(messages, "messages") else messages)
+        if not rows:
+            return
+
+        # Oldest-first processing keeps thread state stable.
+        rows = rows[: max(1, int(limit))]
+        rows.reverse()
+        inbox_sender = _normalize_sender_email(self._inbox_address)
+
+        for msg in rows:
+            message_id = str(getattr(msg, "message_id", "") or "").strip()
+            if not message_id or self._seen_message_id(message_id):
+                continue
+            sender_email = _normalize_sender_email(str(getattr(msg, "from_", "") or ""))
+            # Ignore self-authored outbound copies in inbox listing.
+            if sender_email and inbox_sender and sender_email == inbox_sender:
+                self._claim_seen_message_id(message_id)
+                continue
+            hydrated_msg = msg
+            try:
+                hydrated_msg = await self._client.inboxes.messages.get(
+                    inbox_id=self._inbox_id,
+                    message_id=message_id,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "📧 Poll hydration failed message_id=%s; using list preview payload (%s)",
+                    message_id,
+                    exc,
+                )
+            await self._handle_inbound_email(_InboundMessageEvent(message=hydrated_msg))
+
     # ------------------------------------------------------------------
     # Ops status
     # ------------------------------------------------------------------
@@ -1182,6 +1329,12 @@ class AgentMailService:
             "ws_enabled": _ws_enabled(),
             "ws_connected": self._ws_connected,
             "ws_reconnect_count": self._ws_reconnect_count,
+            "ws_last_status_code": self._ws_last_status_code,
+            "ws_fail_opened": self._ws_fail_opened,
+            "ws_fail_open_after_attempts": self._ws_fail_open_after_attempts,
+            "ws_fail_open_status_codes": sorted(self._ws_fail_open_status_codes),
+            "inbound_poll_enabled": self._inbound_poll_enabled,
+            "inbound_poll_interval_seconds": self._inbound_poll_interval_seconds,
             "messages_sent": self._messages_sent,
             "messages_received": self._messages_received,
             "drafts_created": self._drafts_created,
@@ -1281,3 +1434,44 @@ class AgentMailService:
             })
         except Exception:
             logger.exception("📧 Failed emitting notification kind=%s", kind)
+
+    @staticmethod
+    def _extract_ws_status_code(exc: Exception) -> Optional[int]:
+        match = re.search(r"status_code:\s*(\d+)", str(exc or ""))
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    def _seen_message_id(self, message_id: str) -> bool:
+        return str(message_id or "").strip() in self._seen_message_id_set
+
+    def _claim_seen_message_id(self, message_id: str) -> bool:
+        clean_id = str(message_id or "").strip()
+        if not clean_id:
+            return False
+        if clean_id in self._seen_message_id_set:
+            return False
+        self._seen_message_ids.append(clean_id)
+        self._seen_message_id_set.add(clean_id)
+        if len(self._seen_message_id_set) > self._seen_message_ids.maxlen:
+            self._seen_message_id_set = set(self._seen_message_ids)
+        return True
+
+    def _release_seen_message_id(self, message_id: str) -> None:
+        clean_id = str(message_id or "").strip()
+        if not clean_id:
+            return
+        if clean_id in self._seen_message_id_set:
+            self._seen_message_id_set.discard(clean_id)
+            self._seen_message_ids = deque(
+                (mid for mid in self._seen_message_ids if mid != clean_id),
+                maxlen=self._seen_message_ids.maxlen,
+            )
+
+
+class _InboundMessageEvent:
+    def __init__(self, *, message: Any) -> None:
+        self.message = message

@@ -34,7 +34,10 @@ from types import SimpleNamespace
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-import httpx
+try:
+    import httpx
+except Exception:  # pragma: no cover - degraded runtime fallback
+    httpx = None  # type: ignore[assignment]
 
 BASE_DIR = Path(__file__).parent.parent.parent
 from universal_agent.auth.ops_auth import (
@@ -225,9 +228,13 @@ _LOCAL_FACTORY_SERVICE_CONTROL_SCRIPT = BASE_DIR / "scripts" / "control_local_fa
 
 _LEGACY_RANDOM_FACTORY_ID_RE = re.compile(r"^factory-[0-9a-f]{8}$")
 _HEARTBEAT_FINDINGS_FILENAME = "heartbeat_findings_latest.json"
+_HEARTBEAT_FINDINGS_FALLBACK_FILENAME = "heartbeat_findings.json"
 _HEARTBEAT_REPORT_FILENAME = "system_health_latest.md"
 _HEARTBEAT_INVESTIGATION_MD = "heartbeat_investigation_summary.md"
 _HEARTBEAT_INVESTIGATION_JSON = "heartbeat_investigation_summary.json"
+_AGENTMAIL_HEARTBEAT_WAKE_SEEN_MAX = 1024
+_agentmail_heartbeat_wake_seen_ids: deque[str] = deque(maxlen=_AGENTMAIL_HEARTBEAT_WAKE_SEEN_MAX)
+_agentmail_heartbeat_wake_seen_set: set[str] = set()
 _HEARTBEAT_MEDIATION_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "coverage_model": "all_non_ok_tiered",
@@ -5384,6 +5391,139 @@ def _emit_cron_event(payload: dict) -> None:
         asyncio.create_task(manager.broadcast(session_id, event))
 
 
+def _agentmail_heartbeat_wake_enabled() -> bool:
+    return str(os.getenv("UA_AGENTMAIL_HEARTBEAT_WAKE_ENABLED", "1")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _extract_agentmail_message_field(message: str, key: str) -> str:
+    if not message or not key:
+        return ""
+    pattern = rf"(?mi)^\s*{re.escape(key)}\s*:\s*(.+?)\s*$"
+    match = re.search(pattern, message)
+    return str(match.group(1)).strip() if match else ""
+
+
+def _extract_agentmail_reply_content(message: str) -> str:
+    if not message:
+        return ""
+    match = re.search(
+        r"(?ms)^--- Reply \(new content\) ---\s*(.+?)(?:^\s*--- |\Z)",
+        message,
+    )
+    if match:
+        return str(match.group(1)).strip()
+    return ""
+
+
+def _claim_agentmail_heartbeat_wake_id(message_id: str) -> bool:
+    clean = str(message_id or "").strip()
+    if not clean:
+        return True
+    if clean in _agentmail_heartbeat_wake_seen_set:
+        return False
+    _agentmail_heartbeat_wake_seen_ids.append(clean)
+    _agentmail_heartbeat_wake_seen_set.add(clean)
+    if len(_agentmail_heartbeat_wake_seen_set) > _AGENTMAIL_HEARTBEAT_WAKE_SEEN_MAX:
+        _agentmail_heartbeat_wake_seen_set.clear()
+        _agentmail_heartbeat_wake_seen_set.update(_agentmail_heartbeat_wake_seen_ids)
+    return True
+
+
+def _agentmail_payload_requests_heartbeat_wake(action_payload: dict[str, Any]) -> bool:
+    if not _agentmail_heartbeat_wake_enabled():
+        return False
+    if str(action_payload.get("name") or "").strip() != "AgentMailInbound":
+        return False
+    message = str(action_payload.get("message") or "")
+    if "sender_trusted: True" not in message:
+        return False
+    reply_text = _extract_agentmail_reply_content(message)
+    subject = _extract_agentmail_message_field(message, "subject")
+    candidate = f"{subject}\n{reply_text}".strip().lower()
+    if "heartbeat" not in candidate:
+        return False
+    command_tokens = (
+        "run",
+        "rerun",
+        "re-run",
+        "start",
+        "trigger",
+        "kick",
+        "wake",
+        "check",
+    )
+    return any(token in candidate for token in command_tokens)
+
+
+def _queue_heartbeat_wake_from_operator_email(
+    *,
+    sender_email: str,
+    thread_id: str,
+    message_id: str,
+) -> dict[str, Any]:
+    if not _heartbeat_service:
+        return {"triggered": False, "reason": "heartbeat_unavailable", "count": 0}
+
+    target_sessions: set[str] = {str(sid) for sid in _sessions.keys() if str(sid)}
+    for session in get_gateway().list_sessions():
+        sid = str(session.session_id or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        try:
+            _heartbeat_service.register_session(session)
+        except Exception:
+            logger.debug("Failed to register session %s during AgentMail heartbeat wake", sid)
+
+    if not target_sessions:
+        return {"triggered": False, "reason": "no_sessions", "count": 0}
+
+    reason = "agentmail_trusted_heartbeat_request"
+    for sid in sorted(target_sessions):
+        _heartbeat_service.request_heartbeat_now(sid, reason=reason)
+
+    _add_notification(
+        kind="agentmail_heartbeat_wake_queued",
+        title="Heartbeat Rerun Queued From Email",
+        message=(
+            f"Queued immediate heartbeat run from trusted email request"
+            f"{f' ({sender_email})' if sender_email else ''}."
+        ),
+        severity="info",
+        requires_action=False,
+        metadata={
+            "source": "agentmail",
+            "sender_email": sender_email,
+            "thread_id": thread_id,
+            "message_id": message_id,
+            "count": len(target_sessions),
+            "reason": reason,
+        },
+    )
+    return {"triggered": True, "reason": "queued", "count": len(target_sessions)}
+
+
+def _maybe_trigger_heartbeat_from_agentmail_action(action_payload: dict[str, Any]) -> dict[str, Any]:
+    if not _agentmail_payload_requests_heartbeat_wake(action_payload):
+        return {"triggered": False, "reason": "not_requested", "count": 0}
+    message = str(action_payload.get("message") or "")
+    message_id = _extract_agentmail_message_field(message, "message_id")
+    if not _claim_agentmail_heartbeat_wake_id(message_id):
+        return {"triggered": False, "reason": "duplicate_message_id", "count": 0}
+    sender_email = _extract_agentmail_message_field(message, "sender_email")
+    thread_id = _extract_agentmail_message_field(message, "thread_id")
+    return _queue_heartbeat_wake_from_operator_email(
+        sender_email=sender_email,
+        thread_id=thread_id,
+        message_id=message_id,
+    )
+
+
 def _emit_heartbeat_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "heartbeat_event")
     _scheduling_record_event("heartbeat", event_type)
@@ -9398,6 +9538,8 @@ async def _probe_channel(channel_id: str, timeout: float = 4.0) -> dict:
     normalized = channel_id.strip().lower()
     checked_at = datetime.now(timezone.utc).isoformat()
     base = {"id": normalized, "checked_at": checked_at}
+    if httpx is None:
+        return {**base, "status": "error", "detail": "httpx unavailable"}
 
     if normalized in {"gateway", "cli"}:
         return {**base, "status": "ok", "detail": "local"}
@@ -10079,23 +10221,33 @@ async def lifespan(app: FastAPI):
     global _agentmail_service
 
     async def _agentmail_dispatch_fn(action_payload: dict) -> tuple[bool, str]:
+        wake_result = _maybe_trigger_heartbeat_from_agentmail_action(action_payload)
         if _hooks_service is None:
             return False, "hooks_service_not_ready"
-        return await _hooks_service.dispatch_internal_action(action_payload)
+        ok, reason = await _hooks_service.dispatch_internal_action(action_payload)
+        if wake_result.get("triggered"):
+            reason = f"{reason}; heartbeat_wake_queued:{int(wake_result.get('count') or 0)}"
+        return ok, reason
 
     async def _agentmail_dispatch_with_admission_fn(action_payload: dict) -> dict[str, Any]:
+        wake_result = _maybe_trigger_heartbeat_from_agentmail_action(action_payload)
         if _hooks_service is None:
             return {
                 "decision": "failed",
                 "reason": "hooks_service_not_ready",
                 "error": "hooks_service_not_ready",
             }
-        return await _hooks_service.dispatch_internal_action_with_admission(action_payload)
+        result = await _hooks_service.dispatch_internal_action_with_admission(action_payload)
+        if wake_result.get("triggered"):
+            result = dict(result or {})
+            result["heartbeat_wake"] = wake_result
+        return result
 
     _agentmail_service = AgentMailService(
         dispatch_fn=_agentmail_dispatch_fn,
         dispatch_with_admission_fn=_agentmail_dispatch_with_admission_fn,
         notification_sink=_hook_notification_sink,
+        trusted_ingress_fn=_maybe_trigger_heartbeat_from_agentmail_action,
     )
     try:
         await _agentmail_service.startup()
@@ -16580,8 +16732,9 @@ async def ops_tutorial_bootstrap_result(
 
 @app.post("/api/v1/vision/describe")
 async def vision_describe(request: VisionDescribeRequest):
-    import httpx
-    
+    if httpx is None:
+        raise HTTPException(status_code=500, detail="httpx is not available in this runtime")
+
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured for vision tasks")
@@ -17404,7 +17557,11 @@ def _heartbeat_findings_from_artifacts(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], Optional[str]]:
     artifact_links = _heartbeat_artifact_links_from_payload(payload)
-    json_candidates = _heartbeat_candidate_paths_from_links(artifact_links, filename=_HEARTBEAT_FINDINGS_FILENAME)
+    json_candidates: list[tuple[Path, dict[str, Any]]] = []
+    for candidate_name in (_HEARTBEAT_FINDINGS_FILENAME, _HEARTBEAT_FINDINGS_FALLBACK_FILENAME):
+        json_candidates = _heartbeat_candidate_paths_from_links(artifact_links, filename=candidate_name)
+        if json_candidates:
+            break
     markdown_candidates = _heartbeat_candidate_paths_from_links(artifact_links, filename=_HEARTBEAT_REPORT_FILENAME)
     findings_path = json_candidates[0][0] if json_candidates else None
     findings_link = json_candidates[0][1] if json_candidates else {}
@@ -17785,6 +17942,12 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
     origin_id = str(metadata.get("source_notification_id") or "").strip()
     if not origin_id:
         return
+    origin_event = _get_activity_event(origin_id)
+    origin_metadata = (
+        origin_event.get("metadata")
+        if isinstance(origin_event, dict) and isinstance(origin_event.get("metadata"), dict)
+        else {}
+    )
     operator_review_required = bool(metadata.get("operator_review_required"))
     summary_rel = str(metadata.get("heartbeat_investigation_summary_workspace_relpath") or "").strip()
     summary_href = str(metadata.get("heartbeat_investigation_summary_href") or "").strip()
@@ -17821,6 +17984,13 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
     should_notify = operator_review_required or bool(metadata.get("unknown_rule_count"))
     if not should_notify:
         return
+    merged_notify_metadata = {
+        **(origin_metadata if isinstance(origin_metadata, dict) else {}),
+        **metadata,
+        "recommended_next_step": recommended_next_step,
+        "email_summary": email_summary,
+        "heartbeat_investigation_summary_href": summary_href,
+    }
     _add_notification(
         kind="heartbeat_operator_review_required",
         title="Heartbeat Investigation Needs Review",
@@ -17834,10 +18004,7 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
         metadata={
             "source": "heartbeat",
             "originating_notification_id": origin_id,
-            **metadata,
-            "recommended_next_step": recommended_next_step,
-            "email_summary": email_summary,
-            "heartbeat_investigation_summary_href": summary_href,
+            **merged_notify_metadata,
         },
     )
     try:
@@ -17845,12 +18012,7 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
             {
                 "originating_notification_id": origin_id,
                 "session_id": payload.get("session_id"),
-                "metadata": {
-                    **metadata,
-                    "recommended_next_step": recommended_next_step,
-                    "email_summary": email_summary,
-                    "heartbeat_investigation_summary_href": summary_href,
-                },
+                "metadata": merged_notify_metadata,
             }
         )
     except Exception as exc:

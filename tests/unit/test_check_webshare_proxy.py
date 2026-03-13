@@ -41,7 +41,7 @@ def test_proxy_probe_main_reports_not_configured(monkeypatch, capsys) -> None:
         lambda: {
             "username": "",
             "password": "",
-            "host": "p.webshare.io",
+            "host": "proxy.webshare.io",
             "port": 80,
             "locations": [],
             "warnings": [],
@@ -78,7 +78,7 @@ def test_proxy_probe_main_surfaces_auth_failures(monkeypatch, capsys) -> None:
         lambda: {
             "username": "proxy-user",
             "password": "proxy-pass",
-            "host": "p.webshare.io",
+            "host": "proxy.webshare.io",
             "port": 80,
             "locations": [],
             "warnings": [],
@@ -89,7 +89,7 @@ def test_proxy_probe_main_surfaces_auth_failures(monkeypatch, capsys) -> None:
         "_tcp_probe",
         lambda *_args, **_kwargs: {
             "ok": True,
-            "host": "p.webshare.io",
+            "host": "proxy.webshare.io",
             "port": 80,
             "latency_ms": 20.0,
             "failure_class": "",

@@ -419,6 +419,46 @@ class TestTrustedInboundHandling:
         assert service_with_queue._dispatch_with_admission_fn.await_count == 2
         mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_calls_trusted_ingress_hook_immediately(
+        self, mock_agentmail_client
+    ):
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        trusted_ingress_fn = MagicMock(return_value={"triggered": True, "count": 1})
+        svc = AgentMailService(
+            dispatch_fn=AsyncMock(return_value=(True, "agent")),
+            dispatch_with_admission_fn=AsyncMock(return_value={"decision": "accepted"}),
+            notification_sink=MagicMock(),
+            trusted_ingress_fn=trusted_ingress_fn,
+        )
+        svc._client = mock_agentmail_client
+        await svc._ensure_inbox()
+        svc._enabled = True
+        svc._started = True
+
+        class _Message:
+            from_ = "Kevin Dragan <kevin.dragan@outlook.com>"
+            subject = "Heartbeat"
+            thread_id = "thd_ingress_001"
+            message_id = "msg_ingress_001"
+            text = "Run another heartbeat and check if it is fixed"
+            html = "<p>Run another heartbeat and check if it is fixed</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        try:
+            await svc._handle_inbound_email(_Event())
+        finally:
+            await svc.shutdown()
+
+        trusted_ingress_fn.assert_called_once()
+        payload = trusted_ingress_fn.call_args.args[0]
+        assert payload["name"] == "AgentMailInbound"
+        assert "Run another heartbeat and check if it is fixed" in payload["message"]
+
 
 class TestTrustedSenderHelpers:
     def test_normalizes_sender_email_from_display_name(self):
@@ -534,6 +574,147 @@ class TestInboundReplyExtraction:
         assert "--- Full Email Body (for reference) ---" not in payload["message"]
         assert "reply_extracted: False" in payload["message"]
         assert "status of the proxy" in payload["message"]
+
+
+class TestInboxPolling:
+    @pytest.mark.asyncio
+    async def test_poll_loop_processes_new_inbound_messages_once(self, service, mock_agentmail_client):
+        inbound = MagicMock()
+        inbound.from_ = "Kevin Dragan <kevinjdragan@gmail.com>"
+        inbound.subject = "Re: heartbeat"
+        inbound.thread_id = "thd_poll_001"
+        inbound.message_id = "msg_poll_001"
+        inbound.text = "Run another heartbeat now."
+        inbound.html = ""
+        inbound.attachments = []
+
+        outbound = MagicMock()
+        outbound.from_ = "Simone D <simone@testdomain.com>"
+        outbound.subject = "Sent by Simone"
+        outbound.thread_id = "thd_poll_002"
+        outbound.message_id = "msg_poll_002"
+        outbound.text = "Operator summary"
+        outbound.html = ""
+        outbound.attachments = []
+
+        listing = MagicMock()
+        listing.messages = [outbound, inbound]
+        mock_agentmail_client.inboxes.messages.list = AsyncMock(return_value=listing)
+        mock_agentmail_client.inboxes.messages.get = AsyncMock(return_value=inbound)
+
+        await service._poll_inbox_once(limit=10)
+        await service._poll_inbox_once(limit=10)
+
+        # Inbound processed once; outbound ignored as self-authored.
+        assert service._dispatch_fn.await_count == 1
+        dispatch_payload = service._dispatch_fn.await_args.args[0]
+        assert dispatch_payload["session_key"] == "agentmail_thd_poll_001"
+        mock_agentmail_client.inboxes.messages.get.assert_awaited_once_with(
+            inbox_id="simone@testdomain.com",
+            message_id="msg_poll_001",
+        )
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_hydrates_full_message_before_dispatch(self, service, mock_agentmail_client):
+        preview = MagicMock()
+        preview.from_ = "Kevin Dragan <kevinjdragan@gmail.com>"
+        preview.subject = "Heartbeat"
+        preview.thread_id = "thd_poll_010"
+        preview.message_id = "msg_poll_010"
+        preview.text = ""
+        preview.html = ""
+        preview.attachments = []
+
+        full = MagicMock()
+        full.from_ = preview.from_
+        full.subject = preview.subject
+        full.thread_id = preview.thread_id
+        full.message_id = preview.message_id
+        full.text = "Run another heartbeat and check if it is fixed"
+        full.html = "<p>Run another heartbeat and check if it is fixed</p>"
+        full.attachments = []
+
+        listing = MagicMock()
+        listing.messages = [preview]
+        mock_agentmail_client.inboxes.messages.list = AsyncMock(return_value=listing)
+        mock_agentmail_client.inboxes.messages.get = AsyncMock(return_value=full)
+
+        await service._poll_inbox_once(limit=10)
+
+        dispatch_payload = service._dispatch_fn.await_args.args[0]
+        assert "Run another heartbeat and check if it is fixed" in dispatch_payload["message"]
+        mock_agentmail_client.inboxes.messages.get.assert_awaited_once_with(
+            inbox_id="simone@testdomain.com",
+            message_id="msg_poll_010",
+        )
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_skips_already_seen_message_id(self, service, mock_agentmail_client):
+        inbound = MagicMock()
+        inbound.from_ = "Kevin Dragan <kevinjdragan@gmail.com>"
+        inbound.subject = "Re: status"
+        inbound.thread_id = "thd_poll_003"
+        inbound.message_id = "msg_poll_003"
+        inbound.text = "Any update?"
+        inbound.html = ""
+        inbound.attachments = []
+
+        listing = MagicMock()
+        listing.messages = [inbound]
+        mock_agentmail_client.inboxes.messages.list = AsyncMock(return_value=listing)
+
+        assert service._claim_seen_message_id("msg_poll_003") is True
+        await service._poll_inbox_once(limit=10)
+
+        service._dispatch_fn.assert_not_awaited()
+
+
+class TestWebSocketFailOpen:
+    @pytest.mark.asyncio
+    async def test_ws_fail_open_stops_reconnect_loop_for_rate_limit(self, monkeypatch):
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        svc._enabled = True
+        svc._client = MagicMock()
+        svc._inbox_id = "simone@testdomain.com"
+        svc._ws_fail_open_after_attempts = 1
+        monkeypatch.setattr("universal_agent.services.agentmail_service.random.uniform", lambda *_: 0.0)
+
+        async def _raise_rate_limited():
+            raise RuntimeError("WebSocketClosedError(status_code: 429)")
+
+        monkeypatch.setattr(svc, "_ws_connect_and_listen", _raise_rate_limited)
+
+        await svc._ws_loop()
+
+        assert svc._ws_fail_opened is True
+        assert svc._ws_last_status_code == 429
+        assert svc._last_error == "ws_fail_open_status_429"
+
+    @pytest.mark.asyncio
+    async def test_ws_non_fail_open_status_keeps_retrying_until_stop(self, monkeypatch):
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        svc._enabled = True
+        svc._client = MagicMock()
+        svc._inbox_id = "simone@testdomain.com"
+        svc._ws_fail_open_after_attempts = 1
+        monkeypatch.setattr("universal_agent.services.agentmail_service.random.uniform", lambda *_: 0.0)
+
+        async def _raise_server_error():
+            raise RuntimeError("WebSocketClosedError(status_code: 500)")
+
+        monkeypatch.setattr(svc, "_ws_connect_and_listen", _raise_server_error)
+        loop_task = asyncio.create_task(svc._ws_loop())
+        await asyncio.sleep(0.01)
+        svc._ws_stop_event.set()
+        await asyncio.wait_for(loop_task, timeout=2)
+
+        assert svc._ws_fail_opened is False
+        assert svc._ws_last_status_code == 500
+        assert svc._ws_reconnect_count >= 1
 
 
 class TestAssertReady:

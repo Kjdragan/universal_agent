@@ -227,8 +227,8 @@ def _build_webshare_proxy_config() -> tuple[Optional[Any], str]:
     domain_name = (
         os.getenv("WEBSHARE_PROXY_HOST")
         or os.getenv("PROXY_HOST")
-        or "p.webshare.io"
-    ).strip() or "p.webshare.io"
+        or "proxy.webshare.io"
+    ).strip() or "proxy.webshare.io"
     proxy_port_raw = (
         os.getenv("WEBSHARE_PROXY_PORT")
         or os.getenv("PROXY_PORT")

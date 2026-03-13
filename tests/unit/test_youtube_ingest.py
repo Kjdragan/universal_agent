@@ -85,7 +85,7 @@ def test_build_webshare_proxy_config_defaults_to_current_residential_endpoint(mo
 
     assert mode == "webshare"
     assert config is not None
-    assert config.domain_name == "p.webshare.io"
+    assert config.domain_name == "proxy.webshare.io"
     assert config.proxy_port == 80
 
 
@@ -315,7 +315,7 @@ def test_run_extract_uses_webshare_proxy_when_env_present(monkeypatch) -> None:
     assert captured["proxy_kwargs"] == {
         "proxy_username": "proxy-user",
         "proxy_password": "proxy-pass",
-        "domain_name": "p.webshare.io",
+        "domain_name": "proxy.webshare.io",
         "proxy_port": 80,
         "filter_ip_locations": ["us", "de"],
     }

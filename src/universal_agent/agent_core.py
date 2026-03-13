@@ -725,7 +725,7 @@ _COMPACTION_LOG: list = []
 
 
 async def pre_compact_context_capture_hook(
-    input_data: dict, context
+    input_data: dict, context: Optional[dict] = None, *args, **kwargs
 ) -> dict:
     """
     PreCompact hook that captures context state before Claude compacts.
@@ -741,6 +741,7 @@ async def pre_compact_context_capture_hook(
     global _COMPACTION_COUNT
     _COMPACTION_COUNT += 1
     
+    context = context if isinstance(context, dict) else {}
     trigger = input_data.get("trigger", "unknown")  # "auto" or "manual"
     session_id = input_data.get("session_id", "unknown")
     transcript_path = input_data.get("transcript_path", "")

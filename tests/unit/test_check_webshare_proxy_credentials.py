@@ -37,7 +37,7 @@ def test_credentials_probe_detects_missing_credentials(monkeypatch, capsys) -> N
         lambda: {
             "username": "",
             "password": "",
-            "host": "p.webshare.io",
+            "host": "proxy.webshare.io",
             "port": 80,
             "locations": [],
         },
@@ -63,7 +63,7 @@ def test_credentials_probe_flags_email_like_username(monkeypatch, capsys) -> Non
         lambda: {
             "username": "user@example.com",
             "password": "secret-pass",
-            "host": "proxy.webshare.io",
+            "host": "p.webshare.io",
             "port": 80,
             "locations": [],
         },

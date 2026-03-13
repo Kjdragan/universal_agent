@@ -53,9 +53,9 @@ POLL_WINDOW_MINUTES: int = int(os.getenv("TGTG_POLL_WINDOW_MINUTES", "90"))
 #   WEBSHARE_PROXY_USER / WEBSHARE_PROXY_PASS are present, a single
 #   Webshare rotating-residential URL is constructed automatically.
 #
-# Webshare residential backbone endpoint: p.webshare.io:80 (HTTP)
-# Sticky-session endpoint:                p.webshare.io:80 with provider-specific user suffixes
-_WEBSHARE_HOST = os.getenv("WEBSHARE_PROXY_HOST", "p.webshare.io")
+# Webshare residential backbone endpoint: proxy.webshare.io:80 (HTTP)
+# Sticky-session endpoint:                proxy.webshare.io:80 with provider-specific user suffixes
+_WEBSHARE_HOST = os.getenv("WEBSHARE_PROXY_HOST", "proxy.webshare.io")
 _WEBSHARE_PORT = os.getenv("WEBSHARE_PROXY_PORT", "80")
 
 def _build_proxy_list() -> list[str]:
