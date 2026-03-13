@@ -36,6 +36,14 @@ The current production outbound policy is:
 - outbound mail is **draft-first by default** unless explicitly forced or policy is changed
 - digest/report traffic to Kevin should **always** use AgentMail so replies come back to Simone
 
+The current trusted inbound sender list defaults to:
+
+- `kevin.dragan@outlook.com`
+- `kevinjdragan@gmail.com`
+- `kevin@clearspringcg.com`
+
+Trusted inbound mail from those addresses is treated as operator mail. It receives an immediate in-thread acknowledgement from the transport layer and is then routed into the normal email handling flow with trusted sender metadata attached.
+
 ## Identities and Routing Rules
 
 ### 1. Simone Identity — AgentMail
@@ -165,6 +173,24 @@ Current behavior:
 - if extraction fails or yields nothing useful, the original body is preserved
 
 This is important for digest replies, because Kevin's instruction should be isolated from the quoted digest below it.
+
+### Trusted Sender Handling
+
+Implementation:
+- `AgentMailService._normalize_sender_email(...)`
+- `AgentMailService._trusted_sender_addresses(...)`
+
+Current behavior:
+- trusted sender addresses are read from `UA_AGENTMAIL_TRUSTED_SENDERS`
+- if the env var is unset, the three Kevin addresses above are used as the default allowlist
+- sender trust is determined in runtime transport logic, not by LLM prompt interpretation
+- trusted inbound mail gets an immediate acknowledgement reply before the deeper handler work continues
+- trusted sender metadata is attached to the internal payload:
+  - `sender_email`
+  - `sender_role`
+  - `sender_trusted`
+
+This closes the gap where unsolicited direct mail from one of Kevin's valid addresses could be treated like generic external mail.
 
 ### Routing to the Email Handler Agent
 

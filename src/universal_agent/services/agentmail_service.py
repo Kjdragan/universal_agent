@@ -20,6 +20,7 @@ Env vars:
 from __future__ import annotations
 
 import asyncio
+from email.utils import parseaddr
 import logging
 import os
 import random
@@ -57,6 +58,11 @@ NotifyFn = Callable[[dict[str, Any]], None]
 
 # Idempotency key for Simone's primary inbox
 _INBOX_CLIENT_ID = "ua-simone-primary"
+_DEFAULT_TRUSTED_SENDERS = (
+    "kevin.dragan@outlook.com",
+    "kevinjdragan@gmail.com",
+    "kevin@clearspringcg.com",
+)
 
 
 def _is_enabled() -> bool:
@@ -92,6 +98,28 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _normalize_sender_email(value: str) -> str:
+    _, address = parseaddr(value or "")
+    return (address or value or "").strip().lower()
+
+
+def _trusted_sender_addresses() -> tuple[str, ...]:
+    configured = os.getenv("UA_AGENTMAIL_TRUSTED_SENDERS", "").strip()
+    if configured:
+        raw_items = configured.split(",")
+    else:
+        raw_items = list(_DEFAULT_TRUSTED_SENDERS)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        address = _normalize_sender_email(str(item))
+        if not address or address in seen:
+            continue
+        seen.add(address)
+        normalized.append(address)
+    return tuple(normalized)
+
+
 class AgentMailService:
     """Async AgentMail service for Simone's email inbox."""
 
@@ -123,6 +151,7 @@ class AgentMailService:
         self._messages_sent: int = 0
         self._messages_received: int = 0
         self._drafts_created: int = 0
+        self._trusted_senders: tuple[str, ...] = _trusted_sender_addresses()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -496,6 +525,13 @@ class AgentMailService:
         try:
             msg = event.message
             sender = getattr(msg, "from_", "unknown")
+            sender_email = _normalize_sender_email(sender)
+            sender_role = (
+                "trusted_operator"
+                if sender_email and sender_email in self._trusted_senders
+                else "external"
+            )
+            sender_trusted = sender_role == "trusted_operator"
             subject = getattr(msg, "subject", "(no subject)")
             thread_id = getattr(msg, "thread_id", "")
             message_id = getattr(msg, "message_id", "")
@@ -507,8 +543,8 @@ class AgentMailService:
             reply_is_extracted = reply_text != text_body
 
             logger.info(
-                "📧 Inbound email from=%s subject=%r thread=%s reply_extracted=%s",
-                sender, subject, thread_id, reply_is_extracted,
+                "📧 Inbound email from=%s subject=%r thread=%s reply_extracted=%s trusted=%s",
+                sender, subject, thread_id, reply_is_extracted, sender_trusted,
             )
 
             # Emit notification
@@ -521,10 +557,35 @@ class AgentMailService:
                     "message_id": message_id,
                     "thread_id": thread_id,
                     "from": sender,
+                    "sender_email": sender_email,
+                    "sender_role": sender_role,
+                    "sender_trusted": sender_trusted,
                     "subject": subject,
                     "inbox": self._inbox_address,
                 },
             )
+
+            # Trusted operator mail should get an immediate confirmation even
+            # before deeper handling completes.
+            if sender_trusted and message_id:
+                try:
+                    await self.reply(
+                        message_id=message_id,
+                        text=(
+                            "Received your email. I'm processing it now and will "
+                            "follow up here."
+                        ),
+                        html=(
+                            "<p>Received your email. I'm processing it now and will "
+                            "follow up here.</p>"
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "📧 Trusted inbound ack failed message_id=%s: %s",
+                        message_id,
+                        exc,
+                    )
 
             # Dispatch through hooks pipeline if dispatch_fn available
             if self._dispatch_fn:
@@ -536,6 +597,9 @@ class AgentMailService:
                     "deliver": True,
                     "message": self._build_inbound_message(
                         sender=sender,
+                        sender_email=sender_email,
+                        sender_role=sender_role,
+                        sender_trusted=sender_trusted,
                         subject=subject,
                         thread_id=thread_id,
                         message_id=message_id,
@@ -583,6 +647,8 @@ class AgentMailService:
             "messages_sent": self._messages_sent,
             "messages_received": self._messages_received,
             "drafts_created": self._drafts_created,
+            "trusted_sender_count": len(self._trusted_senders),
+            "trusted_senders": list(self._trusted_senders),
             "last_error": self._last_error,
         }
 
@@ -590,6 +656,9 @@ class AgentMailService:
         self,
         *,
         sender: str,
+        sender_email: str,
+        sender_role: str,
+        sender_trusted: bool,
         subject: str,
         thread_id: str,
         message_id: str,
@@ -606,6 +675,9 @@ class AgentMailService:
         lines = [
             "Inbound email received in Simone's AgentMail inbox.",
             f"from: {sender}",
+            f"sender_email: {sender_email}",
+            f"sender_role: {sender_role}",
+            f"sender_trusted: {sender_trusted}",
             f"subject: {subject}",
             f"thread_id: {thread_id}",
             f"message_id: {message_id}",

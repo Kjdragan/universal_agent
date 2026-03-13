@@ -229,6 +229,8 @@ class TestStatus:
         assert status["ws_connected"] is False
         assert isinstance(status["messages_sent"], int)
         assert isinstance(status["drafts_created"], int)
+        assert status["trusted_sender_count"] == 3
+        assert "kevin@clearspringcg.com" in status["trusted_senders"]
 
 
 class TestNotifications:
@@ -258,6 +260,65 @@ class TestReplyExtraction:
         assert "proxy issue" in result
         assert "YouTube RSS Digest" not in result
         assert "oddcity216@agentmail.to" not in result
+
+
+class TestTrustedInboundHandling:
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_sends_ack_and_dispatches_metadata(
+        self, service, mock_agentmail_client
+    ):
+        class _Message:
+            from_ = "Kevin Dragan <kevin.dragan@outlook.com>"
+            subject = "Hello Simone"
+            thread_id = "thd_direct_001"
+            message_id = "msg_direct_001"
+            text = "hello there"
+            html = "<p>hello there</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+
+        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
+        dispatch_payload = service._dispatch_fn.await_args.args[0]
+        assert dispatch_payload["to"] == "email-handler"
+        assert "sender_email: kevin.dragan@outlook.com" in dispatch_payload["message"]
+        assert "sender_role: trusted_operator" in dispatch_payload["message"]
+        assert "sender_trusted: True" in dispatch_payload["message"]
+
+    @pytest.mark.asyncio
+    async def test_untrusted_inbound_skips_ack(self, service, mock_agentmail_client):
+        class _Message:
+            from_ = "Random Person <random@example.com>"
+            subject = "Hi"
+            thread_id = "thd_random_001"
+            message_id = "msg_random_001"
+            text = "hello"
+            html = "<p>hello</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+
+        mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
+        dispatch_payload = service._dispatch_fn.await_args.args[0]
+        assert "sender_email: random@example.com" in dispatch_payload["message"]
+        assert "sender_role: external" in dispatch_payload["message"]
+        assert "sender_trusted: False" in dispatch_payload["message"]
+
+
+class TestTrustedSenderHelpers:
+    def test_normalizes_sender_email_from_display_name(self):
+        from universal_agent.services.agentmail_service import _normalize_sender_email
+
+        assert (
+            _normalize_sender_email("Kevin Dragan <kevin@clearspringcg.com>")
+            == "kevin@clearspringcg.com"
+        )
 
     def test_extracts_outlook_reply(self):
         from universal_agent.services.agentmail_service import _extract_reply_text
