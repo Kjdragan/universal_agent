@@ -110,31 +110,42 @@ jobs:
             echo '--> Ensuring Python 3.12 runtime for uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv python install 3.12\"
 
-            echo '--> Writing explicit staging bootstrap .env...'
-            upsert_env_key() {
-              key=\"$1\"
-              value=\"$2\"
-              if [ ! -f \"\$STAGING_DIR/.env\" ]; then
-                touch \"\$STAGING_DIR/.env\"
-              fi
-              if grep -q \"^${key}=\" \"\$STAGING_DIR/.env\"; then
-                sed -i \"s#^${key}=.*#${key}=${value}#g\" \"\$STAGING_DIR/.env\"
-              else
-                printf '%s=%s\n' \"$key\" \"$value\" >> \"\$STAGING_DIR/.env\"
-              fi
+            echo '--> Writing clean staging bootstrap .env...'
+            export STAGING_DIR
+            python3 - <<'PY'
+            from __future__ import annotations
+
+            import json
+            import os
+            from pathlib import Path
+
+            env_path = Path(os.environ["STAGING_DIR"]) / ".env"
+            bootstrap = {
+                "INFISICAL_CLIENT_ID": os.environ["INFISICAL_CLIENT_ID"],
+                "INFISICAL_CLIENT_SECRET": os.environ["INFISICAL_CLIENT_SECRET"],
+                "INFISICAL_PROJECT_ID": os.environ["INFISICAL_PROJECT_ID"],
+                "INFISICAL_ENVIRONMENT": "staging",
+                "UA_RUNTIME_STAGE": "staging",
+                "FACTORY_ROLE": "HEADQUARTERS",
+                "UA_DEPLOYMENT_PROFILE": "vps",
+                "UA_MACHINE_SLUG": "vps-hq-staging",
+                "UA_INFISICAL_ENABLED": "1",
+                "UA_GATEWAY_PORT": "9002",
+                "UA_API_PORT": "9001",
+                "UA_GATEWAY_URL": "http://127.0.0.1:9002",
             }
-            upsert_env_key \"INFISICAL_CLIENT_ID\" \"'\$INFISICAL_CLIENT_ID'\"
-            upsert_env_key \"INFISICAL_CLIENT_SECRET\" \"'\$INFISICAL_CLIENT_SECRET'\"
-            upsert_env_key \"INFISICAL_PROJECT_ID\" \"'\$INFISICAL_PROJECT_ID'\"
-            upsert_env_key \"INFISICAL_ENVIRONMENT\" \"'staging'\"
-            upsert_env_key \"UA_RUNTIME_STAGE\" \"'staging'\"
-            upsert_env_key \"FACTORY_ROLE\" \"'HEADQUARTERS'\"
-            upsert_env_key \"UA_DEPLOYMENT_PROFILE\" \"'vps'\"
-            upsert_env_key \"UA_MACHINE_SLUG\" \"'vps-hq-staging'\"
-            upsert_env_key \"UA_INFISICAL_ENABLED\" \"1\"
-            upsert_env_key \"UA_GATEWAY_PORT\" \"9002\"
-            upsert_env_key \"UA_API_PORT\" \"9001\"
-            upsert_env_key \"UA_GATEWAY_URL\" \"http://127.0.0.1:9002\"
+            env_path.write_text(
+                "".join(f"{key}={json.dumps(str(value))}\n" for key, value in bootstrap.items()),
+                encoding="utf-8",
+            )
+            PY
+            if command -v sudo >/dev/null 2>&1; then
+              sudo chown ua:ua "\$STAGING_DIR/.env"
+              sudo chmod 600 "\$STAGING_DIR/.env"
+            else
+              chown ua:ua "\$STAGING_DIR/.env"
+              chmod 600 "\$STAGING_DIR/.env"
+            fi
 
             echo '--> Syncing dependencies with uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"

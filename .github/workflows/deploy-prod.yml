@@ -131,28 +131,34 @@ jobs:
             export PATH="$HOME/.local/bin:/home/ua/.local/bin:/usr/local/bin:$PATH"
             run_as_ua "export PATH=\"$PATH\"; uv python install 3.12"
 
-            echo "--> Updating bootstrap .env keys..."
-            upsert_env_key() {
-              key="$1"
-              value="$2"
-              if [ ! -f "$PROD_DIR/.env" ]; then
-                touch "$PROD_DIR/.env"
-              fi
-              if grep -q "^${key}=" "$PROD_DIR/.env"; then
-                sed -i "s#^${key}=.*#${key}=${value}#g" "$PROD_DIR/.env"
-              else
-                printf '%s=%s\n' "$key" "$value" >> "$PROD_DIR/.env"
-              fi
+            echo "--> Writing clean production bootstrap .env..."
+            export PROD_DIR
+            python3 - <<'PY'
+            from __future__ import annotations
+
+            import json
+            import os
+            from pathlib import Path
+
+            env_path = Path(os.environ["PROD_DIR"]) / ".env"
+            bootstrap = {
+                "INFISICAL_CLIENT_ID": os.environ["INFISICAL_CLIENT_ID"],
+                "INFISICAL_CLIENT_SECRET": os.environ["INFISICAL_CLIENT_SECRET"],
+                "INFISICAL_PROJECT_ID": os.environ["INFISICAL_PROJECT_ID"],
+                "INFISICAL_ENVIRONMENT": "production",
+                "UA_RUNTIME_STAGE": "production",
+                "FACTORY_ROLE": "HEADQUARTERS",
+                "UA_DEPLOYMENT_PROFILE": "vps",
+                "UA_MACHINE_SLUG": "vps-hq-production",
+                "UA_INFISICAL_ENABLED": "1",
             }
-            upsert_env_key "INFISICAL_CLIENT_ID" "'$INFISICAL_CLIENT_ID'"
-            upsert_env_key "INFISICAL_CLIENT_SECRET" "'$INFISICAL_CLIENT_SECRET'"
-            upsert_env_key "INFISICAL_PROJECT_ID" "'$INFISICAL_PROJECT_ID'"
-            upsert_env_key "INFISICAL_ENVIRONMENT" "'production'"
-            upsert_env_key "UA_RUNTIME_STAGE" "'production'"
-            upsert_env_key "FACTORY_ROLE" "'HEADQUARTERS'"
-            upsert_env_key "UA_DEPLOYMENT_PROFILE" "'vps'"
-            upsert_env_key "UA_MACHINE_SLUG" "'vps-hq-production'"
-            upsert_env_key "UA_INFISICAL_ENABLED" "1"
+            env_path.write_text(
+                "".join(f"{key}={json.dumps(str(value))}\n" for key, value in bootstrap.items()),
+                encoding="utf-8",
+            )
+            PY
+            sudo chown ua:ua "$PROD_DIR/.env"
+            sudo chmod 600 "$PROD_DIR/.env"
 
             echo "--> Syncing dependencies with uv..."
             run_as_ua "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"

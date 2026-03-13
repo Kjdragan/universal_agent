@@ -45,6 +45,8 @@ Machine identity is written locally during bootstrap and validated during deploy
 - `UA_MACHINE_SLUG`
 
 Deploy workflows must not provision machine-shaped Infisical environments during normal deploys.
+They also rewrite the checkout bootstrap `.env` from scratch on every deploy so
+stale historical lines cannot survive a lane migration.
 
 ## Required GitHub Secrets
 
@@ -99,6 +101,9 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 - `FACTORY_ROLE=HEADQUARTERS`
 - `UA_DEPLOYMENT_PROFILE=vps`
 - `UA_MACHINE_SLUG=vps-hq-staging`
+- `UA_GATEWAY_PORT=9002`
+- `UA_API_PORT=9001`
+- `UA_GATEWAY_URL=http://127.0.0.1:9002`
 
 ### Production VPS
 
@@ -107,6 +112,9 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 - `FACTORY_ROLE=HEADQUARTERS`
 - `UA_DEPLOYMENT_PROFILE=vps`
 - `UA_MACHINE_SLUG=vps-hq-production`
+
+The bootstrap file written by deploys is intentionally minimal. Stage-shared
+runtime config and secrets are loaded from Infisical after bootstrap validation.
 
 ## Deployed Runtime Tooling
 
