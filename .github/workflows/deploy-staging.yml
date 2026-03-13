@@ -140,7 +140,7 @@ jobs:
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
 
             echo '--> Validating staging runtime bootstrap...'
-            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && set -a && source .env && set +a && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment staging --expect-runtime-stage staging --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-staging --require UA_OPS_TOKEN --json\"
+            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment staging --expect-runtime-stage staging --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-staging --require UA_OPS_TOKEN --json\"
 
             echo '--> Installing NotebookLM CLI/MCP tool for ua...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv tool install --force notebooklm-mcp-cli\"

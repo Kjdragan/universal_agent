@@ -158,7 +158,7 @@ jobs:
             run_as_ua "export PATH=\"$PATH\"; uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
 
             echo "--> Validating production runtime bootstrap..."
-            run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && set -a && source .env && set +a && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment production --expect-runtime-stage production --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-production --require UA_OPS_TOKEN --json"
+            run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment production --expect-runtime-stage production --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-production --require UA_OPS_TOKEN --json"
 
             echo "--> Installing NotebookLM CLI/MCP tool for ua..."
             run_as_ua "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
