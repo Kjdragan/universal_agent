@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, MessageSquare, Zap, Radio, Hash, CheckCircle, AlertTriangle, RotateCcw } from "lucide-react";
+import { RefreshCw, MessageSquare, Zap, Radio, Hash, CheckCircle, AlertTriangle, RotateCcw, Trash2 } from "lucide-react";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -30,7 +31,15 @@ type ActivityEvent = {
   session_id?: string;
   created_at: string;
   updated_at?: string;
+  actions?: ActivityAction[];
   metadata?: Record<string, unknown>;
+};
+
+type ActivityAction = {
+  id: string;
+  label: string;
+  type: string;
+  href?: string;
 };
 
 type TelegramSession = {
@@ -134,6 +143,8 @@ export default function TelegramPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<TelegramData>({});
+  const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
+  const [deletingAllActivity, setDeletingAllActivity] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -161,6 +172,59 @@ export default function TelegramPage() {
     return () => clearInterval(timer);
   }, [load]);
 
+  const removeActivityIdsFromState = useCallback((ids: string[]) => {
+    const idSet = new Set(ids.filter(Boolean));
+    if (idSet.size === 0) return;
+    setData((current) => {
+      const filterEvents = (items?: ActivityEvent[]) => (items || []).filter((item) => !idSet.has(item.id));
+      const nextPipelineActivity = filterEvents(current.pipeline_activity);
+      const nextRecentNotifications = filterEvents(current.recent_notifications);
+      const nextFailures = filterEvents(current.recent_failures);
+      const nextActionable = filterEvents(current.actionable_alerts);
+      const nextRecovery = filterEvents(current.recovery_events);
+      const nextCounts = {
+        ...(current.counts || {}),
+        pipeline_activity: nextPipelineActivity.length,
+        recent_failures: nextFailures.length,
+        actionable_alerts: nextActionable.length,
+        recovery_events: nextRecovery.length,
+      };
+      return {
+        ...current,
+        pipeline_activity: nextPipelineActivity,
+        recent_notifications: nextRecentNotifications,
+        recent_failures: nextFailures,
+        actionable_alerts: nextActionable,
+        recovery_events: nextRecovery,
+        counts: nextCounts,
+      };
+    });
+  }, []);
+
+  const deleteActivityEvent = useCallback(async (eventId: string) => {
+    const normalized = String(eventId || "").trim();
+    if (!normalized) return;
+    setDeletingIds((current) => ({ ...current, [normalized]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/activity/${encodeURIComponent(normalized)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new Error(normalizeErrorMessage(res.status, detail));
+      }
+      removeActivityIdsFromState([normalized]);
+    } catch (err: unknown) {
+      setError((err as Error)?.message || "Failed to delete delivery activity event.");
+    } finally {
+      setDeletingIds((current) => {
+        const next = { ...current };
+        delete next[normalized];
+        return next;
+      });
+    }
+  }, [removeActivityIdsFromState]);
+
   const bot = data.bot || {};
   const botEnabled = bot.enabled_by_policy !== false;
   const botStateLabel = !botEnabled ? "Disabled" : bot.service_active ? "Active" : "Down";
@@ -183,6 +247,78 @@ export default function TelegramPage() {
   const activeTutorialRuns = data.active_tutorial_runs || [];
   const sessions = data.telegram_sessions || [];
   const counts = data.counts || {};
+
+  const deleteAllDeliveryActivity = useCallback(async () => {
+    const ids = pipelineActivity.map((item) => item.id).filter(Boolean);
+    if (ids.length === 0) return;
+    setDeletingAllActivity(true);
+    setError("");
+    try {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const res = await fetch(`${API_BASE}/api/v1/dashboard/activity/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+          });
+          return { id, ok: res.ok, detail: res.ok ? "" : await res.text().catch(() => "") };
+        }),
+      );
+      const failed = results.filter((item) => !item.ok);
+      const deleted = results.filter((item) => item.ok).map((item) => item.id);
+      if (deleted.length > 0) removeActivityIdsFromState(deleted);
+      if (failed.length > 0) {
+        throw new Error(normalizeErrorMessage(500, failed[0]?.detail || "Failed deleting one or more activity items."));
+      }
+    } catch (err: unknown) {
+      setError((err as Error)?.message || "Failed to delete delivery activity events.");
+      void load(true);
+    } finally {
+      setDeletingAllActivity(false);
+    }
+  }, [load, pipelineActivity, removeActivityIdsFromState]);
+
+  function actionPriority(action: ActivityAction): number {
+    const id = String(action.id || "").trim().toLowerCase();
+    const priorityMap: Record<string, number> = {
+      open_tutorial_artifacts: 1,
+      open_repo: 2,
+      open_review_artifacts: 3,
+      open_report: 4,
+      open_artifact: 5,
+      open_findings: 6,
+      open_investigation: 7,
+      open_session: 8,
+      view_csi: 9,
+      view: 10,
+      copy_runbook_command: 11,
+    };
+    return priorityMap[id] ?? 50;
+  }
+
+  function primaryActivityActions(event: ActivityEvent): ActivityAction[] {
+    const actions = Array.isArray(event.actions) ? event.actions : [];
+    return actions
+      .filter((action) => {
+        const id = String(action.id || "").trim().toLowerCase();
+        if (!id) return false;
+        return !["mark_read", "snooze", "unsnooze", "pin", "unpin", "send_to_simone"].includes(id);
+      })
+      .sort((left, right) => actionPriority(left) - actionPriority(right))
+      .slice(0, 2);
+  }
+
+  async function handleActivityAction(event: ActivityEvent, action: ActivityAction): Promise<void> {
+    const id = String(action.id || "").trim().toLowerCase();
+    if (action.type === "link") return;
+    if (id === "copy_runbook_command") {
+      const command = String(event.metadata?.primary_runbook_command || "").trim();
+      if (!command) return;
+      try {
+        await navigator.clipboard.writeText(command);
+      } catch {
+        setError("Failed to copy runbook command.");
+      }
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -400,13 +536,25 @@ export default function TelegramPage() {
 
           {/* Recent Notification Activity */}
           <section className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-            <h2 className="mb-3 text-sm font-semibold text-slate-200">Recent Delivery Activity</h2>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-200">Recent Delivery Activity</h2>
+              {pipelineActivity.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void deleteAllDeliveryActivity()}
+                  disabled={deletingAllActivity}
+                  className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-40"
+                >
+                  {deletingAllActivity ? "Deleting..." : "Delete All"}
+                </button>
+              )}
+            </div>
             {pipelineActivity.length === 0 ? (
               <p className="py-6 text-center text-sm text-slate-500">No recent Telegram-related activity.</p>
             ) : (
               <div className="space-y-2 max-h-[400px] overflow-y-auto">
                 {pipelineActivity.map((n) => (
-                  <div key={n.id} className="flex items-start gap-2.5 rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 py-2">
+                  <div key={n.id} className="group flex items-start gap-2.5 rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 py-2">
                     {severityIcon(n.severity)}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
@@ -418,7 +566,40 @@ export default function TelegramPage() {
                         <span>{n.kind}</span>
                         <span>{formatTime(n.created_at)}</span>
                       </div>
+                      {primaryActivityActions(n).length > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {primaryActivityActions(n).map((action) => (
+                            action.type === "link" && action.href ? (
+                              <Link
+                                key={`${n.id}:${action.id}`}
+                                href={action.href}
+                                className="rounded border border-cyan-700/60 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/35"
+                              >
+                                {action.label}
+                              </Link>
+                            ) : (
+                              <button
+                                key={`${n.id}:${action.id}`}
+                                type="button"
+                                onClick={() => void handleActivityAction(n, action)}
+                                className="rounded border border-cyan-700/60 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/35"
+                              >
+                                {action.label}
+                              </button>
+                            )
+                          ))}
+                        </div>
+                      )}
                     </div>
+                    <button
+                      type="button"
+                      aria-label="Delete activity item"
+                      onClick={() => void deleteActivityEvent(n.id)}
+                      disabled={Boolean(deletingIds[n.id])}
+                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded p-1 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>

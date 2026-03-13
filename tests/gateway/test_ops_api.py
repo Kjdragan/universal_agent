@@ -2254,6 +2254,18 @@ def test_ops_telegram_status_includes_pipeline_slices(client):
         metadata={"video_id": "demo123"},
     )
     gateway_server._add_notification(
+        kind="youtube_tutorial_ready",
+        title="YouTube Tutorial Artifacts Ready",
+        message="Artifacts ready for review.",
+        severity="success",
+        requires_action=True,
+        metadata={
+            "video_id": "demo123",
+            "tutorial_run_path": "youtube-tutorial-creation/demo-run",
+            "repo_storage_href": "/storage?tab=explorer&scope=artifacts&path=tutorial_repos/demo_repo",
+        },
+    )
+    gateway_server._add_notification(
         kind="youtube_tutorial_interrupted",
         title="YouTube Tutorial Interrupted",
         message="Run interrupted and queued for recovery.",
@@ -2292,6 +2304,14 @@ def test_ops_telegram_status_includes_pipeline_slices(client):
     active_kinds = {str(item.get("kind") or "") for item in payload.get("active_tutorial_runs") or []}
     assert active_kinds.intersection({"youtube_playlist_new_video", "youtube_tutorial_interrupted"})
     assert int((payload.get("counts") or {}).get("recent_failures") or 0) >= 1
+
+    ready_entry = next(
+        item for item in payload.get("pipeline_activity") or []
+        if str(item.get("kind") or "") == "youtube_tutorial_ready"
+    )
+    action_labels = {str(action.get("label") or "") for action in ready_entry.get("actions") or []}
+    assert "Open Artifacts" in action_labels
+    assert "Open Repo" in action_labels
 
 
 def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_mission(client, tmp_path, monkeypatch):
