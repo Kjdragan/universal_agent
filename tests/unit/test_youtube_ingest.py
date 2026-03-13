@@ -26,6 +26,14 @@ def test_classify_api_error_detects_proxy_auth_issue() -> None:
     assert cls == "proxy_auth_failed"
 
 
+def test_classify_api_error_detects_webshare_no_proxies_allocated() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "youtube_transcript_api_failed",
+        "Configuration no_proxies_allocated 407 You are connecting to a proxy which is not in your proxy list anymore.",
+    )
+    assert cls == "proxy_pool_unallocated"
+
+
 def test_classify_api_error_detects_webshare_invalid_auth_credentials_message() -> None:
     cls = youtube_ingest._classify_api_error(
         "proxy_http_error",

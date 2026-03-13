@@ -113,6 +113,16 @@ def _classify_api_error(error: str, detail: str) -> str:
     if any(
         hint in lowered
         for hint in (
+            "no_proxies_allocated",
+            "not in your proxy list anymore",
+            "proxy list anymore",
+            "auto-replacement rules enabled on the proxy settings page",
+        )
+    ):
+        return "proxy_pool_unallocated"
+    if any(
+        hint in lowered
+        for hint in (
             "407 proxy authentication required",
             "proxy auth",
             "proxy authentication",

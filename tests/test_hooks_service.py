@@ -1390,6 +1390,17 @@ async def test_local_ingest_proxy_connect_failure_emits_proxy_alert_notification
     assert str(proxy_alert["metadata"]["result_file"]).endswith("local_ingest_result.json")
 
 
+def test_format_ingest_failure_reason_handles_proxy_pool_unallocated() -> None:
+    reason = HooksService._format_ingest_failure_reason(
+        error="youtube_transcript_api_failed",
+        failure_class="proxy_pool_unallocated",
+        attempts=1,
+        max_attempts=10,
+    )
+    assert "no allocated proxies" in reason
+    assert "update Infisical secrets" in reason
+
+
 @pytest.mark.asyncio
 async def test_local_ingest_inflight_duplicate_reports_existing_root_cause(mock_gateway, tmp_path):
     config = HooksConfig(

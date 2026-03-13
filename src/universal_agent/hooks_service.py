@@ -86,6 +86,7 @@ DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_LOCAL = "/home/kjdragan/YoutubeCodeExamples
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_VPS = str((resolve_artifacts_dir() / "tutorial_repos").resolve())
 YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {
     "proxy_quota_or_billing",
+    "proxy_pool_unallocated",
     "proxy_auth_failed",
     "proxy_not_configured",
     "proxy_connect_failed",
@@ -99,6 +100,7 @@ YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
     "proxy_not_configured",
     "proxy_auth_failed",
     "proxy_quota_or_billing",
+    "proxy_pool_unallocated",
 }
 YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES = {
     "api_unavailable",
@@ -1412,6 +1414,13 @@ class HooksService:
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
                 "PROXY ALERT: Webshare quota/billing appears exhausted; verify account credits/bandwidth and retry."
+            )
+        if cls == "proxy_pool_unallocated":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare reported no allocated proxies for the configured endpoint/username. "
+                "Refresh your Webshare proxy list/rotation username and update Infisical secrets."
             )
         if cls == "proxy_auth_failed":
             return (
@@ -2849,6 +2858,12 @@ class HooksService:
                                 "YouTube ingest failed because the residential proxy CONNECT path is broken. "
                                 "Check Webshare host/port overrides, proxy credentials in Infisical, "
                                 "and upstream proxy availability."
+                            )
+                        elif failure_class == "proxy_pool_unallocated":
+                            _proxy_alert_msg = (
+                                "YouTube ingest failed because Webshare reported no proxies allocated for the "
+                                "configured endpoint/username. Refresh the Webshare proxy list/rotation username "
+                                "and update Infisical proxy secrets."
                             )
                         else:
                             _proxy_alert_msg = (
