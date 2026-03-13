@@ -83,7 +83,7 @@ YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
     "fitness",
 }
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_LOCAL = "/home/kjdragan/YoutubeCodeExamples"
-DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_VPS = "/opt/universal_agent_data/tutorial_repos"
+DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_VPS = str((resolve_artifacts_dir() / "tutorial_repos").resolve())
 YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {
     "proxy_quota_or_billing",
     "proxy_auth_failed",

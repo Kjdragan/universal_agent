@@ -455,7 +455,7 @@ def _tutorial_bootstrap_target_root_default() -> str:
     if configured:
         return configured
     if _DEPLOYMENT_PROFILE == "vps":
-        return "/opt/universal_agent_data/tutorial_repos"
+        return str((ARTIFACTS_DIR / "tutorial_repos").resolve())
     return "/home/kjdragan/YoutubeCodeExamples"
 
 
@@ -496,6 +496,19 @@ def _tutorial_bootstrap_remote_access_metadata(repo_dir: str) -> tuple[str, str,
     return execution_host, "remote_path", hint
 
 
+def _tutorial_bootstrap_storage_metadata(repo_dir: str) -> tuple[str, str]:
+    normalized_repo_dir = str(repo_dir or "").strip()
+    if not normalized_repo_dir:
+        return "", ""
+    try:
+        relative = Path(normalized_repo_dir).expanduser().resolve().relative_to(ARTIFACTS_DIR.resolve()).as_posix()
+    except Exception:
+        return "", ""
+    href = _storage_explorer_href(scope="artifacts", path=relative)
+    hint = "Open this repo in the in-app File Browser."
+    return href, hint
+
+
 def _tutorial_bootstrap_enrich_job(job: dict[str, Any]) -> dict[str, Any]:
     record = dict(job)
     execution_target = str(record.get("execution_target") or "local").strip().lower() or "local"
@@ -512,6 +525,9 @@ def _tutorial_bootstrap_enrich_job(job: dict[str, Any]) -> dict[str, Any]:
             record["execution_host"] = execution_host
             record["repo_access_mode"] = repo_access_mode
             record["repo_access_hint"] = repo_access_hint
+            repo_storage_href, repo_storage_hint = _tutorial_bootstrap_storage_metadata(repo_dir)
+            record["repo_storage_href"] = repo_storage_href
+            record["repo_storage_hint"] = repo_storage_hint
             record.pop("repo_open_uri", None)
             record.pop("repo_open_hint", None)
         else:
@@ -14003,6 +14019,11 @@ def _serialize_task_review_item(item: dict[str, Any]) -> dict[str, Any]:
     approval_meta = metadata.get("approval") if isinstance(metadata.get("approval"), dict) else {}
     title = str(item.get("title") or approval_meta.get("title") or "Action required").strip()
     summary = str(item.get("description") or title).strip() or title
+    default_focus_href = (
+        "/dashboard/todolist?mode=personal&focus=approvals"
+        if _task_requires_explicit_human_approval(item)
+        else "/dashboard/todolist?mode=agent"
+    )
     return {
         "approval_id": str(item.get("task_id") or ""),
         "task_id": str(item.get("task_id") or ""),
@@ -14016,11 +14037,45 @@ def _serialize_task_review_item(item: dict[str, Any]) -> dict[str, Any]:
         "created_at": item.get("created_at"),
         "updated_at": item.get("updated_at"),
         "priority": int(item.get("priority") or 1),
-        "focus_href": str(metadata.get("focus_href") or "/dashboard/todolist?mode=agent"),
+        "focus_href": str(metadata.get("focus_href") or default_focus_href),
         "approval_source": "task_hub",
         "source_kind": str(item.get("source_kind") or ""),
         "metadata": metadata,
     }
+
+
+def _task_requires_explicit_human_approval(item: dict[str, Any]) -> bool:
+    source_kind = str(item.get("source_kind") or "").strip().lower()
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    csi_meta = metadata.get("csi") if isinstance(metadata.get("csi"), dict) else {}
+    labels = {
+        str(label).strip().lower()
+        for label in (item.get("labels") or [])
+        if str(label).strip()
+    }
+
+    if source_kind == "approval":
+        return True
+
+    if bool(metadata.get("requires_human_approval")) or bool(metadata.get("manual_approval_required")):
+        return True
+
+    if source_kind == "csi":
+        return (
+            str(item.get("csi_routing_state") or csi_meta.get("routing_state") or "").strip().lower()
+            == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED
+        )
+
+    if source_kind == "csi_recommendation":
+        if not bool(item.get("agent_ready")):
+            return True
+        triage = metadata.get("triage") if isinstance(metadata.get("triage"), dict) else {}
+        return str(triage.get("owner_lane") or "").strip().lower() == "human"
+
+    if "needs-human" in labels or "human-task" in labels or "manual-approval" in labels:
+        return True
+
+    return bool(item.get("must_complete")) and not bool(item.get("agent_ready"))
 
 
 def _list_ops_approvals(status: Optional[str] = None) -> list[dict[str, Any]]:
@@ -14046,7 +14101,7 @@ def _list_ops_approvals(status: Optional[str] = None) -> list[dict[str, Any]]:
             placeholders = ",".join("?" for _ in task_statuses)
             query = (
                 "SELECT * FROM task_hub_items "
-                "WHERE must_complete = 1 AND source_kind != 'approval' "
+                "WHERE source_kind != 'approval' "
                 f"AND status IN ({placeholders}) "
                 "ORDER BY priority DESC, updated_at DESC"
             )
@@ -14055,7 +14110,9 @@ def _list_ops_approvals(status: Optional[str] = None) -> list[dict[str, Any]]:
             conn.close()
 
     for row in task_rows:
-        rows.append(_serialize_task_review_item(task_hub.hydrate_item(dict(row))))
+        item = task_hub.hydrate_item(dict(row))
+        if _task_requires_explicit_human_approval(item):
+            rows.append(_serialize_task_review_item(item))
 
     status_rank = {"pending": 0, "approved": 1, "rejected": 2}
     rows.sort(
@@ -16046,6 +16103,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
                 "execution_host": str(updated.get("execution_host") or ""),
                 "repo_access_mode": str(updated.get("repo_access_mode") or ""),
                 "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+                "repo_storage_href": str(updated.get("repo_storage_href") or ""),
                 "source": "dashboard_tutorial_bootstrap",
             },
         )
@@ -16083,6 +16141,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
                 "execution_host": str(updated.get("execution_host") or ""),
                 "repo_access_mode": str(updated.get("repo_access_mode") or ""),
                 "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+                "repo_storage_href": str(updated.get("repo_storage_href") or ""),
                 "source": "dashboard_tutorial_bootstrap",
             },
         )
@@ -16124,6 +16183,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
                 "execution_host": str(updated.get("execution_host") or ""),
                 "repo_access_mode": str(updated.get("repo_access_mode") or ""),
                 "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+                "repo_storage_href": str(updated.get("repo_storage_href") or ""),
                 "source": "dashboard_tutorial_bootstrap",
             },
         )
@@ -16163,6 +16223,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             "execution_host": str(updated.get("execution_host") or ""),
             "repo_access_mode": str(updated.get("repo_access_mode") or ""),
             "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+            "repo_storage_href": str(updated.get("repo_storage_href") or ""),
             "source": "dashboard_tutorial_bootstrap",
         },
     )
@@ -16173,6 +16234,8 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
         "execution_host": str(updated.get("execution_host") or ""),
         "repo_access_mode": str(updated.get("repo_access_mode") or ""),
         "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+        "repo_storage_href": str(updated.get("repo_storage_href") or ""),
+        "repo_storage_hint": str(updated.get("repo_storage_hint") or ""),
         "run_path": run_rel,
         "repo_name": repo_name,
         "target_root": target_root,
@@ -16407,6 +16470,7 @@ async def ops_tutorial_bootstrap_result(
             "execution_host": str(updated.get("execution_host") or ""),
             "repo_access_mode": str(updated.get("repo_access_mode") or ""),
             "repo_access_hint": str(updated.get("repo_access_hint") or ""),
+            "repo_storage_href": str(updated.get("repo_storage_href") or ""),
             "source": "tutorial_bootstrap_worker",
         },
     )

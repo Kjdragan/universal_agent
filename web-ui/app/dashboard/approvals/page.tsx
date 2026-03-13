@@ -159,8 +159,8 @@ export default function ApprovalsPage() {
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
-                                    <p className="truncate font-mono text-xs text-slate-200">
-                                        {approval.approval_id}
+                                    <p className="truncate text-sm font-semibold text-slate-100">
+                                        {approval.title || approval.summary || approval.approval_id}
                                     </p>
                                     <span
                                         className={`text-[11px] font-medium uppercase tracking-[0.14em] ${statusColor(approval.status)}`}
@@ -168,11 +168,9 @@ export default function ApprovalsPage() {
                                         {approval.status}
                                     </span>
                                 </div>
-                                {(approval.title || approval.summary) && (
-                                    <p className="mt-1.5 text-sm text-slate-300">
-                                        {approval.title || approval.summary}
-                                    </p>
-                                )}
+                                <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
+                                    {approval.approval_id}
+                                </p>
                                 {approval.summary && approval.summary !== approval.title && (
                                     <p className="mt-1 text-xs text-slate-400">{approval.summary}</p>
                                 )}
