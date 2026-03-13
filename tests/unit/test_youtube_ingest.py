@@ -26,6 +26,14 @@ def test_classify_api_error_detects_proxy_auth_issue() -> None:
     assert cls == "proxy_auth_failed"
 
 
+def test_classify_api_error_detects_webshare_invalid_auth_credentials_message() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "proxy_http_error",
+        "Not authenticated or invalid authentication credentials. Make sure to update your proxy address, proxy username and port.",
+    )
+    assert cls == "proxy_auth_failed"
+
+
 def test_classify_api_error_detects_proxy_connect_tunnel_failure() -> None:
     cls = youtube_ingest._classify_api_error(
         "youtube_transcript_api_failed",

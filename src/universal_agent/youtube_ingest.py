@@ -118,6 +118,9 @@ def _classify_api_error(error: str, detail: str) -> str:
             "proxy authentication",
             "invalid proxy credentials",
             "bad proxy credentials",
+            "not authenticated or invalid authentication credentials",
+            "invalid authentication credentials",
+            "not authenticated",
         )
     ):
         return "proxy_auth_failed"

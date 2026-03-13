@@ -37,6 +37,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.youtube_ingest import _classify_api_error, _parse_proxy_locations
 
 DEFAULT_HTTP_URL = "http://api.ipify.org?format=json"
@@ -221,17 +222,39 @@ def main() -> int:
         help="Small YouTube HTTPS URL to fetch through proxy",
     )
     parser.add_argument("--timeout-seconds", type=float, default=15.0, help="Per-probe timeout in seconds")
+    parser.add_argument("--skip-tcp", action="store_true", help="Skip raw TCP reachability probe")
     parser.add_argument("--skip-http", action="store_true", help="Skip plain HTTP proxy probe")
     parser.add_argument("--skip-https", action="store_true", help="Skip HTTPS CONNECT probe")
     parser.add_argument("--skip-youtube", action="store_true", help="Skip YouTube HTTPS probe")
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Optional deployment profile override for Infisical bootstrap",
+    )
     parser.add_argument("--json", action="store_true", help="Reserved for compatibility; output is always JSON")
     args = parser.parse_args()
 
     _load_local_env()
+    bootstrap = initialize_runtime_secrets(
+        profile=str(args.profile or os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation"),
+        force_reload=True,
+    )
     settings = _resolve_proxy_settings()
 
     report: dict[str, Any] = {
         "configured": bool(settings["username"] and settings["password"]),
+        "bootstrap": {
+            "ok": bool(bootstrap.ok),
+            "source": bootstrap.source,
+            "strict_mode": bool(bootstrap.strict_mode),
+            "loaded_count": int(bootstrap.loaded_count),
+            "fallback_used": bool(bootstrap.fallback_used),
+            "environment": bootstrap.environment,
+            "runtime_stage": bootstrap.runtime_stage,
+            "machine_slug": bootstrap.machine_slug,
+            "deployment_profile": bootstrap.deployment_profile,
+            "errors": list(bootstrap.errors),
+        },
         "proxy": {
             "host": settings["host"],
             "port": settings["port"],
@@ -250,11 +273,12 @@ def main() -> int:
         return 1
 
     proxy_url = _proxy_url(settings)
-    report["probes"]["tcp"] = _tcp_probe(
-        str(settings["host"]),
-        int(settings["port"]),
-        timeout_seconds=float(args.timeout_seconds or 15.0),
-    )
+    if not args.skip_tcp:
+        report["probes"]["tcp"] = _tcp_probe(
+            str(settings["host"]),
+            int(settings["port"]),
+            timeout_seconds=float(args.timeout_seconds or 15.0),
+        )
 
     if not args.skip_http:
         report["probes"]["http"] = _request_via_proxy(
