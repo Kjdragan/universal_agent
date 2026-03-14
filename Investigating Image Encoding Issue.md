@@ -136,11 +136,11 @@ Okay, we've changed a bunch of stuff here. Can you search in our official projec
 
 *Searched filesystem*
 
-*Viewed [31_VPS_Deployment_Decision_Tree_2026-02-13.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/31_VPS_Deployment_Decision_Tree_2026-02-13.md) *
+*Viewed [31_VPS_Deployment_Decision_Tree_2026-02-13.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/31_VPS_Deployment_Decision_Tree_2026-02-13.md) *
 
-*Viewed [27_Deployment_Runbook_2026-02-12.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/27_Deployment_Runbook_2026-02-12.md) *
+*Viewed [27_Deployment_Runbook_2026-02-12.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/27_Deployment_Runbook_2026-02-12.md) *
 
-*Viewed [19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md) *
+*Viewed [19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md) *
 
 *Edited relevant file*
 

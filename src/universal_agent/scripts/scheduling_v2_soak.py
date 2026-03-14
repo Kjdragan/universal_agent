@@ -354,7 +354,7 @@ def main() -> int:
     parser.add_argument("--ops-token", default=None)
     parser.add_argument(
         "--out-json",
-        default="OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_latest.json",
+        default="docs/03_Run_Reviews/scheduling_v2_soak_latest.json",
     )
     parser.add_argument(
         "--status-json",

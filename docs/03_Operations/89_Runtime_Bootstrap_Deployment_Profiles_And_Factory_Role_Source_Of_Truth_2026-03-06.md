@@ -330,7 +330,7 @@ Primary consumers:
 - `src/universal_agent/delegation/bridge_main.py`
 
 Related operations docs:
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md`
+- `docs/03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md`
 
 ## Bottom Line
 

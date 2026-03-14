@@ -49,9 +49,9 @@ Have you updated our official project documentation to reflect all the work that
 
 *Updated todo list*
 
-*Listed directory [OFFICIAL_PROJECT_DOCUMENTATION](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION) *
+*Listed directory [docs](file:///home/kjdragan/lrepos/universal_agent/docs) *
 
-*Listed directory [03_Operations](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations) *
+*Listed directory [03_Operations](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations) *
 
 *Updated todo list*
 
@@ -59,11 +59,11 @@ Have you updated our official project documentation to reflect all the work that
 
 Let me read the key canonical docs to understand what needs updating:
 
-*Viewed [88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md) *
+*Viewed [88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md) *
 
-*Viewed [89_Runtime_Bootstrap_Deployment_Profiles_And_Factory_Role_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/89_Runtime_Bootstrap_Deployment_Profiles_And_Factory_Role_Source_Of_Truth_2026-03-06.md) *
+*Viewed [89_Runtime_Bootstrap_Deployment_Profiles_And_Factory_Role_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/89_Runtime_Bootstrap_Deployment_Profiles_And_Factory_Role_Source_Of_Truth_2026-03-06.md) *
 
-*Viewed [91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
+*Viewed [91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
 
 ### Planner Response
 
@@ -77,7 +77,7 @@ Doc 88 already covers pause/resume and system missions. Let me check what's miss
 
 *Grep searched codebase*
 
-*Viewed [88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md) *
+*Viewed [88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md) *
 
 ### Planner Response
 
@@ -105,7 +105,7 @@ Now update doc 91 — Telegram Architecture — with the shared send utility and
 
 *Grep searched codebase*
 
-*Viewed [91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
+*Viewed [91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
 
 *Edited relevant file*
 
@@ -113,7 +113,7 @@ Now update doc 91 — Telegram Architecture — with the shared send utility and
 
 Now update the shared send utility section in doc 91:
 
-*Viewed [91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
+*Viewed [91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
 
 *Edited relevant file*
 
@@ -123,7 +123,7 @@ Now update doc 92 — CSI Architecture — with Infisical bootstrap:
 
 *Grep searched codebase*
 
-*Viewed [92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
+*Viewed [92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
 
 *Edited relevant file*
 
@@ -141,7 +141,7 @@ Now update doc 85 — Infisical Secrets — to reference the CSI bootstrap:
 
 *Grep searched codebase*
 
-*Viewed [85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
+*Viewed [85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) *
 
 *Edited relevant file*
 
@@ -151,13 +151,13 @@ Now update doc 85 — Infisical Secrets — to reference the CSI bootstrap:
 
 Now let me identify stale older docs. The key candidates are docs that have been superseded by the canonical source-of-truth documents (82-95). Let me scan for obvious overlaps:
 
-*Viewed [18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md) *
+*Viewed [18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md) *
 
-*Viewed [21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md) *
+*Viewed [21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md) *
 
-*Viewed [29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md) *
+*Viewed [29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md) *
 
-*Viewed [63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md) *
+*Viewed [63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md) *
 
 ### Planner Response
 
@@ -165,22 +165,22 @@ Let me identify which older docs are now superseded by the canonical docs 82-95.
 
 | Canonical Doc | Supersedes These Older Docs |
 |---|---|
-| **82** (AgentMail) | [AgentMail_Digest_Email_Plan.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/AgentMail_Digest_Email_Plan.md:0:0-0:0) |
+| **82** (AgentMail) | [AgentMail_Digest_Email_Plan.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/AgentMail_Digest_Email_Plan.md:0:0-0:0) |
 | **83** (Webhooks) | `15_Webhook_Service_Implementation`, `18_Hostinger_VPS_Composio_Webhook`, `29_YouTube_Hook_Mirroring`, `42_Hybrid_Local_VPS_Webhook`, `75_Composio_YouTube_Trigger` |
 | **85** (Infisical) | Parts of `35_XAI_Grok_API_Keys` |
 | **87** (Tailscale) | `63-73_Tailnet_First_DevOps` (7 docs) |
 | **88** (Factory Delegation) | Parts of `39_DraganCorp_Phase_A_Handoff` |
-| **89** (Runtime Bootstrap) | `46_Running_The_Agent`, [Configuration_Guide.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Configuration_Guide.md:0:0-0:0) |
+| **89** (Runtime Bootstrap) | `46_Running_The_Agent`, [Configuration_Guide.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Configuration_Guide.md:0:0-0:0) |
 | **91** (Telegram) | `44_Telegram_Functionality_Implementation_Plan` |
 | **92** (CSI) | `74_Unified_Creator_Signal_Intelligence_Strategy` |
 
-Rather than individually rewriting 20+ stale docs, I'll move the clearly superseded ones to the Archive folder with a pointer to the canonical replacement. Let me also update the [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/Documentation_Status.md:0:0-0:0) to reflect the new canonical structure:
+Rather than individually rewriting 20+ stale docs, I'll move the clearly superseded ones to the Archive folder with a pointer to the canonical replacement. Let me also update the [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/docs/Documentation_Status.md:0:0-0:0) to reflect the new canonical structure:
 
-*Viewed [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/Documentation_Status.md) *
+*Viewed [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/docs/Documentation_Status.md) *
 
 ### Planner Response
 
-This [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/Documentation_Status.md:0:0-0:0) is severely outdated (Feb 5). Let me rewrite it as the canonical index, then handle archival of superseded docs.
+This [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/docs/Documentation_Status.md:0:0-0:0) is severely outdated (Feb 5). Let me rewrite it as the canonical index, then handle archival of superseded docs.
 
 *Edited relevant file*
 
@@ -243,21 +243,21 @@ I'd rather delete unneeded documents than keep them around in an archive. So if 
 
 Let me quickly audit each superseded doc to decide: delete (fully covered by canonical), or capture unique content first.
 
-*Viewed [15_Webhook_Service_Implementation_2026-02-10.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md) *
+*Viewed [15_Webhook_Service_Implementation_2026-02-10.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md) *
 
-*Viewed [42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md) *
+*Viewed [42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md) *
 
-*Viewed [44_Telegram_Functionality_Implementation_Plan_2026-02-18.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md) *
+*Viewed [44_Telegram_Functionality_Implementation_Plan_2026-02-18.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md) *
 
-*Viewed [46_Running_The_Agent.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/46_Running_The_Agent.md) *
+*Viewed [46_Running_The_Agent.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/46_Running_The_Agent.md) *
 
-*Viewed [74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md) *
+*Viewed [74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md) *
 
-*Viewed [AgentMail_Digest_Email_Plan.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/AgentMail_Digest_Email_Plan.md) *
+*Viewed [AgentMail_Digest_Email_Plan.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/AgentMail_Digest_Email_Plan.md) *
 
-*Viewed [Configuration_Guide.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Configuration_Guide.md) *
+*Viewed [Configuration_Guide.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Configuration_Guide.md) *
 
-*Viewed [75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md) *
+*Viewed [75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md) *
 
 ### Planner Response
 
@@ -281,52 +281,52 @@ Based on my audit, here's my decision for each:
 
 Let me also check the remaining standalone files:
 
-*Viewed [Advanced_CLI_Harnessing.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Advanced_CLI_Harnessing.md) *
+*Viewed [Advanced_CLI_Harnessing.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Advanced_CLI_Harnessing.md) *
 
-*Viewed [Skill_Development.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Skill_Development.md) *
+*Viewed [Skill_Development.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Skill_Development.md) *
 
-*Viewed [Testing_Strategy.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Testing_Strategy.md) *
+*Viewed [Testing_Strategy.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Testing_Strategy.md) *
 
-*Viewed [installing%20Bird%20and%20Lat30days](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/installing%20Bird%20and%20Lat30days) *
+*Viewed [installing%20Bird%20and%20Lat30days](file:///home/kjdragan/lrepos/universal_agent/docs/installing%20Bird%20and%20Lat30days) *
 
 ### Planner Response
 
-All clear on what to delete. [Advanced_CLI_Harnessing.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Advanced_CLI_Harnessing.md:0:0-0:0), [Skill_Development.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Skill_Development.md:0:0-0:0), [Testing_Strategy.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Testing_Strategy.md:0:0-0:0) are generic stubs with stale content. `installing Bird and Lat30days` is a random setup note. All deletable.
+All clear on what to delete. [Advanced_CLI_Harnessing.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Advanced_CLI_Harnessing.md:0:0-0:0), [Skill_Development.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Skill_Development.md:0:0-0:0), [Testing_Strategy.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/Testing_Strategy.md:0:0-0:0) are generic stubs with stale content. `installing Bird and Lat30days` is a random setup note. All deletable.
 
 *Updated todo list*
 
 *User accepted the command `cd /home/kjdragan/lrepos/universal_agent && git rm \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_Hybrid_Youtube_Ingestion_LocalWorker_Runbook_2026-02-18.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/30_Local_Dev_Startup_With_Youtube_Forwarding_Tunnel_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/46_Running_The_Agent.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/66_Tailnet_First_DevOps_Phase_A_Implementation_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/67_Tailnet_First_DevOps_Phase_B_Implementation_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/68_Tailnet_First_DevOps_Phase_C_SSH_Auth_Mode_Implementation_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/69_Tailnet_First_DevOps_Phase_D_Runbook_And_Source_Of_Truth_Update_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/70_Tailnet_First_DevOps_Phases_A_D_VPS_Canary_Validation_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/71_Tailnet_First_DevOps_Phases_A_D_Final_Closure_Validation_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/72_Tailnet_SSH_Auth_Mode_Canary_Completion_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/73_Tailnet_SSH_Defaults_And_Operator_Execution_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/AgentMail_Digest_Email_Plan.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Configuration_Guide.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Advanced_CLI_Harnessing.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Skill_Development.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Testing_Strategy.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/installing Bird and Lat30days" \
+  "docs/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md" \
+  "docs/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md" \
+  "docs/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md" \
+  "docs/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md" \
+  "docs/03_Operations/29_Hybrid_Youtube_Ingestion_LocalWorker_Runbook_2026-02-18.md" \
+  "docs/03_Operations/30_Local_Dev_Startup_With_Youtube_Forwarding_Tunnel_2026-02-13.md" \
+  "docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md" \
+  "docs/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md" \
+  "docs/03_Operations/46_Running_The_Agent.md" \
+  "docs/03_Operations/63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md" \
+  "docs/03_Operations/66_Tailnet_First_DevOps_Phase_A_Implementation_2026-02-22.md" \
+  "docs/03_Operations/67_Tailnet_First_DevOps_Phase_B_Implementation_2026-02-22.md" \
+  "docs/03_Operations/68_Tailnet_First_DevOps_Phase_C_SSH_Auth_Mode_Implementation_2026-02-22.md" \
+  "docs/03_Operations/69_Tailnet_First_DevOps_Phase_D_Runbook_And_Source_Of_Truth_Update_2026-02-22.md" \
+  "docs/03_Operations/70_Tailnet_First_DevOps_Phases_A_D_VPS_Canary_Validation_2026-02-22.md" \
+  "docs/03_Operations/71_Tailnet_First_DevOps_Phases_A_D_Final_Closure_Validation_2026-02-22.md" \
+  "docs/03_Operations/72_Tailnet_SSH_Auth_Mode_Canary_Completion_2026-02-22.md" \
+  "docs/03_Operations/73_Tailnet_SSH_Defaults_And_Operator_Execution_2026-02-22.md" \
+  "docs/03_Operations/74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md" \
+  "docs/03_Operations/75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md" \
+  "docs/03_Operations/AgentMail_Digest_Email_Plan.md" \
+  "docs/03_Operations/Configuration_Guide.md" \
+  "docs/03_Operations/Advanced_CLI_Harnessing.md" \
+  "docs/03_Operations/Skill_Development.md" \
+  "docs/03_Operations/Testing_Strategy.md" \
+  "docs/installing Bird and Lat30days" \
   2>&1`*
 
 ### Planner Response
 
-Now update [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/Documentation_Status.md:0:0-0:0) to remove the superseded section (those docs are deleted now):
+Now update [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/docs/Documentation_Status.md:0:0-0:0) to remove the superseded section (those docs are deleted now):
 
 *Edited relevant file*
 
@@ -364,14 +364,14 @@ remaining non-canonicalized docs." && git push origin dev-parallel 2>&1`*
 | **Stale stubs** | Advanced_CLI_Harnessing, Skill_Development, Testing_Strategy | No unique content |
 | **Random** | `installing Bird and Lat30days` | Not a real doc |
 
-### What remains in [03_Operations/](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations:0:0-0:0):
+### What remains in [03_Operations/](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations:0:0-0:0):
 
 - **12 canonical source-of-truth docs** (82-92) — the authoritative references
 - **3 review/decision docs** (93-95) — integration review + ADRs
 - **7 non-canonicalized docs** that still have unique value (concurrency, watchdog, sandbox, GWS, etc.)
 - **~30 historical point-in-time docs** (VP orchestration, DraganCorp phases, debugging sessions) that cover topics without canonical replacements yet
 
-The doc count in [03_Operations/](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations:0:0-0:0) went from **108 items** to **82 items** — a 24% reduction with zero information loss.
+The doc count in [03_Operations/](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations:0:0-0:0) went from **108 items** to **82 items** — a 24% reduction with zero information loss.
 
 ### User Input
 
@@ -379,101 +379,101 @@ We also don't need implementation plans anymore for systems that have been deplo
 
 *Updated todo list*
 
-*Listed directory [03_Operations](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations) *
+*Listed directory [03_Operations](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations) *
 
 ### Planner Response
 
 Let me quickly scan each remaining doc to categorize as implementation plan (delete) vs operational reference (keep):
 
-*User accepted the command `cd /home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations && head -5 08_Memory_Pipeline_Phased_Implementation_Plan_2026-02-07.md 08_Session_Attach_Detach_And_DropIn_Implementation_Plan_2026-02-07.md 09_Internal_Scheduling_Calendar_V1_Implementation_Plan_2026-02-08.md 10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md 12_Multi_Interface_Session_Surface_Implementation_Plan_2026-02-09.md 17_Youtube_Tutorial_Explainer_V2_Implementation_2026-02-11.md 25_System_Configuration_Agent_Architecture_And_Implementation_Plan_2026-02-12.md 28_Beyond_Research_Reports_Multi_Phase_Universal_Agent_Architecture_2026-02-13.md 45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md 48_UA_OpenClaw_Parity_Implementation_Plan_2026-02-20.md 53_UA_External_Primary_Agent_Runtime_Implementation_Plan_2026-02-20.md 56_VP_Testing_And_Workproduct_Tracking_Plan_2026-02-20.md 57_VP_Orchestration_Context_Handoff_And_Next_Steps_2026-02-21.md 58_VP_Tool_First_Orchestration_And_Dedicated_VP_DB_Implementation_Plan_2026-02-21.md 59_VP_Tool_First_Orchestration_Implementation_Completion_And_Deployment_2026-02-21.md 81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md 2>&1 | head -120`*
+*User accepted the command `cd /home/kjdragan/lrepos/universal_agent/docs/03_Operations && head -5 08_Memory_Pipeline_Phased_Implementation_Plan_2026-02-07.md 08_Session_Attach_Detach_And_DropIn_Implementation_Plan_2026-02-07.md 09_Internal_Scheduling_Calendar_V1_Implementation_Plan_2026-02-08.md 10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md 12_Multi_Interface_Session_Surface_Implementation_Plan_2026-02-09.md 17_Youtube_Tutorial_Explainer_V2_Implementation_2026-02-11.md 25_System_Configuration_Agent_Architecture_And_Implementation_Plan_2026-02-12.md 28_Beyond_Research_Reports_Multi_Phase_Universal_Agent_Architecture_2026-02-13.md 45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md 48_UA_OpenClaw_Parity_Implementation_Plan_2026-02-20.md 53_UA_External_Primary_Agent_Runtime_Implementation_Plan_2026-02-20.md 56_VP_Testing_And_Workproduct_Tracking_Plan_2026-02-20.md 57_VP_Orchestration_Context_Handoff_And_Next_Steps_2026-02-21.md 58_VP_Tool_First_Orchestration_And_Dedicated_VP_DB_Implementation_Plan_2026-02-21.md 59_VP_Tool_First_Orchestration_Implementation_Completion_And_Deployment_2026-02-21.md 81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md 2>&1 | head -120`*
 
 ### Planner Response
 
 Now let me check the verification docs and remaining assessments:
 
-*User accepted the command `cd /home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations && head -5 49_UA_OpenClaw_Parity_Phase_A_P0_Verification_2026-02-20.md 50_UA_OpenClaw_Parity_Phase_B_P1_Verification_2026-02-20.md 51_UA_OpenClaw_Parity_Phase_C_P2_Verification_2026-02-20.md 52_UA_OpenClaw_Parity_Live_Smoke_Verification_2026-02-20.md 54_UA_External_Primary_Agent_Phase_A_B_Verification_2026-02-20.md 55_UA_External_Primary_Agent_Phase_C_D_E_Verification_2026-02-20.md 60_VP_General_Poem_Run_Evaluation_Storage_Browser_Remediation_And_Next_Steps_2026-02-21.md 61_VP_Explicit_Routing_Enforcement_And_Task_Path_Block_2026-02-21.md 62_VP_Explicit_Routing_Regression_General_DP_Hardening_2026-02-21.md 64_VP_Independence_Deployment_And_Strict_Explicit_Routing_Implementation_2026-02-21.md 65_VP_Independent_Mission_Model_Simone_Integration_And_Tailnet_Next_Focus_2026-02-22.md 03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md 04_Clawdbot_Memory_Parity_Investigation.md 05_Independent_Clawdbot_Memory_Parity_Assessment_2026-02-07.md 06_Detailed_Memory_Pipeline_Recommendations_2026-02-07.md 07_Clawdbot_Voyage_Memory_Architecture_Assessment_2026-02-07.md 47_OpenClaw_Functionality_Parity_Evaluation_And_UA_Recommendations_2026-02-20.md 2>&1 | head -100`*
+*User accepted the command `cd /home/kjdragan/lrepos/universal_agent/docs/03_Operations && head -5 49_UA_OpenClaw_Parity_Phase_A_P0_Verification_2026-02-20.md 50_UA_OpenClaw_Parity_Phase_B_P1_Verification_2026-02-20.md 51_UA_OpenClaw_Parity_Phase_C_P2_Verification_2026-02-20.md 52_UA_OpenClaw_Parity_Live_Smoke_Verification_2026-02-20.md 54_UA_External_Primary_Agent_Phase_A_B_Verification_2026-02-20.md 55_UA_External_Primary_Agent_Phase_C_D_E_Verification_2026-02-20.md 60_VP_General_Poem_Run_Evaluation_Storage_Browser_Remediation_And_Next_Steps_2026-02-21.md 61_VP_Explicit_Routing_Enforcement_And_Task_Path_Block_2026-02-21.md 62_VP_Explicit_Routing_Regression_General_DP_Hardening_2026-02-21.md 64_VP_Independence_Deployment_And_Strict_Explicit_Routing_Implementation_2026-02-21.md 65_VP_Independent_Mission_Model_Simone_Integration_And_Tailnet_Next_Focus_2026-02-22.md 03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md 04_Clawdbot_Memory_Parity_Investigation.md 05_Independent_Clawdbot_Memory_Parity_Assessment_2026-02-07.md 06_Detailed_Memory_Pipeline_Recommendations_2026-02-07.md 07_Clawdbot_Voyage_Memory_Architecture_Assessment_2026-02-07.md 47_OpenClaw_Functionality_Parity_Evaluation_And_UA_Recommendations_2026-02-20.md 2>&1 | head -100`*
 
 ### Planner Response
 
 Let me quickly check a few docs I'm less sure about:
 
-*User accepted the command `cd /home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations && head -8 10_Clawdbot_Heartbeat_Architecture_And_UA_Parity_2026-02-13.md 29_System_Prompt_Comparison_2026-02-13.md 34_Code_Writer_And_Analytics_Routing_Policy_2026-02-14.md 34_User_Profile_Interview_And_Memory_Persistence_2026-02-14.md 40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md 43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md 00_Current_Handoff_Context_2026-02-14.md 39_DraganCorp_Phase_A_Handoff_2026-02-15.md 2>&1`*
+*User accepted the command `cd /home/kjdragan/lrepos/universal_agent/docs/03_Operations && head -8 10_Clawdbot_Heartbeat_Architecture_And_UA_Parity_2026-02-13.md 29_System_Prompt_Comparison_2026-02-13.md 34_Code_Writer_And_Analytics_Routing_Policy_2026-02-14.md 34_User_Profile_Interview_And_Memory_Persistence_2026-02-14.md 40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md 43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md 00_Current_Handoff_Context_2026-02-14.md 39_DraganCorp_Phase_A_Handoff_2026-02-15.md 2>&1`*
 
 *Updated todo list*
 
 *User accepted the command `cd /home/kjdragan/lrepos/universal_agent && git rm \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/00_Current_Handoff_Context_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/04_Clawdbot_Memory_Parity_Investigation.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/05_Independent_Clawdbot_Memory_Parity_Assessment_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/06_Detailed_Memory_Pipeline_Recommendations_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/07_Clawdbot_Voyage_Memory_Architecture_Assessment_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/08_Memory_Pipeline_Phased_Implementation_Plan_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/08_Session_Attach_Detach_And_DropIn_Implementation_Plan_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/09_Internal_Scheduling_Calendar_V1_Implementation_Plan_2026-02-08.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/10_Clawdbot_Heartbeat_Architecture_And_UA_Parity_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/12_Multi_Interface_Session_Surface_Implementation_Plan_2026-02-09.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/17_Youtube_Tutorial_Explainer_V2_Implementation_2026-02-11.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/25_System_Configuration_Agent_Architecture_And_Implementation_Plan_2026-02-12.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/28_Beyond_Research_Reports_Multi_Phase_Universal_Agent_Architecture_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_System_Prompt_Comparison_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/31_UA_Memory_Hard_Cut_OpenClaw_Parity_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/33_Claude_Agent_SDK_Release_Changes_Assessment_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/34_Code_Writer_And_Analytics_Routing_Policy_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/34_User_Profile_Interview_And_Memory_Persistence_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/35_XAI_Grok_API_Keys_And_Loading_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/36_MCP_File_Writing_Latency_Investigation_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/37_ZA_Model_Performance_Tester_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/38_Potential_Skill_Candidate_Process_And_Architecture_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/39_DraganCorp_Phase_A_Handoff_2026-02-15.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/47_OpenClaw_Functionality_Parity_Evaluation_And_UA_Recommendations_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/48_UA_OpenClaw_Parity_Implementation_Plan_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/49_UA_OpenClaw_Parity_Phase_A_P0_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/50_UA_OpenClaw_Parity_Phase_B_P1_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/51_UA_OpenClaw_Parity_Phase_C_P2_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/52_UA_OpenClaw_Parity_Live_Smoke_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/53_UA_External_Primary_Agent_Runtime_Implementation_Plan_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/54_UA_External_Primary_Agent_Phase_A_B_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/55_UA_External_Primary_Agent_Phase_C_D_E_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/56_VP_Testing_And_Workproduct_Tracking_Plan_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/57_VP_Orchestration_Context_Handoff_And_Next_Steps_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/58_VP_Tool_First_Orchestration_And_Dedicated_VP_DB_Implementation_Plan_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/59_VP_Tool_First_Orchestration_Implementation_Completion_And_Deployment_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/60_VP_General_Poem_Run_Evaluation_Storage_Browser_Remediation_And_Next_Steps_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/61_VP_Explicit_Routing_Enforcement_And_Task_Path_Block_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/62_VP_Explicit_Routing_Regression_General_DP_Hardening_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/64_VP_Independence_Deployment_And_Strict_Explicit_Routing_Implementation_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/65_VP_Independent_Mission_Model_Simone_Integration_And_Tailnet_Next_Focus_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md" \
+  "docs/03_Operations/00_Current_Handoff_Context_2026-02-14.md" \
+  "docs/03_Operations/03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md" \
+  "docs/03_Operations/04_Clawdbot_Memory_Parity_Investigation.md" \
+  "docs/03_Operations/05_Independent_Clawdbot_Memory_Parity_Assessment_2026-02-07.md" \
+  "docs/03_Operations/06_Detailed_Memory_Pipeline_Recommendations_2026-02-07.md" \
+  "docs/03_Operations/07_Clawdbot_Voyage_Memory_Architecture_Assessment_2026-02-07.md" \
+  "docs/03_Operations/08_Memory_Pipeline_Phased_Implementation_Plan_2026-02-07.md" \
+  "docs/03_Operations/08_Session_Attach_Detach_And_DropIn_Implementation_Plan_2026-02-07.md" \
+  "docs/03_Operations/09_Internal_Scheduling_Calendar_V1_Implementation_Plan_2026-02-08.md" \
+  "docs/03_Operations/10_Clawdbot_Heartbeat_Architecture_And_UA_Parity_2026-02-13.md" \
+  "docs/03_Operations/10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md" \
+  "docs/03_Operations/12_Multi_Interface_Session_Surface_Implementation_Plan_2026-02-09.md" \
+  "docs/03_Operations/17_Youtube_Tutorial_Explainer_V2_Implementation_2026-02-11.md" \
+  "docs/03_Operations/25_System_Configuration_Agent_Architecture_And_Implementation_Plan_2026-02-12.md" \
+  "docs/03_Operations/28_Beyond_Research_Reports_Multi_Phase_Universal_Agent_Architecture_2026-02-13.md" \
+  "docs/03_Operations/29_System_Prompt_Comparison_2026-02-13.md" \
+  "docs/03_Operations/31_UA_Memory_Hard_Cut_OpenClaw_Parity_2026-02-20.md" \
+  "docs/03_Operations/33_Claude_Agent_SDK_Release_Changes_Assessment_2026-02-14.md" \
+  "docs/03_Operations/34_Code_Writer_And_Analytics_Routing_Policy_2026-02-14.md" \
+  "docs/03_Operations/34_User_Profile_Interview_And_Memory_Persistence_2026-02-14.md" \
+  "docs/03_Operations/35_XAI_Grok_API_Keys_And_Loading_2026-02-14.md" \
+  "docs/03_Operations/36_MCP_File_Writing_Latency_Investigation_2026-02-14.md" \
+  "docs/03_Operations/37_ZA_Model_Performance_Tester_2026-02-14.md" \
+  "docs/03_Operations/38_Potential_Skill_Candidate_Process_And_Architecture_2026-02-14.md" \
+  "docs/03_Operations/39_DraganCorp_Phase_A_Handoff_2026-02-15.md" \
+  "docs/03_Operations/40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md" \
+  "docs/03_Operations/43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md" \
+  "docs/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md" \
+  "docs/03_Operations/47_OpenClaw_Functionality_Parity_Evaluation_And_UA_Recommendations_2026-02-20.md" \
+  "docs/03_Operations/48_UA_OpenClaw_Parity_Implementation_Plan_2026-02-20.md" \
+  "docs/03_Operations/49_UA_OpenClaw_Parity_Phase_A_P0_Verification_2026-02-20.md" \
+  "docs/03_Operations/50_UA_OpenClaw_Parity_Phase_B_P1_Verification_2026-02-20.md" \
+  "docs/03_Operations/51_UA_OpenClaw_Parity_Phase_C_P2_Verification_2026-02-20.md" \
+  "docs/03_Operations/52_UA_OpenClaw_Parity_Live_Smoke_Verification_2026-02-20.md" \
+  "docs/03_Operations/53_UA_External_Primary_Agent_Runtime_Implementation_Plan_2026-02-20.md" \
+  "docs/03_Operations/54_UA_External_Primary_Agent_Phase_A_B_Verification_2026-02-20.md" \
+  "docs/03_Operations/55_UA_External_Primary_Agent_Phase_C_D_E_Verification_2026-02-20.md" \
+  "docs/03_Operations/56_VP_Testing_And_Workproduct_Tracking_Plan_2026-02-20.md" \
+  "docs/03_Operations/57_VP_Orchestration_Context_Handoff_And_Next_Steps_2026-02-21.md" \
+  "docs/03_Operations/58_VP_Tool_First_Orchestration_And_Dedicated_VP_DB_Implementation_Plan_2026-02-21.md" \
+  "docs/03_Operations/59_VP_Tool_First_Orchestration_Implementation_Completion_And_Deployment_2026-02-21.md" \
+  "docs/03_Operations/60_VP_General_Poem_Run_Evaluation_Storage_Browser_Remediation_And_Next_Steps_2026-02-21.md" \
+  "docs/03_Operations/61_VP_Explicit_Routing_Enforcement_And_Task_Path_Block_2026-02-21.md" \
+  "docs/03_Operations/62_VP_Explicit_Routing_Regression_General_DP_Hardening_2026-02-21.md" \
+  "docs/03_Operations/64_VP_Independence_Deployment_And_Strict_Explicit_Routing_Implementation_2026-02-21.md" \
+  "docs/03_Operations/65_VP_Independent_Mission_Model_Simone_Integration_And_Tailnet_Next_Focus_2026-02-22.md" \
+  "docs/03_Operations/81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md" \
   2>&1`*
 
 ### User Input
 
-This directory is woefully out of date and consequently misleading. Please review the areas that it discusses and if it's an important area, create a brand new document based on our current source code only. Not any clearly out of date bullshit that is in these files. As our first architecture directory in our official project documentation, design documentation here based on a thorough review of our project that you think should appropriately go in such a directory, not what is in here right now: /home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture
+This directory is woefully out of date and consequently misleading. Please review the areas that it discusses and if it's an important area, create a brand new document based on our current source code only. Not any clearly out of date bullshit that is in these files. As our first architecture directory in our official project documentation, design documentation here based on a thorough review of our project that you think should appropriately go in such a directory, not what is in here right now: /home/kjdragan/lrepos/universal_agent/docs/01_Architecture
 
 *Updated todo list*
 
-*Listed directory [01_Architecture](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture) *
+*Listed directory [01_Architecture](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture) *
 
-*Viewed [01_Research_Architecture_Dilemma.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/01_Research_Architecture_Dilemma.md) *
+*Viewed [01_Research_Architecture_Dilemma.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/01_Research_Architecture_Dilemma.md) *
 
-*Viewed [System_Overview.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/System_Overview.md) *
+*Viewed [System_Overview.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/System_Overview.md) *
 
-*Viewed [Core_Classes.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/Core_Classes.md) *
+*Viewed [Core_Classes.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/Core_Classes.md) *
 
-*Viewed [Soul_Architecture.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/Soul_Architecture.md) *
+*Viewed [Soul_Architecture.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/Soul_Architecture.md) *
 
-*Viewed [UI_Architecture.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/UI_Architecture.md) *
+*Viewed [UI_Architecture.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/UI_Architecture.md) *
 
 ### Planner Response
 
 All 6 docs are stale — references to "Simon", Composio Router, ChromaDB/LanceDB, Zustand, etc. are all wrong. Let me delete them all, then study the actual codebase to write accurate replacements.
 
-*User accepted the command `cd /home/kjdragan/lrepos/universal_agent && git rm OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/*.md 2>&1`*
+*User accepted the command `cd /home/kjdragan/lrepos/universal_agent && git rm docs/01_Architecture/*.md 2>&1`*
 
 ### Planner Response
 
@@ -517,61 +517,61 @@ Now I have a thorough understanding of the actual codebase. Let me write three f
 
 ### Planner Response
 
-Now let me also clean up the stale implementation plans from [03_Operations](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations:0:0-0:0) that were interrupted earlier, then commit everything:
+Now let me also clean up the stale implementation plans from [03_Operations](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations:0:0-0:0) that were interrupted earlier, then commit everything:
 
 *User accepted the command `cd /home/kjdragan/lrepos/universal_agent && git rm \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/00_Current_Handoff_Context_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/04_Clawdbot_Memory_Parity_Investigation.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/05_Independent_Clawdbot_Memory_Parity_Assessment_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/06_Detailed_Memory_Pipeline_Recommendations_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/07_Clawdbot_Voyage_Memory_Architecture_Assessment_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/08_Memory_Pipeline_Phased_Implementation_Plan_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/08_Session_Attach_Detach_And_DropIn_Implementation_Plan_2026-02-07.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/09_Internal_Scheduling_Calendar_V1_Implementation_Plan_2026-02-08.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/10_Clawdbot_Heartbeat_Architecture_And_UA_Parity_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/12_Multi_Interface_Session_Surface_Implementation_Plan_2026-02-09.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/17_Youtube_Tutorial_Explainer_V2_Implementation_2026-02-11.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/25_System_Configuration_Agent_Architecture_And_Implementation_Plan_2026-02-12.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/28_Beyond_Research_Reports_Multi_Phase_Universal_Agent_Architecture_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_System_Prompt_Comparison_2026-02-13.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/31_UA_Memory_Hard_Cut_OpenClaw_Parity_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/33_Claude_Agent_SDK_Release_Changes_Assessment_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/34_Code_Writer_And_Analytics_Routing_Policy_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/34_User_Profile_Interview_And_Memory_Persistence_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/35_XAI_Grok_API_Keys_And_Loading_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/36_MCP_File_Writing_Latency_Investigation_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/37_ZA_Model_Performance_Tester_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/38_Potential_Skill_Candidate_Process_And_Architecture_2026-02-14.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/39_DraganCorp_Phase_A_Handoff_2026-02-15.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/47_OpenClaw_Functionality_Parity_Evaluation_And_UA_Recommendations_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/48_UA_OpenClaw_Parity_Implementation_Plan_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/49_UA_OpenClaw_Parity_Phase_A_P0_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/50_UA_OpenClaw_Parity_Phase_B_P1_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/51_UA_OpenClaw_Parity_Phase_C_P2_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/52_UA_OpenClaw_Parity_Live_Smoke_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/53_UA_External_Primary_Agent_Runtime_Implementation_Plan_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/54_UA_External_Primary_Agent_Phase_A_B_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/55_UA_External_Primary_Agent_Phase_C_D_E_Verification_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/56_VP_Testing_And_Workproduct_Tracking_Plan_2026-02-20.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/57_VP_Orchestration_Context_Handoff_And_Next_Steps_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/58_VP_Tool_First_Orchestration_And_Dedicated_VP_DB_Implementation_Plan_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/59_VP_Tool_First_Orchestration_Implementation_Completion_And_Deployment_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/60_VP_General_Poem_Run_Evaluation_Storage_Browser_Remediation_And_Next_Steps_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/61_VP_Explicit_Routing_Enforcement_And_Task_Path_Block_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/62_VP_Explicit_Routing_Regression_General_DP_Hardening_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/64_VP_Independence_Deployment_And_Strict_Explicit_Routing_Implementation_2026-02-21.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/65_VP_Independent_Mission_Model_Simone_Integration_And_Tailnet_Next_Focus_2026-02-22.md" \
-  "OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md" \
+  "docs/03_Operations/00_Current_Handoff_Context_2026-02-14.md" \
+  "docs/03_Operations/03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md" \
+  "docs/03_Operations/04_Clawdbot_Memory_Parity_Investigation.md" \
+  "docs/03_Operations/05_Independent_Clawdbot_Memory_Parity_Assessment_2026-02-07.md" \
+  "docs/03_Operations/06_Detailed_Memory_Pipeline_Recommendations_2026-02-07.md" \
+  "docs/03_Operations/07_Clawdbot_Voyage_Memory_Architecture_Assessment_2026-02-07.md" \
+  "docs/03_Operations/08_Memory_Pipeline_Phased_Implementation_Plan_2026-02-07.md" \
+  "docs/03_Operations/08_Session_Attach_Detach_And_DropIn_Implementation_Plan_2026-02-07.md" \
+  "docs/03_Operations/09_Internal_Scheduling_Calendar_V1_Implementation_Plan_2026-02-08.md" \
+  "docs/03_Operations/10_Clawdbot_Heartbeat_Architecture_And_UA_Parity_2026-02-13.md" \
+  "docs/03_Operations/10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md" \
+  "docs/03_Operations/12_Multi_Interface_Session_Surface_Implementation_Plan_2026-02-09.md" \
+  "docs/03_Operations/17_Youtube_Tutorial_Explainer_V2_Implementation_2026-02-11.md" \
+  "docs/03_Operations/25_System_Configuration_Agent_Architecture_And_Implementation_Plan_2026-02-12.md" \
+  "docs/03_Operations/28_Beyond_Research_Reports_Multi_Phase_Universal_Agent_Architecture_2026-02-13.md" \
+  "docs/03_Operations/29_System_Prompt_Comparison_2026-02-13.md" \
+  "docs/03_Operations/31_UA_Memory_Hard_Cut_OpenClaw_Parity_2026-02-20.md" \
+  "docs/03_Operations/33_Claude_Agent_SDK_Release_Changes_Assessment_2026-02-14.md" \
+  "docs/03_Operations/34_Code_Writer_And_Analytics_Routing_Policy_2026-02-14.md" \
+  "docs/03_Operations/34_User_Profile_Interview_And_Memory_Persistence_2026-02-14.md" \
+  "docs/03_Operations/35_XAI_Grok_API_Keys_And_Loading_2026-02-14.md" \
+  "docs/03_Operations/36_MCP_File_Writing_Latency_Investigation_2026-02-14.md" \
+  "docs/03_Operations/37_ZA_Model_Performance_Tester_2026-02-14.md" \
+  "docs/03_Operations/38_Potential_Skill_Candidate_Process_And_Architecture_2026-02-14.md" \
+  "docs/03_Operations/39_DraganCorp_Phase_A_Handoff_2026-02-15.md" \
+  "docs/03_Operations/40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md" \
+  "docs/03_Operations/43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md" \
+  "docs/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md" \
+  "docs/03_Operations/47_OpenClaw_Functionality_Parity_Evaluation_And_UA_Recommendations_2026-02-20.md" \
+  "docs/03_Operations/48_UA_OpenClaw_Parity_Implementation_Plan_2026-02-20.md" \
+  "docs/03_Operations/49_UA_OpenClaw_Parity_Phase_A_P0_Verification_2026-02-20.md" \
+  "docs/03_Operations/50_UA_OpenClaw_Parity_Phase_B_P1_Verification_2026-02-20.md" \
+  "docs/03_Operations/51_UA_OpenClaw_Parity_Phase_C_P2_Verification_2026-02-20.md" \
+  "docs/03_Operations/52_UA_OpenClaw_Parity_Live_Smoke_Verification_2026-02-20.md" \
+  "docs/03_Operations/53_UA_External_Primary_Agent_Runtime_Implementation_Plan_2026-02-20.md" \
+  "docs/03_Operations/54_UA_External_Primary_Agent_Phase_A_B_Verification_2026-02-20.md" \
+  "docs/03_Operations/55_UA_External_Primary_Agent_Phase_C_D_E_Verification_2026-02-20.md" \
+  "docs/03_Operations/56_VP_Testing_And_Workproduct_Tracking_Plan_2026-02-20.md" \
+  "docs/03_Operations/57_VP_Orchestration_Context_Handoff_And_Next_Steps_2026-02-21.md" \
+  "docs/03_Operations/58_VP_Tool_First_Orchestration_And_Dedicated_VP_DB_Implementation_Plan_2026-02-21.md" \
+  "docs/03_Operations/59_VP_Tool_First_Orchestration_Implementation_Completion_And_Deployment_2026-02-21.md" \
+  "docs/03_Operations/60_VP_General_Poem_Run_Evaluation_Storage_Browser_Remediation_And_Next_Steps_2026-02-21.md" \
+  "docs/03_Operations/61_VP_Explicit_Routing_Enforcement_And_Task_Path_Block_2026-02-21.md" \
+  "docs/03_Operations/62_VP_Explicit_Routing_Regression_General_DP_Hardening_2026-02-21.md" \
+  "docs/03_Operations/64_VP_Independence_Deployment_And_Strict_Explicit_Routing_Implementation_2026-02-21.md" \
+  "docs/03_Operations/65_VP_Independent_Mission_Model_Simone_Integration_And_Tailnet_Next_Focus_2026-02-22.md" \
+  "docs/03_Operations/81_Google_Workspace_CLI_Integration_Implementation_Plan_2026-03-06.md" \
   2>&1`*
 
 ### Planner Response
 
-Now update [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/Documentation_Status.md:0:0-0:0) to reflect the massive cleanup and new architecture docs:
+Now update [Documentation_Status.md](file:///home/kjdragan/lrepos/universal_agent/docs/Documentation_Status.md:0:0-0:0) to reflect the massive cleanup and new architecture docs:
 
 *Edited relevant file*
 
@@ -605,7 +605,7 @@ using mermaid diagrams, charts or other graqphis (such as sequence diagrams, swi
 
 *Updated todo list*
 
-*Viewed [01_System_Architecture_Overview.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/01_System_Architecture_Overview.md) *
+*Viewed [01_System_Architecture_Overview.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/01_System_Architecture_Overview.md) *
 
 *Edited relevant file*
 
@@ -613,9 +613,9 @@ using mermaid diagrams, charts or other graqphis (such as sequence diagrams, swi
 
 Now let me add diagrams to doc 02:
 
-*Viewed [02_Gateway_Sessions_And_Execution.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/02_Gateway_Sessions_And_Execution.md) *
+*Viewed [02_Gateway_Sessions_And_Execution.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/02_Gateway_Sessions_And_Execution.md) *
 
-*Viewed [02_Gateway_Sessions_And_Execution.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/02_Gateway_Sessions_And_Execution.md) *
+*Viewed [02_Gateway_Sessions_And_Execution.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/02_Gateway_Sessions_And_Execution.md) *
 
 *Edited relevant file*
 
@@ -623,9 +623,9 @@ Now let me add diagrams to doc 02:
 
 Now add diagrams to doc 03 — VP Workers and Delegation:
 
-*Viewed [03_VP_Workers_And_Delegation.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/03_VP_Workers_And_Delegation.md) *
+*Viewed [03_VP_Workers_And_Delegation.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/03_VP_Workers_And_Delegation.md) *
 
-*Viewed [03_VP_Workers_And_Delegation.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/03_VP_Workers_And_Delegation.md) *
+*Viewed [03_VP_Workers_And_Delegation.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/03_VP_Workers_And_Delegation.md) *
 
 *Edited relevant file*
 
@@ -767,7 +767,7 @@ The ideation skill requires Claude Code's Agent Teams (not available here), so I
 
 Ready to proceed when you confirm.
 
-*Viewed [19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md) *
+*Viewed [19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md) *
 
 ### User Input
 
@@ -1098,14 +1098,14 @@ Deployment successful — all services active, health checks passing. Here's the
 - Dismissed events persist in localStorage across page refreshes
 
 ### Brainstorm Document
-- [01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md:0:0-0:0)
+- [01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md:0:0-0:0)
 - 4 factory utilization strategies (specialization, overflow, research lab, development staging)
 - 7 new capability areas (proactive monitoring, multi-agent collaboration, autonomous briefings, self-improvement, knowledge base maintenance, external integrations, financial analytics)
 - 4 autonomy expansion concepts (goal-driven missions, inter-factory comms, self-healing, capability discovery)
 - Telegram as first-class interface expansion ideas
 - Priority assessment matrix with Now / Next / Later / Future ratings
 
-*Viewed [04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md) *
+*Viewed [04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md) *
 
 ### User Input
 
@@ -1904,7 +1904,7 @@ The next CSI signal that arrives will sync to Todoist successfully instead of pr
 
 You can delete the two test tasks in Todoist (`[TEST] UA Todoist integration test` and `[TEST] SDK integration test`) — they were just verification artifacts.
 
-*Viewed [04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md) *
+*Viewed [04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md) *
 
 ### User Input
 
@@ -2366,7 +2366,7 @@ Here's a summary of everything deployed in this commit:
 
 **Important note about the Telegram bot:** The bot **already accepts plain text** without `/agent` — you can just type normally and Simone will respond. The old `/start` help message was misleading by showing `/agent <prompt>` as the primary command. That's now fixed. Try sending a plain message to the 007 bot and it should work directly.
 
-*Viewed [04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md) *
+*Viewed [04_Dual_Factory_And_Capability_Expansion_Brainstorm.md](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md) *
 
 ### User Input
 

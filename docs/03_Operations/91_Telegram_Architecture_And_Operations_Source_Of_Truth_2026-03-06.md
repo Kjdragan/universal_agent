@@ -269,8 +269,8 @@ This is an important current hardening layer for Telegram reliability.
 Primary operational references:
 - `AGENTS.md`
 - `docs/deployment/ci_cd_pipeline.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/24_VPS_Service_Recovery_System_Runbook_2026-02-12.md`
+- `docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
+- `docs/03_Operations/24_VPS_Service_Recovery_System_Runbook_2026-02-12.md`
 - `scripts/vps_service_watchdog.sh`
 - `scripts/vpsctl.sh` for break-glass diagnostics only
 
@@ -465,10 +465,10 @@ Tests:
 - `tests/unit/test_telegram_formatter.py`
 
 Related operational docs:
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/46_Running_The_Agent.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/24_VPS_Service_Recovery_System_Runbook_2026-02-12.md`
+- `docs/03_Operations/46_Running_The_Agent.md`
+- `docs/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md`
+- `docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
+- `docs/03_Operations/24_VPS_Service_Recovery_System_Runbook_2026-02-12.md`
 
 Legacy/helper material:
 - `start_telegram_bot.sh`

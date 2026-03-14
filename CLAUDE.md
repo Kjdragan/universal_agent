@@ -7,7 +7,7 @@ This file provides quick working context for Claude (and other coding agents) in
 
 It includes:
 - Agent execution and orchestration logic under `src/universal_agent/`
-- Operational docs under `OFFICIAL_PROJECT_DOCUMENTATION/`
+- Operational docs under `docs/`
 - Environment-driven feature flags and scheduler controls via `.env`
 
 ## Key Commands

@@ -291,5 +291,5 @@ The `AgentHookSet` class accepts these parameters:
 
 ## See Also
 
-- [Event Streaming Flow](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/02_Flows/Event_Streaming_Flow.md)
+- [Event Streaming Flow](file:///home/kjdragan/lrepos/universal_agent/docs/02_Flows/Event_Streaming_Flow.md)
 - [Guardrails Reference](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/guardrails/)

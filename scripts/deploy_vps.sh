@@ -171,7 +171,7 @@ rsync -az \
   }
 
   # Keep source/build files owned by service user for build/runtime writes.
-  chown -R ua:ua .claude deployment docs OFFICIAL_PROJECT_DOCUMENTATION scripts src tests web-ui webhook_transforms 2>/dev/null || true
+  chown -R ua:ua .claude deployment docs scripts src tests web-ui webhook_transforms 2>/dev/null || true
   chown ua:ua pyproject.toml uv.lock README.md AGENTS.md .gitignore 2>/dev/null || true
   # Runtime roots must be writable by service user for memory/session capture.
   mkdir -p Memory_System AGENT_RUN_WORKSPACES artifacts logs

@@ -85,7 +85,7 @@ In order to do this, you need to first review the repository here, and before yo
 
 *Grep searched codebase*
 
-*Listed directory [OFFICIAL_PROJECT_DOCUMENTATION](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION) *
+*Listed directory [docs](file:///home/kjdragan/lrepos/universal_agent/docs) *
 
 *Viewed [pyproject.toml](file:///home/kjdragan/lrepos/universal_agent/pyproject.toml) *
 
@@ -163,13 +163,13 @@ Create an number prefix document about this implementation in our official proje
 
 *Listed directory [universal_agent](file:///home/kjdragan/lrepos/universal_agent) *
 
-*Listed directory [OFFICIAL_PROJECT_DOCUMENTATION](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION) *
+*Listed directory [docs](file:///home/kjdragan/lrepos/universal_agent/docs) *
 
-*Listed directory [01_Architecture](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/01_Architecture) *
+*Listed directory [01_Architecture](file:///home/kjdragan/lrepos/universal_agent/docs/01_Architecture) *
 
-*Listed directory [03_Operations](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations) *
+*Listed directory [03_Operations](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations) *
 
-*Listed directory [02_Subsystems](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/02_Subsystems) *
+*Listed directory [02_Subsystems](file:///home/kjdragan/lrepos/universal_agent/docs/02_Subsystems) *
 
 *Edited relevant file*
 
@@ -179,7 +179,7 @@ Take a look at our project capabilities and discuss and brainstorm potential int
 
 *Viewed [task.md](file:///home/kjdragan/.gemini/antigravity/brain/75cf095f-2b87-4e03-870b-4746a69aa4c9/task.md) *
 
-*Viewed [15_Webhook_Service_Implementation_2026-02-10.md](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md) *
+*Viewed [15_Webhook_Service_Implementation_2026-02-10.md](file:///home/kjdragan/lrepos/universal_agent/docs/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md) *
 
 *Listed directory [scripts](file:///home/kjdragan/lrepos/universal_agent/scripts) *
 
@@ -234,7 +234,7 @@ So the Telegram idea has validity, but I already have a Telegram bot set up in a
 - Added `HooksService` in `src/universal_agent/hooks_service.py` to handle webhook logic, including token authentication, request matching, and templating.
 - Updated `src/universal_agent/ops_config.py` to include webhook configuration schema.
 - Integrated `HooksService` into `src/universal_agent/gateway_server.py` and exposed `POST /api/v1/hooks/{subpath:path}` endpoint.
-- Added usage documentation in `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md` and `walkthrough.md`.
+- Added usage documentation in `docs/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md` and `walkthrough.md`.
 - Added unit tests in `tests/test_hooks_service.py`.
 - Updated `task.md` with progress and brainstorming tasks."`*
 

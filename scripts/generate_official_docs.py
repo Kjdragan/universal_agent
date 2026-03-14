@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Configuration
 PROJECT_ROOT = Path(".").resolve()
-DOCS_ROOT = PROJECT_ROOT / "OFFICIAL_PROJECT_DOCUMENTATION"
+DOCS_ROOT = PROJECT_ROOT / "docs"
 SRC_ROOT = PROJECT_ROOT / "src" / "universal_agent"
 
 def log(msg):
@@ -71,7 +71,7 @@ This is the **Universal Agent** project.
 
 ## Developer Rules
 1.  **Code First**: Docs are secondary to code. Analyze `src/` to determine truth.
-2.  **Artifacts**: Store designs in `OFFICIAL_PROJECT_DOCUMENTATION/`.
+2.  **Artifacts**: Store designs in `docs/`.
 """
         with open(agent_md, "w") as f:
             f.write(content)

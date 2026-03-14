@@ -367,12 +367,12 @@ Primary implementation:
 - `infrastructure/tailscale/tailnet-policy.hujson`
 
 Primary operational records:
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/27_Deployment_Runbook_2026-02-12.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/66_Tailnet_First_DevOps_Phase_A_Implementation_2026-02-22.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/67_Tailnet_First_DevOps_Phase_B_Implementation_2026-02-22.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/68_Tailnet_First_DevOps_Phase_C_SSH_Auth_Mode_Implementation_2026-02-22.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`
+- `docs/03_Operations/27_Deployment_Runbook_2026-02-12.md`
+- `docs/03_Operations/63_Tailnet_First_DevOps_Profile_And_Staging_Workflow_2026-02-21.md`
+- `docs/03_Operations/66_Tailnet_First_DevOps_Phase_A_Implementation_2026-02-22.md`
+- `docs/03_Operations/67_Tailnet_First_DevOps_Phase_B_Implementation_2026-02-22.md`
+- `docs/03_Operations/68_Tailnet_First_DevOps_Phase_C_SSH_Auth_Mode_Implementation_2026-02-22.md`
+- `docs/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`
 
 ## Bottom Line
 

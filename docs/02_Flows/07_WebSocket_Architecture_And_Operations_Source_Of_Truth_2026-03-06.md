@@ -273,9 +273,9 @@ Secondary/legacy:
 - `src/web/server.py`
 
 Related docs:
-- `OFFICIAL_PROJECT_DOCUMENTATION/02_Flows/04_Chat_Panel_Communication_Layer.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/02_Flows/05_Activity_Log_Communication_Layer.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md`
+- `docs/02_Flows/04_Chat_Panel_Communication_Layer.md`
+- `docs/02_Flows/05_Activity_Log_Communication_Layer.md`
+- `docs/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md`
 
 ## Bottom Line
 

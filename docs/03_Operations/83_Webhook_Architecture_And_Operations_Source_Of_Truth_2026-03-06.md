@@ -293,9 +293,9 @@ Primary implementation:
 - `scripts/register_composio_webhook_subscription.py`
 
 Primary operational references:
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md`
+- `docs/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
+- `docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
+- `docs/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md`
 
 ## Bottom Line
 

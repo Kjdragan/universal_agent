@@ -380,7 +380,7 @@ Agent and knowledge behavior:
 - `.agents/skills/agentmail/SKILL.md`
 
 Operational reference and transition note:
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/AgentMail_Digest_Email_Plan.md`
+- `docs/03_Operations/AgentMail_Digest_Email_Plan.md`
 
 Tests:
 - `tests/unit/test_agentmail_service.py`

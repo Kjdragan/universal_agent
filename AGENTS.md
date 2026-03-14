@@ -17,7 +17,7 @@ Do not treat any older manual VPS deployment flow as canonical.
 
 - `scripts/deploy_vps.sh` is legacy and not the primary deployment path.
 - `scripts/vpsctl.sh` is a break-glass diagnostics helper, not the normal deployment path.
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/27_Deployment_Runbook_2026-02-12.md` is deprecated.
+- `docs/03_Operations/27_Deployment_Runbook_2026-02-12.md` is deprecated.
 
 ## Current Deployment Contract
 

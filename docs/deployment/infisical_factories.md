@@ -134,4 +134,4 @@ as the bootstrap-only template for `.env`.
 
 - [architecture_overview.md](/home/kjdragan/lrepos/universal_agent/docs/deployment/architecture_overview.md)
 - [ci_cd_pipeline.md](/home/kjdragan/lrepos/universal_agent/docs/deployment/ci_cd_pipeline.md)
-- [07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md](/home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION/06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)
+- [07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md](/home/kjdragan/lrepos/universal_agent/docs/06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)

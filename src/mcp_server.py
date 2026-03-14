@@ -342,7 +342,7 @@ def fix_path_typos(path: str) -> str:
     if "AGENT_RUNSPACES" in path and "AGENT_RUN_WORKSPACES" not in path:
         path = path.replace("AGENT_RUNSPACES", "AGENT_RUN_WORKSPACES")
         sys.stderr.write(
-            f"[Local Toolkit] Path auto-corrected: AGENT_RUNSPACES → AGENT_RUN_WORKSPACES\n"
+            "[Local Toolkit] Path auto-corrected: AGENT_RUNSPACES → AGENT_RUN_WORKSPACES\n"
         )
 
     # Fix common literal artifacts-root mistakes:
@@ -1506,7 +1506,7 @@ def read_vps_file(
     Read a file from the VPS filesystem (read-only).
 
     Allowed roots: AGENT_RUN_WORKSPACES, artifacts, config, src,
-    OFFICIAL_PROJECT_DOCUMENTATION, .claude/agents, scripts.
+    docs, .claude/agents, scripts.
     Binary files return size info only.
 
     Args:
@@ -1531,7 +1531,7 @@ def read_vps_file(
         project / "artifacts",
         project / "config",
         project / "src",
-        project / "OFFICIAL_PROJECT_DOCUMENTATION",
+        project / "docs",
         project / ".claude",
         project / "scripts",
         project / "web-ui",
@@ -2016,7 +2016,7 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                                 data = await resp.json()
 
                                 # Cloud API returns content directly (no polling needed)
-                                if data.get("success") == False:
+                                if data.get("success") is False:
                                     last_error = data.get("error", "Unknown error")
                                     # Don't retry on explicit API errors (e.g., blocked)
                                     return {
@@ -2315,7 +2315,7 @@ word_count: {len(content.split())}
                             fm_text = full_content[4:fm_end].strip()
                             try:
                                 metadata = yaml.safe_load(fm_text)
-                            except:
+                            except Exception:
                                 metadata = {}
                             body = full_content[fm_end + 4 :].strip()
                         else:
@@ -2382,16 +2382,16 @@ If you need large files, read them individually with `read_local_file`.
                     overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
 
                 if medium_files:
-                    overview_header += f"\n## Medium Files (Included in batch if space)\n\n| # | File | Words | Title |\n|---|------|-------|-------|\n"
+                    overview_header += "\n## Medium Files (Included in batch if space)\n\n| # | File | Words | Title |\n|---|------|-------|-------|\n"
                     for f in medium_files:
                         overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
 
                 if large_files:
-                    overview_header += f"\n## ⚠️ Large Files (Read Individually)\n\n| # | File | Words | Title | Command |\n|---|------|-------|-------|--------|\n"
+                    overview_header += "\n## ⚠️ Large Files (Read Individually)\n\n| # | File | Words | Title | Command |\n|---|------|-------|-------|--------|\n"
                     for f in large_files:
                         overview_header += f'| {f["index"]} | `{f["file"]}` | {f["word_count"]:,} | {f["title"][:40]}... | `read_local_file(path="{f["path"]}")` |\n'
 
-                overview_header += f"""
+                overview_header += """
 ---
 
 ## All Sources Detail
@@ -3237,7 +3237,7 @@ async def build_evidence_ledger(
                     fm_text = content[4:fm_end].strip()
                     try:
                         metadata = yaml.safe_load(fm_text) or {}
-                    except:
+                    except Exception:
                         pass
                     body = content[fm_end + 4 :].strip()
 
@@ -3634,7 +3634,7 @@ def generate_image(
                         # Get description for filename
                         try:
                             description = describe_image_internal(image)
-                        except:
+                        except Exception:
                             description = "generated_image"
 
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3944,7 +3944,7 @@ def generate_image_with_review(
     return json.dumps(result_obj, indent=2)
 
 
-def describe_image_internal(image: "Image.Image") -> str:
+def describe_image_internal(image: Any) -> str:
     """Internal helper to describe image using Gemini vision, with simple fallback."""
     try:
         from google import genai

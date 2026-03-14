@@ -212,6 +212,6 @@ Read it this way:
 
 For local runtime mode details, see:
 
-- `OFFICIAL_PROJECT_DOCUMENTATION/06_Deployment_And_Environments/05_Local_Runtime_Modes.md`
+- `docs/06_Deployment_And_Environments/05_Local_Runtime_Modes.md`
 
 If deployment behavior changes later, update this file together with the GitHub Actions workflow documentation.

@@ -48,7 +48,7 @@ FileBrowser is rooted at `/opt/universal_agent`, so you can browse:
 | `web-ui/` | Next.js frontend source |
 | `.claude/agents/` | Subagent definitions |
 | `scripts/` | Deployment and ops scripts |
-| `OFFICIAL_PROJECT_DOCUMENTATION/` | Project docs |
+| `docs/` | Project docs |
 | `config/` | Configuration files |
 
 ## Architecture

@@ -79,7 +79,7 @@ This document is a prioritized, self-contained cleanup plan derived from a compr
 - `heartbeat/08_Telegram_Revival_and_Enhancement_Plan.md` — may reference CSI playlist assumptions
 - `CSI_Ingester/development/README.md` — youtube_playlist section
 - `CSI_Ingester/documentation/` — older runbooks
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
+- `docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 
 **Expected fix:** Add a clear note at the top of each stale section stating that native UA playlist watching is now authoritative. Do not delete the CSI playlist adapter code or config, just ensure docs accurately reflect the current split.
 
@@ -116,7 +116,7 @@ This document is a prioritized, self-contained cleanup plan derived from a compr
 - `scripts/vpsctl.sh`
 - `scripts/sync_remote_workspaces.sh`
 - `scripts/pull_remote_workspaces_now.sh`
-- Older runbooks under `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/`
+- Older runbooks under `docs/03_Operations/`
 
 **Expected fix:** Standardize all default host references to the MagicDNS name. Keep `UA_VPS_HOST` / `UA_REMOTE_SSH_HOST` as the override mechanism.
 
@@ -275,7 +275,7 @@ This document is a prioritized, self-contained cleanup plan derived from a compr
 
 **Canonical docs:** All 12 canonical source-of-truth documents.
 
-**Expected fix:** Audit older docs under `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/` and add forward references to the relevant canonical doc where appropriate.
+**Expected fix:** Audit older docs under `docs/03_Operations/` and add forward references to the relevant canonical doc where appropriate.
 
 **Scope:** Medium — batch doc pass.
 

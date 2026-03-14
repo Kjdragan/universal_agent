@@ -478,7 +478,7 @@ Boom, your ClawdBot memory is now 10000x better
 
 *Viewed [agent-runner-memory.ts](file:///home/kjdragan/lrepos/clawdbot/src/auto-reply/reply/agent-runner-memory.ts) *
 
-*Listed directory [OFFICIAL_PROJECT_DOCUMENTATION](file:///home/kjdragan/lrepos/universal_agent/OFFICIAL_PROJECT_DOCUMENTATION) *
+*Listed directory [docs](file:///home/kjdragan/lrepos/universal_agent/docs) *
 
 *Listed directory [Memory_System_Data](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/Memory_System_Data) *
 

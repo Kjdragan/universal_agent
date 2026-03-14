@@ -1,6 +1,6 @@
 # Document 01. Unified Creator Signal Intelligence Strategy (2026-02-22)
 
-Source lineage: adapted from `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md`.
+Source lineage: adapted from `docs/03_Operations/74_Unified_Creator_Signal_Intelligence_Strategy_2026-02-22.md`.
 
 ## 1. Objective
 

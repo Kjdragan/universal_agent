@@ -21,6 +21,9 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | VPS Checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
 | Fallback Checkout | n/a | `/opt/universal_agent_repo` |
 | Gateway/API Ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, `UA_GATEWAY_URL=http://127.0.0.1:9002` | `8002` / `8001` |
+| Web UI Port | `3001` | `3000` |
+| Web UI URL | `https://srv1360701.taildcc090.ts.net:9443` (Tailnet) | `https://app.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net` (Tailnet) |
+| API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net:8443` (Tailnet) |
 | Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units |
 | Secrets Behavior | Bootstrap into stage env `staging` and validate stage secrets; machine identity is written locally in `.env` | Bootstrap into stage env `production` and validate stage secrets; machine identity is written locally in `.env` |
 
