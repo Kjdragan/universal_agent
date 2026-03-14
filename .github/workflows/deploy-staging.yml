@@ -136,7 +136,7 @@ jobs:
 
             echo '--> Setting deployment-window flag...'
             touch /tmp/ua-deployment-window
-            (sleep 1500 && rm -f /tmp/ua-deployment-window) &
+            (sleep 1500 && rm -f /tmp/ua-deployment-window) </dev/null >/dev/null 2>&1 &
 
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then
