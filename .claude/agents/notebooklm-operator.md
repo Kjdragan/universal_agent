@@ -109,6 +109,18 @@ download_artifact(notebook_id=<id>, artifact_type="slide_deck", output_path="/pa
 download_artifact(notebook_id=<id>, artifact_type="audio", output_path="/path/to/audio.mp3")
 ```
 
+### Step 6: Return results — do NOT send emails
+```
+⚠️ Do NOT attempt email delivery. Return artifact paths and notebook URL
+   to the primary agent. Email delivery is the primary agent's responsibility
+   using AgentMail (Simone's identity) — NEVER Composio Gmail.
+
+Return payload must include:
+- notebook_id, notebook_url
+- list of downloaded file paths with sizes
+- any warnings (e.g., report download not supported → exported to Google Docs)
+```
+
 ### Common Mistakes to AVOID
 1. **Do NOT pass `source_indices` to `research_import`** — omit it to import all
 2. **Do NOT use `urls` array in `source_add`** — use singular `url`, one at a time

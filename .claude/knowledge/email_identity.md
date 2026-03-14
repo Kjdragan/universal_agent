@@ -102,3 +102,17 @@ When the user says things like:
 1. **Default to AgentMail** for Simone's outbound delivery
 2. Use Gmail (gws MCP) only when Kevin explicitly asks to use "my Gmail" or needs to read his inbox
 3. **NEVER ask for Kevin's email** if they said "me" or "to me" — use `kevinjdragan@gmail.com`
+4. **NEVER use Composio Gmail tools** (`GMAIL_SEND_EMAIL`, etc.) — these are deprecated
+
+## Email Delivery Fallback Chain
+
+When Simone needs to deliver work (reports, artifacts, digests):
+
+1. **AgentMail** (default) — via SDK or Ops API `POST /api/v1/ops/agentmail/send`
+2. **gws MCP Gmail** (fallback only if Kevin explicitly requests "from my email")
+3. **NEVER Composio `GMAIL_SEND_EMAIL`** — deprecated, wrong identity, and bypasses reply routing
+
+> [!CAUTION]
+> If AgentMail fails (SDK import error, API timeout), do NOT fall back to Composio Gmail.
+> Instead: report the failure to the user and explain that artifacts are available locally
+> at the download path and in the NotebookLM notebook URL.

@@ -181,6 +181,12 @@ Deep research can produce a *different* `task_id` in `research_status` responses
 
 **Solution:** Pass the `query` parameter to `research_status` as a fallback matching mechanism when the task_id changes during deep research.
 
+### 8. Email Delivery Belongs Outside the NLM Pipeline
+
+The NLM sub-agent should **never** attempt email delivery. In a March 2026 incident, the sub-agent returned artifacts to the primary agent, which then failed to send via AgentMail (SDK not installed, Ops API auth issues) and fell back to Composio `GMAIL_SEND_EMAIL` — sending from Kevin's identity instead of Simone's.
+
+**Solution:** The NLM sub-agent now explicitly returns artifact paths and notebook URL to the primary agent without attempting delivery. Email routing follows the standard identity policy: AgentMail for Simone's work, gws MCP Gmail only on Kevin's explicit request. Composio Gmail tools are deprecated.
+
 ## Configuration
 
 ### Environment Variables

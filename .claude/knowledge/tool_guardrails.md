@@ -151,3 +151,22 @@ Use this to discover the best Composio search tools and get recommended steps.
   "query": "AI policy regulation January 2026"
 }
 ```
+
+## ⛔ DEPRECATED: Composio Gmail Tools
+
+> [!CAUTION]
+> `GMAIL_SEND_EMAIL`, `GMAIL_CREATE_EMAIL_DRAFT`, `GMAIL_SEND_DRAFT`, and ALL other
+> Composio Gmail tools are **DEPRECATED**. Do NOT use them. Do NOT use
+> `COMPOSIO_SEARCH_TOOLS` to discover Gmail send capabilities.
+
+**For email, use these paths instead:**
+
+| Purpose | Tool | Identity |
+|---------|------|----------|
+| Simone sends work to Kevin or external contacts | **AgentMail** (see agentmail skill) | Simone D `<oddcity216@agentmail.to>` |
+| Kevin asks to send from "my email" | **gws MCP** (`mcp__gws__gmail.*`) | Kevin's Gmail |
+| Kevin asks to read/manage his inbox | **gws MCP** (`mcp__gws__gmail.*`) | Kevin's Gmail |
+
+**Why deprecated:** Composio Gmail sends from Kevin's identity, bypassing AgentMail's
+reply-routing and making it look like Kevin emailed himself. The gws MCP server
+provides the same Gmail functionality with simpler attachment handling.

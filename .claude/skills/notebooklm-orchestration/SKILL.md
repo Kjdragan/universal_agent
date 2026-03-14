@@ -149,6 +149,12 @@ download_artifact(notebook_id=<id>, artifact_type="slide_deck", output_path="~/n
 download_artifact(notebook_id=<id>, artifact_type="audio", output_path="~/nlm_artifacts/audio.mp3")
 ```
 
+### Step 6: Return results — do NOT send emails
+The NLM sub-agent returns artifact paths and notebook URL to the primary agent.
+Email delivery is the **primary agent's responsibility** using AgentMail.
+Do NOT use Composio Gmail, gws MCP Gmail, or any other email tool from within
+the NLM sub-agent.
+
 ### Common Mistakes to AVOID
 1. **Do NOT pass `source_indices` to `research_import`** — omit it to import all.
 2. **Do NOT use `urls` array in `source_add`** — add one URL at a time with `url` (singular).
@@ -156,6 +162,7 @@ download_artifact(notebook_id=<id>, artifact_type="audio", output_path="~/nlm_ar
 4. **Do NOT run `uv run python scripts/notebooklm_auth_preflight.py`** — it breaks.
 5. **Do NOT call `nlm login` without `--manual`** — no browser on VPS.
 6. **Default to `mode="fast"` for research** — only use `mode="deep"` when user explicitly requests comprehensive/thorough/exhaustive research.
+7. **Do NOT send emails from the NLM sub-agent** — return artifact paths to the primary agent for delivery via AgentMail.
 
 ## CLI Fallback Patterns
 
