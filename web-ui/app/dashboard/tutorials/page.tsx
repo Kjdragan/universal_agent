@@ -146,7 +146,15 @@ function notificationRunPath(notification: PipelineNotification): string {
   return asText(metadata.tutorial_run_path) || asText(metadata.run_path);
 }
 
+// Global health-alert kinds — only one live entry per kind is shown.
+const HEALTH_ALERT_KINDS = new Set([
+  "youtube_ingest_proxy_alert",
+  "hook_dispatch_queue_overflow",
+]);
+
 function notificationEntityKey(notification: PipelineNotification): string {
+  const kind = asText(notification.kind);
+  if (kind && HEALTH_ALERT_KINDS.has(kind)) return `kind:${kind}`;
   const videoId = notificationVideoId(notification);
   if (videoId) return `video:${videoId}`;
   const runPath = notificationRunPath(notification);

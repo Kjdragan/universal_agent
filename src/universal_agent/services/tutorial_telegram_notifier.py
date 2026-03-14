@@ -3,6 +3,18 @@
 Sends structured messages to a dedicated Telegram chat at each stage of
 the tutorial processing lifecycle.
 
+Per-video Telegram behaviour:
+  - 2 messages per video are sent:
+      1. youtube_playlist_new_video   (video detected, pipeline kicked off)
+      2. youtube_tutorial_ready | youtube_tutorial_failed | youtube_tutorial_interrupted
+  - youtube_tutorial_started and youtube_tutorial_progress are suppressed
+    (redundant given the detection + outcome pair).
+
+System-health alerts (youtube_ingest_proxy_alert, hook_dispatch_queue_overflow)
+are global notices — NOT per-video.  They are rate-limited to at most one
+Telegram message per kind per HEALTH_ALERT_COOLDOWN_SECONDS (default 1 hour)
+to avoid notification floods when many videos process during an outage.
+
 Env vars:
     TELEGRAM_BOT_TOKEN              — bot token (shared with other notifiers)
     YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID — target chat / channel ID
@@ -22,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
+# ---- event kind classification ------------------------------------------
+
 _RELEVANT_KINDS = {
     "youtube_playlist_new_video",
     "youtube_playlist_dispatch_failed",
@@ -33,7 +47,32 @@ _RELEVANT_KINDS = {
     "youtube_ingest_failed",
     "hook_dispatch_queue_overflow",
     "youtube_hook_recovery_queued",
+    "youtube_ingest_proxy_alert",
 }
+
+# These intermediate lifecycle events are suppressed — the user receives:
+#   msg 1: youtube_playlist_new_video (video detected + pipeline kicked off)
+#   msg 2: ready / failed / interrupted (final outcome)
+_SUPPRESSED_KINDS = {
+    "youtube_tutorial_started",
+    "youtube_tutorial_progress",
+}
+
+# Global system-health alert kinds: not tied to a specific video.
+# Rate-limited to one Telegram message per kind per cooldown window.
+_HEALTH_ALERT_KINDS = {
+    "youtube_ingest_proxy_alert",
+    "hook_dispatch_queue_overflow",
+}
+
+# 1-hour cooldown for health alerts (seconds)
+HEALTH_ALERT_COOLDOWN_SECONDS: float = float(
+    os.getenv("UA_TUTORIAL_HEALTH_ALERT_COOLDOWN_SECONDS", "3600")
+)
+
+# In-process state: last Telegram send timestamp per kind for health alerts.
+# Resets on restart which is intentional — a restart is a meaningful event.
+_health_alert_last_sent: dict[str, float] = {}
 
 _KIND_EMOJI: dict[str, str] = {
     "youtube_playlist_new_video": "🎬",
@@ -154,8 +193,14 @@ def _send(text: str) -> bool:
 def maybe_send(payload: dict[str, Any]) -> bool:
     """Send a Telegram notification if this payload is tutorial-relevant.
 
-    Silently returns False when Telegram is not configured or kind is not
-    in the tutorial notification set — never raises.
+    Rules (in order):
+    1. Payload must be a dict with a `kind` in _RELEVANT_KINDS.
+    2. Telegram must be configured (bot token + chat id).
+    3. Suppressed intermediate lifecycle events are silently dropped.
+    4. System-health alert kinds are rate-limited (one per cooldown window).
+    5. All other events are forwarded immediately.
+
+    Returns True if a message was actually sent.
     """
     if not isinstance(payload, dict):
         return False
@@ -164,6 +209,26 @@ def maybe_send(payload: dict[str, Any]) -> bool:
         return False
     if not _is_configured():
         return False
+
+    # --- suppressed intermediate events ---
+    if kind in _SUPPRESSED_KINDS:
+        logger.debug("tutorial_telegram_notifier: suppressed intermediate kind=%s", kind)
+        return False
+
+    # --- health alert rate-limiting (per-kind cooldown) ---
+    if kind in _HEALTH_ALERT_KINDS:
+        now = time.monotonic()
+        last = _health_alert_last_sent.get(kind, 0.0)
+        remaining = HEALTH_ALERT_COOLDOWN_SECONDS - (now - last)
+        if remaining > 0:
+            logger.debug(
+                "tutorial_telegram_notifier: health alert throttled kind=%s cooldown_remaining=%.0fs",
+                kind,
+                remaining,
+            )
+            return False
+        _health_alert_last_sent[kind] = now
+
     title = str(payload.get("title") or "Tutorial Event")
     message = str(payload.get("message") or "")
     metadata = payload.get("metadata") or {}

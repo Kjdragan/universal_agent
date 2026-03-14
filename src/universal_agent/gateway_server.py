@@ -8048,7 +8048,16 @@ def _activity_upsert_digest_notification(
     return None
 
 
+# System-health alert kinds that are global (not per-video).
+# Only one live row is kept per kind via kind-level upsert in _add_notification.
+_HEALTH_ALERT_NOTIFICATION_KINDS: frozenset[str] = frozenset({
+    "youtube_ingest_proxy_alert",
+    "hook_dispatch_queue_overflow",
+})
+
+
 def _add_notification(
+
     *,
     kind: str,
     title: str,
@@ -8066,8 +8075,37 @@ def _add_notification(
     full_message_text = full_message if full_message is not None else message
     timestamp = _normalize_notification_timestamp(created_at)
 
+    # Kind-level upsert for global system-health alerts.
+    # These are not tied to a specific video, so we must never create more than
+    # one live row per kind — otherwise a proxy outage generates one alert per
+    # video being processed.  Instead we find the most recent non-dismissed row
+    # of the same kind and update it in-place.
+    kind_norm_check = str(kind or "").strip().lower()
+    if kind_norm_check in _HEALTH_ALERT_NOTIFICATION_KINDS:
+        for existing in reversed(_notifications):
+            if str(existing.get("kind") or "").strip().lower() != kind_norm_check:
+                continue
+            if _normalize_notification_status(existing.get("status") or "new") == "dismissed":
+                continue
+            # Update the existing record in-place.
+            existing["title"] = title
+            existing["message"] = full_message if full_message is not None else message
+            existing["full_message"] = full_message if full_message is not None else message
+            existing["summary"] = summary if summary is not None else _activity_summary_text(message)
+            existing["severity"] = severity
+            existing["updated_at"] = _utc_now_iso()
+            existing["status"] = "new"
+            if isinstance(metadata, dict):
+                existing_meta = existing.setdefault("metadata", {})
+                if isinstance(existing_meta, dict):
+                    existing_meta.update(metadata)
+            _replace_notification_cache_record(existing)
+            _persist_notification_activity(existing)
+            return existing
+
     # Idempotency for repeated ingest/replay of the same source event.
     event_id = str(metadata_obj.get("event_id") or "").strip()
+
     if event_id:
         kind_norm = str(kind or "").strip().lower()
         for existing in reversed(_notifications):
