@@ -107,6 +107,7 @@ notebook_create(title="My Research Topic")
 ### Step 2: Research and import (use built-in research, NOT web search)
 ```
 research_start(notebook_id=<id>, query="...", source="web", mode="fast")
+# ALWAYS use mode="fast" — deep mode is unreliable (hangs, returns 0 sources)
 → save task_id
 
 # POLLING LOOP — MUST Bash sleep between calls!

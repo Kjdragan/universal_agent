@@ -64,6 +64,7 @@ notebook_create(title="Topic Name")
 ### Step 2: Research and import
 ```
 research_start(notebook_id=<id>, query="...", source="web", mode="fast")
+# ALWAYS use mode="fast" — deep mode is unreliable (hangs, returns 0 sources)
 → save task_id
 
 # POLLING LOOP — MUST sleep between calls!
@@ -109,6 +110,7 @@ download_artifact(notebook_id=<id>, artifact_type="audio", output_path="/path/to
 2. **Do NOT use `urls` array in `source_add`** — use singular `url`, one at a time
 3. **Do NOT stringify list parameters** — pass actual JSON arrays
 4. **Do NOT run preflight scripts** — they break on VPS
+5. **Do NOT use `mode="deep"` for research** — it hangs and returns 0 sources. Always use `mode="fast"`
 
 ## Execution Policy
 
