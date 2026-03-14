@@ -504,18 +504,18 @@ export default function DashboardTutorialsPage() {
           new Set(visibleNotifications.map((n) => asText(n.kind)).filter(Boolean)),
         );
         if (uniqueKinds.length === 0) return;
+        // Use purge (hard-delete from DB) rather than dismiss (soft-mark) so that
+        // notifications from active runs cannot re-surface after the user clears them.
         const results = await Promise.allSettled(
           uniqueKinds.map((kind) =>
             fetchWithTimeout(
-              `${API_BASE}/api/v1/dashboard/notifications/bulk`,
+              `${API_BASE}/api/v1/dashboard/notifications/purge`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  status: "dismissed",
                   kind,
-                  limit: 1000,
-                  note: "deleted in tutorials panel bulk action",
+                  clear_all: false,
                 }),
               },
             ),
