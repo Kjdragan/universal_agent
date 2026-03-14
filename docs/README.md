@@ -2,6 +2,14 @@
 
 Welcome to the official technical documentation for the **Universal Agent**. This documentation is designed for junior developers to quickly understand the project's architecture, core logic, and operational workflows.
 
+## ⚠️ MANDATORY: Documentation Rules
+
+This `README.md` and `Documentation_Status.md` serve as the **authoritative indexes** for all project documentation.
+
+- All documentation MUST be located within the `docs/` directory.
+- Before creating a new document, search these indexes to ensure the topic isn't already covered. Always prefer updating an existing document over creating a new one.
+- **Rule:** If you create a new documentation file, you MUST add a link to it in this `README.md` index and in `Documentation_Status.md`.
+
 ## Deployment Notice
 
 The canonical deployment contract is maintained in `docs/deployment/`, not in older VPS runbooks under `03_Operations/`.
