@@ -109,17 +109,13 @@ download_artifact(notebook_id=<id>, artifact_type="slide_deck", output_path="/pa
 download_artifact(notebook_id=<id>, artifact_type="audio", output_path="/path/to/audio.mp3")
 ```
 
-### Step 6: Return results — do NOT send emails
-```
-⚠️ Do NOT attempt email delivery. Return artifact paths and notebook URL
-   to the primary agent. Email delivery is the primary agent's responsibility
-   using AgentMail (Simone's identity) — NEVER Composio Gmail.
+### Step 6: Hand back to Simone (FINAL STEP)
 
-Return payload must include:
-- notebook_id, notebook_url
-- list of downloaded file paths with sizes
-- any warnings (e.g., report download not supported → exported to Google Docs)
-```
+Your job **ends after downloading artifacts**. Do NOT send emails, post to Slack,
+create calendar events, or take any delivery/notification actions.
+
+Your final output is a **structured handoff report** so Simone knows exactly
+what you produced and where to find it. See Output Contract below.
 
 ### Common Mistakes to AVOID
 1. **Do NOT pass `source_indices` to `research_import`** — omit it to import all
@@ -146,16 +142,44 @@ You MUST ask for explicit user confirmation before any destructive or visibility
 
 When asking, include exact target IDs/titles, reversibility, and the exact tool call.
 
-## Output Contract
+## Output Contract (Handoff Report)
 
-Return concise structured output for handoff to the primary agent:
+Your **final message** to Simone must be a concise structured report. This is
+how Simone learns what you created and where to find it. She will use this to
+decide next steps (e.g., email artifacts via AgentMail, post to Slack, etc.).
 
-- `status`: `success | blocked | failed | needs_confirmation`
-- `path_used`: `mcp | cli | hybrid`
-- `operation_summary`: short sentence
-- `artifacts`: list of files/ids/urls produced
-- `warnings`: list of non-fatal issues
-- `next_step_if_blocked`: operator action required
+**Required fields:**
+
+- `status`: `success | partial | blocked | failed`
+- `notebook_id`: the NLM notebook UUID
+- `notebook_url`: link to the notebook on notebooklm.google.com
+- `artifacts`: list of downloaded files with:
+  - `type` (report, audio, infographic, slide_deck, etc.)
+  - `path` (absolute path on disk)
+  - `format` (md, mp3, png, pdf, etc.)
+- `sources_imported`: count of sources imported
+- `warnings`: list of non-fatal issues (e.g., "report download returned empty, exported to Google Docs instead")
+- `operation_summary`: one-sentence summary of what was done
+
+**Example handoff:**
+```
+status: success
+notebook_id: abc123-def456
+notebook_url: https://notebooklm.google.com/notebook/abc123-def456
+sources_imported: 8
+artifacts:
+  - type: report, path: ~/nlm_artifacts/briefing.md, format: md
+  - type: infographic, path: ~/nlm_artifacts/infographic.png, format: png
+  - type: slide_deck, path: ~/nlm_artifacts/slides.pdf, format: pdf
+  - type: audio, path: ~/nlm_artifacts/audio.mp3, format: mp3
+warnings: []
+operation_summary: Created notebook with 8 web sources about Russia-Ukraine war (March 9-14, 2026), generated 4 artifacts.
+```
+
+> [!IMPORTANT]
+> **Scope boundary:** Your work ends at this report. Do NOT send emails, post
+> to Slack, create calendar entries, or take any delivery actions. Simone handles
+> all downstream delivery using her own tools (AgentMail, gws MCP, etc.).
 
 ## Failure Handling
 

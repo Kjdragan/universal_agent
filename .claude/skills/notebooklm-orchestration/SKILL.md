@@ -149,11 +149,14 @@ download_artifact(notebook_id=<id>, artifact_type="slide_deck", output_path="~/n
 download_artifact(notebook_id=<id>, artifact_type="audio", output_path="~/nlm_artifacts/audio.mp3")
 ```
 
-### Step 6: Return results — do NOT send emails
-The NLM sub-agent returns artifact paths and notebook URL to the primary agent.
-Email delivery is the **primary agent's responsibility** using AgentMail.
-Do NOT use Composio Gmail, gws MCP Gmail, or any other email tool from within
-the NLM sub-agent.
+### Step 6: Hand back to Simone (FINAL STEP)
+
+The sub-agent's work **ends after downloading**. Its final output is a structured
+handoff report listing every artifact (type, path, format), the notebook URL,
+source count, and any warnings. Simone then handles all downstream delivery
+(AgentMail, Slack, etc.) using her own tools.
+
+The sub-agent must NOT send emails, post to Slack, or take any delivery actions.
 
 ### Common Mistakes to AVOID
 1. **Do NOT pass `source_indices` to `research_import`** — omit it to import all.
