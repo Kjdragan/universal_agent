@@ -59,23 +59,6 @@ type TutorialBootstrapJob = {
   error?: string;
 };
 
-type ActiveTutorialRun = {
-  run_key: string;
-  session_id?: string;
-  video_id?: string;
-  run_path?: string;
-  title?: string;
-  stage?: string;
-  kind?: string;
-  status?: string;
-  severity?: string;
-  created_at?: string;
-  message?: string;
-  ingest_status?: string;
-  ingest_reason?: string;
-  ingest_failure_class?: string;
-};
-
 type PipelineNotification = {
   id: string;
   kind: string;
@@ -236,7 +219,6 @@ function markRunsSeen(runPaths: string[]) {
 
 export default function DashboardTutorialsPage() {
   const [runs, setRuns] = useState<TutorialRun[]>([]);
-  const [activeRuns, setActiveRuns] = useState<ActiveTutorialRun[]>([]);
   const [jobs, setJobs] = useState<TutorialReviewJob[]>([]);
   const [bootstrapJobs, setBootstrapJobs] = useState<TutorialBootstrapJob[]>([]);
   const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
@@ -264,20 +246,17 @@ export default function DashboardTutorialsPage() {
     setLoading(true);
     setError("");
     try {
-      const [runsRes, activeRes, jobsRes, bootstrapRes, notifRes] = await Promise.all([
+      const [runsRes, jobsRes, bootstrapRes, notifRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
-        fetch(`${API_BASE}/api/v1/dashboard/tutorials/active-runs?limit=40`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/review-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
       ]);
       const runsPayload = runsRes.ok ? await runsRes.json() : { runs: [] };
-      const activePayload = activeRes.ok ? await activeRes.json() : { runs: [] };
       const jobsPayload = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
       const bootstrapPayload = bootstrapRes.ok ? await bootstrapRes.json() : { jobs: [] };
       const notifPayload = notifRes.ok ? await notifRes.json() : { notifications: [] };
       setRuns(Array.isArray(runsPayload.runs) ? (runsPayload.runs as TutorialRun[]) : []);
-      setActiveRuns(Array.isArray(activePayload.runs) ? (activePayload.runs as ActiveTutorialRun[]) : []);
       setJobs(Array.isArray(jobsPayload.jobs) ? (jobsPayload.jobs as TutorialReviewJob[]) : []);
       setBootstrapJobs(
         Array.isArray(bootstrapPayload.jobs)
@@ -292,7 +271,6 @@ export default function DashboardTutorialsPage() {
     } catch (err: any) {
       setError(err?.message || "Failed to load tutorial backlog");
       setRuns([]);
-      setActiveRuns([]);
       setJobs([]);
       setBootstrapJobs([]);
       setNotifications([]);
@@ -340,12 +318,11 @@ export default function DashboardTutorialsPage() {
       const status = asText(job.status).toLowerCase();
       return status === "queued" || status === "running";
     });
-    const refreshMs = hasActiveBootstrapJobs || activeRuns.length > 0 ? 5_000 : 30_000;
+    const refreshMs = hasActiveBootstrapJobs ? 5_000 : 30_000;
     const interval = setInterval(async () => {
       try {
-        const [runsRes, activeRes, notifRes, bootstrapRes] = await Promise.all([
+        const [runsRes, notifRes, bootstrapRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
-          fetch(`${API_BASE}/api/v1/dashboard/tutorials/active-runs?limit=40`),
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
         ]);
@@ -353,12 +330,6 @@ export default function DashboardTutorialsPage() {
           const data = await runsRes.json();
           if (Array.isArray(data.runs)) {
             setRuns(data.runs as TutorialRun[]);
-          }
-        }
-        if (activeRes.ok) {
-          const data = await activeRes.json();
-          if (Array.isArray(data.runs)) {
-            setActiveRuns(data.runs as ActiveTutorialRun[]);
           }
         }
         if (notifRes.ok) {
@@ -377,7 +348,7 @@ export default function DashboardTutorialsPage() {
       void fetchWatcherStatus();
     }, refreshMs);
     return () => clearInterval(interval);
-  }, [activeRuns.length, bootstrapJobs, fetchWatcherStatus]);
+  }, [bootstrapJobs, fetchWatcherStatus]);
 
   // Mark currently visible runs as seen after initial load
   useEffect(() => {
@@ -411,16 +382,7 @@ export default function DashboardTutorialsPage() {
     return map;
   }, [bootstrapJobs]);
 
-  const activeRunStageLabel = useCallback((run: ActiveTutorialRun): string => {
-    const stage = asText(run.stage).toLowerCase();
-    if (stage === "degraded") return "Degraded";
-    if (stage === "recovery_queued") return "Recovery Queued";
-    if (stage === "interrupted") return "Interrupted";
-    if (stage === "in_progress") return "In Progress";
-    if (stage === "processing") return "Processing";
-    if (stage === "queued") return "Queued";
-    return stage || "Active";
-  }, []);
+
 
   // Keep only the latest notification per tutorial entity (video/run),
   // so "started" notices are replaced by newer "ready/failed" updates.
@@ -731,73 +693,15 @@ export default function DashboardTutorialsPage() {
         </section>
       )}
 
-      {activeRuns.length > 0 && (
-        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Active Tutorial Runs ({activeRuns.length})
-            </h2>
-          </div>
-          <div className="space-y-2">
-            {activeRuns.map((run) => {
-              const stage = asText(run.stage).toLowerCase();
-              const badgeClass =
-                stage === "degraded" || stage === "interrupted"
-                  ? "border-amber-700/60 bg-amber-900/25 text-amber-200"
-                  : stage === "queued"
-                    ? "border-sky-700/60 bg-sky-900/25 text-sky-200"
-                    : "border-violet-700/60 bg-violet-900/25 text-violet-200";
-              const sessionHref = chatSessionHref(asText(run.session_id));
-              return (
-                <article
-                  key={asText(run.run_key) || `${asText(run.video_id)}-${asText(run.created_at)}`}
-                  className="rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-100">
-                        {asText(run.title) || asText(run.video_id) || asText(run.run_key)}
-                      </p>
-                      <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                        <span className={`rounded border px-1.5 py-0.5 ${badgeClass}`}>
-                          {activeRunStageLabel(run)}
-                        </span>
-                        {asText(run.video_id) && <span>video={asText(run.video_id)}</span>}
-                        {asText(run.created_at) && <span>{timeAgo(asText(run.created_at))}</span>}
-                      </p>
-                      {asText(run.message) && (
-                        <p className="mt-1 text-xs text-slate-300">{asText(run.message)}</p>
-                      )}
-                      {asText(run.ingest_reason) && (
-                        <p className="mt-1 text-[11px] text-amber-200">
-                          Ingest: {asText(run.ingest_reason)}
-                        </p>
-                      )}
-                    </div>
-                    {sessionHref && (
-                      <a
-                        href={sessionHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded border border-violet-700/60 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-100 hover:bg-violet-900/35"
-                      >
-                        Watch
-                      </a>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
       {/* ── Pipeline Notifications ── */}
       {visibleNotifications.length > 0 && (
         <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
           <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Pipeline Activity ({visibleNotifications.length})
+            <h2
+              className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400"
+              title="Shows the latest event per video — earlier events (Started, Processing) are collapsed when a final state (Ready, Failed) arrives"
+            >
+              Pipeline Notifications ({visibleNotifications.length})
             </h2>
             <div className="flex items-center gap-2">
               <button
