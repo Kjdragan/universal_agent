@@ -48,6 +48,69 @@ function gatewayOpsToken(): string {
   );
 }
 
+/**
+ * Check if dev-mode stub data should be used when upstream is unavailable.
+ * Controlled by UA_DEV_MODE_STUBS env var (default: true in development).
+ */
+function isDevModeStubsEnabled(): boolean {
+  const raw = (process.env.UA_DEV_MODE_STUBS || "").trim().toLowerCase();
+  // Explicit opt-out
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  // Explicit opt-in
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  // Default: enabled in development, disabled in production
+  return process.env.NODE_ENV !== "production";
+}
+
+/**
+ * Get stub data for a given API path when upstream is unavailable.
+ * Used for development and testing when the backend gateway is not running.
+ */
+function getStubDataForPath(pathname: string): unknown | null {
+  // CSI recent signals stub
+  if (pathname === "/api/v1/csi/recent") {
+    return {
+      status: "ok",
+      signals: [
+        {
+          id: "csi-001",
+          title: "n8n automation demand surging on Freelancer.com",
+          source: "opportunity_bundle",
+          relevance_score: 92,
+          mission_alignment: "freelance_monetization",
+          created_at: new Date(Date.now() - 3600000).toISOString(),
+        },
+        {
+          id: "csi-002",
+          title: "AI agent development trending on X",
+          source: "x_trends",
+          relevance_score: 85,
+          mission_alignment: "universal_agent",
+          created_at: new Date(Date.now() - 7200000).toISOString(),
+        },
+        {
+          id: "csi-003",
+          title: "RAG implementation jobs increasing on Upwork",
+          source: "csi_report",
+          relevance_score: 78,
+          mission_alignment: "freelance_monetization",
+          created_at: new Date(Date.now() - 14400000).toISOString(),
+        },
+        {
+          id: "csi-004",
+          title: "r/MachineLearning discussing agent orchestration",
+          source: "reddit",
+          relevance_score: 65,
+          mission_alignment: "universal_agent",
+          created_at: new Date(Date.now() - 28800000).toISOString(),
+        },
+      ],
+      total: 4,
+    };
+  }
+  return null;
+}
+
 function buildUpstreamHeaders(request: NextRequest, ownerId: string): Headers {
   const headers = new Headers();
   request.headers.forEach((value, key) => {
@@ -165,7 +228,14 @@ async function proxyRequest(request: NextRequest, path: string[]) {
     }
   }
 
+  // Dev-mode fallback: return stub data if upstream is unavailable (when enabled)
   if (!upstreamResponse || !upstreamUrl) {
+    if (isDevModeStubsEnabled()) {
+      const stubData = getStubDataForPath(upstreamPathname);
+      if (stubData) {
+        return NextResponse.json(stubData);
+      }
+    }
     return NextResponse.json(
       {
         detail: "Gateway upstream unavailable.",
@@ -178,6 +248,13 @@ async function proxyRequest(request: NextRequest, path: string[]) {
 
   const upstreamContentType = (upstreamResponse.headers.get("content-type") || "").toLowerCase();
   if (upstreamResponse.status >= 500 && upstreamContentType.includes("text/html")) {
+    // Dev-mode fallback: return stub data if upstream returns 500+ HTML error (when enabled)
+    if (isDevModeStubsEnabled()) {
+      const stubData = getStubDataForPath(upstreamPathname);
+      if (stubData) {
+        return NextResponse.json(stubData);
+      }
+    }
     const htmlSnippet = (await upstreamResponse.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 180);
     return NextResponse.json(
       {

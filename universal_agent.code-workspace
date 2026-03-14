@@ -14,7 +14,7 @@
 	],
 	"settings": {
 		"makefile.configureOnOpen": false,
-		"chatgpt.openOnStartup": true,
+		"chatgpt.openOnStartup": false,
 		"liveServer.settings.multiRootWorkspaceName": "universal_agent"
 	}
 }
