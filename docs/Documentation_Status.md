@@ -2,6 +2,14 @@
 
 **Last updated:** 2026-03-12
 
+## ⚠️ MANDATORY: Documentation Rules
+
+This file and `docs/README.md` serve as the **authoritative indexes** for all project documentation.
+
+- All documentation MUST be located strictly within the `docs/` directory.
+- Always check this index to update existing documents before creating new ones.
+- **Rule:** If you create a new documentation file, you MUST log it and link it in this file and in `docs/README.md`.
+
 ## Architecture (01_Architecture/)
 
 Written from source code review — these describe the system as it actually exists.

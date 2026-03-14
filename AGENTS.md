@@ -28,6 +28,17 @@ Do not treat any older manual VPS deployment flow as canonical.
 - Tailscale CI access is GitHub Actions -> `TAILSCALE_AUTHKEY` -> tag identity `tag:ci-gha`.
 - Production is branch-driven and automated; do not recommend ad hoc `ssh`, `rsync`, or `git pull` as the default deployment method.
 
+## Documentation
+
+All documentation for this project MUST reside exclusively within the `docs/` directory. Creating any other documentation directories (such as `OFFICIAL_PROJECT_DOCUMENTATION/`) is strictly prohibited.
+
+When asked to update or create documentation:
+
+1. **Always Check the Indexes First**: You must consult `docs/README.md` and `docs/Documentation_Status.md` before proceeding.
+2. **Update Over Create**: If a document already exists for your topic, update the existing file rather than creating a new one.
+3. **Log New Documents**: If you must create a new file, you are required to add a link and description of that new file to both `docs/README.md` and `docs/Documentation_Status.md`.
+4. **No Unindexed Files**: No document should exist in `docs/` without being linked from one of the two index files.
+
 ## If You Change Deployment Behavior
 
 When editing `.github/workflows/deploy-staging.yml` or `.github/workflows/deploy-prod.yml`, update the canonical docs in `docs/deployment/` in the same change.
