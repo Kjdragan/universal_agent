@@ -28,15 +28,34 @@ Use hybrid execution:
 2. CLI fallback (`nlm`) when MCP is unavailable, needs recovery, or user explicitly requests CLI.
 3. Auth/profile setup and recovery may use CLI even when MCP is available.
 
-## Infisical and Auth Rules
+## Auth Recovery (MCP-First)
 
-1. Secrets come only from runtime environment populated by UA Infisical bootstrap.
-2. Use the dedicated profile policy:
-   - `UA_NOTEBOOKLM_PROFILE` -> `NOTEBOOKLM_PROFILE` -> `vps`
-3. Run auth preflight before NotebookLM calls.
-   - Preferred: `uv run python scripts/notebooklm_auth_preflight.py --workspace "$CURRENT_SESSION_WORKSPACE"`
-4. If auth fails and seeding is enabled, use `NOTEBOOKLM_AUTH_COOKIE_HEADER` and seed through manual login file flow.
-5. After successful CLI seed/check, call MCP `refresh_auth` before MCP operations when MCP path is active.
+Follow this exact sequence before any NotebookLM MCP operation:
+
+1. **Try `refresh_auth` first** (fast path):
+   ```
+   mcp__notebooklm-mcp__refresh_auth()
+   ```
+   If status is "ok" or "success", proceed to operations.
+
+2. **If refresh fails**, inject cookies from environment:
+   ```bash
+   # Read the cookie header from Infisical-injected env
+   echo "$NOTEBOOKLM_AUTH_COOKIE_HEADER" | head -c 100
+   ```
+   If the env var is set, call the MCP tool:
+   ```
+   mcp__notebooklm-mcp__save_auth_tokens(cookies=<value of NOTEBOOKLM_AUTH_COOKIE_HEADER>)
+   ```
+   Then retry `refresh_auth`.
+
+3. **CLI fallback** (only if MCP tools are completely unavailable):
+   ```bash
+   nlm login --manual --file <(echo "$NOTEBOOKLM_AUTH_COOKIE_HEADER") --profile "${UA_NOTEBOOKLM_PROFILE:-vps}"
+   ```
+
+4. **NEVER run** `uv run python scripts/notebooklm_auth_preflight.py` — this rebuilds the venv and fails on headless VPS.
+5. **NEVER run** `nlm login` without `--manual` — there is no browser on the VPS.
 6. Never print cookie/header secrets, and never persist them in repo files.
 
 ## Confirm-Before-Action Guardrails
