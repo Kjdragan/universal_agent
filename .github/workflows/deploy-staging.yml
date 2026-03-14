@@ -8,7 +8,7 @@ on:
 jobs:
   deploy-staging:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Connect to Tailscale Network
         uses: tailscale/github-action@v4
@@ -60,7 +60,7 @@ jobs:
 
           rm -f /tmp/ssh_preflight.out /tmp/ssh_preflight.err
 
-          timeout 25m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" "
+          timeout 30m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" "
             set -euo pipefail
             STAGING_DIR='/opt/universal-agent-staging'
             echo '--> Pulling latest code...'
