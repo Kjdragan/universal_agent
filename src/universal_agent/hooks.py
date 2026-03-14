@@ -1744,8 +1744,10 @@ class AgentHookSet:
             if self._notebooklm_intent_this_turn:
                 nlm_hint = (
                     "\n5. **NotebookLM Routing**: This request involves NotebookLM operations. "
-                    "You MUST delegate to the `notebooklm-operator` sub-agent using "
+                    "You MUST delegate ALL NotebookLM work to the `notebooklm-operator` sub-agent using "
                     "`Task(subagent_type='notebooklm-operator', description='...', prompt='...')`. "
+                    "NotebookLM has its OWN built-in web research via `research_start` — do NOT do separate web research. "
+                    "Pass the full pipeline (create notebook, research, generate artifacts, download) to the sub-agent in a single delegation. "
                     "Do NOT call `mcp__notebooklm-mcp__*` tools directly — they are only available to the sub-agent."
                 )
             return {
@@ -1757,7 +1759,8 @@ class AgentHookSet:
                         "1. **Analyze**: Break this request into atomic, logical steps.\n"
                         "2. **Happy Path Backbone**: Consider the deterministic path (e.g., using `mcp__composio__get_actions` or deterministic tools if you need discovery).\n"
                         "3. **Capability Match**: Evaluate your Capability Routing Doctrine. Route specific tasks (like specific forms of research) to the appropriate specialized agents.\n"
-                        "4. **Execution**: Proceed methodically, orchestrating subagents and validating each atomic step."
+                        "4. **Execution**: Proceed methodically, orchestrating subagents and validating each atomic step.\n"
+                        "5. **TaskStop**: NEVER call TaskStop with fabricated IDs like 'task_1'. Only use TaskStop with real task IDs received from TaskStarted/TaskProgress events. If you have no real task ID, do NOT call TaskStop at all."
                         + nlm_hint
                     ),
                 }
