@@ -2051,6 +2051,14 @@ _activity_digest_max_sample_ids = max(
 _activity_store_lock = threading.Lock()
 _csi_dispatch_recent: dict[str, float] = {}
 _csi_dispatch_lock = threading.Lock()
+# Tracks consecutive auto-remediation failure windows per source-event key.
+# Resets on a succeeded event; escalates to human after _CSI_AUTO_REMEDIATION_HUMAN_THRESHOLD.
+_csi_auto_remediation_failure_streak: dict[str, int] = {}
+_csi_auto_remediation_streak_lock = threading.Lock()
+_CSI_AUTO_REMEDIATION_HUMAN_THRESHOLD = max(
+    1,
+    int(os.getenv("UA_CSI_AUTO_REMEDIATION_HUMAN_ESCALATION_THRESHOLD", "3") or 3),
+)
 _csi_specialist_loop_lock = threading.Lock()
 _csi_specialist_followup_budget = max(
     1,
@@ -3684,6 +3692,29 @@ def _csi_record_dispatch(source: str, event_type: str) -> None:
                 _csi_dispatch_recent.pop(stale_key, None)
 
 
+def _csi_auto_remediation_streak_increment(event_type: str) -> int:
+    """Increment the failure streak counter; return the new streak count."""
+    key = str(event_type or "").strip().lower()
+    with _csi_auto_remediation_streak_lock:
+        streak = _csi_auto_remediation_failure_streak.get(key, 0) + 1
+        _csi_auto_remediation_failure_streak[key] = streak
+        return streak
+
+
+def _csi_auto_remediation_streak_reset(event_type: str) -> None:
+    """Reset the failure streak on a successful remediation event."""
+    key = str(event_type or "").strip().lower()
+    with _csi_auto_remediation_streak_lock:
+        _csi_auto_remediation_failure_streak.pop(key, None)
+
+
+def _csi_auto_remediation_current_streak(event_type: str) -> int:
+    """Return the current streak count without modifying it."""
+    key = str(event_type or "").strip().lower()
+    with _csi_auto_remediation_streak_lock:
+        return _csi_auto_remediation_failure_streak.get(key, 0)
+
+
 def _csi_should_digest_event(event_type: str) -> bool:
     lowered = str(event_type or "").strip().lower()
     return lowered in {
@@ -4068,12 +4099,22 @@ def _csi_task_routing_decision(
         "force_escalation",
     )
     if normalized_event_type == "csi_global_brief_review_due":
+        # Brief review tasks are informational — the agent reads the artifact and acknowledges.
+        # No human approval gate needed; the artifact path is in subject_json.
+        artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else {}
+        md_path = str(artifact_paths.get("markdown") or "").strip()
+        brief_reason = (
+            f"Read and acknowledge CSI global trend brief artifact: {md_path}"
+            if md_path
+            else "Read and acknowledge latest CSI global trend brief."
+        )
         return {
-            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
-            "routing_reason": "scheduled_brief_review_due",
+            "routing_state": task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
+            "routing_reason": "brief_review_agent_acknowledgment",
             "confidence_target": confidence_target,
             "follow_up_budget_remaining": follow_up_budget_remaining,
-            "human_intervention_reason": "Review latest CSI global trend brief.",
+            "human_intervention_reason": None,
+            "agent_instruction": brief_reason,
         }
     if manual_required:
         return {
@@ -4083,13 +4124,45 @@ def _csi_task_routing_decision(
             "follow_up_budget_remaining": follow_up_budget_remaining,
             "human_intervention_reason": "CSI explicitly requested human intervention.",
         }
-    if normalized_event_type in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}:
+    if normalized_event_type == "delivery_health_auto_remediation_failed":
+        # Increment streak; only escalate to human after threshold consecutive failures.
+        streak = _csi_auto_remediation_streak_increment(normalized_event_type)
+        human_threshold = _CSI_AUTO_REMEDIATION_HUMAN_THRESHOLD
+        if streak >= human_threshold:
+            return {
+                "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
+                "routing_reason": f"delivery_auto_remediation_persistent_failure_streak_{streak}",
+                "confidence_target": confidence_target,
+                "follow_up_budget_remaining": follow_up_budget_remaining,
+                "human_intervention_reason": (
+                    f"CSI auto-remediation has failed {streak} consecutive times "
+                    "(exceeding {human_threshold}-window threshold). Manual diagnosis required."
+                ),
+            }
+        # Below threshold — agent evaluates and optionally triggers runbook commands.
         return {
-            "routing_state": task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED,
-            "routing_reason": "delivery_exception_hard_failure",
+            "routing_state": task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
+            "routing_reason": f"delivery_auto_remediation_failure_streak_{streak}_agent_retry",
             "confidence_target": confidence_target,
             "follow_up_budget_remaining": follow_up_budget_remaining,
-            "human_intervention_reason": "CSI surfaced an operational incident that requires human intervention.",
+            "human_intervention_reason": None,
+        }
+    if normalized_event_type == "delivery_reliability_slo_breached":
+        # SLO breach: surface runbook commands to the agent for autonomous execution.
+        # The replay_dlq and canary scripts are deterministic and safe to run.
+        top_root_causes = subject_obj.get("top_root_causes") if isinstance(subject_obj.get("top_root_causes"), list) else []
+        runbook_commands = [
+            str(rc.get("runbook_command") or "").strip()
+            for rc in top_root_causes
+            if isinstance(rc, dict) and str(rc.get("runbook_command") or "").strip()
+        ]
+        return {
+            "routing_state": task_hub.CSI_ROUTING_AGENT_ACTIONABLE,
+            "routing_reason": "delivery_slo_breach_agent_runbook",
+            "confidence_target": confidence_target,
+            "follow_up_budget_remaining": follow_up_budget_remaining,
+            "human_intervention_reason": None,
+            "runbook_commands": runbook_commands,
         }
     if loop_status == "budget_exhausted":
         return {
@@ -10583,6 +10656,8 @@ async def signals_ingest_endpoint(request: Request):
             elif event_type_norm == "delivery_health_auto_remediation_succeeded":
                 notification_kind = "csi_delivery_health_auto_remediation_succeeded"
                 title = "CSI Auto-Remediation Succeeded"
+                # Reset the failure streak now that remediation succeeded.
+                _csi_auto_remediation_streak_reset("delivery_health_auto_remediation_failed")
             message = analytics_action.get("message", "No content")
 
             # Packet 14: normalize traceability fields on every CSI notification

@@ -167,6 +167,9 @@ class YouTubePlaylistWatcher:
         # lifetime so that concurrent _loop + poll_now calls never double-notify
         # for the same video (e.g. on service restart race or manual poll overlap).
         self._dispatched_this_session: set[str] = set()
+        # Mutex that serialises the check-and-register section so _loop and
+        # poll_now cannot both see the same video as "unseen" simultaneously.
+        self._dispatch_lock: asyncio.Lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -274,38 +277,14 @@ class YouTubePlaylistWatcher:
                 self._last_poll_ok = True
                 self._last_error = ""
                 for item in reversed(new_items):
-                    vid = item["video_id"]
-                    seen.add(vid)
-                    # Persist before side effects so restarts do not re-announce the same video.
-                    seen = self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
-                    # Session-level dedup: skip notification+dispatch if already handled
-                    # this lifetime (e.g. concurrent poll_now call beat us to it).
-                    if vid in self._dispatched_this_session:
+                    dispatched = await self._process_new_video(
+                        item, seen, current_ids, playlist_id
+                    )
+                    if not dispatched:
                         logger.info(
                             "📺 Skipping duplicate dispatch video_id=%s (already dispatched this session)",
-                            vid,
+                            item["video_id"],
                         )
-                        continue
-                    self._dispatched_this_session.add(vid)
-                    self._dispatched_total += 1
-                    logger.info(
-                        "📺 New playlist video detected video_id=%s title=%r",
-                        vid,
-                        item.get("title", ""),
-                    )
-                    self._emit_notification(
-                        kind="youtube_playlist_new_video",
-                        title="New Tutorial Video Detected",
-                        message=f"{item.get('title') or vid} — queued for processing",
-                        severity="info",
-                        metadata={
-                            "video_id": vid,
-                            "video_url": item.get("url", f"https://www.youtube.com/watch?v={vid}"),
-                            "title": item.get("title", ""),
-                            "playlist_id": playlist_id,
-                        },
-                    )
-                    await self._dispatch(item)
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -529,6 +508,52 @@ class YouTubePlaylistWatcher:
         except Exception:
             logger.exception("📺 Failed emitting watcher notification kind=%s", kind)
 
+    async def _process_new_video(
+        self,
+        item: dict[str, Any],
+        seen: set[str],
+        current_ids: list[str],
+        playlist_id: str,
+    ) -> bool:
+        """Check-and-register a video then dispatch it. Returns True if dispatched.
+
+        The critical section (seen update + _dispatched_this_session check/add) is
+        protected by _dispatch_lock so that concurrent calls from _loop and poll_now
+        never both register the same video as unseen at the same time, which was the
+        root cause of duplicate 'New Tutorial Video Detected' Telegram notifications.
+        The actual dispatch coroutine (slow network/agent call) runs outside the lock.
+        """
+        vid = item["video_id"]
+        async with self._dispatch_lock:
+            # Persist to disk first so a restart after this point does not re-dispatch.
+            seen.add(vid)
+            self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+            if vid in self._dispatched_this_session:
+                return False  # already handled by a concurrent path
+            self._dispatched_this_session.add(vid)
+            self._dispatched_total += 1
+
+        # Emit notification and dispatch outside the lock (slow operations).
+        logger.info(
+            "📺 New playlist video detected video_id=%s title=%r",
+            vid,
+            item.get("title", ""),
+        )
+        self._emit_notification(
+            kind="youtube_playlist_new_video",
+            title="New Tutorial Video Detected",
+            message=f"{item.get('title') or vid} — queued for processing",
+            severity="info",
+            metadata={
+                "video_id": vid,
+                "video_url": item.get("url", f"https://www.youtube.com/watch?v={vid}"),
+                "title": item.get("title", ""),
+                "playlist_id": playlist_id,
+            },
+        )
+        await self._dispatch(item)
+        return True
+
 
     async def poll_now(self) -> dict[str, Any]:
         """Manually trigger one poll cycle. Returns result summary."""
@@ -550,32 +575,14 @@ class YouTubePlaylistWatcher:
         dispatched = []
         for item in reversed(new_items):
             vid = item["video_id"]
-            seen.add(vid)
-            # Persist before side effects so manual poll + restart cannot duplicate notifications.
-            seen = self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
-            # Session-level dedup: skip if background _loop already handled this video.
-            if vid in self._dispatched_this_session:
+            ok = await self._process_new_video(item, seen, current_ids, playlist_id)
+            if ok:
+                dispatched.append(vid)
+            else:
                 logger.info(
                     "📺 poll_now: skipping duplicate dispatch video_id=%s (already dispatched this session)",
                     vid,
                 )
-                continue
-            self._dispatched_this_session.add(vid)
-            self._dispatched_total += 1
-            self._emit_notification(
-                kind="youtube_playlist_new_video",
-                title="New Tutorial Video Detected",
-                message=f"{item.get('title') or vid} — queued for processing",
-                severity="info",
-                metadata={
-                    "video_id": vid,
-                    "video_url": item.get("url", f"https://www.youtube.com/watch?v={vid}"),
-                    "title": item.get("title", ""),
-                    "playlist_id": playlist_id,
-                },
-            )
-            await self._dispatch(item)
-            dispatched.append(vid)
         return {
             "ok": True,
             "total_in_playlist": len(items),
