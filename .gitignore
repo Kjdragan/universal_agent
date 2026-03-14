@@ -58,6 +58,7 @@ src/universal_agent/Memory_System_Data/
 # === Project Workspaces & Artifacts ===
 AGENT_RUN_WORKSPACES/
 AGENT_RUN_WORKSPACES_ARCHIVE/
+tasks/
 Memory_System/ua_shared_workspace/memory/sessions/
 # Shared workspace runtime memory state (operational; host-local, not source).
 Memory_System/ua_shared_workspace/MEMORY.md
