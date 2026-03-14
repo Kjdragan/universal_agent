@@ -376,6 +376,19 @@ def _maybe_trip_tool_loop_circuit_breaker(
     max_consecutive_same_sig = _get_env_int("UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_SAME_SIGNATURE", 8)
     max_generate_image_copy_only = _get_env_int("UA_CIRCUIT_BREAKER_MAX_GENERATE_IMAGE_COPY_ONLY_CALLS", 4)
 
+    # Polling / status-check tools are EXPECTED to be called repeatedly with
+    # identical params while waiting for an async backend operation to finish.
+    # Give them a much higher threshold so they don't trip the circuit breaker
+    # during legitimate long-running operations (deep research ~5 min, audio gen ~3 min).
+    _POLLING_TOOLS = {
+        "mcp__notebooklm-mcp__research_status",
+        "mcp__notebooklm-mcp__studio_status",
+    }
+    if tool_name in _POLLING_TOOLS:
+        max_consecutive_same_sig = _get_env_int(
+            "UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_POLLING", 30
+        )
+
     state = trace.setdefault(
         "_tool_loop_circuit",
         {

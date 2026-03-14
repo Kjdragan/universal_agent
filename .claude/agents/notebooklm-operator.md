@@ -66,8 +66,12 @@ notebook_create(title="Topic Name")
 research_start(notebook_id=<id>, query="...", source="web", mode="fast")
 → save task_id
 
-research_status(notebook_id=<id>, task_id=<id>, poll_interval=15, max_wait=180)
-→ wait until status="completed"
+# POLLING LOOP — MUST sleep between calls!
+# The MCP transport does NOT block despite max_wait param.
+# You MUST call Bash("sleep 15") between each poll.
+research_status(notebook_id=<id>, task_id=<id>, max_wait=0)
+→ if status != "completed": Bash("sleep 15") then call research_status again
+→ repeat until status="completed" (deep research takes ~5 min)
 
 research_import(notebook_id=<id>, task_id=<id>)
 → Do NOT pass source_indices — omitting imports ALL sources
@@ -83,9 +87,13 @@ studio_create(notebook_id=<id>, artifact_type="audio", audio_format="deep_dive",
 
 ### Step 4: Poll completion
 ```
+# POLLING LOOP — MUST sleep between calls!
 studio_status(notebook_id=<id>)
-→ repeat every 30s until all artifacts show status="completed"
-→ Audio takes 3-5 minutes
+→ if any artifacts show status="in_progress":
+    Bash("sleep 15")
+    call studio_status again
+→ repeat until ALL artifacts show status="completed"
+→ Audio takes 3-5 minutes; infographics/reports ~1-2 min
 ```
 
 ### Step 5: Download artifacts
