@@ -130,3 +130,53 @@ async def test_poll_now_persists_seen_ids_before_dispatch_side_effects(monkeypat
 
     saved = json.loads(_state_path().read_text(encoding="utf-8"))
     assert saved["seen_ids"] == ["vid123"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_poll_now_calls_dispatch_exactly_once(monkeypatch, tmp_path):
+    """Regression test: two concurrent poll_now calls on the same new video must
+    emit exactly one 'New Tutorial Video Detected' notification and dispatch exactly once.
+
+    This simulates the race that previously caused duplicate Telegram messages when
+    the background _loop and a manual poll_now overlapped on the same new video.
+    """
+    import asyncio
+
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    new_item = {
+        "video_id": "raceVid1",
+        "url": "https://www.youtube.com/watch?v=raceVid1",
+        "title": "Race Condition Test Video",
+        "channel_id": "chan1",
+        "occurred_at": "2026-03-13T22:00:00Z",
+        "playlist_id": "PLdemo",
+    }
+
+    notifications: list[dict] = []
+    dispatch_mock = AsyncMock(return_value=(True, "agent"))
+
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=dispatch_mock,
+        notification_sink=notifications.append,
+    )
+    # Both concurrent calls see the same unseen video
+    watcher._fetch_playlist_items = AsyncMock(return_value=[new_item])
+
+    # Fire two poll_now calls concurrently — this is the race scenario
+    results = await asyncio.gather(watcher.poll_now(), watcher.poll_now())
+
+    # Exactly one should have dispatched, the other should have returned 0
+    total_dispatched = sum(r["new_dispatched"] for r in results)
+    assert total_dispatched == 1, f"Expected 1 dispatch, got {total_dispatched}: {results}"
+
+    # dispatch_fn must be called exactly once
+    assert dispatch_mock.await_count == 1
+
+    # Exactly one 'New Tutorial Video Detected' notification
+    detected_notifs = [n for n in notifications if n["kind"] == "youtube_playlist_new_video"]
+    assert len(detected_notifs) == 1, (
+        f"Expected 1 'New Tutorial Video Detected' notification, got {len(detected_notifs)}"
+    )
