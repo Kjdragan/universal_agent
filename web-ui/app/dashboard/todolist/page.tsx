@@ -318,6 +318,9 @@ export default function ToDoListDashboardPage() {
   const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
   const [taskHistoryLoadingId, setTaskHistoryLoadingId] = useState("");
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
+  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+  const [deleteAllPending, setDeleteAllPending] = useState(false);
+  const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
 
   const approvalsRef = useRef<HTMLDivElement | null>(null);
 
@@ -485,6 +488,35 @@ export default function ToDoListDashboardPage() {
     }
   }, [load]);
 
+  const handleDeleteCompletedTask = useCallback(async (taskId: string) => {
+    setDeletedTaskIds((prev) => new Set([...prev, taskId]));
+    try {
+      await fetch(
+        `${API_BASE}/api/v1/dashboard/todolist/completed/${encodeURIComponent(taskId)}`,
+        { method: "DELETE" },
+      );
+    } catch {
+      // optimistic — already removed from local state
+    }
+  }, []);
+
+  const handleDeleteAllCompleted = useCallback(async () => {
+    setDeleteAllPending(true);
+    const ids = (completedTasks?.items || []).map((i) => i.task_id);
+    setDeletedTaskIds(new Set(ids));
+    try {
+      await Promise.allSettled(
+        ids.map((id) =>
+          fetch(`${API_BASE}/api/v1/dashboard/todolist/completed/${encodeURIComponent(id)}`, { method: "DELETE" }),
+        ),
+      );
+    } catch {
+      // noop
+    } finally {
+      setDeleteAllPending(false);
+    }
+  }, [completedTasks]);
+
   const filteredAgentItems = useMemo(() => {
     const rows = Array.isArray(agentQueue?.items) ? agentQueue!.items : [];
     if (!showNonCsiOnly) return rows;
@@ -493,12 +525,21 @@ export default function ToDoListDashboardPage() {
 
   const dispatchThreshold = Number(overview?.queue_health?.threshold || 0);
 
+  // Build a Set of task_ids that have pending approvals for highlight
+  const approvalTaskIdSet = useMemo(() => {
+    const s = new Set<string>();
+    (approvalsHighlight?.approvals || []).forEach((a) => {
+      if (a.approval_id) s.add(a.approval_id);
+    });
+    return s;
+  }, [approvalsHighlight]);
+
   const renderAgentPanel = (compact = false) => (
     <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">
-            Agent Queue ({filteredAgentItems.length}/{agentQueue?.pagination?.total || filteredAgentItems.length})
+            Task Priority List ({filteredAgentItems.length}/{agentQueue?.pagination?.total || filteredAgentItems.length})
           </h2>
           <p className="text-xs text-slate-400">Prioritized internal dispatch queue with CSI incident collapse.</p>
         </div>
@@ -539,109 +580,121 @@ export default function ToDoListDashboardPage() {
         {filteredAgentItems.length === 0 ? (
           <p className="text-sm text-slate-500 italic">No agent queue items available.</p>
         ) : (
-          filteredAgentItems.map((item) => (
-            <article key={item.task_id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <h3 className="font-semibold text-slate-200">{item.title}</h3>
-                    {item.must_complete ? (
-                      <span className="rounded border border-rose-700/60 bg-rose-900/25 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-200">Must Complete</span>
-                    ) : null}
-                    {String(item.source_kind || "") === "csi" ? (
-                      <span className="rounded border border-emerald-800/60 bg-emerald-900/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">CSI</span>
+          filteredAgentItems.map((item, idx) => {
+            const isCsiEscalation = String(item.source_kind || "") === "csi";
+            const isHighPriority = isCsiEscalation || item.must_complete;
+            return (
+              <article
+                key={item.task_id}
+                className={`rounded-lg border bg-slate-950/60 p-3 ${
+                  isHighPriority
+                    ? "border-l-4 border-amber-500/60 border-t-slate-800/80 border-r-slate-800/80 border-b-slate-800/80"
+                    : "border-slate-800/80"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] font-bold text-slate-500 tabular-nums">#{idx + 1}</span>
+                      <h3 className="font-semibold text-slate-200">{item.title}</h3>
+                      {item.must_complete ? (
+                        <span className="rounded border border-rose-700/60 bg-rose-900/25 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-200">Must Complete</span>
+                      ) : null}
+                      {isCsiEscalation ? (
+                        <span className="rounded border border-emerald-800/60 bg-emerald-900/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">CSI</span>
+                      ) : null}
+                    </div>
+                    {item.description ? (
+                      <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p>
                     ) : null}
                   </div>
-                  {item.description ? (
-                    <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                  ) : null}
+                  <div className="text-right text-[10px] text-slate-400">
+                    <div>{priorityText(item.priority)}</div>
+                    <div>score {item.score ?? 0} · Q {item.score_confidence ?? 0}</div>
+                    {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
+                      <div className="text-amber-300">below threshold {dispatchThreshold}</div>
+                    ) : null}
+                    {item.collapsed_count && item.collapsed_count > 1 ? (
+                      <div className="text-emerald-300">{item.collapsed_count} incident items</div>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="text-right text-[10px] text-slate-400">
-                  <div>{priorityText(item.priority)}</div>
-                  <div>score {item.score ?? 0} · Q {item.score_confidence ?? 0}</div>
-                  {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
-                    <div className="text-amber-300">below threshold {dispatchThreshold}</div>
-                  ) : null}
-                  {item.collapsed_count && item.collapsed_count > 1 ? (
-                    <div className="text-emerald-300">{item.collapsed_count} incident items</div>
-                  ) : null}
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                  <span>{item.project_key}</span>
+                  <span>•</span>
+                  <span>{item.status}</span>
+                  {item.due_at ? (<><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>) : null}
+                  {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
                 </div>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-                <span>{item.project_key}</span>
-                <span>•</span>
-                <span>{item.status}</span>
-                {item.due_at ? (<><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>) : null}
-                {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <button
-                  onClick={() => void handleTaskAction(item.task_id, "complete")}
-                  disabled={actionPendingTaskId === item.task_id}
-                  className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
-                >
-                  Complete
-                </button>
-                <button
-                  onClick={() => void handleWakeHeartbeat(item.task_id)}
-                  disabled={wakePending}
-                  className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                >
-                  Force Next Heartbeat
-                </button>
-
-                <div className="relative ml-2">
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <button
-                    onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
-                    className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+                    onClick={() => void handleTaskAction(item.task_id, "complete")}
+                    disabled={actionPendingTaskId === item.task_id}
+                    className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
                   >
-                    Advanced ▾
+                    Complete
                   </button>
-                  {openActionMenuId === item.task_id && (
-                    <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-slate-700 bg-slate-900 p-1 shadow-xl">
-                      {item.status === "open" && (
+                  <button
+                    onClick={() => void handleWakeHeartbeat(item.task_id)}
+                    disabled={wakePending}
+                    className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                  >
+                    Force Next Heartbeat
+                  </button>
+
+                  <div className="relative ml-2">
+                    <button
+                      onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
+                      className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+                    >
+                      Advanced ▾
+                    </button>
+                    {openActionMenuId === item.task_id && (
+                      <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-slate-700 bg-slate-900 p-1 shadow-xl">
+                        {item.status === "open" && (
+                          <button
+                            onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "seize"); }}
+                            disabled={actionPendingTaskId === item.task_id}
+                            className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                          >
+                            Seize
+                          </button>
+                        )}
                         <button
-                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "seize"); }}
+                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "review"); }}
                           disabled={actionPendingTaskId === item.task_id}
-                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
                         >
-                          Seize
+                          Mark Review
                         </button>
-                      )}
-                      <button
-                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "review"); }}
-                        disabled={actionPendingTaskId === item.task_id}
-                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        Mark Review
-                      </button>
-                      <button
-                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "block"); }}
-                        disabled={actionPendingTaskId === item.task_id}
-                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
-                      >
-                        Block
-                      </button>
-                      <button
-                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "reject"); }}
-                        disabled={actionPendingTaskId === item.task_id}
-                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        Reject
-                      </button>
-                      <button
-                        onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "park"); }}
-                        disabled={actionPendingTaskId === item.task_id}
-                        className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
-                      >
-                        Park
-                      </button>
-                    </div>
-                  )}
+                        <button
+                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "block"); }}
+                          disabled={actionPendingTaskId === item.task_id}
+                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
+                        >
+                          Block
+                        </button>
+                        <button
+                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "reject"); }}
+                          disabled={actionPendingTaskId === item.task_id}
+                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "park"); }}
+                          disabled={actionPendingTaskId === item.task_id}
+                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                        >
+                          Park
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))
+              </article>
+            );
+          })
         )}
       </div>
     </section>
@@ -649,64 +702,68 @@ export default function ToDoListDashboardPage() {
 
   const renderPersonalPanel = (compact = false) => (
     <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div ref={approvalsRef} className="mb-3 flex items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
-            Personal Queue ({personalQueue?.items?.length || 0})
+            Task Priority List ({personalQueue?.items?.length || 0})
           </h2>
           <p className="text-xs text-slate-400">Human-visible tasks plus CSI escalations and prioritized approvals.</p>
         </div>
-      </div>
-
-      <div ref={approvalsRef} className="mb-3 rounded border border-amber-800/50 bg-amber-950/20 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">Priority Approvals</h3>
-          <Link href="/dashboard/approvals" className="text-[11px] text-amber-200 hover:text-amber-100">Open Approvals</Link>
-        </div>
-        {approvalsHighlight?.approvals?.length ? (
-          <div className="space-y-1.5">
-            {approvalsHighlight.approvals.slice(0, compact ? 3 : 8).map((row) => (
-              <div key={row.approval_id} className="rounded border border-amber-700/40 bg-amber-900/15 px-2 py-1.5 text-xs">
-                <div className="font-semibold text-amber-100">{row.title}</div>
-                <div className="text-[10px] text-amber-200/90">priority {row.priority} · {row.status}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500">No pending approvals.</p>
-        )}
+        <Link
+          href="/dashboard/approvals"
+          className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35"
+        >
+          Open Approvals
+          {(approvalsHighlight?.pending_count || 0) > 0 ? (
+            <span className="ml-1.5 rounded-full bg-amber-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
+              {approvalsHighlight!.pending_count}
+            </span>
+          ) : null}
+        </Link>
       </div>
 
       <div className="space-y-2 max-h-[56vh] overflow-y-auto pr-1">
         {(personalQueue?.items || []).length === 0 ? (
           <p className="text-sm text-slate-500 italic">No personal tasks available.</p>
         ) : (
-          (personalQueue?.items || []).map((item) => (
-            <article key={item.task_id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <h3 className="font-semibold text-slate-200">{item.title}</h3>
-                    {String(item.source_kind || "") === "csi" ? (
-                      <span className="rounded border border-amber-700/60 bg-amber-900/25 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">CSI Escalation</span>
+          (personalQueue?.items || []).map((item, idx) => {
+            const isCsiEscalation = String(item.source_kind || "") === "csi";
+            const hasApprovalHighlight = approvalTaskIdSet.has(item.task_id) || isCsiEscalation;
+            return (
+              <article
+                key={item.task_id}
+                className={`rounded-lg border bg-slate-950/60 p-3 ${
+                  hasApprovalHighlight
+                    ? "border-l-4 border-amber-500/70 border-t-slate-800/80 border-r-slate-800/80 border-b-slate-800/80"
+                    : "border-slate-800/80"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] font-bold text-slate-500 tabular-nums">#{idx + 1}</span>
+                      <h3 className="font-semibold text-slate-200">{item.title}</h3>
+                      {isCsiEscalation ? (
+                        <span className="rounded border border-amber-700/60 bg-amber-900/25 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">CSI Escalation</span>
+                      ) : null}
+                    </div>
+                    {isCsiEscalation && item.metadata?.csi?.human_intervention_reason ? (
+                      <p className="mt-1 text-[11px] text-amber-200">{item.metadata.csi.human_intervention_reason}</p>
                     ) : null}
                   </div>
-                  {String(item.source_kind || "") === "csi" && item.metadata?.csi?.human_intervention_reason ? (
-                    <p className="mt-1 text-[11px] text-amber-200">{item.metadata.csi.human_intervention_reason}</p>
-                  ) : null}
+                  <span className="text-[10px] text-slate-400">{priorityText(item.priority)}</span>
                 </div>
-                <span className="text-[10px] text-slate-400">{priorityText(item.priority)}</span>
-              </div>
-              {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
-              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-                <span>{item.project_key}</span>
-                <span>•</span>
-                <span>{item.status}</span>
-                {item.due_at ? (<><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>) : null}
-                {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
-              </div>
-            </article>
-          ))
+                {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                  <span>{item.project_key}</span>
+                  <span>•</span>
+                  <span>{item.status}</span>
+                  {item.due_at ? (<><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>) : null}
+                  {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
+                </div>
+              </article>
+            );
+          })
         )}
       </div>
     </section>
@@ -717,23 +774,52 @@ export default function ToDoListDashboardPage() {
     [completedTasks],
   );
 
+  const visibleCompletedRows = useMemo(
+    () => completedRows.filter((r) => !deletedTaskIds.has(r.task_id)),
+    [completedRows, deletedTaskIds],
+  );
+
   const renderCompletedPanel = (compact = false) => (
     <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-300">
-            Completed Agent Jobs ({completedRows.length})
+            Completed Agent Jobs ({visibleCompletedRows.length})
           </h2>
           <p className="text-xs text-slate-400">Most recent finished tasks with session and run-log links.</p>
         </div>
+        {visibleCompletedRows.length > 0 ? (
+          <button
+            onClick={() => void handleDeleteAllCompleted()}
+            disabled={deleteAllPending}
+            className="rounded border border-rose-800/60 bg-rose-950/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-300 hover:bg-rose-950/40 disabled:opacity-50"
+          >
+            {deleteAllPending ? "Deleting..." : "🗑 Delete All"}
+          </button>
+        ) : null}
       </div>
       <div className="space-y-2 max-h-[42vh] overflow-y-auto pr-1">
-        {completedRows.length === 0 ? (
+        {visibleCompletedRows.length === 0 ? (
           <p className="text-sm text-slate-500 italic">No completed agent jobs yet.</p>
         ) : (
-          completedRows.slice(0, compact ? 8 : 20).map((item) => (
-            <article key={`completed-${item.task_id}`} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-              <div className="flex items-start justify-between gap-2">
+          visibleCompletedRows.slice(0, compact ? 8 : 20).map((item) => (
+            <article
+              key={`completed-${item.task_id}`}
+              className="group relative rounded-lg border border-slate-800/80 bg-slate-950/60 p-3"
+              onMouseEnter={() => setHoveredDeleteId(item.task_id)}
+              onMouseLeave={() => setHoveredDeleteId(null)}
+            >
+              {/* Per-item delete button — appears on hover */}
+              <button
+                onClick={() => void handleDeleteCompletedTask(item.task_id)}
+                className={`absolute right-2 top-2 rounded p-1 text-slate-500 transition-opacity hover:bg-rose-950/50 hover:text-rose-300 ${
+                  hoveredDeleteId === item.task_id ? "opacity-100" : "opacity-0"
+                }`}
+                title="Delete"
+              >
+                🗑
+              </button>
+              <div className="flex items-start justify-between gap-2 pr-6">
                 <div className="min-w-0">
                   <h3 className="truncate font-semibold text-slate-200">{item.title}</h3>
                   {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}

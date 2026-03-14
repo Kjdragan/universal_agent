@@ -654,6 +654,11 @@ class CronService:
                                 workspace_dir=job.workspace_dir,
                             )
                             record.session_id = str(getattr(session, "session_id", "") or "")
+                            # Tag session so the reaper correctly classifies this as
+                            # an admin (short-lived) session with cron TTL.
+                            if isinstance(session.metadata, dict):
+                                session.metadata.setdefault("source", "cron")
+                                session.metadata.setdefault("job_id", job.job_id)
                             # Build request metadata with optional model override
                             request_metadata: dict[str, Any] = {
                                 "source": "cron",
@@ -799,6 +804,19 @@ class CronService:
                     self.store.save_jobs(self.jobs.values())
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+
+                # Close the gateway session created for this cron run so it is
+                # immediately released from the in-memory session registry.
+                # The reaper would catch it eventually, but explicit cleanup on
+                # completion is always preferred for admin/cron sessions.
+                if record.session_id:
+                    try:
+                        await self.gateway.close_session(record.session_id)
+                    except Exception as _close_exc:
+                        logger.warning(
+                            "Could not close cron session %s after job %s: %s",
+                            record.session_id, job.job_id, _close_exc,
+                        )
 
                 # Post-run memory capture: write a session rollover to shared memory
                 # so cron run context is available to future sessions (fix #6).

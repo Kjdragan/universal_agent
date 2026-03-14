@@ -895,6 +895,10 @@ class HeartbeatService:
 
     def register_session(self, session: GatewaySession):
         logger.info(f"Registering session {session.session_id} for heartbeat")
+        # Tag the session as source=heartbeat so the gateway reaper applies
+        # the correct (short) TTL for admin sessions.
+        if isinstance(session.metadata, dict):
+            session.metadata.setdefault("source", "heartbeat")
         self.active_sessions[session.session_id] = session
 
     def unregister_session(self, session_id: str):
@@ -964,7 +968,7 @@ class HeartbeatService:
         Check if session is idle (no connections, no active runs, and past timeout).
         Returns True if session was unregistered (and thus processing should stop).
         """
-        unregister_idle = _parse_bool(os.getenv("UA_HEARTBEAT_UNREGISTER_IDLE"), default=False)
+        unregister_idle = _parse_bool(os.getenv("UA_HEARTBEAT_UNREGISTER_IDLE"), default=True)
         if not unregister_idle:
             return False
 
@@ -1004,8 +1008,8 @@ class HeartbeatService:
             last_activity = datetime.fromisoformat(ts_str)
             now = datetime.now(last_activity.tzinfo) if last_activity.tzinfo else datetime.now()
             
-            # Default 5 minutes (300s)
-            idle_timeout = int(os.getenv("UA_HEARTBEAT_IDLE_TIMEOUT", "300"))
+            # Default 10 minutes (600s) for admin/heartbeat sessions
+            idle_timeout = int(os.getenv("UA_HEARTBEAT_IDLE_TIMEOUT", "600"))
             
             elapsed = (now - last_activity).total_seconds()
             if elapsed > idle_timeout:

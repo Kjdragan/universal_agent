@@ -266,6 +266,10 @@ class InProcessGateway(Gateway):
         self._vp_db_conn = None
         self._coder_vp_runtime: Optional[CoderVPRuntime] = None
 
+        # Session reaper state (started lazily via start_reaper())
+        self._reaper_running: bool = False
+        self._reaper_task: Optional[asyncio.Task] = None
+
         try:
             self._runtime_db_conn = connect_runtime_db(get_runtime_db_path())
             ensure_schema(self._runtime_db_conn)
@@ -1412,7 +1416,13 @@ class InProcessGateway(Gateway):
             completed_at_epoch=time.time(),
             execution_summary={"tool_calls": tool_calls, "duration_seconds": round(duration, 3)},
         )
-        
+
+        # Stamp last_activity_at so the session reaper can measure inactivity.
+        try:
+            session.metadata["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            pass
+
         return GatewayResult(
             response_text=response_text,
             tool_calls=tool_calls,
@@ -1438,10 +1448,170 @@ class InProcessGateway(Gateway):
             return True
         return False
 
-    def list_sessions(self) -> list[GatewaySessionSummary]:
+    async def close_session(self, session_id: str) -> None:
+        """Tear down a session and release all associated resources.
+
+        Safe to call for sessions that are not in memory (no-op).
+        If the session's execution lock is currently held this logs a warning
+        but proceeds with cleanup — the adapter and session dicts are cleared
+        so the next allocate will be fresh.
+        """
+        session_lock = self._session_exec_locks.get(session_id)
+        if session_lock and session_lock.locked():
+            logger.warning(
+                "close_session(%s): session lock is held — closing anyway; "
+                "in-flight execution may see a missing adapter.",
+                session_id,
+            )
+
+        async with self._timed_execution_lock("close_session"):
+            adapter = self._adapters.pop(session_id, None)
+            self._sessions.pop(session_id, None)
+            self._session_exec_locks.pop(session_id, None)
+
+        if adapter is not None:
+            teardown = getattr(adapter, "teardown", None)
+            if callable(teardown):
+                try:
+                    result = teardown()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    logger.warning("Adapter teardown error for session %s: %s", session_id, exc)
+
+        logger.info("Session closed and resources released: %s", session_id)
+
+    # ---------------------------------------------------------------------------
+    # Session Reaper — activity-based TTL cleanup
+    # ---------------------------------------------------------------------------
+
+    _ADMIN_SOURCES: frozenset[str] = frozenset({"cron", "heartbeat"})
+    _VP_SOURCES: frozenset[str] = frozenset({"vp_mission", "vp.coder", "vp.general"})
+
+    def _session_inactivity_seconds(self, session: GatewaySession) -> Optional[float]:
+        """Return seconds since last_activity_at, or None if no timestamp."""
+        raw = session.metadata.get("last_activity_at") if isinstance(session.metadata, dict) else None
+        if not raw:
+            return None
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+        except Exception:
+            return None
+
+    def _reaper_ttl_seconds(self, session: GatewaySession) -> Optional[int]:
+        """Return inactivity TTL for this session, or None to never auto-close.
+
+        TTL classes (all inactivity-based — sessions still executing are safe):
+          - source=cron / source=heartbeat  → UA_SESSION_ADMIN_TTL_SECONDS (default 600 s / 10 min)
+          - source=vp_mission / vp.coder …  → UA_SESSION_VP_INACTIVITY_TTL_SECONDS (default 900 s / 15 min)
+          - source=user (interactive)        → None (never auto-close)
+        """
+        metadata = session.metadata if isinstance(session.metadata, dict) else {}
+        source = str(metadata.get("source") or metadata.get("run_source") or "user").strip().lower()
+        # Also check request metadata stored on adapter config.
+        if source == "user":
+            lane = str(metadata.get("lane") or "").strip().lower()
+            if lane and lane.startswith("vp"):
+                source = "vp_mission"
+
+        if source in self._ADMIN_SOURCES:
+            return int(os.getenv("UA_SESSION_ADMIN_TTL_SECONDS", "600"))
+        if source in self._VP_SOURCES:
+            return int(os.getenv("UA_SESSION_VP_INACTIVITY_TTL_SECONDS", "900"))
+        # Interactive user sessions are never reaped.
+        return None
+
+    async def _session_reaper(self) -> None:
+        """Background task: periodically close sessions that have exceeded their inactivity TTL."""
+        interval = max(30, int(os.getenv("UA_SESSION_REAPER_INTERVAL_SECONDS", "60")))
+        logger.info("Session reaper started (interval=%ds)", interval)
+        while self._reaper_running:
+            try:
+                await asyncio.sleep(interval)
+                if not self._reaper_running:
+                    break
+                candidates = list(self._sessions.values())
+                for session in candidates:
+                    ttl = self._reaper_ttl_seconds(session)
+                    if ttl is None:
+                        continue  # interactive session — never auto-close
+                    lock = self._session_exec_locks.get(session.session_id)
+                    if lock and lock.locked():
+                        continue  # executing right now — skip
+                    inactivity = self._session_inactivity_seconds(session)
+                    if inactivity is None:
+                        # No activity timestamp yet — use session creation age as fallback
+                        # with a grace window (double the TTL) before reaping.
+                        created = session.metadata.get("created_at") if isinstance(session.metadata, dict) else None
+                        if created:
+                            try:
+                                age = time.time() - float(created)
+                                if age < ttl * 2:
+                                    continue  # too young, give it time to stamp activity
+                            except Exception:
+                                pass
+                        continue
+                    if inactivity >= ttl:
+                        logger.info(
+                            "Reaper closing stale session %s (source=%s, inactive=%.0fs, ttl=%ds)",
+                            session.session_id,
+                            session.metadata.get("source", "unknown") if isinstance(session.metadata, dict) else "unknown",
+                            inactivity,
+                            ttl,
+                        )
+                        try:
+                            await self.close_session(session.session_id)
+                        except Exception as exc:
+                            logger.warning("Reaper error closing session %s: %s", session.session_id, exc)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Session reaper loop error: %s", exc)
+        logger.info("Session reaper stopped")
+
+    def start_reaper(self) -> None:
+        """Start the session reaper background task (idempotent)."""
+        if getattr(self, "_reaper_running", False):
+            return
+        self._reaper_running = True
+        self._reaper_task: Optional[asyncio.Task] = asyncio.create_task(self._session_reaper())
+        logger.info("Session reaper task created")
+
+    async def stop_reaper(self) -> None:
+        """Stop the session reaper background task."""
+        self._reaper_running = False
+        task = getattr(self, "_reaper_task", None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Session reaper task stopped")
+
+    def list_sessions(self, since_hours: int = 48) -> list[GatewaySessionSummary]:
+        """List active and recently-completed sessions.
+
+        Only sessions that are currently in memory (live) or whose workspace
+        directories were modified within *since_hours* (default 48 h) are
+        returned.  Older disk-only session directories are excluded to prevent
+        inflated counts and dashboard noise.
+
+        Args:
+            since_hours: Workspace directories older than this many hours are
+                excluded from the disk scan.  In-memory (live) sessions are
+                always included regardless of age.  Pass 0 to include all.
+        """
+        import stat as _stat
+
         summaries: list[GatewaySessionSummary] = []
-        
-        # Include in-memory sessions
+        cutoff_seconds = since_hours * 3600 if since_hours > 0 else 0
+        now_ts = time.time()
+
+        # 1. Always include in-memory (live) sessions.
         for session_id, session in self._sessions.items():
             workspace_path = Path(session.workspace_dir)
             trace_file = workspace_path / "trace.json"
@@ -1459,24 +1629,36 @@ class InProcessGateway(Gateway):
                     metadata=session.metadata,
                 )
             )
-        
-        # Scan workspace base for additional sessions
+
+        # 2. Scan workspace base for sessions not in memory, limited to since_hours.
+        #    These are presented as "archived" (completed, read-only) — not active.
+        live_ids = {s.session_id for s in summaries}
         if self._workspace_base.exists():
             for session_dir in sorted(self._workspace_base.iterdir(), reverse=True):
-                if session_dir.is_dir() and session_dir.name.startswith("session_"):
-                    if session_dir.name not in self._sessions:
-                        trace_file = session_dir / "trace.json"
-                        status = "complete" if trace_file.exists() else "incomplete"
-                        summaries.append(
-                            GatewaySessionSummary(
-                                session_id=session_dir.name,
-                                workspace_dir=str(session_dir),
-                                status=status,
-                                metadata={"discovered": True},
-                            )
-                        )
-        
-        # Also include legacy sessions if bridge exists
+                if not (session_dir.is_dir() and session_dir.name.startswith("session_")):
+                    continue
+                if session_dir.name in live_ids:
+                    continue
+                # Apply 48h recency filter via directory mtime.
+                if cutoff_seconds > 0:
+                    try:
+                        mtime = session_dir.stat().st_mtime
+                        if (now_ts - mtime) > cutoff_seconds:
+                            continue  # too old — exclude from results
+                    except OSError:
+                        continue
+                trace_file = session_dir / "trace.json"
+                status = "archived" if trace_file.exists() else "archived_incomplete"
+                summaries.append(
+                    GatewaySessionSummary(
+                        session_id=session_dir.name,
+                        workspace_dir=str(session_dir),
+                        status=status,
+                        metadata={"archived": True},
+                    )
+                )
+
+        # 3. Legacy bridge sessions (deprecated path).
         if self._use_legacy and self._bridge:
             for session in self._bridge.list_sessions():
                 if session["session_id"] not in [s.session_id for s in summaries]:
