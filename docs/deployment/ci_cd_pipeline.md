@@ -121,25 +121,35 @@ deploy rather than editing keys in place.
 ## Deployed Runtime Tooling
 
 - Staging and production deploys install project dependencies with `uv sync`.
-- Staging and production deploys also install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
+- Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
+- Staging and production deploys install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
 - The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
 - Staging deploy must execute `uv` tool installation under the real `ua` home directory (`sudo -H -u ua` / `HOME=$ua_home`) so NotebookLM tools land in the service user's tool path.
 - In the staging SSH deploy script, PATH must be quoted for remote expansion, not shipped as a literal `$PATH`, or basic commands like `getent`/`cut` can disappear from the remote shell.
 
-## Deployed Runtime Tooling
+## Expected Deploy Times
 
-- Staging and production deploys install project dependencies with `uv sync`.
-- Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm install && npm run build`.
-- Staging and production deploys also install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
-- This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
-- The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
+| Scenario | Staging | Production |
+|----------|---------|------------|
+| First deploy on a fresh VPS (cold npm build) | ~20–25 min | ~20–25 min |
+| Normal deploy — no `package.json` change | ~8–12 min | ~8–12 min |
+| Deploy after `package.json` change (fresh npm install) | ~15–20 min | ~15–20 min |
+
+Both workflows have `timeout-minutes: 35` to accommodate the worst-case cold build. Normal deploys complete well within 15 minutes.
+
+To force a full `npm install` on the next deploy (e.g. after a failed install left a corrupt `node_modules`), delete the sentinel on the VPS:
+
+```bash
+rm /opt/universal-agent-staging/web-ui/node_modules/.package-json-mtime  # staging
+rm /opt/universal_agent/web-ui/node_modules/.package-json-mtime           # production
+```
 
 ## Review and Promotion Rule
 
 - There is exactly one Codex review gate: the PR into `develop`.
 - There is no second Codex review on `main`.
-- Production promotion must use the exact validated `develop` SHA.
+- Production promotion must use the **full 40-character** validated `develop` SHA — the workflow's SHA comparison will reject abbreviated short SHAs.
 - The promotion workflow refuses to run if `develop` has moved since the validated SHA.
 - The promotion workflow explicitly dispatches `Deploy Production`; it does not rely on workflow fan-out from the `main` fast-forward.
 - To make the review gate enforceable, configure GitHub branch protection on `develop` to require the `Codex Review Develop PR` check before merge.
@@ -177,9 +187,20 @@ Configure these settings in GitHub repository settings.
 
 - While you code, `develop` is the automated VPS-backed dev/staging lane.
 - `main` is a separately deployable production lane and is currently deployable.
-- Production and staging both have passing workflow runs as of March 11, 2026.
+- Production and staging both have passing workflow runs as of March 14, 2026.
 
 ## Troubleshooting
+
+### Deploy Job Times Out
+
+Both `deploy-staging.yml` and `deploy-prod.yml` have `timeout-minutes: 35`.
+
+If a deploy times out, the most common cause is a cold `npm run build` with no existing `.next` cache on the VPS. This happens on the very first deploy to a fresh server or after `node_modules` is wiped.
+
+Actions:
+1. Check whether `node_modules` and `.next` exist on the VPS under `web-ui/`.
+2. If not, simply re-run the workflow — the cold build just needs more time and will succeed within the 35-minute window.
+3. If the timeout keeps happening on subsequent runs, check if `package.json` changed (triggering a re-install) or if the VPS is under memory pressure during the build.
 
 ### Promotion Workflow Refuses To Run
 
