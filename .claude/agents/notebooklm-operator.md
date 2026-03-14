@@ -63,8 +63,12 @@ notebook_create(title="Topic Name")
 
 ### Step 2: Research and import
 ```
+# MODE SELECTION — choose based on user intent:
+#   mode="fast"  → DEFAULT. ~30s, ~10 sources. Use for standard requests.
+#   mode="deep"  → ~5 min, ~40 sources. ONLY when user explicitly says:
+#                  "comprehensive", "thorough", "exhaustive", "in-depth",
+#                  "deep research", or "find everything"
 research_start(notebook_id=<id>, query="...", source="web", mode="fast")
-# ALWAYS use mode="fast" — deep mode is unreliable (hangs, returns 0 sources)
 → save task_id
 
 # POLLING LOOP — MUST sleep between calls!
@@ -72,7 +76,7 @@ research_start(notebook_id=<id>, query="...", source="web", mode="fast")
 # You MUST call Bash("sleep 15") between each poll.
 research_status(notebook_id=<id>, task_id=<id>, max_wait=0)
 → if status != "completed": Bash("sleep 15") then call research_status again
-→ repeat until status="completed" (deep research takes ~5 min)
+→ repeat until status="completed" (fast ~30s, deep ~5 min)
 
 research_import(notebook_id=<id>, task_id=<id>)
 → Do NOT pass source_indices — omitting imports ALL sources
@@ -110,7 +114,7 @@ download_artifact(notebook_id=<id>, artifact_type="audio", output_path="/path/to
 2. **Do NOT use `urls` array in `source_add`** — use singular `url`, one at a time
 3. **Do NOT stringify list parameters** — pass actual JSON arrays
 4. **Do NOT run preflight scripts** — they break on VPS
-5. **Do NOT use `mode="deep"` for research** — it hangs and returns 0 sources. Always use `mode="fast"`
+5. **Default to `mode="fast"` for research** — only use `mode="deep"` if user explicitly requests comprehensive/thorough/exhaustive research. Deep mode can be slow (~5 min) and may return 0 sources.
 
 ## Execution Policy
 

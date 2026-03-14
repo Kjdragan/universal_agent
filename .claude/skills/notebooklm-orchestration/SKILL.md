@@ -106,15 +106,19 @@ notebook_create(title="My Research Topic")
 
 ### Step 2: Research and import (use built-in research, NOT web search)
 ```
+# MODE SELECTION — choose based on user intent:
+#   mode="fast"  → DEFAULT. ~30s, ~10 sources. Use for standard requests.
+#   mode="deep"  → ~5 min, ~40 sources. ONLY when user explicitly says:
+#                  "comprehensive", "thorough", "exhaustive", "in-depth",
+#                  "deep research", or "find everything"
 research_start(notebook_id=<id>, query="...", source="web", mode="fast")
-# ALWAYS use mode="fast" — deep mode is unreliable (hangs, returns 0 sources)
 → save task_id
 
 # POLLING LOOP — MUST Bash sleep between calls!
 # MCP transport does NOT block despite max_wait param.
 research_status(notebook_id=<id>, task_id=<id>, max_wait=0)
 → if status != "completed": Bash("sleep 15") then poll again
-→ repeat until status="completed" (deep ~5 min, fast ~30s)
+→ repeat until status="completed" (fast ~30s, deep ~5 min)
 
 research_import(notebook_id=<id>, task_id=<id>)
 → Do NOT pass source_indices — omitting it imports ALL sources automatically
@@ -151,7 +155,7 @@ download_artifact(notebook_id=<id>, artifact_type="audio", output_path="~/nlm_ar
 3. **Do NOT stringify list parameters** — pass actual JSON arrays.
 4. **Do NOT run `uv run python scripts/notebooklm_auth_preflight.py`** — it breaks.
 5. **Do NOT call `nlm login` without `--manual`** — no browser on VPS.
-6. **Do NOT poll `research_status` with `max_wait=0`** — use at least 60 seconds.
+6. **Default to `mode="fast"` for research** — only use `mode="deep"` when user explicitly requests comprehensive/thorough/exhaustive research.
 
 ## CLI Fallback Patterns
 
