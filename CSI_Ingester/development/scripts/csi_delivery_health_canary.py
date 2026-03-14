@@ -228,7 +228,14 @@ def _source_metrics(
     status = "ok"
     if under_min_volume or stale:
         status = "degraded"
-    if attempts_failed > 0 or dlq_exceeds:
+    # Skip delivery-failure-based degraded check for csi_analytics.
+    # csi_analytics emits events with source="csi_analytics", so when those
+    # events fail delivery to UA (e.g. during a restart window), the next canary
+    # run sees its own past failures and flags itself as degraded — a self-loop
+    # that never clears. The adapter health check below still applies and will
+    # correctly escalate to "failing" if the adapter itself stops working.
+    _is_self_monitoring = source_name == "csi_analytics"
+    if (attempts_failed > 0 or dlq_exceeds) and not _is_self_monitoring:
         status = "degraded"
     if high_failed_ratio or all_failed or adapter_unhealthy:
         status = "failing"
