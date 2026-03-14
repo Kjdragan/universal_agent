@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-RUN_DIR="${ROOT_DIR}/OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews"
+RUN_DIR="${ROOT_DIR}/docs/03_Run_Reviews"
 
 STATUS_FILE="${1:-}"
 if [[ -z "$STATUS_FILE" ]]; then

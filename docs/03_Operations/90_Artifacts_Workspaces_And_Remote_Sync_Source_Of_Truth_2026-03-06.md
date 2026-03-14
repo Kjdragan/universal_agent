@@ -332,8 +332,8 @@ Primary implementation:
 - `web-ui/lib/sessionDirectory.ts`
 
 Relevant supporting docs:
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`
-- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/87_Tailscale_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md`
+- `docs/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`
+- `docs/03_Operations/87_Tailscale_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md`
 
 ## Bottom Line
 

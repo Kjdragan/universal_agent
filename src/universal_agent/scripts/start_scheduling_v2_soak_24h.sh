@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT_DIR"
 
 TS_UTC="$(date -u +%Y%m%dT%H%M%SZ)"
-RUN_DIR="${ROOT_DIR}/OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews"
+RUN_DIR="${ROOT_DIR}/docs/03_Run_Reviews"
 mkdir -p "$RUN_DIR"
 
 PORT="${UA_GATEWAY_PORT:-8002}"

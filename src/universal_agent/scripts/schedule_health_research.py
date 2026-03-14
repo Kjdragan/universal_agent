@@ -26,7 +26,7 @@ def schedule_task():
     command = (
         "Research the feasibility and design of a proactive System Health Monitor Agent. "
         "Investigate the current project setup, internal tools, and Composio connections. "
-        "Create a PRD in the OFFICIAL_PROJECT_DOCUMENTATION directory detailing the best approach, "
+        "Create a PRD in the docs directory detailing the best approach, "
         "including sub-agents, skills, and periodic scheduling (e.g., once a day/week) to detect "
         "regressions or broken connectors."
     )

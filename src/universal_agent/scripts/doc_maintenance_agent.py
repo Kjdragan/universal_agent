@@ -56,7 +56,7 @@ async def main():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
     
     objective = f"""You are the Documentation Maintenance Agent. 
-Your objective is to read the recent codebase changes and update the documentation in the 'OFFICIAL_PROJECT_DOCUMENTATION/' directory to ensure it remains accurate and up-to-date.
+Your objective is to read the recent codebase changes and update the documentation in the 'docs/' directory to ensure it remains accurate and up-to-date.
 
 Here is the `git diff --stat` showing the files changed over the last {days} days:
 ```
@@ -70,7 +70,7 @@ Detailed file status:
 
 Instructions:
 1. Examine the list of changed backend/frontend files.
-2. Read the corresponding documentation files in `OFFICIAL_PROJECT_DOCUMENTATION/` to see if they are stale.
+2. Read the corresponding documentation files in `docs/` to see if they are stale.
 3. If any documentation is outdated regarding architecture, features, or configurations due to these code changes, update the markdown files directly.
 4. If no documentation changes are necessary, exit successfully with a note.
 5. Provide a summary of the markdown files you modified and why.

@@ -289,7 +289,7 @@ Expected:
 
 ## File/Path References
 
-1. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
+1. `docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
 2. `/opt/universal_agent/.env` (VPS runtime env)
 3. `/etc/systemd/system/universal-agent-gateway.service`
 4. `/etc/systemd/system/universal-agent-api.service`

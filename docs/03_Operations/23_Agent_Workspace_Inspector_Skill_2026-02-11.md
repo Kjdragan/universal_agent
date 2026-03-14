@@ -53,4 +53,4 @@ Because the logic is env-driven, behavior is consistent across both environments
 ## Notes for operators
 - This tool does not sync files between VPS and local machine.
 - Use the VPS sync runbook for transfer workflows:
-  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`
+  - `docs/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`

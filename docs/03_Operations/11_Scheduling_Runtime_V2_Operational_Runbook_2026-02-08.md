@@ -134,7 +134,7 @@ uv run python src/universal_agent/scripts/scheduling_v2_soak.py \
   --duration-seconds 300 \
   --interval-seconds 15 \
   --timeout-seconds 6 \
-  --out-json OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_short.json
+  --out-json docs/03_Run_Reviews/scheduling_v2_soak_short.json
 ```
 
 Example 24h gate run:
@@ -144,5 +144,5 @@ uv run python src/universal_agent/scripts/scheduling_v2_soak.py \
   --duration-seconds 86400 \
   --interval-seconds 30 \
   --timeout-seconds 8 \
-  --out-json OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_24h.json
+  --out-json docs/03_Run_Reviews/scheduling_v2_soak_24h.json
 ```

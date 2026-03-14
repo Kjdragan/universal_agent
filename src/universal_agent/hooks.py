@@ -767,6 +767,7 @@ class AgentHookSet:
         self._requires_youtube_skill_first = False
         self._youtube_skill_seen_this_turn = False
         self._stopped_task_ids: set[str] = set()
+        self._initial_decomposition_prompt_injected = False
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
             "/agent_run_workspaces/vp_" in workspace_norm
@@ -1275,11 +1276,13 @@ class AgentHookSet:
                     )
                     return {
                         "systemMessage": (
-                            "⚠️ Report-style research workflow detected.\n\n"
-                            "First tool call in this turn must be "
-                            "`Task(subagent_type='research-specialist', ...)` or "
-                            "`Agent(subagent_type='research-specialist', ...)`.\n"
-                            "Do not delegate to another specialist before the research handoff."
+                            "⚠️ Research workflow detected, but you attempted an unrecognized delegation.\n\n"
+                            "Consult your Capability Routing Doctrine. You must decompose this research request "
+                            "and delegate to the correct specialist.\n\n"
+                            "- For general web scraping/news/reports: use `Task(subagent_type='research-specialist', ...)`\n"
+                            "- For podcasts, audio synthesis, or document-based chat: use `Task(subagent_type='notebooklm-operator', ...)`\n"
+                            "- For YouTube video transcripts: use `Task(subagent_type='youtube-expert', ...)`\n\n"
+                            "Do not formulate unrecognized subagent names."
                             + ordering_hint
                         ),
                         "decision": "block",
@@ -1287,7 +1290,7 @@ class AgentHookSet:
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
                             "permissionDecisionReason": (
-                                "Report-style research turns must delegate to research-specialist first."
+                                "Research turns must delegate to a recognized research specialist (research-specialist, notebooklm-operator, etc.)."
                             ),
                         },
                     }
@@ -1715,6 +1718,22 @@ class AgentHookSet:
                 if ws:
                     self._skill_candidate_log_path = str(Path(ws) / "skill_candidates.log")
         
+        if not self._initial_decomposition_prompt_injected and len(prompt_text.split()) > 10:
+            self._initial_decomposition_prompt_injected = True
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": (
+                        "\n### 🧭 Initial Task Assessment & Decomposition\n"
+                        "Before beginning execution, decompose this request carefully:\n"
+                        "1. **Analyze**: Break this request into atomic, logical steps.\n"
+                        "2. **Happy Path Backbone**: Consider the deterministic path (e.g., using `mcp__composio__get_actions` or deterministic tools if you need discovery).\n"
+                        "3. **Capability Match**: Evaluate your Capability Routing Doctrine. Route specific tasks (like specific forms of research) to the appropriate specialized agents.\n"
+                        "4. **Execution**: Proceed methodically, orchestrating subagents and validating each atomic step."
+                    ),
+                }
+            }
+
         return {}
 
     async def on_pre_tool_use_skill_detection(self, input_data: dict, tool_use_id: object, context: dict) -> dict:

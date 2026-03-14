@@ -7,18 +7,18 @@
 
 ## Active Artifacts
 - Status JSON:
-  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.status.json`
+  - `docs/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.status.json`
 - Final report JSON (written at completion):
-  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.json`
+  - `docs/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.json`
 - Soak log:
-  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.log`
+  - `docs/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.log`
 - Gateway log:
-  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_gateway_20260208T225317Z.log`
+  - `docs/03_Run_Reviews/scheduling_v2_gateway_20260208T225317Z.log`
 
 ## Live Monitor Command
 ```bash
 ./src/universal_agent/scripts/show_scheduling_v2_soak_status.sh \
-  OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.status.json
+  docs/03_Run_Reviews/scheduling_v2_soak_24h_20260208T225317Z.status.json
 ```
 
 ## Initial Checkpoint

@@ -146,7 +146,7 @@ async def list_agent_sessions_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description=(
         "Read a file from the VPS filesystem (read-only). "
         "Supports project-relative or absolute paths within allowed roots: "
-        "AGENT_RUN_WORKSPACES, artifacts, config, src, OFFICIAL_PROJECT_DOCUMENTATION, "
+        "AGENT_RUN_WORKSPACES, artifacts, config, src, docs, "
         ".claude, scripts, web-ui, deployment. Directories return listing."
     ),
     input_schema={

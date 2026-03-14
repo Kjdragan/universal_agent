@@ -19,7 +19,7 @@ This document was an initial implementation plan for Composio YouTube triggers. 
 
 ## For Current Composio YouTube Trigger Implementation
 
-**SEE**: `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md`
+**SEE**: `docs/03_Operations/75_Composio_YouTube_Trigger_Complete_Implementation_Guide_2026-02-22.md`
 
 Document 75 includes:
 - Complete step-by-step setup guide
@@ -45,7 +45,7 @@ Design a production-safe trigger architecture that supports:
 2. Non-Composio webhook/fallback sources (RSS/WebSub/manual URL) when Composio is unavailable or unsuitable.
 3. Automatic YouTube tutorial processing with transcript + optional visual analysis (Z.AI Vision), including degraded transcript-only mode.
 
-This plan extends the current webhook foundation documented in `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md`.
+This plan extends the current webhook foundation documented in `docs/03_Operations/15_Webhook_Service_Implementation_2026-02-10.md`.
 
 ## Current State (Verified)
 
@@ -327,7 +327,7 @@ Fallback strategy when Composio trigger setup fails:
    1. `COMPOSIO_WEBHOOK_SECRET`
    2. `UA_HOOKS_TOKEN` (recommended for manual endpoint auth)
 2. Optional: mirror VPS Composio YouTube events into your local dev stack (reverse SSH tunnel):
-   1. See: `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
+   1. See: `docs/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
    2. This is best-effort and should not affect VPS processing if your laptop is offline.
 3. Bootstrap mappings (dry-run):
    1. `uv run python scripts/bootstrap_composio_youtube_hooks.py`

@@ -5,14 +5,14 @@ This is the short companion to the full deployment explainers.
 Use this for daily operation and fast troubleshooting of the VPS deployment.
 
 Primary references:
-1. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
-2. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
-3. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md`
-4. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/23_Agent_Workspace_Inspector_Skill_2026-02-11.md`
-5. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md`
-6. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
-7. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/30_Local_Dev_Startup_With_Youtube_Forwarding_Tunnel_2026-02-13.md`
-8. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
+1. `docs/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
+2. `docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
+3. `docs/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md`
+4. `docs/03_Operations/23_Agent_Workspace_Inspector_Skill_2026-02-11.md`
+5. `docs/03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md`
+6. `docs/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
+7. `docs/03_Operations/30_Local_Dev_Startup_With_Youtube_Forwarding_Tunnel_2026-02-13.md`
+8. `docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 
 ---
 
