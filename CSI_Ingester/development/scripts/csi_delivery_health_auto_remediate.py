@@ -411,6 +411,17 @@ async def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
     state["last_run_epoch"] = now_epoch
     state["last_run_status"] = str(health.get("status") or "")
+
+    # Track how long the system has been continuously degraded so we can apply
+    # an escalation cooldown before creating a human-review task.
+    current_is_degraded = str(health.get("status") or "") in {"degraded", "failing"}
+    if current_is_degraded:
+        # Preserve the epoch when degradation first started (never reset while degraded)
+        if not int(state.get("first_degraded_epoch") or 0):
+            state["first_degraded_epoch"] = now_epoch
+    else:
+        state.pop("first_degraded_epoch", None)
+
     source_state_store.set_state(conn, state_key, state)
 
     any_failed = any(not bool(item.get("success")) for item in executed_actions)
@@ -424,20 +435,44 @@ async def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     else:
         summary_status = "no_effect"
 
+    # Escalation cooldown: only emit _failed (which creates a human task) if the
+    # system has been continuously degraded for >= escalate_after_minutes.
+    # This prevents a routine deploy restart from landing in the human task queue.
+    escalate_after_minutes = max(
+        0,
+        int(
+            canary._resolve_setting(
+                ["UA_CSI_AUTO_REMEDIATE_ESCALATE_AFTER_MINUTES"],
+                env_vals,
+                str(getattr(args, "escalate_after_minutes", 120)),
+            )
+        ),
+    )
+    first_degraded_epoch = int(state.get("first_degraded_epoch") or now_epoch)
+    degraded_for_minutes = max(0, (now_epoch - first_degraded_epoch) / 60.0)
+    escalation_matured = bool(args.force) or degraded_for_minutes >= escalate_after_minutes
+
     summary = {
         "status": summary_status,
         "health_status": str(health.get("status") or ""),
         "executed_actions": executed_actions,
         "skipped_actions": skipped_actions,
         "guardrails": guardrails,
+        "degraded_for_minutes": round(degraded_for_minutes, 1),
+        "escalate_after_minutes": escalate_after_minutes,
+        "escalation_matured": escalation_matured,
     }
 
     should_emit = bool(args.force) or bool(executed_actions) or bool(any_failed)
     emitted = False
     emit_status_code = 0
     if should_emit and not bool(args.dry_run):
-        if summary_status == "failed":
+        if summary_status == "failed" and escalation_matured:
+            # Degraded long enough — create a human-review task
             event_type = "delivery_health_auto_remediation_failed"
+        elif summary_status == "failed" and not escalation_matured:
+            # Still within cooldown — emit skipped so the system keeps trying silently
+            event_type = "delivery_health_auto_remediation_skipped"
         elif summary_status in {"succeeded", "no_effect"}:
             event_type = "delivery_health_auto_remediation_succeeded"
         else:
@@ -469,6 +504,12 @@ def main() -> int:
     parser.add_argument("--max-actions-per-run", type=int, default=3)
     parser.add_argument("--dlq-replay-limit", type=int, default=50)
     parser.add_argument("--dlq-replay-attempts", type=int, default=3)
+    parser.add_argument(
+        "--escalate-after-minutes",
+        type=int,
+        default=120,
+        help="Minutes of continuous degradation required before auto_remediation_failed creates a human task.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--env-file", default="/opt/universal_agent/.env")

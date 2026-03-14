@@ -24,6 +24,22 @@ from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.store import source_state as source_state_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
+# ---------------------------------------------------------------------------
+# Deployment-window suppression
+# ---------------------------------------------------------------------------
+# When CI/CD deploys, it touches this file before restarting services and
+# removes it afterward. While the file exists the canary skips SLO regression
+# alerts so a routine deploy never creates a human-review task.
+_DEPLOYMENT_WINDOW_FILE = Path(
+    os.getenv("UA_DEPLOYMENT_WINDOW_FILE", "/tmp/ua-deployment-window")
+)
+
+
+def _deployment_window_active() -> bool:
+    """Return True if a deployment is in progress (suppresses regression alerts)."""
+    return _DEPLOYMENT_WINDOW_FILE.exists()
+# ---------------------------------------------------------------------------
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -460,6 +476,12 @@ def _canary_transition(
     is_regression = curr in {"degraded", "failing"}
     was_regression = prev in {"degraded", "failing"}
     repeat_seconds = max(60, int(repeat_minutes) * 60)
+
+    # Suppress regression alerts while a deployment is in progress.
+    # Recovery events still fire — we want to know when things come back up.
+    in_deploy_window = not force and _deployment_window_active()
+    if in_deploy_window and is_regression:
+        return {"emit": False, "event_type": "", "reason": "deployment_window_active"}
 
     if force and is_regression:
         return {"emit": True, "event_type": "delivery_health_regression", "reason": "forced"}

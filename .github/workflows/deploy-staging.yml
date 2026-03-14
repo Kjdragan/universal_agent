@@ -133,7 +133,11 @@ jobs:
             
             echo '--> Building web-ui Next.js application (staging config — API port 9002)...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\\\"; if [ -d \\\"\$STAGING_DIR/web-ui\\\" ] && command -v npm >/dev/null 2>&1; then cd \\\"\$STAGING_DIR/web-ui\\\" && [ -f next.config.staging.js ] && cp next.config.staging.js next.config.js; npm install && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi\"
-            
+
+            echo '--> Setting deployment-window flag...'
+            touch /tmp/ua-deployment-window
+            (sleep 1500 && rm -f /tmp/ua-deployment-window) &
+
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
@@ -156,5 +160,8 @@ jobs:
             else
               echo '--> WARNING: No supported service manager found (systemctl/service); skipping restart.'
             fi
+
+            echo '--> Clearing deployment-window flag...'
+            rm -f /tmp/ua-deployment-window
             echo '--> Deployment complete!'
           "
