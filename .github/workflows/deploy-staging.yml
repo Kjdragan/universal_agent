@@ -131,23 +131,27 @@ jobs:
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; uv tool install --force notebooklm-mcp-cli\"
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; command -v nlm && command -v notebooklm-mcp\"
             
-            echo '--> Building web-ui Next.js application...'
-            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\\\"; if [ -d \\\"\$STAGING_DIR/web-ui\\\" ] && command -v npm >/dev/null 2>&1; then cd \\\"\$STAGING_DIR/web-ui\\\" && npm install && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi\"
+            echo '--> Building web-ui Next.js application (staging config — API port 9002)...'
+            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\\\"; if [ -d \\\"\$STAGING_DIR/web-ui\\\" ] && command -v npm >/dev/null 2>&1; then cd \\\"\$STAGING_DIR/web-ui\\\" && [ -f next.config.staging.js ] && cp next.config.staging.js next.config.js; npm install && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi\"
             
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
                 sudo systemctl restart universal-agent-staging-gateway universal-agent-staging-api
+                sudo systemctl restart universal-agent-staging-webui || echo 'WARN: staging-webui unit not yet installed; run one-time setup on VPS'
               else
                 systemctl restart universal-agent-staging-gateway universal-agent-staging-api
+                systemctl restart universal-agent-staging-webui || echo 'WARN: staging-webui unit not yet installed'
               fi
             elif command -v service >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
                 sudo service universal-agent-staging-gateway restart
                 sudo service universal-agent-staging-api restart
+                sudo service universal-agent-staging-webui restart || echo 'WARN: staging-webui service not yet installed'
               else
                 service universal-agent-staging-gateway restart
                 service universal-agent-staging-api restart
+                service universal-agent-staging-webui restart || echo 'WARN: staging-webui service not yet installed'
               fi
             else
               echo '--> WARNING: No supported service manager found (systemctl/service); skipping restart.'
