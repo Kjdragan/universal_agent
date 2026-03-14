@@ -64,22 +64,6 @@ type HealthPayload = {
   db_error?: string | null;
 };
 
-type CSISignalItem = {
-  id: string;
-  title: string;
-  source: string; // "x_trends" | "reddit" | "csi_report" | "opportunity_bundle"
-  relevance_score?: number;
-  mission_alignment?: string;
-  url?: string;
-  created_at: string;
-};
-
-type CSIPayload = {
-  status: string;
-  signals: CSISignalItem[];
-  total: number;
-};
-
 // Helper functions
 function formatTs(ts?: string | null): string {
   if (!ts) return "";
@@ -381,17 +365,28 @@ function SystemStatusPanel() {
   );
 }
 
+const CLEARED_EVENTS_LS_KEY = "mc_cleared_events_before";
+
 // Recent Events Panel
 function RecentEventsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<DispatchQueuePayload | null>(null);
+  const [clearedBefore, setClearedBefore] = useState<string | null>(null);
+
+  // Load the "cleared before" timestamp from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(CLEARED_EVENTS_LS_KEY);
+      if (stored) setClearedBefore(stored);
+    } catch { /* localStorage unavailable */ }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/dispatch-queue?limit=10`, {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/dispatch-queue?limit=20`, {
         cache: "no-store",
       });
       if (!res.ok) {
@@ -409,6 +404,14 @@ function RecentEventsPanel() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const handleClearAll = () => {
+    const now = new Date().toISOString();
+    try {
+      localStorage.setItem(CLEARED_EVENTS_LS_KEY, now);
+    } catch { /* ignore */ }
+    setClearedBefore(now);
+  };
 
   if (loading) {
     return (
@@ -451,7 +454,20 @@ function RecentEventsPanel() {
     );
   }
 
-  const items = data?.items || [];
+  // Sort by updated_at descending (most recent first), then filter out cleared items
+  const allItems = (data?.items || []).slice().sort((a, b) => {
+    const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+    const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    return tb - ta;
+  });
+
+  const clearedTs = clearedBefore ? new Date(clearedBefore).getTime() : null;
+  const items = clearedTs
+    ? allItems.filter((item) => {
+        if (!item.updated_at) return false;
+        return new Date(item.updated_at).getTime() > clearedTs;
+      })
+    : allItems;
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
@@ -460,7 +476,17 @@ function RecentEventsPanel() {
           <Clock className="h-4 w-4 text-slate-400" />
           <h2 className="text-sm font-medium text-slate-300">Recent Events</h2>
         </div>
-        <span className="text-xs text-slate-500">{data?.eligible_total || 0} eligible</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">{data?.eligible_total || 0} eligible</span>
+          {items.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-xs text-slate-400 hover:bg-slate-700 hover:text-slate-300"
+            >
+              Clear All
+            </button>
+          )}
+        </div>
       </div>
 
       {items.length === 0 ? (
@@ -514,20 +540,43 @@ function RecentEventsPanel() {
   );
 }
 
-// CSI Signals Panel
+type CSINotificationItem = {
+  id: string;
+  kind: string;
+  title?: string;
+  body?: string;
+  source_domain?: string;
+  created_at?: string;
+  updated_at?: string;
+  status?: string;
+};
+
+// CSI Signals Panel — fetches from the working notifications endpoint filtered by source_domain=csi
 function CSISignalsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<CSIPayload | null>(null);
+  const [items, setItems] = useState<CSINotificationItem[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/csi/recent?limit=5`, { cache: "no-store" });
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/notifications?source_domain=csi&limit=10`,
+        { cache: "no-store" }
+      );
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
       const json = await res.json();
-      setData(json as CSIPayload);
+      const notifications: CSINotificationItem[] = Array.isArray(json.notifications)
+        ? json.notifications
+        : [];
+      // Sort most recent first
+      notifications.sort((a, b) => {
+        const ta = a.updated_at || a.created_at || "";
+        const tb = b.updated_at || b.created_at || "";
+        return tb.localeCompare(ta);
+      });
+      setItems(notifications);
     } catch (err: any) {
       setError(err.message || "Failed to load CSI signals");
     } finally {
@@ -575,23 +624,7 @@ function CSISignalsPanel() {
     );
   }
 
-  const signals = data?.signals || [];
-
-  const sourceIcon = (source: string) => {
-    if (source === "x_trends") return "X";
-    if (source === "reddit") return "r/";
-    if (source === "csi_report") return "RPT";
-    if (source === "opportunity_bundle") return "OPP";
-    return "SIG";
-  };
-
-  const sourceColor = (source: string) => {
-    if (source === "x_trends") return "text-blue-400";
-    if (source === "reddit") return "text-orange-400";
-    if (source === "csi_report") return "text-green-400";
-    if (source === "opportunity_bundle") return "text-purple-400";
-    return "text-slate-400";
-  };
+  const signals = items;
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
@@ -600,12 +633,12 @@ function CSISignalsPanel() {
           <TrendingUp className="h-4 w-4 text-purple-400" />
           <h2 className="text-sm font-medium text-slate-300">CSI Signals</h2>
         </div>
-        <span className="text-xs text-slate-500">{data?.total || 0} signals</span>
+        <span className="text-xs text-slate-500">{signals.length} signals</span>
       </div>
 
       {signals.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-slate-500">No recent signals</p>
+          <p className="text-sm text-slate-500">No recent CSI signals</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
@@ -614,26 +647,24 @@ function CSISignalsPanel() {
               key={signal.id}
               className="rounded-lg border border-slate-700/50 bg-slate-800/30 p-3 transition-colors hover:border-slate-600"
             >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-200 leading-snug">{signal.title}</p>
-                </div>
-                <span className={`flex-shrink-0 text-xs ${sourceColor(signal.source)}`}>
-                  {sourceIcon(signal.source)} {signal.source.replace("_", " ")}
-                </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-200 leading-snug">
+                  {signal.title || signal.kind || "CSI Signal"}
+                </p>
+                {signal.body && (
+                  <p className="mt-1 text-xs text-slate-400 line-clamp-2">{signal.body}</p>
+                )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {signal.relevance_score !== undefined && (
-                  <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-xs text-purple-400">
-                    {signal.relevance_score}% relevant
-                  </span>
+                <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-xs text-purple-400">
+                  {signal.kind}
+                </span>
+                {signal.status && (
+                  <span className="text-xs text-slate-500">{signal.status}</span>
                 )}
-                {signal.mission_alignment && (
-                  <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-xs text-blue-400">
-                    {signal.mission_alignment}
-                  </span>
-                )}
-                <span className="text-xs text-slate-500">{formatTs(signal.created_at)}</span>
+                <span className="text-xs text-slate-500">
+                  {formatTs(signal.updated_at || signal.created_at)}
+                </span>
               </div>
             </div>
           ))}
