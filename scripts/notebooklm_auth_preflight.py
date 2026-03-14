@@ -12,6 +12,15 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=45.0, help="Command timeout seconds")
     args = parser.parse_args()
 
+    # Load Infisical secrets into environment BEFORE auth preflight.
+    # This ensures NOTEBOOKLM_AUTH_COOKIE_HEADER and UA_NOTEBOOKLM_PROFILE
+    # are available from Infisical when running on the VPS.
+    try:
+        from universal_agent.infisical_loader import initialize_runtime_secrets
+        initialize_runtime_secrets()
+    except Exception:
+        pass  # Non-fatal: preflight will proceed with whatever env vars are set
+
     result = run_auth_preflight(args.workspace, timeout_seconds=args.timeout)
     payload = {
         "ok": result.ok,
