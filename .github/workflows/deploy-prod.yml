@@ -54,7 +54,7 @@ jobs:
 
           rm -f /tmp/ssh_preflight.out /tmp/ssh_preflight.err
           
-          timeout 15m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
+          timeout 25m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
             PROD_DIR="/opt/universal_agent"
