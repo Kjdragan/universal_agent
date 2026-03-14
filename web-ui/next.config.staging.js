@@ -1,10 +1,14 @@
-/** @type {import('next').NextConfig} */
 // Staging-specific Next.js config.
 // At deploy time, deploy-staging.yml copies this file over next.config.js
 // inside /opt/universal-agent-staging/web-ui so the staging Next.js server
 // proxies API calls to the staging backend (port 9002) instead of production (8002).
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Expose the runtime stage so the UI can show a staging banner
+  env: {
+    NEXT_PUBLIC_UA_RUNTIME_STAGE: 'staging',
+  },
   async redirects() {
     return [
       {

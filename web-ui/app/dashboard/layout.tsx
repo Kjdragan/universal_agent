@@ -280,8 +280,18 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   /* Authenticated layout                                              */
   /* ---------------------------------------------------------------- */
 
+  const isStaging = process.env.NEXT_PUBLIC_UA_RUNTIME_STAGE === "staging";
+
   return (
     <div className="h-screen flex flex-col bg-[#0a0a0f] text-slate-100">
+      {/* Staging environment banner */}
+      {isStaging && (
+        <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-400 px-4 py-1.5 text-xs font-semibold text-amber-950">
+          <span>⚠️</span>
+          <span>STAGING ENVIRONMENT — changes here are not production</span>
+          <span>⚠️</span>
+        </div>
+      )}
       {/* Top bar — desktop + mobile */}
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-white/[0.06] bg-white/[0.02] px-4 backdrop-blur">
         <div className="flex items-center gap-3">
