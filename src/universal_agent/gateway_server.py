@@ -2057,7 +2057,7 @@ _csi_auto_remediation_failure_streak: dict[str, int] = {}
 _csi_auto_remediation_streak_lock = threading.Lock()
 _CSI_AUTO_REMEDIATION_HUMAN_THRESHOLD = max(
     1,
-    int(os.getenv("UA_CSI_AUTO_REMEDIATION_HUMAN_ESCALATION_THRESHOLD", "3") or 3),
+    int(os.getenv("UA_CSI_AUTO_REMEDIATION_HUMAN_ESCALATION_THRESHOLD", "5") or 5),
 )
 _csi_specialist_loop_lock = threading.Lock()
 _csi_specialist_followup_budget = max(
@@ -4136,7 +4136,7 @@ def _csi_task_routing_decision(
                 "follow_up_budget_remaining": follow_up_budget_remaining,
                 "human_intervention_reason": (
                     f"CSI auto-remediation has failed {streak} consecutive times "
-                    "(exceeding {human_threshold}-window threshold). Manual diagnosis required."
+                    f"(exceeding {human_threshold}-window threshold). Manual diagnosis required."
                 ),
             }
         # Below threshold — agent evaluates and optionally triggers runbook commands.

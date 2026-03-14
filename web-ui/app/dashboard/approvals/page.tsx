@@ -24,6 +24,98 @@ type Approval = {
     metadata?: Record<string, unknown>;
 };
 
+/** Pull a plain-English summary out of the raw approval data. */
+function humanSummary(approval: Approval): string {
+    const meta = approval.metadata || {};
+    const subject = (meta.subject_json ?? meta.subject ?? meta.description ?? "") as string;
+
+    // Try to parse subject_json if it's a string
+    let subjectObj: Record<string, unknown> = {};
+    if (typeof subject === "string" && subject.trim().startsWith("{")) {
+        try { subjectObj = JSON.parse(subject); } catch { /* ignore */ }
+    } else if (typeof subject === "object" && subject !== null) {
+        subjectObj = subject as Record<string, unknown>;
+    }
+
+    const title = approval.title || "";
+
+    // Auto-remediation failure
+    if (title.toLowerCase().includes("auto-remediation") || title.toLowerCase().includes("remediation failed")) {
+        const degraded = (subjectObj.degraded_sources as string[] | undefined) || [];
+        const failing = (subjectObj.failing_sources as string[] | undefined) || [];
+        const executed = (subjectObj.executed_actions as Array<Record<string, unknown>> | undefined) || [];
+        const failed = executed.filter((a) => !a.success);
+        const health = (subjectObj.health_status as string) || "unknown";
+        const parts: string[] = [];
+        if (failing.length) parts.push(`Failing sources: ${failing.join(", ")}`);
+        if (degraded.length) parts.push(`Degraded sources: ${degraded.join(", ")}`);
+        if (failed.length) {
+            const details = failed.map((a) => {
+                const r = (a.result as Record<string, unknown>) || {};
+                return `${a.source} (${r.detail || "failed"})`;
+            });
+            parts.push(`Failed actions: ${details.join("; ")}`);
+        }
+        return `Delivery pipeline health is ${health}. The CSI system tried to replay failed messages automatically but it didn't work. ${parts.join(". ")}`;
+    }
+
+    // SLO breach
+    if (title.toLowerCase().includes("slo") || title.toLowerCase().includes("reliability")) {
+        const breaches = (subjectObj.breaches as Array<Record<string, unknown>> | undefined) || [];
+        const metrics = (subjectObj.metrics as Record<string, unknown> | undefined) || {};
+        const ratio = metrics.delivery_success_ratio as number | undefined;
+        const parts: string[] = [];
+        if (ratio !== undefined) parts.push(`Delivery success rate: ${(ratio * 100).toFixed(1)}% (target: 98%)`);
+        for (const b of breaches) {
+            if (b.code === "canary_regression_frequency_exceeds_max") {
+                parts.push(`Canary regressions: ${b.actual} (max allowed: ${b.threshold})`);
+            }
+        }
+        return `Daily delivery metrics fell below target yesterday. ${parts.join(". ")} The system needs to re-run failed delivery jobs.`;
+    }
+
+    // Brief review
+    if (title.toLowerCase().includes("brief") || title.toLowerCase().includes("trend brief")) {
+        const slot = (subjectObj.slot_display ?? subjectObj.slot ?? "") as string;
+        const date = (subjectObj.local_date ?? "") as string;
+        return `Scheduled reminder to review the CSI global trend brief${slot ? ` (${slot} slot)` : ""}${date ? ` for ${date}` : ""}. The agent reads this artifact and acknowledges it — no human action needed.`;
+    }
+
+    // Fallback
+    return approval.summary || "Review and take action on this approval request.";
+}
+
+/** Determine if this is a human or agent approval based on metadata. */
+function reviewerLabel(approval: Approval): { label: string; color: string } {
+    const meta = approval.metadata || {};
+    const csi = (meta.csi || {}) as Record<string, unknown>;
+    const routing = (csi.routing_state as string) || "";
+    const reason = (csi.human_intervention_reason as string) || (csi.routing_reason as string) || "";
+
+    // Explicit routing state from task_hub
+    if (routing === "human_intervention_required") {
+        return { label: "Human Review", color: "bg-red-500/15 text-red-300 border border-red-500/30" };
+    }
+    if (routing === "agent_actionable") {
+        return { label: "Agent Review", color: "bg-blue-500/15 text-blue-300 border border-blue-500/30" };
+    }
+
+    // Infer from title / reason
+    const titleLc = (approval.title || "").toLowerCase();
+    if (
+        reason.toLowerCase().includes("human") ||
+        reason.toLowerCase().includes("persistent_failure") ||
+        titleLc.includes("auto-remediation")
+    ) {
+        return { label: "Human Review", color: "bg-red-500/15 text-red-300 border border-red-500/30" };
+    }
+    if (titleLc.includes("brief") || titleLc.includes("slo")) {
+        return { label: "Agent Review", color: "bg-blue-500/15 text-blue-300 border border-blue-500/30" };
+    }
+
+    return { label: "Needs Review", color: "bg-amber-500/15 text-amber-300 border border-amber-500/30" };
+}
+
 export default function ApprovalsPage() {
     const [approvals, setApprovals] = useState<Approval[]>([]);
     const [loading, setLoading] = useState(true);
@@ -151,74 +243,87 @@ export default function ApprovalsPage() {
             )}
 
             <div className="space-y-3">
-                {approvals.map((approval) => (
-                    <article
-                        key={approval.approval_id}
-                        className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"
-                    >
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                    <p className="truncate text-sm font-semibold text-slate-100">
-                                        {approval.title || approval.summary || approval.approval_id}
-                                    </p>
-                                    <span
-                                        className={`text-[11px] font-medium uppercase tracking-[0.14em] ${statusColor(approval.status)}`}
-                                    >
-                                        {approval.status}
-                                    </span>
-                                </div>
-                                <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
-                                    {approval.approval_id}
-                                </p>
-                                {approval.summary && approval.summary !== approval.title && (
-                                    <p className="mt-1 text-xs text-slate-400">{approval.summary}</p>
-                                )}
-                                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-                                    {approval.requested_by && <span>Requested by: {approval.requested_by}</span>}
-                                    {approval.approved_by && <span>Decided by: {approval.approved_by}</span>}
-                                    {approval.created_at && <span>Created: {approval.created_at}</span>}
-                                    {approval.updated_at && <span>Updated: {approval.updated_at}</span>}
-                                    {approval.phase_id && <span>Phase: {approval.phase_id}</span>}
-                                    {approval.priority !== undefined && <span>Priority: {approval.priority}</span>}
-                                    {approval.raw_status && <span>Task status: {approval.raw_status}</span>}
-                                    {approval.approval_source && <span>Source: {approval.approval_source}</span>}
-                                </div>
-                            </div>
+                {approvals.map((approval) => {
+                    const reviewer = reviewerLabel(approval);
+                    const summary = humanSummary(approval);
+                    return (
+                        <article
+                            key={approval.approval_id}
+                            className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                    {/* Title row with status + reviewer badge */}
+                                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                                        <p className="text-sm font-semibold text-slate-100 leading-snug">
+                                            {approval.title || approval.summary || approval.approval_id}
+                                        </p>
+                                        <span
+                                            className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusColor(approval.status)}`}
+                                        >
+                                            {approval.status}
+                                        </span>
+                                        <span
+                                            className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${reviewer.color}`}
+                                        >
+                                            {reviewer.label}
+                                        </span>
+                                    </div>
 
-                            <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                {approval.focus_href && (
-                                    <Link
-                                        href={approval.focus_href}
-                                        className="rounded border border-cyan-800/70 bg-cyan-900/20 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/35"
-                                    >
-                                        Open
-                                    </Link>
-                                )}
-                                {approval.status === "pending" && (
-                                    <>
-                                    <button
-                                        type="button"
-                                        onClick={() => updateApproval(approval.approval_id, "approved")}
-                                        disabled={updatingId === approval.approval_id}
-                                        className="rounded border border-emerald-800/70 bg-emerald-900/20 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                                    >
-                                        Approve
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => updateApproval(approval.approval_id, "rejected")}
-                                        disabled={updatingId === approval.approval_id}
-                                        className="rounded border border-rose-800/70 bg-rose-900/20 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
-                                    >
-                                        Reject
-                                    </button>
-                                    </>
-                                )}
+                                    {/* Plain-English summary */}
+                                    <p className="text-xs text-slate-300 leading-relaxed mb-2">{summary}</p>
+
+                                    {/* Compact ID */}
+                                    <p className="font-mono text-[11px] text-slate-600 mb-1">
+                                        {approval.approval_id}
+                                    </p>
+
+                                    {/* Metadata row */}
+                                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                                        {approval.requested_by && <span>Requested by: {approval.requested_by}</span>}
+                                        {approval.approved_by && <span>Decided by: {approval.approved_by}</span>}
+                                        {approval.created_at && <span>Created: {approval.created_at}</span>}
+                                        {approval.updated_at && <span>Updated: {approval.updated_at}</span>}
+                                        {approval.priority !== undefined && <span>Priority: {approval.priority}</span>}
+                                        {approval.raw_status && <span>Task status: {approval.raw_status}</span>}
+                                        {approval.approval_source && <span>Source: {approval.approval_source}</span>}
+                                    </div>
+                                </div>
+
+                                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                    {approval.focus_href && (
+                                        <Link
+                                            href={approval.focus_href}
+                                            className="rounded border border-cyan-800/70 bg-cyan-900/20 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/35"
+                                        >
+                                            Open
+                                        </Link>
+                                    )}
+                                    {approval.status === "pending" && (
+                                        <>
+                                        <button
+                                            type="button"
+                                            onClick={() => updateApproval(approval.approval_id, "approved")}
+                                            disabled={updatingId === approval.approval_id}
+                                            className="rounded border border-emerald-800/70 bg-emerald-900/20 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                                        >
+                                            Approve
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => updateApproval(approval.approval_id, "rejected")}
+                                            disabled={updatingId === approval.approval_id}
+                                            className="rounded border border-rose-800/70 bg-rose-900/20 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                                        >
+                                            Reject
+                                        </button>
+                                        </>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    </article>
-                ))}
+                        </article>
+                    );
+                })}
             </div>
         </div>
     );

@@ -200,9 +200,9 @@ function ActiveTasksPanel() {
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-200">{item.title}</p>
+                  <p className="text-sm font-medium text-slate-200 leading-snug">{item.title}</p>
                   {item.description && (
-                    <p className="mt-0.5 truncate text-xs text-slate-500">{item.description}</p>
+                    <p className="mt-0.5 text-xs text-slate-500 leading-snug line-clamp-2">{item.description}</p>
                   )}
                 </div>
               </div>
@@ -460,11 +460,11 @@ function RecentEventsPanel() {
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-200">{item.title}</p>
+                  <p className="text-sm font-medium text-slate-200 leading-snug">{item.title}</p>
                 </div>
                 {item.eligible !== undefined && (
                   <span
-                    className={`rounded px-1.5 py-0.5 text-xs ${
+                    className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${
                       item.eligible
                         ? "bg-green-500/10 text-green-400"
                         : "bg-yellow-500/10 text-yellow-400"
