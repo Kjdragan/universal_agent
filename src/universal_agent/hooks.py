@@ -108,6 +108,26 @@ _NOTEBOOKLM_INTENT_MARKERS = (
     "notebooklm-mcp",
     "notebooklm workflow",
     "nlm cli",
+    "nlm ",
+    "notebook_create",
+    "notebook_query",
+    "research_start",
+    "research_import",
+    "studio_create",
+    "studio artifact",
+    "audio overview",
+    "briefing doc",
+    "slide deck",
+    "slide presentation",
+    "deep dive audio",
+    "generate a report",
+    "generate a podcast",
+    "generate an infographic",
+    "generate studio",
+    "download_artifact",
+    "notebook_describe",
+    "mcp tools to perform",
+    "research and content generation pipeline",
 )
 
 _YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
@@ -1720,6 +1740,14 @@ class AgentHookSet:
         
         if not self._initial_decomposition_prompt_injected and len(prompt_text.split()) > 10:
             self._initial_decomposition_prompt_injected = True
+            nlm_hint = ""
+            if self._notebooklm_intent_this_turn:
+                nlm_hint = (
+                    "\n5. **NotebookLM Routing**: This request involves NotebookLM operations. "
+                    "You MUST delegate to the `notebooklm-operator` sub-agent using "
+                    "`Task(subagent_type='notebooklm-operator', description='...', prompt='...')`. "
+                    "Do NOT call `mcp__notebooklm-mcp__*` tools directly — they are only available to the sub-agent."
+                )
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
@@ -1730,6 +1758,7 @@ class AgentHookSet:
                         "2. **Happy Path Backbone**: Consider the deterministic path (e.g., using `mcp__composio__get_actions` or deterministic tools if you need discovery).\n"
                         "3. **Capability Match**: Evaluate your Capability Routing Doctrine. Route specific tasks (like specific forms of research) to the appropriate specialized agents.\n"
                         "4. **Execution**: Proceed methodically, orchestrating subagents and validating each atomic step."
+                        + nlm_hint
                     ),
                 }
             }
