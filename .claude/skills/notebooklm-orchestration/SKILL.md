@@ -86,6 +86,67 @@ Require explicit user confirmation before running any of these operations:
 3. Exports (`export_artifact`).
 4. Sharing (`notebook_share_status`, `notebook_share_public`, `notebook_share_invite`).
 
+## ⚠️ Critical MCP Parameter Rules
+
+**List/array parameters MUST be actual JSON arrays, NOT stringified arrays.**
+- ✅ Correct: `source_indices: [0, 1, 2]`
+- ❌ Wrong: `source_indices: "[0, 1, 2]"`
+- ✅ Correct: `urls: ["https://a.com", "https://b.com"]`
+- ❌ Wrong: `urls: '["https://a.com", "https://b.com"]'`
+
+## Happy Path: Full Research Pipeline
+
+Follow this exact sequence for research → artifact generation → download:
+
+### Step 1: Create notebook
+```
+notebook_create(title="My Research Topic")
+→ save notebook_id
+```
+
+### Step 2: Research and import (use built-in research, NOT web search)
+```
+research_start(notebook_id=<id>, query="...", source="web", mode="fast")
+→ save task_id
+
+research_status(notebook_id=<id>, task_id=<id>, poll_interval=15, max_wait=180)
+→ wait until status="completed"
+
+research_import(notebook_id=<id>, task_id=<id>)
+→ Do NOT pass source_indices — omitting it imports ALL sources automatically
+```
+
+### Step 3: Generate artifacts (confirm=true required)
+```
+studio_create(notebook_id=<id>, artifact_type="report", report_format="Briefing Doc", confirm=true)
+studio_create(notebook_id=<id>, artifact_type="infographic", orientation="landscape", confirm=true)
+studio_create(notebook_id=<id>, artifact_type="slide_deck", confirm=true)
+studio_create(notebook_id=<id>, artifact_type="audio", audio_format="deep_dive", confirm=true)
+```
+
+### Step 4: Poll for completion
+```
+studio_status(notebook_id=<id>)
+→ repeat until all artifacts show status="completed"
+→ Audio may take 3-5 minutes
+```
+
+### Step 5: Download each artifact
+```
+download_artifact(notebook_id=<id>, artifact_type="report", output_path="~/nlm_artifacts/briefing.md")
+download_artifact(notebook_id=<id>, artifact_type="infographic", output_path="~/nlm_artifacts/infographic.png")
+download_artifact(notebook_id=<id>, artifact_type="slide_deck", output_path="~/nlm_artifacts/slides.pdf")
+download_artifact(notebook_id=<id>, artifact_type="audio", output_path="~/nlm_artifacts/audio.mp3")
+```
+
+### Common Mistakes to AVOID
+1. **Do NOT pass `source_indices` to `research_import`** — omit it to import all.
+2. **Do NOT use `urls` array in `source_add`** — add one URL at a time with `url` (singular).
+3. **Do NOT stringify list parameters** — pass actual JSON arrays.
+4. **Do NOT run `uv run python scripts/notebooklm_auth_preflight.py`** — it breaks.
+5. **Do NOT call `nlm login` without `--manual`** — no browser on VPS.
+6. **Do NOT poll `research_status` with `max_wait=0`** — use at least 60 seconds.
+
 ## CLI Fallback Patterns
 
 Use these only when needed and with safe flags:
