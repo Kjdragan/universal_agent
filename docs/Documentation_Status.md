@@ -38,6 +38,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 90 | Artifacts, Workspaces & Remote Sync |
 | 91 | Telegram |
 | 92 | CSI Architecture |
+| 96 | NotebookLM Integration & Research Pipeline |
 
 ## Review & Decision Documents
 
