@@ -172,6 +172,7 @@ export default function DashboardCorporationPage() {
   const [controllingFactory, setControllingFactory] = useState<string | null>(null);
   const [serviceControllingFactory, setServiceControllingFactory] = useState<string | null>(null);
   const [systemTimers, setSystemTimers] = useState<any[]>([]);
+  const [removingFactory, setRemovingFactory] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -254,6 +255,28 @@ export default function DashboardCorporationPage() {
       else setLoading(false);
     }
   }, []);
+
+  const removeFactory = useCallback(async (factoryId: string) => {
+    if (!window.confirm(`Remove registration for factory "${factoryId}"?\nThis will delete it from the registry.`)) return;
+    setRemovingFactory(factoryId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/factory/registrations/${encodeURIComponent(factoryId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        alert(`Failed to remove factory: ${res.status} ${detail}`);
+      } else {
+        // Optimistically remove from local list, then refresh
+        setRegistrations((prev) => prev.filter((r) => r.factory_id !== factoryId));
+        void load(true);
+      }
+    } catch (err: any) {
+      alert(`Error removing factory: ${err?.message || "Unknown error"}`);
+    } finally {
+      setRemovingFactory(null);
+    }
+  }, [load]);
 
   useEffect(() => {
     void load(false);
@@ -597,6 +620,17 @@ export default function DashboardCorporationPage() {
                                         </div>
                                       </>
                                     )}
+                                    <button
+                                      type="button"
+                                      disabled={removingFactory === row.factory_id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void removeFactory(row.factory_id);
+                                      }}
+                                      className="rounded-md border border-red-800/50 bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/40 disabled:cursor-wait disabled:opacity-50"
+                                    >
+                                      {removingFactory === row.factory_id ? "Removing…" : "Remove"}
+                                    </button>
                                   </div>
                                 );
                               })()

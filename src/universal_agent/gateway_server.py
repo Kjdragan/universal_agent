@@ -11517,6 +11517,37 @@ async def list_factory_registrations(
     }
 
 
+@app.delete("/api/v1/factory/registrations/{factory_id}")
+async def delete_factory_registration(request: Request, factory_id: str):
+    """Remove a factory registration from the registry.
+
+    Useful for cleaning up stale or duplicate factory entries (e.g. old HQ servers
+    that have been replaced).  The active HQ factory cannot be removed.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    normalized_id = str(factory_id or "").strip()
+    if not normalized_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="factory_id is required")
+    # Prevent deleting the active HQ factory itself
+    if normalized_id == _FACTORY_ID:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot remove the active headquarters factory registration.",
+        )
+    deleted = 0
+    if _factory_registry is not None:
+        deleted = _factory_registry.delete_ids([normalized_id])
+    else:
+        with _factory_registration_lock:
+            if normalized_id in _factory_registrations:
+                del _factory_registrations[normalized_id]
+                deleted = 1
+    return {"ok": True, "factory_id": normalized_id, "deleted": deleted}
+
+
 @app.get("/api/v1/ops/delegation/history")
 async def delegation_history(request: Request, limit: int = 20):
     """Return recent VP missions sourced from the Redis bridge (delegation history)."""
