@@ -5,6 +5,24 @@ import { useCallback, useEffect, useState } from "react";
 
 const API_BASE = "/api/dashboard/gateway";
 
+/** Format ISO timestamp to abbreviated human-readable form, e.g. "Mar 14, 4:35 PM" */
+function formatDate(iso: string | undefined): string {
+    if (!iso) return "";
+    try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        const now = new Date();
+        const sameYear = d.getFullYear() === now.getFullYear();
+        const month = d.toLocaleString("en-US", { month: "short" });
+        const day = d.getDate();
+        const time = d.toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+        if (sameYear) return `${month} ${day}, ${time}`;
+        return `${month} ${day} '${String(d.getFullYear()).slice(2)}, ${time}`;
+    } catch {
+        return iso;
+    }
+}
+
 type Approval = {
     approval_id: string;
     task_id?: string;
@@ -121,6 +139,7 @@ export default function ApprovalsPage() {
     const [loading, setLoading] = useState(true);
     const [updatingId, setUpdatingId] = useState<string | null>(null);
     const [statusFilter, setStatusFilter] = useState<string>("all");
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -150,6 +169,7 @@ export default function ApprovalsPage() {
     const updateApproval = useCallback(
         async (approvalId: string, status: "approved" | "rejected") => {
             setUpdatingId(approvalId);
+            setErrorMsg(null);
             try {
                 const res = await fetch(
                     `${API_BASE}/api/v1/ops/approvals/${encodeURIComponent(approvalId)}`,
@@ -159,12 +179,22 @@ export default function ApprovalsPage() {
                         body: JSON.stringify({ status }),
                     },
                 );
-                if (!res.ok) return;
+                if (!res.ok) {
+                    let detail = `Failed to ${status} (HTTP ${res.status})`;
+                    try {
+                        const errBody = await res.json();
+                        if (errBody.detail) detail = String(errBody.detail);
+                    } catch { /* ignore parse errors */ }
+                    setErrorMsg(detail);
+                    return;
+                }
                 const data = await res.json();
                 const updated = data.approval as Approval;
                 setApprovals((prev) =>
                     prev.map((item) => (item.approval_id === approvalId ? updated : item)),
                 );
+            } catch (err) {
+                setErrorMsg(`Network error: ${err instanceof Error ? err.message : String(err)}`);
             } finally {
                 setUpdatingId((prev) => (prev === approvalId ? null : prev));
             }
@@ -230,6 +260,13 @@ export default function ApprovalsPage() {
                 </div>
             </div>
 
+            {errorMsg && (
+                <div className="rounded-xl border border-rose-800/60 bg-rose-900/20 p-3 text-sm text-rose-200 flex items-center justify-between">
+                    <span>⚠️ {errorMsg}</span>
+                    <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 text-xs ml-3">Dismiss</button>
+                </div>
+            )}
+
             {loading && approvals.length === 0 && (
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-6 text-center text-sm text-slate-400">
                     Loading approvals…
@@ -282,8 +319,8 @@ export default function ApprovalsPage() {
                                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
                                         {approval.requested_by && <span>Requested by: {approval.requested_by}</span>}
                                         {approval.approved_by && <span>Decided by: {approval.approved_by}</span>}
-                                        {approval.created_at && <span>Created: {approval.created_at}</span>}
-                                        {approval.updated_at && <span>Updated: {approval.updated_at}</span>}
+                                        {approval.created_at && <span>Created: {formatDate(approval.created_at)}</span>}
+                                        {approval.updated_at && <span>Updated: {formatDate(approval.updated_at)}</span>}
                                         {approval.priority !== undefined && <span>Priority: {approval.priority}</span>}
                                         {approval.raw_status && <span>Task status: {approval.raw_status}</span>}
                                         {approval.approval_source && <span>Source: {approval.approval_source}</span>}
