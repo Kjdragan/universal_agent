@@ -9,7 +9,7 @@ on:
 jobs:
   deploy-production:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Connect to Tailscale Network
         uses: tailscale/github-action@v4
@@ -54,7 +54,7 @@ jobs:
 
           rm -f /tmp/ssh_preflight.out /tmp/ssh_preflight.err
           
-          timeout 25m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
+          timeout 30m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
             PROD_DIR="/opt/universal_agent"
@@ -148,7 +148,7 @@ jobs:
             run_as_ua "export PATH=\"$PATH\"; command -v nlm && command -v notebooklm-mcp"
             
             echo "--> Building web-ui Next.js application..."
-            run_as_ua "export PATH=\"$PATH\"; if [ -d \"$PROD_DIR/web-ui\" ] && command -v npm >/dev/null 2>&1; then cd \"$PROD_DIR/web-ui\" && npm install && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi"
+            run_as_ua "export PATH=\"$PATH\"; if [ -d \"$PROD_DIR/web-ui\" ] && command -v npm >/dev/null 2>&1; then cd \"$PROD_DIR/web-ui\" && [ -f next.config.js ] || true; if [ package.json -nt node_modules/.package-json-mtime ] 2>/dev/null || [ ! -d node_modules ]; then echo '--> package.json changed or node_modules missing — running npm install...'; npm install && touch node_modules/.package-json-mtime; else echo '--> node_modules up to date, skipping npm install'; fi && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi"
             
             # 3. Restart Systemd Services
             # Set deployment-window flag so CSI canary suppresses SLO alerts during restart
