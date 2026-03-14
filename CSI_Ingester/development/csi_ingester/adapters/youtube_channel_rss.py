@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -44,7 +45,15 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         watchlist = self._resolve_watchlist()
         timeout_seconds = max(5, int(self.config.get("timeout_seconds", 20)))
         events: list[RawEvent] = []
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        # Route through residential proxy when configured to avoid VPS IP blocks.
+        # Set CSI_RSS_PROXY_URL=http://user:pass@host:port in csi-ingester.env
+        proxy_url: str | None = (
+            str(self.config.get("proxy_url") or os.getenv("CSI_RSS_PROXY_URL") or "").strip() or None
+        )
+        client_kwargs: dict[str, Any] = {"timeout": timeout_seconds}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+        async with httpx.AsyncClient(**client_kwargs) as client:
             for item in watchlist:
                 channel_id = str(item.get("channel_id") or "").strip()
                 channel_name = str(item.get("channel_name") or "").strip()
