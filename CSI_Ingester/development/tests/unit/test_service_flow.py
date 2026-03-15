@@ -84,63 +84,43 @@ def _service(tmp_path: Path) -> tuple[CSIService, object]:
     return service, conn
 
 
-async def test_service_delivers_and_dedupes(tmp_path):
+async def test_service_stores_and_dedupes(tmp_path):
+    """_poll_adapter stores events locally and dedupes on second call.
+
+    Events are NOT emitted per-poll any more; emission happens
+    via the batch-brief scheduler.
+    """
     service, conn = _service(tmp_path)
     adapter = _FakeAdapter()
     service.emitter = _EmitterOK()
 
     await service._poll_adapter("fake", adapter)
-    delivered = conn.execute("SELECT delivered FROM events WHERE event_id = 'evt-1'").fetchone()
-    assert delivered is not None
-    assert int(delivered["delivered"]) == 1
-    attempts = conn.execute(
-        "SELECT delivered, status_code, target FROM delivery_attempts WHERE event_id = 'evt-1' ORDER BY id ASC"
-    ).fetchall()
-    assert len(attempts) == 1
-    assert int(attempts[0]["delivered"]) == 1
-    assert int(attempts[0]["status_code"]) == 200
-    assert str(attempts[0]["target"]) == "ua_signals_ingest"
+    row = conn.execute("SELECT delivered FROM events WHERE event_id = 'evt-1'").fetchone()
+    assert row is not None
+    # Event is stored but NOT delivered (delivered=0) — batch brief will mark it later
+    assert int(row["delivered"]) == 0
 
+    # Second poll: same event is deduped, no second insert
     await service._poll_adapter("fake", adapter)
     rows = conn.execute("SELECT COUNT(*) AS c FROM events WHERE event_id = 'evt-1'").fetchone()
     assert int(rows["c"]) == 1
-    attempt_count = conn.execute("SELECT COUNT(*) AS c FROM delivery_attempts WHERE event_id = 'evt-1'").fetchone()
-    # Dedupe prevents a second outbound emit attempt for the same event.
-    assert int(attempt_count["c"]) == 1
 
 
-async def test_service_moves_failed_emit_to_dlq(tmp_path):
-    service, conn = _service(tmp_path)
-    adapter = _FakeAdapter()
-    service.emitter = _EmitterFail()
+async def test_service_stores_without_emitter(tmp_path):
+    """When emitter is None, events are still stored normally.
 
-    await service._poll_adapter("fake", adapter)
-    dlq = conn.execute("SELECT COUNT(*) AS c FROM dead_letter").fetchone()
-    assert int(dlq["c"]) == 1
-    attempts = conn.execute(
-        "SELECT delivered, status_code, error_class FROM delivery_attempts WHERE event_id = 'evt-1' ORDER BY id ASC"
-    ).fetchall()
-    assert len(attempts) == 1
-    assert int(attempts[0]["delivered"]) == 0
-    assert int(attempts[0]["status_code"]) == 503
-    assert str(attempts[0]["error_class"]) == "upstream_5xx"
-
-
-async def test_service_records_dlq_when_emitter_disabled(tmp_path):
+    No DLQ is created — the batch brief will emit them later.
+    """
     service, conn = _service(tmp_path)
     adapter = _FakeAdapter()
     service.emitter = None
 
     await service._poll_adapter("fake", adapter)
-    dlq = conn.execute("SELECT COUNT(*) AS c FROM dead_letter WHERE event_id = 'evt-1'").fetchone()
-    assert int(dlq["c"]) == 1
-    attempts = conn.execute(
-        "SELECT delivered, status_code, error_class FROM delivery_attempts WHERE event_id = 'evt-1' ORDER BY id ASC"
-    ).fetchall()
-    assert len(attempts) == 1
-    assert int(attempts[0]["delivered"]) == 0
-    assert int(attempts[0]["status_code"]) == 503
-    assert str(attempts[0]["error_class"]) == "upstream_5xx"
+    row = conn.execute("SELECT COUNT(*) AS c FROM events WHERE event_id = 'evt-1'").fetchone()
+    assert int(row["c"]) == 1
+    # No dead-letter entries created
+    dlq = conn.execute("SELECT COUNT(*) AS c FROM dead_letter").fetchone()
+    assert int(dlq["c"]) == 0
 
     state = conn.execute(
         "SELECT state_json FROM source_state WHERE source_key = 'adapter_health:fake' LIMIT 1"
@@ -150,7 +130,6 @@ async def test_service_records_dlq_when_emitter_disabled(tmp_path):
 
     parsed = _json.loads(str(state["state_json"]))
     assert bool(parsed.get("ok")) is True
-    assert int((parsed.get("last_cycle") or {}).get("emit_disabled") or 0) == 1
 
 
 async def test_service_records_adapter_health_on_fetch_failure(tmp_path):
