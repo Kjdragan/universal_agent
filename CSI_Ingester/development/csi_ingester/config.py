@@ -82,6 +82,52 @@ class CSIConfig:
     def threads_token_expires_at(self) -> str:
         return (os.getenv("THREADS_TOKEN_EXPIRES_AT") or "").strip()
 
+    # ── Batch brief delivery ────────────────────────────────────────────
+    @property
+    def batch_interval_seconds(self) -> int:
+        env = (os.getenv("CSI_BATCH_INTERVAL_SECONDS") or "").strip()
+        if env:
+            return max(60, int(env))
+        raw_delivery = self.raw.get("delivery", {})
+        if isinstance(raw_delivery, dict):
+            val = raw_delivery.get("batch_interval_seconds")
+            if val is not None:
+                return max(60, int(val))
+        return 7200  # default 2 hours
+
+    @property
+    def batch_min_events(self) -> int:
+        env = (os.getenv("CSI_BATCH_MIN_EVENTS") or "").strip()
+        if env:
+            return max(1, int(env))
+        raw_delivery = self.raw.get("delivery", {})
+        if isinstance(raw_delivery, dict):
+            val = raw_delivery.get("batch_min_events")
+            if val is not None:
+                return max(1, int(val))
+        return 3
+
+    @property
+    def gemini_api_key(self) -> str:
+        return (os.getenv("CSI_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
+
+    @property
+    def gemini_model(self) -> str:
+        """Gemini model for batch briefs.
+
+        Default: gemini-3-flash-preview
+        Low-cost alternative: gemini-3.1-flash-lite-preview (set via CSI_GEMINI_MODEL)
+        """
+        env = (os.getenv("CSI_GEMINI_MODEL") or "").strip()
+        if env:
+            return env
+        raw_delivery = self.raw.get("delivery", {})
+        if isinstance(raw_delivery, dict):
+            val = raw_delivery.get("gemini_model")
+            if val:
+                return str(val).strip()
+        return "gemini-3-flash-preview"
+
 
 def load_config(config_path: str | None = None) -> CSIConfig:
     path = Path(config_path or os.getenv("CSI_CONFIG_PATH") or "config/config.yaml")

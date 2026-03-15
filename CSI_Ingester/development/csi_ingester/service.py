@@ -15,13 +15,12 @@ from csi_ingester.adapters.threads_trends_broad import ThreadsBroadTrendsAdapter
 from csi_ingester.adapters.threads_trends_seeded import ThreadsSeededTrendsAdapter
 from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 from csi_ingester.adapters.youtube_playlist import YouTubePlaylistAdapter
+from csi_ingester.batch_brief import run_batch_cycle
 from csi_ingester.config import CSIConfig
-from csi_ingester.emitter.ua_client import UAEmitter, is_transient_failure
+from csi_ingester.emitter.ua_client import UAEmitter
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.scheduler import PollingScheduler
 from csi_ingester.store import dedupe as dedupe_store
-from csi_ingester.store import delivery_attempts as delivery_attempt_store
-from csi_ingester.store import dlq as dlq_store
 from csi_ingester.store import events as event_store
 from csi_ingester.store import source_state as source_state_store
 
@@ -52,7 +51,19 @@ class CSIService:
         for name, adapter in self.adapters.items():
             interval = self._poll_interval_for_adapter(name)
             self.scheduler.add_job(name, interval, lambda adapter=adapter, name=name: self._poll_adapter(name, adapter))
-        logger.info("CSI service started adapters=%s", ",".join(sorted(self.adapters.keys())))
+
+        # ── Batch brief scheduler ──────────────────────────────────────
+        batch_interval = float(self.config.batch_interval_seconds)
+        self.scheduler.add_job(
+            "batch_brief",
+            batch_interval,
+            self._run_batch_brief,
+        )
+        logger.info(
+            "CSI service started adapters=%s batch_interval=%ds",
+            ",".join(sorted(self.adapters.keys())),
+            int(batch_interval),
+        )
 
     async def stop(self) -> None:
         await self.scheduler.stop()
@@ -182,15 +193,17 @@ class CSIService:
         source_state_store.set_state(self.conn, key, state)
 
     async def _poll_adapter(self, adapter_name: str, adapter: SourceAdapter) -> None:
+        """Poll an adapter: fetch → normalize → dedup → store locally.
+
+        Events are NOT emitted individually any more.  Emission happens
+        via the batch-brief scheduler that runs every *batch_interval*.
+        """
         self.metrics.inc("csi.poll.cycles")
         started_at = time.time()
         fetched_count = 0
         stored_count = 0
         deduped_count = 0
         normalized_error_count = 0
-        delivered_count = 0
-        dlq_count = 0
-        emit_disabled_count = 0
         try:
             raw_events = await adapter.fetch_events()
         except Exception as exc:
@@ -228,67 +241,7 @@ class CSIService:
             event_store.insert_event(self.conn, event)
             self.metrics.inc("csi.events.stored")
             stored_count += 1
-            if self.emitter is None:
-                emit_disabled_count += 1
-                delivery_attempt_store.record_attempt(
-                    self.conn,
-                    event_id=event.event_id,
-                    target="ua_signals_ingest",
-                    delivered=False,
-                    status_code=503,
-                    payload={"error": "ua_delivery_not_configured"},
-                )
-                dlq_store.enqueue(
-                    self.conn,
-                    event_id=event.event_id,
-                    event=event.model_dump(),
-                    error_reason="ua_delivery_not_configured",
-                    retry_count=3,
-                )
-                self.metrics.inc("csi.events.dlq")
-                dlq_count += 1
-                continue
-            maint = self.config.ua_maintenance_mode
-            delivered, status_code, payload = await self.emitter.emit_with_retries(
-                [event], maintenance_mode=maint,
-            )
-            fc = str(payload.get("failure_class") or "") if isinstance(payload, dict) else ""
-            delivery_attempt_store.record_attempt(
-                self.conn,
-                event_id=event.event_id,
-                target="ua_signals_ingest",
-                delivered=bool(delivered),
-                status_code=int(status_code or 0),
-                payload=payload if isinstance(payload, dict) else {"payload": payload},
-            )
-            if delivered:
-                event_store.mark_delivered(self.conn, event.event_id)
-                self.metrics.inc("csi.events.delivered")
-                delivered_count += 1
-            else:
-                error_reason = fc if fc else f"ua_status_{status_code}"
-                dlq_store.enqueue(
-                    self.conn,
-                    event_id=event.event_id,
-                    event=event.model_dump(),
-                    error_reason=error_reason,
-                    retry_count=3,
-                )
-                self.metrics.inc("csi.events.dlq")
-                dlq_count += 1
-                if is_transient_failure(fc):
-                    logger.info(
-                        "CSI emit deferred (transient: %s) adapter=%s event_id=%s",
-                        fc, adapter_name, event.event_id,
-                    )
-                else:
-                    logger.warning(
-                        "CSI emit failed adapter=%s event_id=%s status=%s payload=%s",
-                        adapter_name,
-                        event.event_id,
-                        status_code,
-                        payload,
-                    )
+
         self._record_adapter_health(
             adapter_name=adapter_name,
             ok=True,
@@ -296,12 +249,40 @@ class CSIService:
             stored=stored_count,
             deduped=deduped_count,
             normalized_errors=normalized_error_count,
-            delivered=delivered_count,
-            dlq=dlq_count,
-            emit_disabled=emit_disabled_count,
             started_at=started_at,
             finished_at=time.time(),
         )
+
+    # ── Batch brief emission ─────────────────────────────────────────
+
+    async def _run_batch_brief(self) -> None:
+        """Collect un-emitted events, summarise with LLM, emit one digest."""
+        try:
+            result = await run_batch_cycle(
+                conn=self.conn,
+                config=self.config,
+                emitter=self.emitter,
+            )
+            status = result.get("status", "unknown")
+            if status == "skipped":
+                logger.debug(
+                    "Batch brief skipped: %s (events=%s)",
+                    result.get("reason"),
+                    result.get("event_count"),
+                )
+            else:
+                logger.info(
+                    "Batch brief %s: headline=%r events=%s llm=%s delivered=%s",
+                    status,
+                    result.get("brief_headline", "")[:80],
+                    result.get("event_count"),
+                    result.get("llm_used"),
+                    result.get("delivered"),
+                )
+            self.metrics.inc("csi.batch_brief.cycles")
+        except Exception as exc:
+            logger.warning("Batch brief cycle failed: %s", exc)
+            self.metrics.inc("csi.batch_brief.errors")
 
 
 def _iso_now() -> str:

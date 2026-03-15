@@ -95,3 +95,5 @@ sources:
 
 delivery:
   ua_endpoint: "${CSI_UA_ENDPOINT}"
+  batch_interval_seconds: 7200
+  batch_min_events: 3
