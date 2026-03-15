@@ -201,6 +201,58 @@ The NLM sub-agent should **never** attempt email delivery. In a March 2026 incid
 
 The NLM MCP server is configured in the Claude agent's MCP settings. It runs as the `notebooklm-mcp` server with stdio transport. The server auto-refreshes tokens and supports multiple Google account profiles.
 
+## Strategic Context
+
+### What NLM Changes for UA
+
+NotebookLM gives UA access to a **premium research-and-artifact engine** running on Google's infrastructure at zero compute cost to us. It handles capabilities that we previously built manually:
+
+| Capability | Before NLM | With NLM |
+|---|---|---|
+| Web source discovery | research-specialist + scraping tools | Built-in `research_start` with ranked results |
+| Multi-source synthesis | Manual collation in prompts | Automatic corpus indexing + cross-source querying |
+| Report generation | report-writer sub-agent + LLM prompting | Native briefing docs, study guides, blog posts |
+| Audio content | Not available | Podcast-style deep dives with AI hosts |
+| Visual artifacts | image-expert for individual images | Infographics, slide decks, mind maps, video |
+| Research persistence | Ephemeral (in-conversation only) | Persistent notebooks accessible via API |
+
+### Latency Tradeoffs
+
+NLM introduces meaningful latency compared to direct LLM tool use:
+
+| Operation | Typical Latency | Notes |
+|---|---|---|
+| Fast research + import | ~45 seconds | Source discovery + indexing |
+| Report generation | ~30 seconds | After sources are indexed |
+| Audio overview | 3-5 minutes | Full podcast generation |
+| Infographic | 1-2 minutes | Visual rendering |
+| Slide deck | 1-2 minutes | PDF/PPTX generation |
+| Video overview | 3-5 minutes | Animated video rendering |
+| **Full pipeline** (research → 4 artifacts) | **8-15 minutes** | End-to-end including downloads |
+
+For comparison, the existing research-specialist + report-writer pipeline typically completes in 2-4 minutes for text output.
+
+### When to Use NLM vs Existing Tools
+
+| Scenario | Recommendation | Rationale |
+|---|---|---|
+| Quick factual research | **Existing tools** (research-specialist) | Lower latency, sufficient quality |
+| Multi-source deep analysis | **NLM** | Superior source discovery, cross-source synthesis |
+| Text-only report | **Either** — NLM for premium quality, existing for speed | NLM reports are well-structured with citations |
+| Audio/video/visual artifacts | **NLM** (only option) | No equivalent in existing toolset |
+| Recurring scheduled research | **NLM** | Persistent notebooks accumulate knowledge |
+| Time-sensitive deliverables | **Existing tools** | NLM latency may be unacceptable |
+| Comprehensive briefing packages | **NLM** | Generate report + slides + audio in one pipeline |
+
+### Resource Model
+
+NLM operations run on Google's infrastructure via our existing subscription. Key implications:
+
+- **No compute cost** to UA — research and generation happen off-platform
+- **Concurrent pipelines** — multiple topics can be researched simultaneously
+- **Persistent storage** — notebooks remain accessible for iterative work
+- **Rate limits** — Google's internal API rate limits apply (not documented)
+
 ## Future Opportunities
 
 1. **Scheduled Research Digests** — Periodic NotebookLM research runs on configured topics, with briefing docs emailed automatically via AgentMail
@@ -209,3 +261,6 @@ The NLM MCP server is configured in the Claude agent's MCP settings. It runs as 
 4. **Export to Google Workspace** — Use `export_artifact` to push reports to Google Docs and data tables to Google Sheets
 5. **Collaborative Notebooks** — Use `notebook_share_invite` to share research notebooks with team members
 6. **Video Generation** — Leverage video overviews with styles like "cinematic" and "whiteboard" for presentation-ready content
+7. **Hybrid Pipelines** — Use NLM for research/corpus building, then existing agents for time-sensitive artifact formatting
+8. **Research Corpus as Knowledge Base** — Use NLM notebooks as persistent, queryable knowledge bases that agents can consult via `notebook_query`
+
