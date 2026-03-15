@@ -35,7 +35,7 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Web UI URL | `https://srv1360701.taildcc090.ts.net:9443` (Tailnet) | `https://app.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net` (Tailnet) |
 | API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net:8443` (Tailnet) |
 | Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units |
-| Secrets Behavior | Bootstrap into stage env `staging` and validate stage secrets; machine identity is written locally in `.env` | Bootstrap into stage env `production` and validate stage secrets; machine identity is written locally in `.env` |
+| Secrets Behavior | Bootstrap `.env` for stage `staging`; webui `.env.local` rendered from Infisical by deploy | Bootstrap `.env` for stage `production`; webui `.env.local` rendered from Infisical by deploy |
 
 ## Infisical Environment Naming
 

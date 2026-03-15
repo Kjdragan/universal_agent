@@ -133,7 +133,7 @@ jobs:
 
             echo "--> Writing clean production bootstrap .env..."
             export PROD_DIR
-            python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
+            python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
             sudo chown ua:ua "$PROD_DIR/.env"
             sudo chmod 600 "$PROD_DIR/.env"
 
@@ -142,6 +142,9 @@ jobs:
 
             echo "--> Validating production runtime bootstrap..."
             run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment production --expect-runtime-stage production --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-production --require UA_OPS_TOKEN --json"
+
+            echo "--> Rendering webui env from Infisical..."
+            run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && PYTHONPATH=src ./.venv/bin/python scripts/render_service_env_from_infisical.py --profile vps --output web-ui/.env.local --entry UA_DASHBOARD_OPS_TOKEN=UA_DASHBOARD_OPS_TOKEN,UA_OPS_TOKEN"
 
             echo "--> Installing NotebookLM CLI/MCP tool for ua..."
             run_as_ua "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
