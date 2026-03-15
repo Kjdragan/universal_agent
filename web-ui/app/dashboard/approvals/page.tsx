@@ -138,8 +138,9 @@ export default function ApprovalsPage() {
     const [approvals, setApprovals] = useState<Approval[]>([]);
     const [loading, setLoading] = useState(true);
     const [updatingId, setUpdatingId] = useState<string | null>(null);
-    const [statusFilter, setStatusFilter] = useState<string>("all");
+    const [statusFilter, setStatusFilter] = useState<string>("pending");
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [clearing, setClearing] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -202,6 +203,29 @@ export default function ApprovalsPage() {
         [],
     );
 
+    const clearAll = useCallback(async () => {
+        if (!window.confirm("Clear ALL approvals? This cannot be undone.")) return;
+        setClearing(true);
+        setErrorMsg(null);
+        try {
+            const res = await fetch(`${API_BASE}/api/v1/ops/approvals`, { method: "DELETE" });
+            if (!res.ok) {
+                let detail = `Clear failed (HTTP ${res.status})`;
+                try {
+                    const errBody = await res.json();
+                    if (errBody.detail) detail = String(errBody.detail);
+                } catch { /* ignore */ }
+                setErrorMsg(detail);
+                return;
+            }
+            await load();
+        } catch (err) {
+            setErrorMsg(`Network error: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            setClearing(false);
+        }
+    }, [load]);
+
     const statusColor = (status: string) => {
         switch (status) {
             case "pending":
@@ -250,6 +274,14 @@ export default function ApprovalsPage() {
                             </button>
                         ))}
                     </div>
+                    <button
+                        type="button"
+                        onClick={clearAll}
+                        disabled={clearing || approvals.length === 0}
+                        className="rounded-lg border border-rose-800/60 bg-rose-900/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-900/35 disabled:opacity-40"
+                    >
+                        {clearing ? "Clearing…" : "Clear All"}
+                    </button>
                     <button
                         type="button"
                         onClick={load}

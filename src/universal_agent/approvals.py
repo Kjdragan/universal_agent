@@ -85,3 +85,25 @@ def update_approval(approval_id: str, updates: dict[str, Any]) -> Optional[dict[
             _write_payload(payload)
             return approvals[idx]
     return None
+
+
+def clear_approvals(statuses: Optional[list[str]] = None) -> int:
+    """Remove approvals matching any of *statuses* (or all if None).
+
+    Returns the number of records removed.
+    """
+    payload = _load_payload()
+    approvals = payload.get("approvals", [])
+    if not approvals:
+        return 0
+    if statuses is None:
+        count = len(approvals)
+        payload["approvals"] = []
+    else:
+        normalized = {s.strip().lower() for s in statuses if s}
+        keep = [item for item in approvals if str(item.get("status") or "").strip().lower() not in normalized]
+        count = len(approvals) - len(keep)
+        payload["approvals"] = keep
+    _write_payload(payload)
+    return count
+

@@ -116,7 +116,7 @@ from universal_agent.ops_config import (
     write_ops_config,
 )
 from universal_agent.artifacts import resolve_artifacts_dir
-from universal_agent.approvals import list_approvals, update_approval, upsert_approval
+from universal_agent.approvals import list_approvals, update_approval, upsert_approval, clear_approvals
 from universal_agent.work_threads import (
     append_work_thread_decision,
     list_work_threads,
@@ -20700,6 +20700,46 @@ async def ops_approvals_update(
             conn.close()
     return {"approval": _serialize_task_review_item(updated_item)}
 
+
+@app.delete("/api/v1/ops/approvals")
+async def ops_approvals_clear(request: Request, status: Optional[str] = None):
+    """Bulk-clear approvals.  ?status=approved,rejected  or omit to clear all."""
+    _require_ops_auth(request)
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+    else:
+        statuses = None  # clear everything
+    removed = clear_approvals(statuses=statuses)
+
+    # Also park/dismiss matching task_hub approval items
+    dismissed_tasks = 0
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            rows = conn.execute(
+                "SELECT task_id, status FROM task_hub_items WHERE source_kind = 'approval'"
+            ).fetchall()
+            for row in rows:
+                tid = row["task_id"]
+                current = str(row["status"] or "").strip().lower()
+                if current not in ("completed", "parked"):
+                    try:
+                        task_hub.perform_task_action(
+                            conn, task_id=tid, action="park",
+                            reason="Bulk cleared from approvals panel",
+                            agent_id="dashboard_operator",
+                        )
+                        dismissed_tasks += 1
+                    except Exception:
+                        pass
+        finally:
+            conn.close()
+
+    return {
+        "status": "ok",
+        "cleared_approvals": removed,
+        "dismissed_tasks": dismissed_tasks,
+    }
 
 @app.get("/api/v1/ops/work-threads")
 async def ops_work_threads_list(
