@@ -109,12 +109,14 @@ function ActiveTasksPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AgentQueuePayload | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/agent-queue?offset=0&limit=10`, {
+      const statusParam = statusFilter === "all" ? "" : `&status=${statusFilter}`;
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/agent-queue?offset=0&limit=10${statusParam}`, {
         cache: "no-store",
       });
       if (!res.ok) {
@@ -127,7 +129,7 @@ function ActiveTasksPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [statusFilter]);
 
   useEffect(() => {
     load();
@@ -136,9 +138,25 @@ function ActiveTasksPanel() {
   if (loading) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-slate-400" />
+            <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300"
+            >
+              <option value="all">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="in_progress">In Progress</option>
+              <option value="blocked">Blocked</option>
+              <option value="completed">Completed</option>
+            </select>
+            <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+          </div>
         </div>
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -155,9 +173,25 @@ function ActiveTasksPanel() {
   if (error) {
     return (
       <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-slate-400" />
+            <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300"
+            >
+              <option value="all">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="in_progress">In Progress</option>
+              <option value="blocked">Blocked</option>
+              <option value="completed">Completed</option>
+            </select>
+            <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+          </div>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
@@ -183,7 +217,20 @@ function ActiveTasksPanel() {
           <BarChart3 className="h-4 w-4 text-slate-400" />
           <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
         </div>
-        <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+        <div className="flex items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300"
+          >
+            <option value="all">All Status</option>
+            <option value="pending">Pending</option>
+            <option value="in_progress">In Progress</option>
+            <option value="blocked">Blocked</option>
+            <option value="completed">Completed</option>
+          </select>
+          <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+        </div>
       </div>
 
       {items.length === 0 ? (
