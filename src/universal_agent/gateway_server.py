@@ -5630,6 +5630,44 @@ def _maybe_trigger_heartbeat_from_agentmail_action(action_payload: dict[str, Any
     )
 
 
+def _heartbeat_has_meaningful_activity(payload: dict, classification: dict) -> bool:
+    """Check whether a heartbeat produced meaningful activity worth notifying about.
+
+    A heartbeat is considered meaningful if:
+    - It wrote files (artifacts.writes is non-empty)
+    - It produced work products (artifacts.work_products is non-empty)
+    - It ran bash commands (artifacts.bash_commands is non-empty)
+    - Its findings have elevated severity (warning, error, critical)
+    - Its findings include unknown rules (not just routine known-rule matches)
+    - Task Hub items were completed or reviewed
+    """
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    writes = artifacts.get("writes") or []
+    work_products = artifacts.get("work_products") or []
+    bash_commands = artifacts.get("bash_commands") or []
+
+    # Any file or command activity = meaningful
+    if writes or work_products or bash_commands:
+        return True
+
+    # Elevated severity findings = meaningful
+    severity = str(classification.get("severity") or "info").strip().lower()
+    if severity in {"warning", "error", "critical"}:
+        return True
+
+    # Unknown rules present = meaningful (needs investigation)
+    if int(classification.get("unknown_rule_count") or 0) > 0:
+        return True
+
+    # Task Hub items completed or reviewed = meaningful
+    if int(payload.get("task_hub_completed_count") or 0) > 0:
+        return True
+    if int(payload.get("task_hub_review_count") or 0) > 0:
+        return True
+
+    return False
+
+
 def _emit_heartbeat_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "heartbeat_event")
     _scheduling_record_event("heartbeat", event_type)
@@ -5641,6 +5679,16 @@ def _emit_heartbeat_event(payload: dict) -> None:
             session_id = str(payload.get("session_id") or "").strip() or None
             findings, artifact_metadata, parse_error = _heartbeat_findings_from_artifacts(payload)
             classification = _classify_heartbeat_mediation(findings)
+
+            # ── Guard: skip notifications for no-op / status-quo heartbeats ──
+            if not _heartbeat_has_meaningful_activity(payload, classification):
+                logger.debug(
+                    "Heartbeat for %s completed with no meaningful activity; suppressing notification.",
+                    session_id,
+                )
+                _scheduling_counter_inc("heartbeat_notification_suppressed_noop")
+                return
+
             mediation_config = _heartbeat_mediation_config()
             dispatch_allowed, dispatch_reason = _should_dispatch_heartbeat_mediation(
                 classification["signature"],
@@ -7743,6 +7791,70 @@ def _delete_activity_events(ids: list[str]) -> None:
             conn.commit()
         finally:
             conn.close()
+
+
+_HEARTBEAT_NOTIFICATION_KINDS: frozenset[str] = frozenset({
+    "autonomous_heartbeat_completed",
+    "heartbeat_findings_parse_failed",
+    "heartbeat_mediation_dispatched",
+    "heartbeat_mediation_dispatch_failed",
+    "heartbeat_operator_review_required",
+    "heartbeat_operator_review_sent",
+    "agentmail_heartbeat_wake_queued",
+    "heartbeat_investigation_completed",
+})
+
+
+def _purge_activity_events_by_kind(kinds: frozenset[str]) -> dict[str, Any]:
+    """Bulk-delete activity_events rows where `kind` matches any of the given set.
+
+    Also removes matching entries from the in-memory _notifications cache.
+    Returns a summary with the count of deleted rows.
+    """
+    if not kinds:
+        return {"deleted_db": 0, "deleted_cache": 0}
+
+    deleted_db = 0
+    deleted_cache = 0
+
+    # 1. Delete from SQLite
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            placeholders = ",".join(["?"] * len(kinds))
+            kinds_lower_list = [k.lower() for k in kinds]
+            # Collect IDs before deleting so we can clean up audit entries
+            id_rows = conn.execute(
+                f"SELECT id FROM activity_events WHERE LOWER(kind) IN ({placeholders})",
+                kinds_lower_list,
+            ).fetchall()
+            event_ids = [str(r["id"]) for r in id_rows if str(r["id"] or "").strip()]
+            if event_ids:
+                id_placeholders = ",".join(["?"] * len(event_ids))
+                conn.execute(
+                    f"DELETE FROM activity_event_audit WHERE event_id IN ({id_placeholders})",
+                    event_ids,
+                )
+            cursor = conn.execute(
+                f"DELETE FROM activity_events WHERE LOWER(kind) IN ({placeholders})",
+                kinds_lower_list,
+            )
+            deleted_db = cursor.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+
+    # 2. Purge from in-memory cache
+    kinds_lower = {k.lower() for k in kinds}
+    before = len(_notifications)
+    _notifications[:] = [
+        n for n in _notifications
+        if str(n.get("kind") or "").strip().lower() not in kinds_lower
+    ]
+    deleted_cache = before - len(_notifications)
+
+    return {"deleted_db": deleted_db, "deleted_cache": deleted_cache}
 
 
 def _replace_notification_cache_record(updated: dict[str, Any]) -> None:
@@ -14873,6 +14985,28 @@ async def dashboard_events_presets_delete(request: Request, preset_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Preset not found")
     return {"owner_id": owner, "deleted": True}
+
+
+@app.post("/api/v1/dashboard/events/purge-heartbeats")
+async def dashboard_events_purge_heartbeats():
+    """Purge all historical heartbeat notification events from the activity store.
+
+    Deletes both the SQLite records and the in-memory notification cache entries
+    matching any of the known heartbeat notification kinds.
+    """
+    result = _purge_activity_events_by_kind(_HEARTBEAT_NOTIFICATION_KINDS)
+    logger.info(
+        "Purged heartbeat notifications: %d from DB, %d from cache",
+        result["deleted_db"],
+        result["deleted_cache"],
+    )
+    return {
+        "purged": True,
+        "deleted_db": result["deleted_db"],
+        "deleted_cache": result["deleted_cache"],
+        "kinds_purged": sorted(_HEARTBEAT_NOTIFICATION_KINDS),
+        "timestamp_utc": _utc_now_iso(),
+    }
 
 
 @app.get("/api/v1/dashboard/activity/{activity_id}/audit")

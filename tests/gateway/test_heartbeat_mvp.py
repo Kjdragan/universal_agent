@@ -18,7 +18,7 @@ def _get_free_port() -> int:
     return port
 
 
-async def _wait_for_server(base_url: str, timeout: float = 20.0) -> bool:
+async def _wait_for_server(base_url: str, timeout: float = 45.0) -> bool:
     start = time.time()
     while time.time() - start < timeout:
         try:

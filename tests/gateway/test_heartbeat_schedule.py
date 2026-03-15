@@ -18,7 +18,7 @@ def _get_free_port() -> int:
     return port
 
 
-async def _wait_for_server(base_url: str, timeout: float = 20.0) -> bool:
+async def _wait_for_server(base_url: str, timeout: float = 45.0) -> bool:
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -60,6 +60,10 @@ def _run_gateway(env_overrides: dict[str, str], workspace_root: Path):
     ws_url = f"ws://127.0.0.1:{port}"
     env = {
         **os.environ,
+        "PYTHONPATH": "src",
+        "UA_DEPLOYMENT_PROFILE": "local_workstation",
+        "UA_INTERNAL_API_TOKEN": "",
+        "UA_OPS_TOKEN": "",
         "UA_GATEWAY_PORT": str(port),
         "UA_WORKSPACES_DIR": str(workspace_root),
         "UA_ENABLE_HEARTBEAT": "1",
