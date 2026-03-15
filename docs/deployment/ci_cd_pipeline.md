@@ -152,7 +152,7 @@ rm /opt/universal_agent/web-ui/node_modules/.package-json-mtime           # prod
 
 - There is exactly one Codex review gate: the PR into `develop`.
 - There is no second Codex review on `main`.
-- Production promotion must use the **full 40-character** validated `develop` SHA — the workflow's SHA comparison will reject abbreviated short SHAs.
+- Production promotion should use the **full 40-character** validated `develop` SHA. The workflow will resolve short SHAs, but full SHAs are preferred to avoid ambiguity.
 - The promotion workflow refuses to run if `develop` has moved since the validated SHA.
 - The promotion workflow explicitly dispatches `Deploy Production`; it does not rely on workflow fan-out from the `main` fast-forward.
 - To make the review gate enforceable, configure GitHub branch protection on `develop` to require the `Codex Review Develop PR` check before merge.

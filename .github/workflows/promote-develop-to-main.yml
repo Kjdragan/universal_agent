@@ -35,34 +35,36 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin develop main
 
-          if ! git rev-parse --verify "${TARGET_SHA}^{commit}" >/dev/null 2>&1; then
+          # Resolve short SHAs to full 40-char form
+          RESOLVED_SHA="$(git rev-parse --verify "${TARGET_SHA}^{commit}" 2>/dev/null || true)"
+          if [ -z "${RESOLVED_SHA}" ]; then
             echo "::error::Requested SHA does not resolve to a commit: ${TARGET_SHA}"
             exit 1
           fi
+          echo "RESOLVED_SHA=${RESOLVED_SHA}" >> "$GITHUB_ENV"
 
           current_develop_sha="$(git rev-parse origin/develop)"
           current_main_sha="$(git rev-parse origin/main)"
 
-          echo "Requested develop SHA: ${TARGET_SHA}"
+          echo "Input SHA:             ${TARGET_SHA}"
+          echo "Resolved SHA:          ${RESOLVED_SHA}"
           echo "Current origin/develop: ${current_develop_sha}"
-          echo "Current origin/main: ${current_main_sha}"
+          echo "Current origin/main:    ${current_main_sha}"
 
-          if [ "${TARGET_SHA}" != "${current_develop_sha}" ]; then
+          if [ "${RESOLVED_SHA}" != "${current_develop_sha}" ]; then
             echo "::error::Refusing promotion because origin/develop has moved or the provided SHA is not the current validated develop head."
             exit 1
           fi
 
-          if ! git merge-base --is-ancestor "${current_main_sha}" "${TARGET_SHA}"; then
+          if ! git merge-base --is-ancestor "${current_main_sha}" "${RESOLVED_SHA}"; then
             echo "::error::Refusing promotion because main cannot be fast-forwarded cleanly to the requested SHA."
             exit 1
           fi
 
       - name: Fast-forward main to validated develop SHA
-        env:
-          TARGET_SHA: ${{ inputs.develop_sha }}
         run: |
           set -euo pipefail
-          git push origin "${TARGET_SHA}:refs/heads/main"
+          git push origin "${RESOLVED_SHA}:refs/heads/main"
 
       - name: Dispatch production deploy workflow
         env:
