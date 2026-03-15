@@ -2023,6 +2023,44 @@ _vp_stale_reconcile_seconds = max(
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
+
+# ── CSI Trend Digest Storage ─────────────────────────────────────────────
+# Lean in-memory store for CSI trend digests.  The new CSI tab reads these
+# instead of the old notification/task-hub/specialist-loop machinery.
+_csi_digests: list[dict] = []
+_csi_digests_max = int(os.getenv("UA_CSI_DIGESTS_MAX", "200"))
+
+
+def _add_csi_digest(
+    *,
+    event_id: str,
+    source: str,
+    event_type: str,
+    title: str,
+    summary: str,
+    full_report_md: str,
+    source_types: list[str] | None = None,
+    created_at: str | None = None,
+) -> dict:
+    """Store a CSI trend digest for the dashboard feed."""
+    import uuid as _uuid
+
+    digest = {
+        "id": str(_uuid.uuid4()),
+        "event_id": event_id,
+        "source": source,
+        "event_type": event_type,
+        "title": title,
+        "summary": summary,
+        "full_report_md": full_report_md,
+        "source_types": source_types or [source],
+        "created_at": created_at or datetime.now(timezone.utc).isoformat(),
+    }
+    _csi_digests.insert(0, digest)
+    # Trim to max size
+    while len(_csi_digests) > _csi_digests_max:
+        _csi_digests.pop()
+    return digest
 _activity_events_retention_days = max(
     7,
     int(os.getenv("UA_ACTIVITY_EVENTS_RETENTION_DAYS", "90") or 90),
@@ -10648,11 +10686,6 @@ async def signals_ingest_endpoint(request: Request):
     if status_code in {200, 207} and _hooks_service:
         dispatch_count = 0
         analytics_dispatch_count = 0
-        analytics_throttled_count = 0
-        recommendation_task_count = 0
-        recommendation_agent_task_count = 0
-        recommendation_human_task_count = 0
-        recommendation_human_notice_count = 0
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
             if manual_payload:
@@ -10672,696 +10705,128 @@ async def signals_ingest_endpoint(request: Request):
                     dispatch_count += 1
                 continue
 
-            analytics_action = to_csi_analytics_action(event)
-            if not analytics_action:
-                continue
-
-            is_throttled, _remaining = _csi_dispatch_is_throttled(event.source, event.event_type)
-            if is_throttled:
-                analytics_throttled_count += 1
-                continue
-
-            asyncio.create_task(_hooks_service.dispatch_internal_action(analytics_action))
-            _csi_record_dispatch(event.source, event.event_type)
-            analytics_dispatch_count += 1
-
-            policy = _csi_event_notification_policy(event)
-            event_type_norm = str(event.event_type or "").strip().lower()
-            notification_kind = "csi_insight"
-            title = f"CSI Insight: {event.event_type or 'Report'} from {event.source or 'Unknown'}"
-            if event_type_norm == "delivery_health_regression":
-                notification_kind = "csi_delivery_health_regression"
-                title = "CSI Delivery Health Regression Detected"
-            elif event_type_norm == "delivery_health_recovered":
-                notification_kind = "csi_delivery_health_recovered"
-                title = "CSI Delivery Health Recovered"
-            elif event_type_norm == "delivery_reliability_slo_breached":
-                notification_kind = "csi_delivery_reliability_slo_breached"
-                title = "CSI Reliability SLO Breached"
-            elif event_type_norm == "delivery_reliability_slo_recovered":
-                notification_kind = "csi_delivery_reliability_slo_recovered"
-                title = "CSI Reliability SLO Recovered"
-            elif event_type_norm == "delivery_health_auto_remediation_failed":
-                notification_kind = "csi_delivery_health_auto_remediation_failed"
-                title = "CSI Auto-Remediation Failed"
-            elif event_type_norm == "delivery_health_auto_remediation_succeeded":
-                notification_kind = "csi_delivery_health_auto_remediation_succeeded"
-                title = "CSI Auto-Remediation Succeeded"
-                # Reset the failure streak now that remediation succeeded.
-                _csi_auto_remediation_streak_reset("delivery_health_auto_remediation_failed")
-            message = analytics_action.get("message", "No content")
-
-            # Packet 14: normalize traceability fields on every CSI notification
-            _session_key = str(analytics_action.get("session_key") or "").strip()
+            # ── CSI Redesign: capture trend digests (no agent/notification dispatch) ──
+            # Non-YouTube CSI events are stored as lean digests for the new CSI tab.
             subject_obj = event.subject if isinstance(event.subject, dict) else {}
-            _report_key = str(subject_obj.get("report_key") or "").strip()
-            _artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else None
-            _source = str(event.source or "").strip()
-            _source_mix: dict[str, int] = {}
+            event_type_norm = str(event.event_type or "").strip().lower()
 
-            # Packet 16: compute report quality score
-            _quality_result: dict[str, Any] | None = None
-            try:
-                score_report_quality = lambda **kw: None  # CSI Redesign: module deleted  # noqa: E731
-                for opp in (subject_obj.get("opportunities") or []):
-                    if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
-                        for k, v in opp["source_mix"].items():
-                            _source_mix[k] = _source_mix.get(k, 0) + int(v or 0)
-                if not _source_mix and _source:
-                    _source_mix[_source] = 1
-                _quality_result = score_report_quality(
-                    subject=subject_obj,
-                    source_mix=_source_mix,
-                )
-            except Exception:
-                pass
+            # Build human-readable title + summary from the event payload
+            _digest_title = str(
+                subject_obj.get("title")
+                or subject_obj.get("brief_title")
+                or f"CSI: {event.event_type or 'Report'} — {event.source or 'Unknown'}"
+            ).strip()
+            _digest_summary = str(
+                subject_obj.get("summary")
+                or subject_obj.get("brief_summary")
+                or subject_obj.get("description")
+                or ""
+            ).strip()[:500]
+            _digest_full_md = str(
+                subject_obj.get("full_report_md")
+                or subject_obj.get("report_markdown")
+                or subject_obj.get("brief_body")
+                or subject_obj.get("analysis")
+                or _digest_summary
+            ).strip()
 
-            metadata = {
-                "event_type": event.event_type,
-                "event_id": event.event_id,
-                "source": _source,
-                "session_key": _session_key or None,
-                "report_key": _report_key or None,
-                "artifact_paths": _artifact_paths,
-                "quality": _quality_result,
-                "source_mix": _source_mix,
-                "notification_policy": {
-                    "high_value": bool(policy.get("high_value")),
-                    "has_anomaly": bool(policy.get("has_anomaly")),
-                },
-            }
-            if isinstance(event.subject, dict):
-                if _artifact_paths:
-                    md_path = _artifact_paths.get("markdown")
-                    if md_path:
-                        message += f"\n\nReport Artifact: {md_path}"
-                if event_type_norm in {"delivery_health_regression", "delivery_health_recovered"}:
-                    metadata["delivery_health_status"] = str(event.subject.get("status") or "")
-                    metadata["failing_sources"] = event.subject.get("failing_sources")
-                    metadata["degraded_sources"] = event.subject.get("degraded_sources")
-                    remediation = event.subject.get("remediation") if isinstance(event.subject.get("remediation"), dict) else {}
-                    steps = remediation.get("steps") if isinstance(remediation.get("steps"), list) else []
-                    if steps:
-                        metadata["remediation_steps"] = steps[:8]
-                        first_command = ""
-                        for step in steps:
-                            if isinstance(step, dict):
-                                first_command = str(step.get("runbook_command") or "").strip()
-                                if first_command:
-                                    break
-                        if first_command:
-                            metadata["primary_runbook_command"] = first_command
-                elif event_type_norm in {"delivery_health_auto_remediation_failed", "delivery_health_auto_remediation_succeeded"}:
-                    metadata["delivery_health_status"] = str(event.subject.get("health_status") or "")
-                    metadata["auto_remediation_status"] = str(event.subject.get("status") or "")
-                    metadata["executed_actions"] = event.subject.get("executed_actions")
-                    metadata["skipped_actions"] = event.subject.get("skipped_actions")
-                    executed = event.subject.get("executed_actions")
-                    if isinstance(executed, list):
-                        first_command = ""
-                        for action in executed:
-                            if isinstance(action, dict):
-                                result = action.get("result") if isinstance(action.get("result"), dict) else {}
-                                maybe = str(result.get("runbook_command") or "").strip()
-                                if maybe:
-                                    first_command = maybe
-                                    break
-                        if first_command:
-                            metadata["primary_runbook_command"] = first_command
-                elif event_type_norm in {"delivery_reliability_slo_breached", "delivery_reliability_slo_recovered"}:
-                    metadata["slo_status"] = str(event.subject.get("status") or "")
-                    metadata["target_day_utc"] = str(event.subject.get("target_day_utc") or "")
-                    metrics = event.subject.get("metrics") if isinstance(event.subject.get("metrics"), dict) else {}
-                    if metrics:
-                        metadata["slo_metrics"] = metrics
-                    thresholds = event.subject.get("thresholds") if isinstance(event.subject.get("thresholds"), dict) else {}
-                    if thresholds:
-                        metadata["slo_thresholds"] = thresholds
-                    top_root_causes = (
-                        event.subject.get("top_root_causes")
-                        if isinstance(event.subject.get("top_root_causes"), list)
-                        else []
-                    )
-                    if top_root_causes:
-                        metadata["top_root_causes"] = top_root_causes[:3]
-                        first_command = ""
-                        for cause in top_root_causes:
-                            if isinstance(cause, dict):
-                                maybe = str(cause.get("runbook_command") or "").strip()
-                                if maybe:
-                                    first_command = maybe
-                                    break
-                        if first_command:
-                            metadata["primary_runbook_command"] = first_command
+            # Collect source type tags if present
+            _source_types: list[str] = []
+            for opp in (subject_obj.get("opportunities") or []):
+                if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
+                    _source_types.extend(opp["source_mix"].keys())
+            if not _source_types:
+                _source_types = [str(event.source or "unknown")]
 
-            notification_detail = _compact_csi_notification_message(message)
-            full_signal_message = (
-                "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
-                f"{notification_detail}"
-            )
-            full_signal_message_raw = (
-                "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
-                f"{message}"
-            )
-            _csi_emit_specialist_synthesis(event, full_signal_message_raw)
-            loop_state = _csi_update_specialist_loop(event, full_signal_message_raw)
-            csi_proactive_family = event_type_norm in _CSI_TASK_HUB_PROACTIVE_EVENT_TYPES
-            should_enqueue_task = _should_enqueue_csi_task(
+            _add_csi_digest(
+                event_id=event.event_id,
+                source=str(event.source or ""),
                 event_type=event_type_norm,
-                policy=policy,
+                title=_digest_title,
+                summary=_digest_summary,
+                full_report_md=_digest_full_md,
+                source_types=_source_types,
+                created_at=event.occurred_at or None,
             )
-            csi_routing = _csi_task_routing_decision(
-                event_type=event_type_norm,
-                subject_obj=subject_obj,
-                policy=policy,
-                loop_state=loop_state,
-            ) if csi_proactive_family else {}
-            if csi_routing:
-                metadata["csi"] = csi_routing
-                if str(csi_routing.get("routing_state") or "") == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
-                    metadata["focus_href"] = "/dashboard/todolist?mode=personal&focus=human-tasks"
-
-            if bool(policy.get("is_digest")):
-                _csi_emit_digest_notification(event, full_signal_message)
-            else:
-                routing_state = str(csi_routing.get("routing_state") or "").strip().lower()
-                should_emit_primary_notification = not (
-                    csi_proactive_family and routing_state == task_hub.CSI_ROUTING_INCUBATING
-                )
-                if should_emit_primary_notification:
-                    primary_requires_action = bool(policy.get("requires_action"))
-                    if routing_state == task_hub.CSI_ROUTING_AGENT_ACTIONABLE:
-                        primary_requires_action = False
-                    elif routing_state == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
-                        primary_requires_action = True
-                    _add_notification(
-                        kind=notification_kind,
-                        title=title,
-                        message=full_signal_message,
-                        summary=_activity_summary_text(message, max_chars=260),
-                        full_message=full_signal_message,
-                        severity=str(policy.get("severity") or "info"),
-                        requires_action=primary_requires_action,
-                        metadata=metadata,
-                        created_at=event.occurred_at or event.received_at,
-                    )
-            if loop_state.get("updated"):
-                for alert in loop_state.get("quality_alerts", []) if isinstance(loop_state.get("quality_alerts"), list) else []:
-                    if not isinstance(alert, dict):
-                        continue
-                    kind = str(alert.get("kind") or "").strip()
-                    if not kind:
-                        continue
-                    topic_key = str((alert.get("metadata") or {}).get("topic_key") or loop_state.get("topic_key") or "").strip()
-                    cooldown_seconds = int(_csi_specialist_alert_cooldown_minutes) * 60
-                    if _has_recent_notification(
-                        kind=kind,
-                        metadata_match={"topic_key": topic_key} if topic_key else None,
-                        within_seconds=max(60, cooldown_seconds),
-                    ):
-                        continue
-                    metadata = alert.get("metadata") if isinstance(alert.get("metadata"), dict) else {}
-                    metadata = {
-                        **metadata,
-                        "topic_key": topic_key or metadata.get("topic_key"),
-                        "confidence_method": loop_state.get("confidence_method"),
-                        "confidence_target": loop_state.get("confidence_target"),
-                        "confidence_score": loop_state.get("confidence_score"),
-                    }
-                    _add_notification(
-                        kind=kind,
-                        title=str(alert.get("title") or "CSI Specialist Quality Alert"),
-                        message=str(alert.get("message") or "CSI specialist quality guardrail triggered."),
-                        severity=str(alert.get("severity") or "warning"),
-                        requires_action=True,
-                        metadata=metadata,
-                        created_at=event.occurred_at or event.received_at,
-                    )
-
-                loop_status = str(loop_state.get("status") or "")
-                if loop_status == "closed":
-                    _add_notification(
-                        kind="csi_specialist_confidence_reached",
-                        title="CSI Specialist Confidence Reached",
-                        message=(
-                            f"Loop {loop_state.get('topic_label')} reached confidence "
-                            f"{loop_state.get('confidence_score')} (target {loop_state.get('confidence_target')})."
-                        ),
-                        severity="success",
-                        requires_action=False,
-                        metadata={
-                            "topic_key": loop_state.get("topic_key"),
-                            "confidence_score": loop_state.get("confidence_score"),
-                            "confidence_target": loop_state.get("confidence_target"),
-                            "confidence_method": loop_state.get("confidence_method"),
-                            "confidence_evidence": loop_state.get("confidence_evidence"),
-                            "events_count": loop_state.get("events_count"),
-                            "low_signal_streak": loop_state.get("low_signal_streak"),
-                            "suppressed_until": loop_state.get("suppressed_until"),
-                        },
-                        created_at=event.occurred_at or event.received_at,
-                    )
-                elif loop_status == "budget_exhausted":
-                    _add_notification(
-                        kind="csi_specialist_followup_budget_exhausted",
-                        title="CSI Specialist Follow-up Budget Exhausted",
-                        message=(
-                            f"Loop {loop_state.get('topic_label')} exhausted follow-up budget "
-                            f"before reaching target confidence."
-                        ),
-                        severity="warning",
-                        requires_action=True,
-                        metadata={
-                            "topic_key": loop_state.get("topic_key"),
-                            "confidence_score": loop_state.get("confidence_score"),
-                            "confidence_target": loop_state.get("confidence_target"),
-                            "confidence_method": loop_state.get("confidence_method"),
-                            "confidence_evidence": loop_state.get("confidence_evidence"),
-                            "events_count": loop_state.get("events_count"),
-                            "low_signal_streak": loop_state.get("low_signal_streak"),
-                            "suppressed_until": loop_state.get("suppressed_until"),
-                        },
-                        created_at=event.occurred_at or event.received_at,
-                    )
-                elif bool(loop_state.get("request_followup")) and _hooks_service:
-                    followup_payload = {
-                        "kind": "agent",
-                        "name": "CSITrendFollowUpRequest",
-                        "session_key": "csi_trend_analyst",
-                        "to": "csi-trend-analyst",
-                        "message": str(loop_state.get("followup_message") or ""),
-                        "timeout_seconds": int(
-                            max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))
-                        ),
-                    }
-                    asyncio.create_task(_hooks_service.dispatch_internal_action(followup_payload))
-                    follow_ok, follow_reason = True, "background"
-                    _add_notification(
-                        kind="csi_specialist_followup_requested" if follow_ok else "csi_specialist_followup_request_failed",
-                        title="CSI Specialist Follow-up Requested" if follow_ok else "CSI Specialist Follow-up Request Failed",
-                        message=(
-                            f"Loop {loop_state.get('topic_label')} follow-up dispatch "
-                            f"{'succeeded' if follow_ok else f'failed: {follow_reason}'}."
-                        ),
-                        severity="info" if follow_ok else "warning",
-                        requires_action=not follow_ok,
-                        metadata={
-                            "topic_key": loop_state.get("topic_key"),
-                            "confidence_score": loop_state.get("confidence_score"),
-                            "confidence_target": loop_state.get("confidence_target"),
-                            "confidence_method": loop_state.get("confidence_method"),
-                            "confidence_evidence": loop_state.get("confidence_evidence"),
-                            "follow_up_budget_remaining": loop_state.get("follow_up_budget_remaining"),
-                            "source_mix": loop_state.get("source_mix"),
-                            "dispatch_reason": follow_reason,
-                            "low_signal_streak": loop_state.get("low_signal_streak"),
-                            "suppressed_until": loop_state.get("suppressed_until"),
-                        },
-                        created_at=event.occurred_at or event.received_at,
-                    )
-
-            # Internal-first task hub write (source of truth).
-            project_key = classify_csi_project_key(
-                event_type=event_type_norm,
-                subject=subject_obj,
-                quality=_quality_result,
-                source_mix=_source_mix,
-            )
-            incident_key = _csi_incident_key(
-                event_id=str(getattr(event, "event_id", "") or ""),
-                event_type=event_type_norm,
-                source=_source,
-                subject_obj=subject_obj if isinstance(subject_obj, dict) else {},
-            )
-            mirror_class = _task_hub_mirror_class_for_csi(
-                event_type=event_type_norm,
-                has_anomaly=bool(policy.get("has_anomaly")),
-                high_value=bool(policy.get("high_value")),
-                requires_action=bool(policy.get("requires_action")),
-            )
-            routing_state = str(csi_routing.get("routing_state") or task_hub.CSI_ROUTING_INCUBATING).strip().lower()
-            csi_labels = ["CSI", f"csi-project:{project_key}"]
-            if routing_state == task_hub.CSI_ROUTING_AGENT_ACTIONABLE:
-                csi_labels.append("agent-ready")
-            elif routing_state == task_hub.CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED:
-                csi_labels.append("needs-human")
-            else:
-                csi_labels.append("csi-incubating")
-            must_complete = bool(
-                event_type_norm in {"delivery_reliability_slo_breached", "delivery_health_auto_remediation_failed"}
-            )
-            if must_complete:
-                csi_labels.append("must-complete")
-
-            mirror_policy: dict[str, Any] = dict(task_hub.DEFAULT_MIRROR_POLICY)
-            should_mirror = False
-            hub_task_id = ""
-            human_recommendation_task_ids: list[str] = []
-            human_recommendation_preview: list[str] = []
-            if not (_task_hub_enabled() and should_enqueue_task):
-                continue
-            with _activity_store_lock:
-                hub_conn = _task_hub_open_conn()
-                try:
-                    mirror_policy = task_hub.get_mirror_policy(hub_conn)
-                    should_mirror = _task_hub_should_mirror(mirror_policy, mirror_class)
-                    hub_item = task_hub.upsert_csi_item(
-                        hub_conn,
-                        event_id=str(getattr(event, "event_id", "") or ""),
-                        event_type=event_type_norm,
-                        source=_source,
-                        title=title,
-                        message=message,
-                        project_key=project_key,
-                        labels=csi_labels,
-                        priority=4 if must_complete else 3,
-                        incident_key=incident_key,
-                        must_complete=must_complete,
-                        mirror_status="mirror_eligible" if should_mirror else "internal_only",
-                        routing_state=routing_state,
-                        routing_reason=str(csi_routing.get("routing_reason") or ""),
-                        confidence_target=csi_routing.get("confidence_target"),
-                        follow_up_budget_remaining=csi_routing.get("follow_up_budget_remaining"),
-                        human_intervention_reason=csi_routing.get("human_intervention_reason"),
-                    )
-                    hub_task_id = str(hub_item.get("task_id") or "")
-
-                    recommendation_items = _build_csi_recommendation_task_items(
-                        subject=subject_obj,
-                        event_type=event_type_norm,
-                        parent_task_id=hub_task_id,
-                        parent_title=title,
-                        project_key=project_key,
-                        must_complete=must_complete,
-                    )
-                    recommendation_ids: list[str] = []
-                    for recommendation_item in recommendation_items:
-                        task_hub.upsert_item(hub_conn, recommendation_item)
-                        recommendation_task_id = str(recommendation_item.get("task_id") or "")
-                        recommendation_ids.append(recommendation_task_id)
-                        recommendation_task_count += 1
-                        if bool(recommendation_item.get("agent_ready")):
-                            recommendation_agent_task_count += 1
-                        else:
-                            recommendation_human_task_count += 1
-                            if recommendation_task_id:
-                                human_recommendation_task_ids.append(recommendation_task_id)
-                            recommendation_meta = recommendation_item.get("metadata")
-                            if isinstance(recommendation_meta, dict):
-                                recommendation_text = str(recommendation_meta.get("recommendation_text") or "").strip()
-                                if recommendation_text:
-                                    human_recommendation_preview.append(recommendation_text)
-
-                    if recommendation_ids:
-                        task_hub.upsert_item(
-                            hub_conn,
-                            {
-                                "task_id": hub_task_id,
-                                "metadata": {
-                                    "recommendation_task_ids": recommendation_ids,
-                                    "recommendation_count": len(recommendation_ids),
-                                    "recommendation_agent_count": sum(
-                                        1 for item in recommendation_items if bool(item.get("agent_ready"))
-                                    ),
-                                    "recommendation_human_count": sum(
-                                        1 for item in recommendation_items if not bool(item.get("agent_ready"))
-                                    ),
-                                },
-                            },
-                        )
-                        if str(os.getenv("UA_CSI_RECOMMENDATION_AUTO_PARK_REMOVED", "1")).strip().lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "on",
-                        }:
-                            placeholders = ",".join("?" for _ in recommendation_ids)
-                            park_sql = (
-                                "UPDATE task_hub_items "
-                                "SET status=?, stale_state=?, seizure_state='unseized', updated_at=? "
-                                "WHERE source_kind='csi_recommendation' "
-                                "AND parent_task_id=? "
-                                "AND status IN ('open', 'blocked', 'needs_review') "
-                                f"AND task_id NOT IN ({placeholders})"
-                            )
-                            params: list[Any] = [
-                                task_hub.TASK_STATUS_PARKED,
-                                "superseded_recommendation",
-                                datetime.now(timezone.utc).isoformat(),
-                                hub_task_id,
-                                *recommendation_ids,
-                            ]
-                            hub_conn.execute(park_sql, tuple(params))
-                            hub_conn.commit()
-                finally:
-                    hub_conn.close()
-
-            if human_recommendation_task_ids:
-                preview_lines = []
-                for text in human_recommendation_preview[:5]:
-                    preview_lines.append(f"- {text}")
-                preview_block = "\n".join(preview_lines)
-                if len(human_recommendation_preview) > len(preview_lines):
-                    preview_block += (
-                        f"\n- (+{len(human_recommendation_preview) - len(preview_lines)} more)"
-                    )
-                _add_notification(
-                    kind="csi_human_action_required",
-                    title="CSI Human Action Required",
-                    message=(
-                        f"CSI surfaced {len(human_recommendation_task_ids)} recommendation task(s) "
-                        "that require human attention.\n\n"
-                        f"{preview_block}\n\n"
-                        "Open Personal Queue: /dashboard/todolist?mode=personal&focus=human-tasks"
-                    ),
-                    severity="warning",
-                    requires_action=True,
-                    metadata={
-                        "event_id": str(getattr(event, "event_id", "") or ""),
-                        "event_type": event_type_norm,
-                        "source": _source,
-                        "task_hub_parent_task_id": hub_task_id,
-                        "task_hub_human_task_ids": human_recommendation_task_ids,
-                        "focus_href": "/dashboard/todolist?mode=personal&focus=human-tasks",
-                    },
-                    created_at=event.occurred_at or event.received_at,
-                )
-                recommendation_human_notice_count += 1
-
-            # Mirror to Todoist only when both event and mirror policy allow it.
-            if (not bool(policy.get("todoist_sync"))) or (not should_mirror):
-                continue
-
-            has_api_key = bool((os.getenv("TODOIST_API_KEY") or "").strip())
-            has_api_token = bool((os.getenv("TODOIST_API_TOKEN") or "").strip())
-            if not (has_api_key or has_api_token):
-                logger.info(
-                    "Skipping CSI Todoist sync because credentials are not configured "
-                    "(TODOIST_API_TOKEN/TODOIST_API_KEY missing)."
-                )
-                if not _has_recent_notification(
-                    kind="system_notice",
-                    metadata_match={"integration": "todoist", "reason": "credentials_missing"},
-                    within_seconds=1800,
-                ):
-                    _add_notification(
-                        kind="system_notice",
-                        title="Todoist Sync Skipped",
-                        message=(
-                            "CSI signal received, but Todoist sync is disabled because "
-                            "TODOIST_API_TOKEN/TODOIST_API_KEY is not configured."
-                        ),
-                        severity="info",
-                        metadata={"integration": "todoist", "reason": "credentials_missing"},
-                    )
-                continue
-
-            try:
-                from universal_agent.services.todoist_service import TodoService
-
-                existing_todoist_task_id = ""
-                if hub_task_id:
-                    with _activity_store_lock:
-                        hub_conn = _task_hub_open_conn()
-                        try:
-                            row = hub_conn.execute(
-                                "SELECT todoist_task_id FROM task_hub_mirror_map WHERE task_id = ? LIMIT 1",
-                                (hub_task_id,),
-                            ).fetchone()
-                            existing_todoist_task_id = str((row["todoist_task_id"] if row else "") or "").strip()
-                        finally:
-                            hub_conn.close()
-
-                if existing_todoist_task_id:
-                    continue
-
-                todoist = TodoService()
-                section_by_project = {
-                    "immediate": "immediate",
-                    "proactive": "inbox",
-                }
-                created = todoist.create_task(
-                    content=title,
-                    description=f"{message}\n\nReview in CSI Dashboard Tab.",
-                    labels=["CSI", f"csi-project:{project_key}"],
-                    priority="high",
-                    section=section_by_project.get(project_key, "background"),
-                    project_key=project_key,
-                )
-                if hub_task_id:
-                    todoist_task_id = str((created or {}).get("id") or "").strip()
-                    with _activity_store_lock:
-                        hub_conn = _task_hub_open_conn()
-                        try:
-                            task_hub.upsert_mirror_map(
-                                hub_conn,
-                                task_id=hub_task_id,
-                                todoist_task_id=todoist_task_id or None,
-                                mirror_class=mirror_class,
-                                mirror_state="synced" if todoist_task_id else "sync_unknown",
-                            )
-                        finally:
-                            hub_conn.close()
-            except Exception as exc:
-                if hub_task_id:
-                    with _activity_store_lock:
-                        hub_conn = _task_hub_open_conn()
-                        try:
-                            task_hub.upsert_mirror_map(
-                                hub_conn,
-                                task_id=hub_task_id,
-                                todoist_task_id=None,
-                                mirror_class=mirror_class,
-                                mirror_state="sync_failed",
-                                last_error=str(exc),
-                            )
-                        finally:
-                            hub_conn.close()
-                exc_str = str(exc)
-                is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
-                is_rate_limited = "429" in exc_str or "rate limit" in exc_str.lower() or "too many requests" in exc_str.lower()
-                is_forbidden = not is_rate_limited and any(s in exc_str for s in ("403", "Forbidden"))
-                is_auth = not is_rate_limited and any(s in exc_str for s in ("401", "Unauthorized", "UNAUTHORIZED"))
-                if is_limit:
-                    logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
-                    if not _has_recent_notification(
-                        kind="system_notice",
-                        metadata_match={"integration": "todoist", "reason": "items_limit_reached"},
-                        within_seconds=3600,
-                    ):
-                        _add_notification(
-                            kind="system_notice",
-                            title="Todoist CSI Project Full",
-                            message=(
-                                "The 'UA: CSI Actions' Todoist project has reached its item limit. "
-                                "Complete or delete old tasks to resume syncing. "
-                                "New CSI signals are still visible in the CSI Feed tab."
-                            ),
-                            severity="warning",
-                            metadata={"integration": "todoist", "reason": "items_limit_reached"},
-                        )
-                elif is_rate_limited:
-                    logger.warning("Todoist rate limit hit (429); backing off: %s", exc)
-                    if not _has_recent_notification(
-                        kind="system_notice",
-                        metadata_match={"integration": "todoist", "reason": "rate_limited"},
-                        within_seconds=900,
-                    ):
-                        _add_notification(
-                            kind="system_notice",
-                            title="Todoist Rate Limit Hit",
-                            message=(
-                                "Todoist returned HTTP 429 (Too Many Requests). The CSI pipeline "
-                                "is generating more than 1000 Todoist API calls within a 15-minute "
-                                "window. Task sync will resume automatically. No action needed — "
-                                "CSI signals are still visible in the CSI Feed tab."
-                            ),
-                            severity="warning",
-                            metadata={"integration": "todoist", "reason": "rate_limited", "source_domain": "system"},
-                        )
-                elif is_auth:
-                    logger.warning("Todoist auth failure (401 — token may be invalid or revoked): %s", exc)
-                    if not _has_recent_notification(
-                        kind="system_error",
-                        metadata_match={"integration": "todoist", "reason": "auth_failure"},
-                        within_seconds=3600,
-                    ):
-                        _add_notification(
-                            kind="system_error",
-                            title="Todoist Auth Failed — Token Needs Regeneration",
-                            message=(
-                                "Todoist API returned 401/403. The API token stored in Infisical "
-                                "is invalid or has been revoked. Personal API tokens can be "
-                                "regenerated at https://app.todoist.com/app/settings/integrations/developer "
-                                "— update TODOIST_API_TOKEN in Infisical and restart the gateway. "
-                                "CSI signals are still visible in the CSI Feed tab; only Todoist sync is affected."
-                            ),
-                            severity="error",
-                            metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
-                        )
-                elif is_forbidden:
-                    logger.warning("Todoist project/permission failure (403): %s", exc)
-                    if not _has_recent_notification(
-                        kind="system_notice",
-                        metadata_match={"integration": "todoist", "reason": "project_forbidden"},
-                        within_seconds=3600,
-                    ):
-                        _add_notification(
-                            kind="system_notice",
-                            title="Todoist Project Write Denied",
-                            message=(
-                                "Todoist returned HTTP 403 while writing to a configured UA project. "
-                                "The token is present, but the project may be read-only or inaccessible "
-                                "for writes. UA now routes writes to a writable fallback project."
-                            ),
-                            severity="warning",
-                            metadata={"integration": "todoist", "reason": "project_forbidden", "source_domain": "system"},
-                        )
-                else:
-                    logger.exception("Failed to create Todoist task for CSI signal")
-                    if not _has_recent_notification(
-                        kind="system_error",
-                        metadata_match={"integration": "todoist", "reason": "task_sync_failed"},
-                        within_seconds=1800,
-                    ):
-                        debug_info = (
-                            f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
-                            f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
-                        )
-                        _add_notification(
-                            kind="system_error",
-                            title="Todoist Sync Failed",
-                            message=(
-                                "Could not sync CSI task to Todoist. "
-                                "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
-                                f"and taxonomy. Error: {exc}. Debug: {debug_info}"
-                            ),
-                            severity="error",
-                            metadata={"integration": "todoist", "reason": "task_sync_failed"},
-                        )
-
+            analytics_dispatch_count += 1
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
         if analytics_dispatch_count > 0:
-            body["analytics_internal_dispatches"] = analytics_dispatch_count
-        if analytics_throttled_count > 0:
-            body["analytics_throttled"] = analytics_throttled_count
-        if recommendation_task_count > 0:
-            body["recommendation_tasks_enqueued"] = recommendation_task_count
-            body["recommendation_tasks_agent_ready"] = recommendation_agent_task_count
-            body["recommendation_tasks_human_queue"] = recommendation_human_task_count
-            body["recommendation_tasks_human_notices"] = recommendation_human_notice_count
-            wake_enabled = str(
-                os.getenv("UA_CSI_WAKE_HEARTBEAT_ON_ACTIONABLE_TASK", "1")
-            ).strip().lower() in {"1", "true", "yes", "on"}
-            if wake_enabled and _task_hub_has_dispatch_eligible_items():
-                queued_sessions = _queue_heartbeat_next_for_all_sessions(
-                    reason="csi_actionable_recommendations",
-                )
-                if queued_sessions > 0:
-                    body["heartbeat_wake_queued_sessions"] = queued_sessions
+            body["csi_digests_captured"] = analytics_dispatch_count
     return JSONResponse(status_code=status_code, content=body)
+
+
+# ---------------------------------------------------------------------------
+# CSI Digest Dashboard Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/dashboard/csi/digests")
+async def dashboard_csi_digests(limit: int = 50):
+    """Return the most recent CSI trend digests for the dashboard feed."""
+    limit = max(1, min(limit, 500))
+    return {"digests": list(_csi_digests[:limit]), "total": len(_csi_digests)}
+
+
+@app.post("/api/v1/dashboard/csi/digests/{digest_id}/send-to-simone")
+async def send_csi_digest_to_simone(digest_id: str, request: Request):
+    """Email a CSI digest to Simone via AgentMail with optional user comment."""
+    # Find the digest
+    target = None
+    for d in _csi_digests:
+        if d.get("id") == digest_id:
+            target = d
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="Digest not found")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    user_comment = str(body.get("comment", "")).strip()
+
+    # Build email body
+    email_subject = f"CSI Trend: {target.get('title', 'Trend Digest')}"
+    email_body_parts = []
+    if user_comment:
+        email_body_parts.append(f"**Kevin's note:** {user_comment}\n\n---\n")
+    email_body_parts.append(f"# {target.get('title', '')}\n")
+    email_body_parts.append(f"**Source:** {target.get('source', 'unknown')}  \n")
+    email_body_parts.append(f"**Type:** {target.get('event_type', '')}  \n")
+    email_body_parts.append(f"**Date:** {target.get('created_at', '')}  \n\n")
+    full_md = target.get("full_report_md", "")
+    if full_md:
+        email_body_parts.append(full_md)
+    else:
+        email_body_parts.append(target.get("summary", "No summary available."))
+
+    email_body = "".join(email_body_parts)
+
+    # Try to send via AgentMail
+    try:
+        from universal_agent.services.agentmail_service import AgentMailService
+        mail = AgentMailService()
+        result = await mail.send_email(
+            subject=email_subject,
+            body=email_body,
+            to="simone",
+        )
+        return {"ok": True, "message": "Digest sent to Simone", "detail": result}
+    except ImportError:
+        logger.warning("AgentMail service not available — cannot send digest")
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "AgentMail service not available"},
+        )
+    except Exception as exc:
+        logger.exception("Failed to send CSI digest to Simone: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(exc)},
+        )
+
 
 
 @app.post("/api/v1/youtube/ingest")
