@@ -20761,18 +20761,23 @@ async def ops_approvals_clear(request: Request, status: Optional[str] = None):
         statuses = None  # clear everything
     removed = clear_approvals(statuses=statuses)
 
-    # Also park/dismiss matching task_hub approval items
+    # Also park/dismiss ALL task_hub items that appear on the approvals page
+    # Previous bug: only parked source_kind='approval', missing CSI and other
+    # items that pass _task_requires_explicit_human_approval().
     dismissed_tasks = 0
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
             rows = conn.execute(
-                "SELECT task_id, status FROM task_hub_items WHERE source_kind = 'approval'"
+                "SELECT * FROM task_hub_items WHERE status NOT IN ('completed', 'parked')"
             ).fetchall()
             for row in rows:
-                tid = row["task_id"]
-                current = str(row["status"] or "").strip().lower()
-                if current not in ("completed", "parked"):
+                item = task_hub.hydrate_item(dict(row))
+                tid = str(item.get("task_id") or "")
+                # Park if it's an approval-type item OR if it would show on the approvals page
+                is_approval_source = str(item.get("source_kind") or "") == "approval"
+                shows_on_approvals = _task_requires_explicit_human_approval(item)
+                if is_approval_source or shows_on_approvals:
                     try:
                         task_hub.perform_task_action(
                             conn, task_id=tid, action="park",
