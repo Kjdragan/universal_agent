@@ -17417,6 +17417,25 @@ def _heartbeat_findings_from_artifacts(
         if json_candidates:
             break
     markdown_candidates = _heartbeat_candidate_paths_from_links(artifact_links, filename=_HEARTBEAT_REPORT_FILENAME)
+
+    # -- Fallback: check filesystem directly if not in artifact links --
+    # The artifact links may not include recently written files if the payload
+    # was constructed before the heartbeat tasks completed.
+    if not json_candidates:
+        session_id = str(payload.get("session_id") or "").strip()
+        workspace_dir = _workspace_dir_for_session(session_id) if session_id else None
+        if workspace_dir:
+            for candidate_name in (_HEARTBEAT_FINDINGS_FILENAME, _HEARTBEAT_FINDINGS_FALLBACK_FILENAME):
+                direct_path = workspace_dir / "work_products" / candidate_name
+                if direct_path.exists():
+                    json_candidates = [(direct_path.resolve(), {
+                        "scope": "workspaces",
+                        "relative_path": f"{session_id}/work_products/{candidate_name}",
+                        "source_path": str(direct_path),
+                        "storage_href": f"/storage?tab=explorer&scope=workspaces&root_source=local&path={session_id}%2Fwork_products&preview={session_id}%2Fwork_products%2F{candidate_name}",
+                    })]
+                    break
+
     findings_path = json_candidates[0][0] if json_candidates else None
     findings_link = json_candidates[0][1] if json_candidates else {}
     markdown_path = markdown_candidates[0][0] if markdown_candidates else None
@@ -20665,7 +20684,7 @@ async def ops_approvals_update(
         conn = _task_hub_open_conn()
         try:
             item = task_hub.get_item(conn, approval_id)
-            if not item or not bool(item.get("must_complete")):
+            if not item:
                 raise HTTPException(status_code=404, detail="Approval not found")
             updated_item = task_hub.perform_task_action(
                 conn,
