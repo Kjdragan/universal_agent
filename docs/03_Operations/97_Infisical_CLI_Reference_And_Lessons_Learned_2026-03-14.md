@@ -176,21 +176,38 @@ Rather than loading individual secrets, `infisical run --env=development -- comm
 
 The Infisical CLI uses `--env=dev` as default, but our project uses full names: `development`, `staging`, `production`. Always specify `--env=development` explicitly.
 
-### 5. SDK vs CLI vs curl
+### 5. SDK vs CLI vs curl — Debugging Sequence
 
-- **Infisical CLI**: Best for desktop/agent use. Fast, reliable.
-- **AgentMail Python SDK**: May hang due to `requests` library version conflicts or proxy settings. Test with curl first to isolate SDK vs network issues.
-- **curl**: Most reliable for quick API tests. Pattern:
+- **curl**: Most reliable for quick API tests. No dependency issues.
+- **Infisical CLI**: Best for pulling individual secrets. `infisical secrets get KEY --plain --silent` is fast and scriptable.
+- **AgentMail Python SDK (v0.4.5)**: Uses `httpx` (not `requests`). Works correctly when the API key is non-empty. An empty key causes `httpx.LocalProtocolError: Illegal header value b'Bearer '` — this looks like a hang but is actually an immediate protocol error.
+- **Debugging pattern**:
+  1. Test API endpoint with curl first (isolate auth from SDK)
+  2. If curl works but SDK doesn't, check the API key is non-empty
+  3. If shell commands hang, check for stale terminal sessions
+
+### 6. Secret Count and Infisical Latency
+
+The `development` environment contains **179 secrets** as of 2026-03-14. `infisical run` injects all of them, which is why it's the preferred approach over individual lookups. However, `infisical run` and `infisical secrets get` latency is variable — sometimes completes in 2-3 seconds, sometimes takes 30+ seconds on first call (auth token refresh). For time-sensitive scripting, cache the key:
+
 ```bash
-API_KEY=$(infisical secrets get KEY_NAME --env=development --plain --silent 2>/dev/null)
-curl -s -H "Authorization: Bearer $API_KEY" https://api.example.com
+# Cache key in shell variable (fast for subsequent uses)
+export AGENTMAIL_API_KEY=$(infisical secrets get AGENTMAIL_API_KEY --env=development --plain --silent 2>/dev/null)
 ```
 
-### 6. Secret Count
+### 7. Stale Shell Sessions
 
-The `development` environment contains **179 secrets** as of 2026-03-14. This is a substantial set — `infisical run` injects all of them, which is why it's the preferred approach over individual lookups.
+`source .venv/bin/activate` in long-running terminal sessions can become unresponsive. Use `.venv/bin/python3` directly instead:
 
-### 7. Desktop Bootstrap Path
+```bash
+# GOOD — direct invocation
+.venv/bin/python3 my_script.py
+
+# AVOID in long-running sessions
+source .venv/bin/activate && python3 my_script.py
+```
+
+### 8. Desktop Bootstrap Path
 
 For first-time desktop setup:
 1. `sudo apt-get update && sudo apt-get install infisical` (if not installed)
