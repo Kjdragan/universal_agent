@@ -1,5 +1,8 @@
 # 85. Infisical Secrets Architecture and Operations Source of Truth (2026-03-06)
 
+> [!NOTE]
+> **Start here instead → [Secrets and Environments](../deployment/secrets_and_environments.md)**
+> This document is the deep-dive implementation reference for the Infisical loader, fetch strategies, and failure modes.
 ## Purpose
 
 This document is the canonical source of truth for how Universal Agent loads, trusts, and operationalizes secrets from Infisical.

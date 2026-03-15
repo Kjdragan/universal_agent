@@ -17,6 +17,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - `docs/deployment/architecture_overview.md`
 - `docs/deployment/ci_cd_pipeline.md`
 - `docs/deployment/infisical_factories.md`
+- `docs/deployment/secrets_and_environments.md` — **Canonical guide for Infisical secrets and environment management**
 
 ## 📚 Table of Contents
 
@@ -82,6 +83,13 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Local Runtime Modes](06_Deployment_And_Environments/05_Local_Runtime_Modes.md)**: Canonical split between HQ dev and the separate desktop worker lane.
 - **[Production Deploy Incident (2026-03-12)](06_Deployment_And_Environments/06_Production_Deploy_Incident_2026-03-12.md)**: Root cause, fix, verification, and prevention notes for the March 12 production `.venv` deployment regression.
 - **[Stage-Based Infisical and Machine Bootstrap Migration Plan (2026-03-12)](06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)**: Living migration record for stage environments, machine-local bootstrap identity, and CI/CD runtime validation.
+
+### 4B. [Deployment Canonical Docs](deployment)
+
+- **[Secrets and Environments](deployment/secrets_and_environments.md)**: Single entry-point for Infisical secrets management, environment configuration, and deploy workflow secrets contract.
+- **[Architecture Overview](deployment/architecture_overview.md)**: Git branching, environmental mapping, and service topology.
+- **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, and pipeline structure.
+- **[Infisical Factories](deployment/infisical_factories.md)**: Stage naming and machine bootstrap detail (superseded by Secrets and Environments).
 
 ### 5. [API Reference](04_API_Reference)
 

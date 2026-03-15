@@ -1,5 +1,8 @@
 # 89. Runtime Bootstrap, Deployment Profiles, and Factory Role Source of Truth (2026-03-06)
 
+> [!NOTE]
+> **Start here instead → [Secrets and Environments](../deployment/secrets_and_environments.md)**
+> This document is the deep-dive reference for deployment profiles, factory roles, and runtime policy matrix.
 ## Purpose
 
 This document is the canonical source of truth for how Universal Agent bootstraps its runtime environment: how deployment profile is resolved, how secrets are loaded, how factory role is translated into runtime policy, and how bootstrap behavior changes between headquarters, local-worker, standalone, and VPS-oriented deployments.

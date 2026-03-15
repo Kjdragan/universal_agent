@@ -1,5 +1,8 @@
 # Infisical Stage Environments and Machine Bootstrap
 
+> [!NOTE]
+> **Start here instead → [Secrets and Environments](secrets_and_environments.md)**
+> This document covers stage naming and machine bootstrap details. The canonical unified guide is `secrets_and_environments.md`.
 Universal Agent now treats Infisical environments as **stage environments**, not machine environments.
 
 ## Canonical Stage Environments

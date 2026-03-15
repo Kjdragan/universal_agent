@@ -39,6 +39,16 @@ These are the authoritative references for each subsystem. When any other docume
 | 91 | Telegram |
 | 92 | CSI Architecture |
 | 96 | NotebookLM Integration & Research Pipeline |
+| 97 | Infisical CLI Reference & Lessons Learned |
+
+## Deployment Canonical Docs (deployment/)
+
+| Doc | Subject |
+|-----|---------|
+| secrets_and_environments.md | **Canonical entry-point** — Infisical secrets, environments, deploy workflow secrets contract |
+| architecture_overview.md | Git branching, environmental mapping, service topology |
+| ci_cd_pipeline.md | Workflow details, timing, pipeline structure |
+| infisical_factories.md | Stage naming and machine bootstrap (superseded by secrets_and_environments.md) |
 
 ## Review & Decision Documents
 
