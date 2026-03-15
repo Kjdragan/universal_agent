@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
 import { formatDateTimeTz } from "@/lib/timezone";
 
@@ -258,13 +259,21 @@ export default function DashboardCronJobsPage() {
           <h1 className="text-xl font-semibold tracking-tight">Chron Jobs</h1>
           <p className="text-sm text-slate-400">Schedule autonomous recurring tasks.</p>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/dashboard"
+            className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+          >
+            Back to Home
+          </Link>
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <form onSubmit={createJob} className="grid gap-2 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:grid-cols-[1fr,230px,130px,130px,auto]">
