@@ -1,14 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
-const MODE_STORAGE_KEY = "ua_todolist_mode_v2";
+const AUTO_REFRESH_SECONDS = 30;
 
-type Mode = "agent" | "personal" | "split";
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type AgentQueueItem = {
   task_id: string;
@@ -19,41 +18,13 @@ type AgentQueueItem = {
   labels?: string[];
   status?: string;
   must_complete?: boolean;
-  incident_key?: string | null;
-  collapsed_count?: number;
   score?: number;
   score_confidence?: number;
   stale_state?: string;
   seizure_state?: string;
-  mirror_status?: string;
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
-  metadata?: {
-    csi?: {
-      routing_state?: string;
-      human_intervention_reason?: string;
-    };
-  };
-};
-
-type PersonalQueueItem = {
-  task_id: string;
-  title: string;
-  description?: string;
-  project_key?: string;
-  priority?: number;
-  labels?: string[];
-  status?: string;
-  updated_at?: string;
-  due_at?: string | null;
-  source_kind?: string;
-  metadata?: {
-    csi?: {
-      routing_state?: string;
-      human_intervention_reason?: string;
-    };
-  };
 };
 
 type ApprovalRow = {
@@ -83,7 +54,6 @@ type AgentActivity = {
       seized: number;
       rejected: number;
       completed: number;
-      rejection_reasons?: Array<{ reason: string; count: number }>;
     };
   };
   backlog_open: number;
@@ -91,19 +61,14 @@ type AgentActivity = {
 
 type OverviewPayload = {
   status: string;
-  mode_default?: Mode;
   approvals_pending?: number;
   queue_health?: {
     dispatch_queue_size: number;
     dispatch_eligible: number;
     threshold?: number;
-    csi_agent_actionable_open?: number;
-    csi_human_open?: number;
-    csi_incubating_hidden?: number;
     status_counts: Record<string, number>;
     source_counts: Record<string, number>;
   };
-  csi_incident_summary?: { open_incidents: number };
   agent_activity?: {
     active_agents: number;
     active_assignments: number;
@@ -129,11 +94,6 @@ type ApprovalHighlightPayload = {
   status: string;
   pending_count: number;
   approvals: ApprovalRow[];
-  banner?: {
-    show: boolean;
-    text: string;
-    focus_href: string;
-  };
 };
 
 type AgentQueuePayload = {
@@ -146,12 +106,6 @@ type AgentQueuePayload = {
     count: number;
     has_more: boolean;
   };
-};
-
-type PersonalQueuePayload = {
-  status: string;
-  items: PersonalQueueItem[];
-  approval_priority_rows: ApprovalRow[];
 };
 
 type TaskHistoryLinks = {
@@ -218,31 +172,7 @@ type TaskHistoryPayload = {
   evaluations: TaskEvaluationHistory[];
 };
 
-function usePersistedMode(defaultMode: Mode): [Mode, (next: Mode) => void] {
-  const [mode, setMode] = useState<Mode>(() => {
-    if (typeof window === "undefined") return defaultMode;
-    try {
-      const stored = localStorage.getItem(MODE_STORAGE_KEY);
-      if (stored === "agent" || stored === "personal" || stored === "split") {
-        return stored;
-      }
-    } catch {
-      // noop
-    }
-    return defaultMode;
-  });
-
-  const setPersisted = useCallback((next: Mode) => {
-    setMode(next);
-    try {
-      localStorage.setItem(MODE_STORAGE_KEY, next);
-    } catch {
-      // noop
-    }
-  }, []);
-
-  return [mode, setPersisted];
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatTs(ts?: string | null): string {
   if (!ts) return "";
@@ -263,20 +193,12 @@ function formatEpochTs(epoch?: number | null): string {
   }
 }
 
-function formatEvery(seconds?: number): string {
+function formatEvery(seconds?: number | null): string {
   const value = Number(seconds || 0);
   if (!value || Number.isNaN(value)) return "n/a";
   if (value % 3600 === 0) return `${value / 3600}h`;
   if (value % 60 === 0) return `${value / 60}m`;
   return `${value}s`;
-}
-
-function scoreBadge(score?: number): string {
-  const value = Number(score || 0);
-  if (value >= 9) return "9-10";
-  if (value >= 8) return "8";
-  if (value >= 7) return "7";
-  return "<7";
 }
 
 function priorityText(priority?: number): string {
@@ -287,31 +209,48 @@ function priorityText(priority?: number): string {
   return "Normal";
 }
 
-function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
-  if (status !== 502) return false;
-  return detail.toLowerCase().includes("gateway upstream unavailable");
+function priorityColor(priority?: number): string {
+  const p = Number(priority || 1);
+  if (p >= 4) return "text-rose-300";
+  if (p === 3) return "text-amber-300";
+  if (p === 2) return "text-sky-300";
+  return "text-slate-400";
 }
 
-export default function ToDoListDashboardPage() {
-  const searchParams = useSearchParams();
-  const modeParam = String(searchParams?.get("mode") || "").trim().toLowerCase();
-  const focus = String(searchParams?.get("focus") || "").trim().toLowerCase();
+function sourceKindPill(kind?: string) {
+  const k = String(kind || "internal").toLowerCase();
+  const styles: Record<string, string> = {
+    todoist: "border-teal-700/60 bg-teal-900/25 text-teal-200",
+    internal: "border-sky-700/60 bg-sky-900/25 text-sky-200",
+    approval: "border-amber-700/60 bg-amber-900/25 text-amber-200",
+    csi: "border-slate-700/60 bg-slate-800/40 text-slate-400",
+  };
+  const style = styles[k] ?? "border-slate-700/60 bg-slate-800/40 text-slate-400";
+  return (
+    <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${style}`}>
+      {k}
+    </span>
+  );
+}
 
+function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
+  return status === 502 && detail.toLowerCase().includes("gateway upstream unavailable");
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+
+export default function ToDoListDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [countdown, setCountdown] = useState(AUTO_REFRESH_SECONDS);
 
   const [overview, setOverview] = useState<OverviewPayload | null>(null);
   const [approvalsHighlight, setApprovalsHighlight] = useState<ApprovalHighlightPayload | null>(null);
   const [agentQueue, setAgentQueue] = useState<AgentQueuePayload | null>(null);
-  const [personalQueue, setPersonalQueue] = useState<PersonalQueuePayload | null>(null);
   const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null);
   const [completedTasks, setCompletedTasks] = useState<CompletedTasksPayload | null>(null);
 
-  const [mode, setMode] = usePersistedMode("agent");
-  const [includeCsi, setIncludeCsi] = useState(true);
-  const [collapseCsi, setCollapseCsi] = useState(true);
-  const [showNonCsiOnly, setShowNonCsiOnly] = useState(false);
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionPendingTaskId, setActionPendingTaskId] = useState("");
   const [wakePending, setWakePending] = useState(false);
@@ -322,7 +261,8 @@ export default function ToDoListDashboardPage() {
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
 
-  const approvalsRef = useRef<HTMLDivElement | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async (background = false) => {
     if (background) setRefreshing(true);
@@ -331,102 +271,79 @@ export default function ToDoListDashboardPage() {
     try {
       const agentQueueUrl = new URL(`${API_BASE}/api/v1/dashboard/todolist/agent-queue`, window.location.origin);
       agentQueueUrl.searchParams.set("limit", "120");
-      agentQueueUrl.searchParams.set("include_csi", includeCsi ? "1" : "0");
-      agentQueueUrl.searchParams.set("collapse_csi", collapseCsi ? "1" : "0");
 
-      const [overviewRes, approvalsRes, agentRes, personalRes, activityRes, completedRes] = await Promise.all([
+      const [overviewRes, approvalsRes, agentRes, activityRes, completedRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/todolist/overview`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/approvals/highlight`, { cache: "no-store" }),
         fetch(`${agentQueueUrl.pathname}${agentQueueUrl.search}`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/dashboard/todolist/personal-queue?limit=200`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/todolist/agent-activity`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/todolist/completed?limit=80`, { cache: "no-store" }),
       ]);
 
-      if (!overviewRes.ok || !agentRes.ok || !personalRes.ok || !activityRes.ok || !completedRes.ok) {
-        const failures: Array<{ name: string; status: number; detail: string }> = [];
-        const required = [
-          { name: "overview", res: overviewRes },
-          { name: "agent_queue", res: agentRes },
-          { name: "personal_queue", res: personalRes },
-          { name: "agent_activity", res: activityRes },
-          { name: "completed_tasks", res: completedRes },
-        ];
-        for (const item of required) {
-          if (item.res.ok) continue;
-          const detail = await item.res.text().catch(() => "");
-          failures.push({ name: item.name, status: item.res.status, detail });
-        }
-        if (
-          failures.length > 0
-          && failures.every((f) => isGatewayUpstreamUnavailable(f.status, f.detail))
-        ) {
+      const required = [
+        { name: "overview", res: overviewRes },
+        { name: "agent_queue", res: agentRes },
+        { name: "agent_activity", res: activityRes },
+        { name: "completed_tasks", res: completedRes },
+      ];
+
+      const failures: Array<{ name: string; status: number; detail: string }> = [];
+      for (const item of required) {
+        if (item.res.ok) continue;
+        const detail = await item.res.text().catch(() => "");
+        failures.push({ name: item.name, status: item.res.status, detail });
+      }
+      if (failures.length > 0) {
+        if (failures.every((f) => isGatewayUpstreamUnavailable(f.status, f.detail))) {
           throw new Error("Gateway is temporarily unavailable. Please retry in a few seconds.");
         }
         const compact = failures.map((f) => `${f.name}:${f.status}`).join(", ");
-        throw new Error(`To Do V2 endpoints failed to load (${compact})`);
+        throw new Error(`Endpoints failed (${compact})`);
       }
 
-      const [overviewJson, agentJson, personalJson, activityJson, completedJson] = await Promise.all([
+      const [overviewJson, agentJson, activityJson, completedJson] = await Promise.all([
         overviewRes.json(),
         agentRes.json(),
-        personalRes.json(),
         activityRes.json(),
         completedRes.json(),
       ]);
       const approvalsJson = approvalsRes.ok
         ? await approvalsRes.json()
-        : ({
-            status: "degraded",
-            pending_count: 0,
-            approvals: [],
-            banner: { show: false, text: "", focus_href: "/dashboard/todolist?mode=personal&focus=approvals" },
-          } as ApprovalHighlightPayload);
+        : { status: "degraded", pending_count: 0, approvals: [] };
 
       setOverview(overviewJson as OverviewPayload);
       setApprovalsHighlight(approvalsJson as ApprovalHighlightPayload);
       setAgentQueue(agentJson as AgentQueuePayload);
-      setPersonalQueue(personalJson as PersonalQueuePayload);
       setAgentActivity(activityJson as AgentActivity);
       setCompletedTasks(completedJson as CompletedTasksPayload);
-
-      if (!background && (!localStorage.getItem(MODE_STORAGE_KEY))) {
-        const defaultMode = (overviewJson?.mode_default || "agent") as Mode;
-        if (defaultMode === "agent" || defaultMode === "personal" || defaultMode === "split") {
-          setMode(defaultMode);
-        }
-      }
-
       setError("");
     } catch (err: any) {
-      if (!background) {
-        setError(err?.message || "Failed to load To Do data.");
-      }
+      if (!background) setError(err?.message || "Failed to load task data.");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [collapseCsi, includeCsi, setMode]);
+  }, []);
 
+  // Auto-refresh timer
   useEffect(() => {
     void load(false);
+    intervalRef.current = setInterval(() => {
+      setCountdown(AUTO_REFRESH_SECONDS);
+      void load(true);
+    }, AUTO_REFRESH_SECONDS * 1000);
+    countdownRef.current = setInterval(() => {
+      setCountdown((c) => (c <= 1 ? AUTO_REFRESH_SECONDS : c - 1));
+    }, 1000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
   }, [load]);
-
-  useEffect(() => {
-    if (modeParam === "agent" || modeParam === "personal" || modeParam === "split") {
-      setMode(modeParam);
-    }
-  }, [modeParam, setMode]);
-
-  useEffect(() => {
-    if (focus === "approvals" && approvalsRef.current) {
-      approvalsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-      if (mode !== "personal") setMode("personal");
-    }
-  }, [focus, mode, setMode]);
 
   const handleTaskAction = useCallback(async (taskId: string, action: string) => {
     setActionPendingTaskId(taskId);
+    setOpenActionMenuId(null);
     try {
       const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(taskId)}/action`, {
         method: "POST",
@@ -491,12 +408,9 @@ export default function ToDoListDashboardPage() {
   const handleDeleteCompletedTask = useCallback(async (taskId: string) => {
     setDeletedTaskIds((prev) => new Set([...prev, taskId]));
     try {
-      await fetch(
-        `${API_BASE}/api/v1/dashboard/todolist/completed/${encodeURIComponent(taskId)}`,
-        { method: "DELETE" },
-      );
+      await fetch(`${API_BASE}/api/v1/dashboard/todolist/completed/${encodeURIComponent(taskId)}`, { method: "DELETE" });
     } catch {
-      // optimistic — already removed from local state
+      // optimistic delete — local state already updated
     }
   }, []);
 
@@ -517,366 +431,313 @@ export default function ToDoListDashboardPage() {
     }
   }, [completedTasks]);
 
-  const filteredAgentItems = useMemo(() => {
-    const rows = Array.isArray(agentQueue?.items) ? agentQueue!.items : [];
-    if (!showNonCsiOnly) return rows;
-    return rows.filter((row) => String(row.source_kind || "") !== "csi");
-  }, [agentQueue, showNonCsiOnly]);
+  // ── Derived data ────────────────────────────────────────────────────────────
 
-  const dispatchThreshold = Number(overview?.queue_health?.threshold || 0);
+  const allQueueItems = useMemo(() => Array.isArray(agentQueue?.items) ? agentQueue!.items : [], [agentQueue]);
 
-  // Build a Set of task_ids that have pending approvals for highlight
-  const approvalTaskIdSet = useMemo(() => {
-    const s = new Set<string>();
-    (approvalsHighlight?.approvals || []).forEach((a) => {
-      if (a.approval_id) s.add(a.approval_id);
-    });
-    return s;
-  }, [approvalsHighlight]);
-
-  const renderAgentPanel = (compact = false) => (
-    <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">
-            Task Priority List ({filteredAgentItems.length}/{agentQueue?.pagination?.total || filteredAgentItems.length})
-          </h2>
-          <p className="text-xs text-slate-400">Prioritized internal dispatch queue with CSI incident collapse.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-2 py-1">
-            <input type="checkbox" checked={includeCsi} onChange={(e) => setIncludeCsi(e.target.checked)} /> CSI
-          </label>
-          <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-2 py-1">
-            <input type="checkbox" checked={collapseCsi} onChange={(e) => setCollapseCsi(e.target.checked)} /> Collapse CSI
-          </label>
-          <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-2 py-1">
-            <input type="checkbox" checked={showNonCsiOnly} onChange={(e) => setShowNonCsiOnly(e.target.checked)} /> Non-CSI spotlight
-          </label>
-          <button
-            onClick={() => { void load(true); }}
-            className="rounded border border-cyan-800/60 bg-cyan-900/20 px-2 py-1 text-cyan-200 hover:bg-cyan-900/35"
-          >
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-          <button
-            onClick={() => { void handleWakeHeartbeat(); }}
-            disabled={wakePending}
-            className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-          >
-            {wakePending ? "Queueing..." : "Run Next Heartbeat"}
-          </button>
-        </div>
-      </div>
-
-      {filteredAgentItems.length > 0 && (overview?.queue_health?.dispatch_eligible || 0) === 0 ? (
-        <div className="mb-3 rounded border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
-          Backlog exists, but nothing is dispatchable right now.
-          {dispatchThreshold > 0 ? ` Current agent threshold is ${dispatchThreshold}.` : ""}
-        </div>
-      ) : null}
-
-      <div className="space-y-2 max-h-[56vh] overflow-y-auto pr-1">
-        {filteredAgentItems.length === 0 ? (
-          <p className="text-sm text-slate-500 italic">No agent queue items available.</p>
-        ) : (
-          filteredAgentItems.map((item, idx) => {
-            const isCsiEscalation = String(item.source_kind || "") === "csi";
-            const isHighPriority = isCsiEscalation || item.must_complete;
-            return (
-              <article
-                key={item.task_id}
-                className={`rounded-lg border bg-slate-950/60 p-3 ${
-                  isHighPriority
-                    ? "border-l-4 border-amber-500/60 border-t-slate-800/80 border-r-slate-800/80 border-b-slate-800/80"
-                    : "border-slate-800/80"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[10px] font-bold text-slate-500 tabular-nums">#{idx + 1}</span>
-                      <h3 className="font-semibold text-slate-200">{item.title}</h3>
-                      {item.must_complete ? (
-                        <span className="rounded border border-rose-700/60 bg-rose-900/25 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-200">Must Complete</span>
-                      ) : null}
-                      {isCsiEscalation ? (
-                        <span className="rounded border border-emerald-800/60 bg-emerald-900/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">CSI</span>
-                      ) : null}
-                    </div>
-                    {item.description ? (
-                      <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                    ) : null}
-                  </div>
-                  <div className="text-right text-[10px] text-slate-400">
-                    <div>{priorityText(item.priority)}</div>
-                    <div>score {item.score ?? 0} · Q {item.score_confidence ?? 0}</div>
-                    {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
-                      <div className="text-amber-300">below threshold {dispatchThreshold}</div>
-                    ) : null}
-                    {item.collapsed_count && item.collapsed_count > 1 ? (
-                      <div className="text-emerald-300">{item.collapsed_count} incident items</div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-                  <span>{item.project_key}</span>
-                  <span>•</span>
-                  <span>{item.status}</span>
-                  {item.due_at ? (<><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>) : null}
-                  {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <button
-                    onClick={() => void handleTaskAction(item.task_id, "complete")}
-                    disabled={actionPendingTaskId === item.task_id}
-                    className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
-                  >
-                    Complete
-                  </button>
-                  <button
-                    onClick={() => void handleWakeHeartbeat(item.task_id)}
-                    disabled={wakePending}
-                    className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                  >
-                    Force Next Heartbeat
-                  </button>
-
-                  <div className="relative ml-2">
-                    <button
-                      onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
-                      className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700"
-                    >
-                      Advanced ▾
-                    </button>
-                    {openActionMenuId === item.task_id && (
-                      <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-slate-700 bg-slate-900 p-1 shadow-xl">
-                        {item.status === "open" && (
-                          <button
-                            onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "seize"); }}
-                            disabled={actionPendingTaskId === item.task_id}
-                            className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                          >
-                            Seize
-                          </button>
-                        )}
-                        <button
-                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "review"); }}
-                          disabled={actionPendingTaskId === item.task_id}
-                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                        >
-                          Mark Review
-                        </button>
-                        <button
-                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "block"); }}
-                          disabled={actionPendingTaskId === item.task_id}
-                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
-                        >
-                          Block
-                        </button>
-                        <button
-                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "reject"); }}
-                          disabled={actionPendingTaskId === item.task_id}
-                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                        >
-                          Reject
-                        </button>
-                        <button
-                          onClick={() => { setOpenActionMenuId(null); void handleTaskAction(item.task_id, "park"); }}
-                          disabled={actionPendingTaskId === item.task_id}
-                          className="w-full rounded bg-transparent px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
-                        >
-                          Park
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </article>
-            );
-          })
-        )}
-      </div>
-    </section>
+  // Time-horizon buckets
+  const futureItems = useMemo(
+    () => allQueueItems.filter((i) => ["open", "parked", "blocked"].includes(String(i.status || "open"))),
+    [allQueueItems],
   );
-
-  const renderPersonalPanel = (compact = false) => (
-    <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
-      <div ref={approvalsRef} className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
-            Task Priority List ({personalQueue?.items?.length || 0})
-          </h2>
-          <p className="text-xs text-slate-400">Human-visible tasks plus CSI escalations and prioritized approvals.</p>
-        </div>
-        <Link
-          href="/dashboard/approvals"
-          className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35"
-        >
-          Open Approvals
-          {(approvalsHighlight?.pending_count || 0) > 0 ? (
-            <span className="ml-1.5 rounded-full bg-amber-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
-              {approvalsHighlight!.pending_count}
-            </span>
-          ) : null}
-        </Link>
-      </div>
-
-      <div className="space-y-2 max-h-[56vh] overflow-y-auto pr-1">
-        {(personalQueue?.items || []).length === 0 ? (
-          <p className="text-sm text-slate-500 italic">No personal tasks available.</p>
-        ) : (
-          (personalQueue?.items || []).map((item, idx) => {
-            const isCsiEscalation = String(item.source_kind || "") === "csi";
-            const hasApprovalHighlight = approvalTaskIdSet.has(item.task_id) || isCsiEscalation;
-            return (
-              <article
-                key={item.task_id}
-                className={`rounded-lg border bg-slate-950/60 p-3 ${
-                  hasApprovalHighlight
-                    ? "border-l-4 border-amber-500/70 border-t-slate-800/80 border-r-slate-800/80 border-b-slate-800/80"
-                    : "border-slate-800/80"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[10px] font-bold text-slate-500 tabular-nums">#{idx + 1}</span>
-                      <h3 className="font-semibold text-slate-200">{item.title}</h3>
-                      {isCsiEscalation ? (
-                        <span className="rounded border border-amber-700/60 bg-amber-900/25 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">CSI Escalation</span>
-                      ) : null}
-                    </div>
-                    {isCsiEscalation && item.metadata?.csi?.human_intervention_reason ? (
-                      <p className="mt-1 text-[11px] text-amber-200">{item.metadata.csi.human_intervention_reason}</p>
-                    ) : null}
-                  </div>
-                  <span className="text-[10px] text-slate-400">{priorityText(item.priority)}</span>
-                </div>
-                {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-                  <span>{item.project_key}</span>
-                  <span>•</span>
-                  <span>{item.status}</span>
-                  {item.due_at ? (<><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>) : null}
-                  {item.updated_at ? (<><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
-                </div>
-              </article>
-            );
-          })
-        )}
-      </div>
-    </section>
+  const nowItems = useMemo(
+    () => allQueueItems.filter((i) => ["in_progress", "needs_review"].includes(String(i.status || ""))),
+    [allQueueItems],
   );
 
   const completedRows = useMemo(
     () => (Array.isArray(completedTasks?.items) ? completedTasks!.items : []),
     [completedTasks],
   );
-
   const visibleCompletedRows = useMemo(
     () => completedRows.filter((r) => !deletedTaskIds.has(r.task_id)),
     [completedRows, deletedTaskIds],
   );
 
-  const renderCompletedPanel = (compact = false) => (
-    <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${compact ? "p-3" : "p-4"}`}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-300">
-            Completed Agent Jobs ({visibleCompletedRows.length})
-          </h2>
-          <p className="text-xs text-slate-400">Most recent finished tasks with session and run-log links.</p>
+  // Allocation breakdown: source_kind counts
+  const allocationBySource = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const item of allQueueItems) {
+      const k = String(item.source_kind || "internal");
+      counts[k] = (counts[k] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [allQueueItems]);
+
+  // Allocation breakdown: project_key counts
+  const allocationByProject = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const item of allQueueItems) {
+      const k = String(item.project_key || "—");
+      counts[k] = (counts[k] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  }, [allQueueItems]);
+
+  const agentMetrics1h = agentActivity?.metrics?.["1h"];
+  const agentMetrics24h = agentActivity?.metrics?.["24h"];
+
+  const completionRate24h = useMemo(() => {
+    const completed = agentMetrics24h?.completed || 0;
+    const rejected = agentMetrics24h?.rejected || 0;
+    const total = completed + rejected;
+    if (!total) return null;
+    return Math.round((completed / total) * 100);
+  }, [agentMetrics24h]);
+
+  const dispatchThreshold = Number(overview?.queue_health?.threshold || 0);
+
+  // Heartbeat alert logic: only surface when something is interesting
+  const heartbeatAlerts = useMemo(() => {
+    const hb = overview?.heartbeat;
+    if (!hb) return [];
+    const alerts: string[] = [];
+    if (!hb.enabled) alerts.push("Heartbeat disabled");
+    if (hb.busy_sessions > 0) alerts.push(`${hb.busy_sessions} busy session${hb.busy_sessions > 1 ? "s" : ""}`);
+    const nextRun = hb.nearest_next_run_epoch;
+    if (nextRun) {
+      const secsUntil = nextRun - Math.floor(Date.now() / 1000);
+      if (secsUntil < 0 && Math.abs(secsUntil) > 120) {
+        alerts.push("Heartbeat overdue");
+      }
+    }
+    if (hb.session_state_count === 0 && hb.session_count === 0) alerts.push("No sessions running");
+    return alerts;
+  }, [overview?.heartbeat]);
+
+  // ── Loading state ────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-slate-400">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+        <span className="text-sm">Loading Task Command Center…</span>
+      </div>
+    );
+  }
+
+  // ── Sub-renders ───────────────────────────────────────────────────────────────
+
+  const renderTaskCard = (item: AgentQueueItem, idx: number, showActions = true) => {
+    const isPending = actionPendingTaskId === item.task_id;
+    return (
+      <article
+        key={item.task_id}
+        className={`rounded-lg border bg-slate-950/60 p-3 transition-colors hover:border-slate-700/80 ${
+          item.must_complete
+            ? "border-l-2 border-l-rose-500/70 border-t-slate-800/80 border-r-slate-800/80 border-b-slate-800/80"
+            : "border-slate-800/70"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+              <span className="text-[10px] font-bold text-slate-600 tabular-nums">#{idx + 1}</span>
+              {sourceKindPill(item.source_kind)}
+              {item.must_complete ? (
+                <span className="rounded border border-rose-700/60 bg-rose-900/25 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-200">
+                  Must Complete
+                </span>
+              ) : null}
+            </div>
+            <h3 className="font-semibold text-slate-200 text-sm leading-snug">{item.title}</h3>
+            {item.description ? (
+              <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p>
+            ) : null}
+          </div>
+          <div className="text-right text-[10px] shrink-0">
+            <div className={`font-semibold ${priorityColor(item.priority)}`}>{priorityText(item.priority)}</div>
+            {item.score !== undefined ? (
+              <div className="text-slate-500 mt-0.5">score {item.score} · Q {item.score_confidence ?? 0}</div>
+            ) : null}
+          </div>
         </div>
-        {visibleCompletedRows.length > 0 ? (
-          <button
-            onClick={() => void handleDeleteAllCompleted()}
-            disabled={deleteAllPending}
-            className="rounded border border-rose-800/60 bg-rose-950/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-300 hover:bg-rose-950/40 disabled:opacity-50"
-          >
-            {deleteAllPending ? "Deleting..." : "🗑 Delete All"}
-          </button>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+          {item.project_key ? <span className="text-slate-400">{item.project_key}</span> : null}
+          {item.due_at ? (
+            <><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>
+          ) : null}
+          {item.updated_at ? (
+            <><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>
+          ) : null}
+          {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
+            <><span>•</span><span className="text-amber-400">below threshold {dispatchThreshold}</span></>
+          ) : null}
+        </div>
+
+        {showActions ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={() => void handleTaskAction(item.task_id, "complete")}
+              disabled={isPending}
+              className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
+            >
+              Complete
+            </button>
+            <button
+              onClick={() => void handleWakeHeartbeat(item.task_id)}
+              disabled={wakePending}
+              className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+            >
+              {wakePending ? "Queueing…" : "Dispatch Now"}
+            </button>
+            <div className="relative">
+              <button
+                onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
+                className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+              >
+                ▾
+              </button>
+              {openActionMenuId === item.task_id && (
+                <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-slate-700 bg-slate-900 p-1 shadow-xl">
+                  {item.status === "open" && (
+                    <button
+                      onClick={() => void handleTaskAction(item.task_id, "seize")}
+                      disabled={isPending}
+                      className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                    >
+                      Seize
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void handleTaskAction(item.task_id, "review")}
+                    disabled={isPending}
+                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    Mark Review
+                  </button>
+                  <button
+                    onClick={() => void handleTaskAction(item.task_id, "block")}
+                    disabled={isPending}
+                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
+                  >
+                    Block
+                  </button>
+                  <button
+                    onClick={() => void handleTaskAction(item.task_id, "park")}
+                    disabled={isPending}
+                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                  >
+                    Park
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
+  };
+
+  const renderCompletedCard = (item: CompletedTaskItem) => (
+    <article
+      key={`completed-${item.task_id}`}
+      className="group relative rounded-lg border border-slate-800/70 bg-slate-950/60 p-3 transition-colors hover:border-slate-700/80"
+      onMouseEnter={() => setHoveredDeleteId(item.task_id)}
+      onMouseLeave={() => setHoveredDeleteId(null)}
+    >
+      <button
+        onClick={() => void handleDeleteCompletedTask(item.task_id)}
+        className={`absolute right-2 top-2 rounded p-1 text-slate-600 transition-opacity hover:bg-rose-950/50 hover:text-rose-300 ${
+          hoveredDeleteId === item.task_id ? "opacity-100" : "opacity-0"
+        }`}
+        title="Delete"
+      >
+        🗑
+      </button>
+      <div className="flex items-start justify-between gap-2 pr-6">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5 mb-1">
+            {sourceKindPill(item.source_kind)}
+          </div>
+          <h3 className="truncate font-semibold text-slate-200 text-sm">{item.title}</h3>
+          {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
+        </div>
+        <div className={`text-right text-[10px] shrink-0 font-semibold ${priorityColor(item.priority)}`}>
+          {priorityText(item.priority)}
+        </div>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+        {item.project_key ? <span className="text-slate-400">{item.project_key}</span> : null}
+        <span>•</span>
+        <span>Done {formatTs(item.completed_at || item.updated_at)}</span>
+        {item.last_assignment?.agent_id ? (
+          <><span>•</span><span className="text-slate-300">{item.last_assignment.agent_id}</span></>
         ) : null}
       </div>
-      <div className="space-y-2 max-h-[42vh] overflow-y-auto pr-1">
-        {visibleCompletedRows.length === 0 ? (
-          <p className="text-sm text-slate-500 italic">No completed agent jobs yet.</p>
-        ) : (
-          visibleCompletedRows.slice(0, compact ? 8 : 20).map((item) => (
-            <article
-              key={`completed-${item.task_id}`}
-              className="group relative rounded-lg border border-slate-800/80 bg-slate-950/60 p-3"
-              onMouseEnter={() => setHoveredDeleteId(item.task_id)}
-              onMouseLeave={() => setHoveredDeleteId(null)}
-            >
-              {/* Per-item delete button — appears on hover */}
-              <button
-                onClick={() => void handleDeleteCompletedTask(item.task_id)}
-                className={`absolute right-2 top-2 rounded p-1 text-slate-500 transition-opacity hover:bg-rose-950/50 hover:text-rose-300 ${
-                  hoveredDeleteId === item.task_id ? "opacity-100" : "opacity-0"
-                }`}
-                title="Delete"
-              >
-                🗑
-              </button>
-              <div className="flex items-start justify-between gap-2 pr-6">
-                <div className="min-w-0">
-                  <h3 className="truncate font-semibold text-slate-200">{item.title}</h3>
-                  {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
-                </div>
-                <div className="text-right text-[10px] text-slate-400">
-                  <div>{priorityText(item.priority)}</div>
-                  <div>{item.status || "completed"}</div>
-                </div>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-                <span>{item.project_key || "immediate"}</span>
-                <span>•</span>
-                <span>Completed {formatTs(item.completed_at || item.updated_at)}</span>
-                {item.last_assignment?.agent_id ? (
-                  <>
-                    <span>•</span>
-                    <span>{item.last_assignment.agent_id}</span>
-                  </>
-                ) : null}
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <button
-                  onClick={() => void handleOpenTaskHistory(item.task_id)}
-                  disabled={taskHistoryLoadingId === item.task_id}
-                  className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
-                >
-                  {taskHistoryLoadingId === item.task_id ? "Loading..." : "Review"}
-                </button>
-                <button
-                  onClick={() => setSelectedTaskDetails(item)}
-                  className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
-                >
-                  Inspect
-                </button>
-                {item.links?.session_href ? (
-                  <Link
-                    href={String(item.links.session_href)}
-                    className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35"
-                  >
-                    Session
-                  </Link>
-                ) : null}
-                {item.links?.run_log_href ? (
-                  <a
-                    href={String(item.links.run_log_href)}
-                    className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35"
-                  >
-                    Run Log
-                  </a>
-                ) : null}
-              </div>
-            </article>
-          ))
-        )}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button
+          onClick={() => void handleOpenTaskHistory(item.task_id)}
+          disabled={taskHistoryLoadingId === item.task_id}
+          className="rounded border border-sky-700/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200 hover:bg-sky-900/35 disabled:opacity-50"
+        >
+          {taskHistoryLoadingId === item.task_id ? "Loading…" : "Review"}
+        </button>
+        <button
+          onClick={() => setSelectedTaskDetails(item)}
+          className="rounded border border-fuchsia-700/60 bg-fuchsia-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-900/35"
+        >
+          Inspect
+        </button>
+        {item.links?.session_href ? (
+          <Link
+            href={String(item.links.session_href)}
+            className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35"
+          >
+            Session
+          </Link>
+        ) : null}
+        {item.links?.run_log_href ? (
+          <a
+            href={String(item.links.run_log_href)}
+            className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35"
+          >
+            Run Log
+          </a>
+        ) : null}
       </div>
-    </section>
+    </article>
   );
+
+  // ── Task details modal ────────────────────────────────────────────────────────
+
+  const renderTaskDetailsModal = () => {
+    if (!selectedTaskDetails) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/50 p-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-100">Task Details</h2>
+              <p className="text-xs text-slate-400">{selectedTaskDetails.task_id}</p>
+            </div>
+            <button
+              onClick={() => setSelectedTaskDetails(null)}
+              className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="overflow-y-auto p-4 text-sm text-slate-300">
+            <pre className="break-all rounded border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] text-emerald-300 whitespace-pre-wrap">
+              {JSON.stringify(selectedTaskDetails, null, 2)}
+            </pre>
+          </div>
+          <div className="flex-none flex justify-end border-t border-slate-800 bg-slate-950/50 p-4">
+            <button
+              onClick={() => setSelectedTaskDetails(null)}
+              className="rounded border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-700"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Task history panel ────────────────────────────────────────────────────────
 
   const renderTaskHistoryPanel = () => (
     <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
@@ -895,7 +756,7 @@ export default function ToDoListDashboardPage() {
         ) : null}
       </div>
       {!taskHistory ? (
-        <p className="text-xs text-slate-500">Select Review on any task to load run history.</p>
+        <p className="text-xs text-slate-500 italic">Select "Review" on any task to load run history.</p>
       ) : (
         <div className="space-y-3 text-xs">
           <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
@@ -967,85 +828,75 @@ export default function ToDoListDashboardPage() {
     </section>
   );
 
-  const agentMetrics1h = agentActivity?.metrics?.["1h"];
-  const agentMetrics24h = agentActivity?.metrics?.["24h"];
+  // ── Kanban column ─────────────────────────────────────────────────────────────
 
-  if (loading) {
-    return <div className="flex h-full items-center justify-center p-6 text-slate-400">Loading To Do Command Center V2...</div>;
-  }
-
-  const renderTaskDetailsModal = () => {
-    if (!selectedTaskDetails) return null;
-    return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-        <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/50 p-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-100">Task Details</h2>
-              <p className="text-xs text-slate-400">{selectedTaskDetails.task_id}</p>
-            </div>
-            <button
-              onClick={() => setSelectedTaskDetails(null)}
-              className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100"
-            >
-              ✕
-            </button>
-          </div>
-          <div className="overflow-y-auto p-4 text-sm text-slate-300">
-            <pre className="break-all rounded border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] text-emerald-300 whitespace-pre-wrap">
-              {JSON.stringify(selectedTaskDetails, null, 2)}
-            </pre>
-          </div>
-          <div className="flex-none flex justify-end border-t border-slate-800 bg-slate-950/50 p-4">
-            <button
-              onClick={() => setSelectedTaskDetails(null)}
-              className="rounded border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-700"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  type KanbanColProps = {
+    label: string;
+    emoji: string;
+    count: number;
+    accentClass: string;
+    headerClass: string;
+    emptyText: string;
+    children: React.ReactNode;
   };
 
-  return (
-    <div className="relative flex h-full flex-col gap-4 pb-6">
-      {renderTaskDetailsModal()}
-      {approvalsHighlight?.banner?.show ? (
-        <div className="sticky top-0 z-20 rounded-lg border border-amber-700/50 bg-amber-950/90 px-3 py-2 text-xs text-amber-100 backdrop-blur">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <span className="font-semibold uppercase tracking-wide">Outstanding Approval:</span>{" "}
-              {approvalsHighlight.banner.text}
-            </div>
-            <Link
-              href={approvalsHighlight.banner.focus_href || "/dashboard/todolist?mode=personal&focus=approvals"}
-              className="rounded border border-amber-600/70 bg-amber-800/25 px-2 py-1 font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-800/35"
-            >
-              Review Now
-            </Link>
-          </div>
+  const KanbanCol = ({ label, emoji, count, accentClass, headerClass, emptyText, children }: KanbanColProps) => (
+    <div className={`flex flex-col rounded-xl border bg-slate-900/60 ${accentClass}`}>
+      <div className="flex items-center justify-between border-b border-slate-800/80 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-base">{emoji}</span>
+          <h2 className={`text-sm font-semibold uppercase tracking-[0.14em] ${headerClass}`}>{label}</h2>
         </div>
-      ) : null}
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${headerClass} bg-slate-800/60`}>{count}</span>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto p-3 max-h-[60vh]">
+        {count === 0 ? (
+          <p className="text-xs text-slate-600 italic pt-2">{emptyText}</p>
+        ) : children}
+      </div>
+    </div>
+  );
 
+  // ── Main render ────────────────────────────────────────────────────────────────
+
+  return (
+    <div className="relative flex h-full flex-col gap-4 pb-6" onClick={() => setOpenActionMenuId(null)}>
+      {renderTaskDetailsModal()}
+
+      {/* ── Header ── */}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">To Do List - Task Command Center V2</h1>
-          <p className="text-sm text-slate-400">Internal-first orchestration with selective Todoist mirror and memory-safe learning.</p>
+          <h1 className="text-xl font-semibold tracking-tight">Task Command Center</h1>
+          <p className="text-sm text-slate-400">Mission allocation across past · current · future work</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-slate-700 bg-slate-800/70 p-1 text-xs">
-            <button onClick={() => setMode("agent")} className={`rounded px-2 py-1 ${mode === "agent" ? "bg-cyan-700/40 text-cyan-100" : "text-slate-300"}`}>Agent</button>
-            <button onClick={() => setMode("personal")} className={`rounded px-2 py-1 ${mode === "personal" ? "bg-indigo-700/40 text-indigo-100" : "text-slate-300"}`}>Personal</button>
-            <button onClick={() => setMode("split")} className={`rounded px-2 py-1 ${mode === "split" ? "bg-violet-700/40 text-violet-100" : "text-slate-300"}`}>Split</button>
-          </div>
+          <span className="text-[11px] text-slate-500 tabular-nums">
+            {refreshing ? "Refreshing…" : `Auto-refresh in ${countdown}s`}
+          </span>
           <button
-            onClick={() => { void load(true); }}
+            onClick={() => { setCountdown(AUTO_REFRESH_SECONDS); void load(true); }}
             className="rounded border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
           >
-            {refreshing ? "Refreshing..." : "Refresh"}
+            Refresh
           </button>
+          <button
+            onClick={() => void handleWakeHeartbeat()}
+            disabled={wakePending}
+            className="rounded border border-emerald-700/60 bg-emerald-900/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+          >
+            {wakePending ? "Queueing…" : "Run Heartbeat"}
+          </button>
+          <Link
+            href="/dashboard/approvals"
+            className="rounded border border-amber-700/60 bg-amber-900/20 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-900/35"
+          >
+            Approvals
+            {(approvalsHighlight?.pending_count || 0) > 0 ? (
+              <span className="ml-1.5 rounded-full bg-amber-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
+                {approvalsHighlight!.pending_count}
+              </span>
+            ) : null}
+          </Link>
         </div>
       </div>
 
@@ -1053,125 +904,207 @@ export default function ToDoListDashboardPage() {
         <div className="rounded-lg border border-rose-800/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-200">{error}</div>
       ) : null}
 
-      <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      {/* ── Summary Cards ── */}
+      <section className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
         <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
           <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-            Dispatch Eligible{dispatchThreshold > 0 ? ` (>= ${dispatchThreshold})` : ""}
+            Dispatch Eligible{dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}
           </p>
           <p className="mt-1 text-2xl font-semibold text-slate-100">{overview?.queue_health?.dispatch_eligible || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">
-            {overview?.queue_health?.dispatch_queue_size || 0} visible agent queue item(s)
-          </p>
-        </article>
-        <Link href="/dashboard/csi#notifications" className="block rounded-lg border border-slate-800 bg-slate-900/60 p-3 transition-colors hover:border-emerald-700/60 hover:bg-slate-900/80">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Open CSI Incidents</p>
-          <p className="mt-1 text-2xl font-semibold text-emerald-200">{overview?.csi_incident_summary?.open_incidents || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">Open CSI notifications</p>
-        </Link>
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Human Intervention Required</p>
-          <p className="mt-1 text-2xl font-semibold text-amber-200">{overview?.queue_health?.csi_human_open || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">CSI escalations waiting on a human</p>
+          <p className="mt-1 text-[11px] text-slate-500">{overview?.queue_health?.dispatch_queue_size || 0} in queue</p>
         </article>
         <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
           <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active Agents</p>
           <p className="mt-1 text-2xl font-semibold text-cyan-200">{agentActivity?.active_agents || 0}</p>
+          <p className="mt-1 text-[11px] text-slate-500">{(agentActivity?.active_assignments || []).length} assignment{(agentActivity?.active_assignments || []).length !== 1 ? "s" : ""}</p>
+        </article>
+        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Backlog Open</p>
+          <p className="mt-1 text-2xl font-semibold text-slate-100">{agentActivity?.backlog_open || 0}</p>
+          <p className="mt-1 text-[11px] text-slate-500">total queued</p>
+        </article>
+        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Approvals Pending</p>
+          <p className="mt-1 text-2xl font-semibold text-amber-200">{approvalsHighlight?.pending_count || 0}</p>
+          <p className="mt-1 text-[11px] text-slate-500">awaiting decision</p>
+        </article>
+        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Completion Rate</p>
+          <p className={`mt-1 text-2xl font-semibold ${completionRate24h !== null ? (completionRate24h >= 70 ? "text-emerald-200" : completionRate24h >= 40 ? "text-amber-200" : "text-rose-300") : "text-slate-500"}`}>
+            {completionRate24h !== null ? `${completionRate24h}%` : "—"}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-500">24h completed / rejected</p>
         </article>
       </section>
 
+      {/* ── NOW: Current Assignments ── */}
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Heartbeat Runtime</h2>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Heartbeat Config / Effective</div>
-            <div className="mt-1 text-slate-100">
-              {formatEvery(overview?.heartbeat?.configured_every_seconds)} / {formatEvery(overview?.heartbeat?.heartbeat_effective_interval_seconds ?? overview?.heartbeat?.effective_default_every_seconds)}
-            </div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Autonomous Cron / Min</div>
-            <div className="mt-1 text-slate-100">
-              {formatEvery(overview?.heartbeat?.cron_interval_seconds ?? undefined)} / {formatEvery(overview?.heartbeat?.min_interval_seconds)}
-            </div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Interval Source / Busy</div>
-            <div className="mt-1 text-slate-100">
-              {overview?.heartbeat?.heartbeat_interval_source || "default"} / {overview?.heartbeat?.busy_sessions ?? 0}
-            </div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Last Run / Next Run</div>
-            <div className="mt-1 text-slate-100">
-              {formatEpochTs(overview?.heartbeat?.latest_last_run_epoch)} / {formatEpochTs(overview?.heartbeat?.nearest_next_run_epoch)}
-            </div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Sessions / State Files</div>
-            <div className="mt-1 text-slate-100">
-              {overview?.heartbeat?.session_count ?? 0} / {overview?.heartbeat?.session_state_count ?? 0}
-            </div>
-          </div>
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-base">⚡</span>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-300">
+            Now — Active Assignments ({(agentActivity?.active_assignments || []).length})
+          </h2>
         </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Agent Efficiency</h2>
-        <p className="mb-2 text-xs text-slate-500">
-          This measures recent agent seizure/completion activity, not total backlog depth.
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">1h new / seized</div>
-            <div className="mt-1 text-slate-100">{agentMetrics1h?.new || 0} / {agentMetrics1h?.seized || 0}</div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">1h completed / rejected</div>
-            <div className="mt-1 text-slate-100">{agentMetrics1h?.completed || 0} / {agentMetrics1h?.rejected || 0}</div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">24h completed / rejected</div>
-            <div className="mt-1 text-slate-100">{agentMetrics24h?.completed || 0} / {agentMetrics24h?.rejected || 0}</div>
-          </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2 text-xs">
-            <div className="text-slate-500">Backlog Open</div>
-            <div className="mt-1 text-slate-100">{agentActivity?.backlog_open || 0}</div>
-          </div>
-        </div>
-        {(agentActivity?.active_assignments || []).length > 0 ? (
-          <div className="mt-3">
-            <h3 className="mb-1 text-xs uppercase tracking-[0.16em] text-slate-500">Current Assignments</h3>
-            <div className="space-y-1 max-h-32 overflow-y-auto">
-              {(agentActivity?.active_assignments || []).map((a) => (
-                <div key={a.assignment_id} className="rounded border border-slate-800/70 bg-slate-950/50 px-2 py-1 text-xs text-slate-300">
-                  <span className="font-semibold text-slate-100">{a.agent_id}</span> - {a.title}
+        {(agentActivity?.active_assignments || []).length === 0 ? (
+          <p className="text-sm text-slate-600 italic">No agents currently working. Queue a heartbeat to dispatch work.</p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {(agentActivity?.active_assignments || []).map((a) => (
+              <div
+                key={a.assignment_id}
+                className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">{a.agent_id}</div>
+                    <div className="mt-1 text-sm font-medium text-slate-200 leading-snug">{a.title}</div>
+                  </div>
+                  <span className={`text-[10px] shrink-0 font-semibold ${priorityColor(a.priority)}`}>{priorityText(a.priority)}</span>
                 </div>
-              ))}
-            </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                  {a.project_key ? <span className="text-slate-400">{a.project_key}</span> : null}
+                  <span>•</span>
+                  <span>Started {formatTs(a.started_at)}</span>
+                </div>
+              </div>
+            ))}
           </div>
-        ) : null}
+        )}
       </section>
 
-      {mode === "agent" ? renderAgentPanel(false) : null}
-      {mode === "personal" ? renderPersonalPanel(false) : null}
-      {mode === "split" ? (
-        <div className="grid gap-3 xl:grid-cols-2">
-          {renderAgentPanel(true)}
-          {renderPersonalPanel(true)}
+      {/* ── Agent Efficiency Strip ── */}
+      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+        <div className="flex flex-wrap items-center gap-4 text-xs">
+          <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500 shrink-0">Agent Efficiency</span>
+          <div className="flex flex-wrap gap-4">
+            <span className="text-slate-400">1h: <strong className="text-slate-200">{agentMetrics1h?.seized || 0}</strong> seized · <strong className="text-emerald-300">{agentMetrics1h?.completed || 0}</strong> done · <strong className="text-rose-300">{agentMetrics1h?.rejected || 0}</strong> rejected</span>
+            <span className="text-slate-400">24h: <strong className="text-slate-200">{agentMetrics24h?.seized || 0}</strong> seized · <strong className="text-emerald-300">{agentMetrics24h?.completed || 0}</strong> done · <strong className="text-rose-300">{agentMetrics24h?.rejected || 0}</strong> rejected</span>
+          </div>
         </div>
+      </section>
+
+      {/* ── Kanban Time Horizon Board ── */}
+      <div className="grid gap-3 lg:grid-cols-3" onClick={(e) => e.stopPropagation()}>
+        {/* FUTURE */}
+        <KanbanCol
+          label="Future"
+          emoji="📅"
+          count={futureItems.length}
+          accentClass="border-slate-800"
+          headerClass="text-sky-300"
+          emptyText="No queued tasks."
+        >
+          {futureItems.map((item, idx) => renderTaskCard(item, idx, true))}
+        </KanbanCol>
+
+        {/* NOW (in-progress from queue) */}
+        <KanbanCol
+          label="In Progress"
+          emoji="⚡"
+          count={nowItems.length}
+          accentClass="border-emerald-900/40"
+          headerClass="text-emerald-300"
+          emptyText="Nothing actively in progress."
+        >
+          {nowItems.map((item, idx) => renderTaskCard(item, idx, true))}
+        </KanbanCol>
+
+        {/* PAST */}
+        <KanbanCol
+          label="Past"
+          emoji="✅"
+          count={visibleCompletedRows.length}
+          accentClass="border-slate-800"
+          headerClass="text-slate-300"
+          emptyText="No completed tasks yet."
+        >
+          <>
+            {visibleCompletedRows.length > 1 ? (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => void handleDeleteAllCompleted()}
+                  disabled={deleteAllPending}
+                  className="mb-1 rounded border border-rose-800/60 bg-rose-950/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-300 hover:bg-rose-950/40 disabled:opacity-50"
+                >
+                  {deleteAllPending ? "Clearing…" : "🗑 Clear All"}
+                </button>
+              </div>
+            ) : null}
+            {visibleCompletedRows.slice(0, 20).map((item) => renderCompletedCard(item))}
+          </>
+        </KanbanCol>
+      </div>
+
+      {/* ── Allocation Breakdown ── */}
+      {allQueueItems.length > 0 ? (
+        <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
+            Work Allocation
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">By Source</h3>
+              <div className="space-y-1.5">
+                {allocationBySource.map(([kind, count]) => {
+                  const pct = Math.round((count / allQueueItems.length) * 100);
+                  return (
+                    <div key={kind} className="flex items-center gap-2 text-xs">
+                      <div className="w-20 shrink-0">{sourceKindPill(kind)}</div>
+                      <div className="flex-1 rounded-full bg-slate-800/60 h-1.5">
+                        <div
+                          className="h-1.5 rounded-full bg-sky-600/60"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-14 text-right text-slate-400 tabular-nums">{count} ({pct}%)</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">By Project</h3>
+              <div className="space-y-1.5">
+                {allocationByProject.map(([proj, count]) => {
+                  const pct = Math.round((count / allQueueItems.length) * 100);
+                  return (
+                    <div key={proj} className="flex items-center gap-2 text-xs">
+                      <span className="w-28 shrink-0 truncate text-slate-300">{proj}</span>
+                      <div className="flex-1 rounded-full bg-slate-800/60 h-1.5">
+                        <div
+                          className="h-1.5 rounded-full bg-violet-600/60"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-14 text-right text-slate-400 tabular-nums">{count} ({pct}%)</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
       ) : null}
 
-      {mode === "split" ? (
-        <div className="grid gap-3 xl:grid-cols-2">
-          {renderCompletedPanel(true)}
-          {renderTaskHistoryPanel()}
-        </div>
-      ) : (
-        <>
-          {renderCompletedPanel(false)}
-          {renderTaskHistoryPanel()}
-        </>
-      )}
+      {/* ── Task History Detail ── */}
+      {renderTaskHistoryPanel()}
+
+      {/* ── Heartbeat Status (only when interesting) ── */}
+      {heartbeatAlerts.length > 0 ? (
+        <section className="rounded-xl border border-amber-800/40 bg-amber-950/20 p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-[10px] uppercase tracking-[0.16em] text-amber-400 shrink-0">Heartbeat</span>
+            {heartbeatAlerts.map((alert) => (
+              <span key={alert} className="rounded border border-amber-700/50 bg-amber-900/20 px-2 py-0.5 text-[11px] text-amber-200">
+                {alert}
+              </span>
+            ))}
+            <span className="text-[10px] text-slate-500">
+              next {formatEpochTs(overview?.heartbeat?.nearest_next_run_epoch)} · interval {formatEvery(overview?.heartbeat?.heartbeat_effective_interval_seconds ?? overview?.heartbeat?.effective_default_every_seconds)}
+            </span>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

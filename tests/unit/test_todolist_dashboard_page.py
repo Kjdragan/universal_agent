@@ -16,7 +16,6 @@ def test_todolist_dashboard_uses_gateway_api_path():
 
 def test_todolist_dashboard_includes_history_and_completed_sections():
     content = _PAGE.read_text(encoding="utf-8")
-    assert "Completed Agent Jobs" in content
     assert "Task History" in content
     assert "/api/v1/dashboard/todolist/tasks/" in content
     assert "/history?limit=120" in content
@@ -24,15 +23,26 @@ def test_todolist_dashboard_includes_history_and_completed_sections():
 
 def test_todolist_dashboard_includes_heartbeat_force_controls():
     content = _PAGE.read_text(encoding="utf-8")
-    assert "Run Next Heartbeat" in content
-    assert "Force Next Heartbeat" in content
+    assert "Run Heartbeat" in content
     assert "/api/v1/heartbeat/wake" in content
 
 
-def test_todolist_dashboard_links_csi_incidents_and_uses_detailed_queue_cards():
+def test_todolist_dashboard_mission_focused_layout():
     content = _PAGE.read_text(encoding="utf-8")
-    assert '/dashboard/csi#notifications' in content
-    assert "score {item.score ?? 0} · Q {item.score_confidence ?? 0}" in content
-    assert "Human Intervention Required" in content
-    assert "CSI Escalation" in content
-    assert "Next Actions" not in content
+    # New mission-focused elements
+    assert "Task Command Center" in content
+    assert "Dispatch Eligible" in content
+    assert "Active Agents" in content
+    assert "Completion Rate" in content
+    assert "source_kind" in content
+    # Kanban time horizons
+    assert "Future" in content
+    assert "In Progress" in content
+    assert "Past" in content
+    # Allocation breakdown
+    assert "Work Allocation" in content
+    # No CSI-specific content
+    assert "Open CSI Incidents" not in content
+    assert "Human Intervention Required" not in content
+    assert "CSI Escalation" not in content
+    assert "/dashboard/csi#notifications" not in content
