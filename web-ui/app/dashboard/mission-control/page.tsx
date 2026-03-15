@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Activity, BarChart3, Clock, CheckCircle, XCircle, RefreshCw, Loader2, TrendingUp } from "lucide-react";
+import { Activity, BarChart3, Clock, CheckCircle, XCircle, RefreshCw, Loader2, TrendingUp, Cpu } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
+const REFRESH_INTERVAL = 30_000; // 30 seconds
 
 // Types for API responses
 type AgentQueueItem = {
@@ -133,6 +134,8 @@ function ActiveTasksPanel() {
 
   useEffect(() => {
     load();
+    const id = setInterval(load, REFRESH_INTERVAL);
+    return () => clearInterval(id);
   }, [load]);
 
   if (loading) {
@@ -301,6 +304,8 @@ function SystemStatusPanel() {
 
   useEffect(() => {
     load();
+    const id = setInterval(load, REFRESH_INTERVAL);
+    return () => clearInterval(id);
   }, [load]);
 
   if (loading) {
@@ -450,6 +455,8 @@ function RecentEventsPanel() {
 
   useEffect(() => {
     load();
+    const id = setInterval(load, REFRESH_INTERVAL);
+    return () => clearInterval(id);
   }, [load]);
 
   const handleClearAll = () => {
@@ -633,6 +640,8 @@ function CSISignalsPanel() {
 
   useEffect(() => {
     load();
+    const id = setInterval(load, REFRESH_INTERVAL);
+    return () => clearInterval(id);
   }, [load]);
 
   if (loading) {
@@ -721,12 +730,215 @@ function CSISignalsPanel() {
   );
 }
 
+type SystemResourcesPayload = {
+  version: number;
+  overall_status: "ok" | "warn" | "critical";
+  generated_at_utc: string;
+  summary: string;
+  metrics: {
+    cpu_load_1m: number;
+    cpu_load_5m: number;
+    cpu_load_15m: number;
+    cpu_cores: number;
+    load_per_core: number;
+    ram_used_gb: number;
+    ram_total_gb: number;
+    ram_percent: number;
+    swap_used_gb: number;
+    swap_total_gb: number;
+    swap_percent: number;
+    disk_used_gb: number;
+    disk_total_gb: number;
+    disk_percent: number;
+    active_agent_sessions: number;
+    gateway_errors_30m: number;
+    dispatch_concurrency: number;
+  };
+  findings: Array<{
+    metric: string;
+    value: number | string;
+    threshold?: number;
+    status: string;
+    message: string;
+  }>;
+};
+
+function MetricBar({ label, value, percent, unit }: { label: string; value: number; percent: number; unit?: string }) {
+  const color =
+    percent >= 85 ? "bg-red-500" : percent >= 70 ? "bg-yellow-500" : "bg-green-500";
+  const textColor =
+    percent >= 85 ? "text-red-400" : percent >= 70 ? "text-yellow-400" : "text-green-400";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-400">{label}</span>
+        <span className={textColor}>
+          {value}{unit || ""} ({percent}%)
+        </span>
+      </div>
+      <div className="h-1.5 w-full rounded-full bg-slate-700">
+        <div
+          className={`h-1.5 rounded-full transition-all duration-500 ${color}`}
+          style={{ width: `${Math.min(percent, 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SystemResourcesPanel() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<SystemResourcesPayload | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/system-resources`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      const json = await res.json();
+      setData(json as SystemResourcesPayload);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, REFRESH_INTERVAL);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Cpu className="h-4 w-4 text-slate-400" />
+          <h2 className="text-sm font-medium text-slate-300">System Resources</h2>
+        </div>
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Cpu className="h-4 w-4 text-slate-400" />
+          <h2 className="text-sm font-medium text-slate-300">System Resources</h2>
+        </div>
+        <div className="flex flex-col items-center justify-center py-6 text-center">
+          <XCircle className="mb-2 h-8 w-8 text-red-400" />
+          <p className="text-sm text-slate-500">{error}</p>
+          <button
+            onClick={load}
+            className="mt-3 flex items-center gap-1 rounded bg-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-600"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const m = data?.metrics;
+  if (!m) return null;
+
+  const statusColor =
+    data.overall_status === "critical"
+      ? "bg-red-500/10 text-red-400 ring-red-500/20"
+      : data.overall_status === "warn"
+      ? "bg-yellow-500/10 text-yellow-400 ring-yellow-500/20"
+      : "bg-green-500/10 text-green-400 ring-green-500/20";
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Cpu className="h-4 w-4 text-slate-400" />
+          <h2 className="text-sm font-medium text-slate-300">System Resources</h2>
+        </div>
+        <span className={`rounded px-2 py-0.5 text-xs font-medium ring-1 ${statusColor}`}>
+          {data.overall_status}
+        </span>
+      </div>
+
+      <div className="space-y-3">
+        {/* CPU */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-400">CPU Load</span>
+            <span className="text-slate-300">
+              {m.cpu_load_1m.toFixed(2)} / {m.cpu_cores} cores
+            </span>
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-slate-700">
+            <div
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                m.load_per_core >= 1 ? "bg-red-500" : m.load_per_core >= 0.7 ? "bg-yellow-500" : "bg-green-500"
+              }`}
+              style={{ width: `${Math.min(m.load_per_core * 100, 100)}%` }}
+            />
+          </div>
+        </div>
+
+        {/* RAM */}
+        <MetricBar label="RAM" value={m.ram_used_gb} percent={m.ram_percent} unit=" GiB" />
+
+        {/* Swap */}
+        <MetricBar label="Swap" value={m.swap_used_gb} percent={m.swap_percent} unit=" GiB" />
+
+        {/* Disk */}
+        <MetricBar label="Disk" value={m.disk_used_gb} percent={m.disk_percent} unit=" GB" />
+
+        {/* Session count */}
+        <div className="flex items-center justify-between rounded-lg bg-slate-800/30 px-3 py-2">
+          <span className="text-xs text-slate-400">Active Sessions</span>
+          <span className={`text-sm font-medium ${
+            m.active_agent_sessions > 50 ? "text-red-400" : m.active_agent_sessions > 30 ? "text-yellow-400" : "text-green-400"
+          }`}>
+            {m.active_agent_sessions}
+          </span>
+        </div>
+
+        {/* Error count */}
+        <div className="flex items-center justify-between rounded-lg bg-slate-800/30 px-3 py-2">
+          <span className="text-xs text-slate-400">Errors (30m)</span>
+          <span className={`text-sm font-medium ${
+            m.gateway_errors_30m > 50 ? "text-red-400" : m.gateway_errors_30m > 10 ? "text-yellow-400" : "text-green-400"
+          }`}>
+            {m.gateway_errors_30m}
+          </span>
+        </div>
+
+        {/* Updated timestamp */}
+        {data.generated_at_utc && (
+          <div className="text-center text-xs text-slate-600">
+            Updated {formatTs(data.generated_at_utc)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Mission Control Dashboard
  *
- * A centralized task monitoring interface with four main panels:
- * - Active Tasks: Currently running tasks and operations (Task Queue Overview)
+ * A centralized task monitoring interface with five main panels:
+ * - Active Tasks: Currently running tasks and operations
  * - System Status: Health and status of system components
+ * - System Resources: Live VPS metrics (CPU, RAM, Swap, Disk, Sessions)
  * - Recent Events: Latest events and notifications
  * - CSI Signals: Content & Signal Intelligence feed
  */
@@ -744,10 +956,11 @@ export default function MissionControlPage() {
         </div>
       </div>
 
-      {/* Main Content Grid - 2 cols desktop, 1 col mobile */}
-      <div className="grid flex-1 gap-4 md:grid-cols-2">
+      {/* Main Content Grid - 3 cols desktop, 1 col mobile */}
+      <div className="grid flex-1 gap-4 md:grid-cols-3">
         <ActiveTasksPanel />
         <SystemStatusPanel />
+        <SystemResourcesPanel />
         <RecentEventsPanel />
         <CSISignalsPanel />
       </div>

@@ -108,6 +108,36 @@ function getStubDataForPath(pathname: string): unknown | null {
       total: 4,
     };
   }
+
+  // System Resources stub (used by System Resources panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/system-resources") {
+    return {
+      version: 1,
+      overall_status: "warn",
+      generated_at_utc: new Date().toISOString(),
+      summary: "Dev mode stub data. Connect to live gateway for real metrics.",
+      metrics: {
+        cpu_load_1m: 0.45,
+        cpu_load_5m: 0.52,
+        cpu_load_15m: 0.61,
+        cpu_cores: 8,
+        load_per_core: 0.06,
+        ram_used_gb: 18.5,
+        ram_total_gb: 31.0,
+        ram_percent: 60,
+        swap_used_gb: 2.1,
+        swap_total_gb: 14.0,
+        swap_percent: 15,
+        disk_used_gb: 23,
+        disk_total_gb: 183,
+        disk_percent: 14,
+        active_agent_sessions: 12,
+        gateway_errors_30m: 0,
+        dispatch_concurrency: 2,
+      },
+      findings: [],
+    };
+  }
   return null;
 }
 

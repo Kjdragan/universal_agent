@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import re
 import time
@@ -80,6 +81,7 @@ except ImportError:
     httpx = None  # type: ignore
     websockets = None  # type: ignore
 
+logger = logging.getLogger(__name__)
 
 _EXPLICIT_GENERAL_VP_PATTERNS = (
     re.compile(r"\bgeneral(?:ist)?\s+vp\b", re.IGNORECASE),

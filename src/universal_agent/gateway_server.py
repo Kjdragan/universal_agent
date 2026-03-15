@@ -15417,6 +15417,56 @@ async def dashboard_notification_purge(payload: NotificationPurgeRequest):
     }
 
 
+# --- System Resources endpoint ---
+@app.get("/api/v1/dashboard/system-resources")
+async def handle_dashboard_system_resources(request):
+    """Return latest VPS system resource metrics from heartbeat findings."""
+    import glob as glob_mod
+
+    # Find the most recent heartbeat_findings_latest.json across workspaces
+    workspaces_base = Path(os.environ.get(
+        "AGENT_RUN_WORKSPACES_DIR",
+        str(BASE_DIR / "AGENT_RUN_WORKSPACES"),
+    ))
+    pattern = str(workspaces_base / "*/work_products/heartbeat_findings_latest.json")
+    candidates = sorted(glob_mod.glob(pattern), key=os.path.getmtime, reverse=True)
+
+    if candidates:
+        try:
+            with open(candidates[0], "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to read heartbeat findings: %s", exc)
+
+    # Fallback: live metrics
+    return {
+        "version": 1,
+        "overall_status": "unknown",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "summary": "No heartbeat findings file found. Showing live fallback.",
+        "metrics": {
+            "cpu_load_1m": os.getloadavg()[0],
+            "cpu_load_5m": os.getloadavg()[1],
+            "cpu_load_15m": os.getloadavg()[2],
+            "cpu_cores": os.cpu_count() or 1,
+            "load_per_core": round(os.getloadavg()[0] / max(os.cpu_count() or 1, 1), 2),
+            "ram_percent": 0,
+            "ram_used_gb": 0,
+            "ram_total_gb": 0,
+            "swap_percent": 0,
+            "swap_used_gb": 0,
+            "swap_total_gb": 0,
+            "disk_percent": 0,
+            "disk_used_gb": 0,
+            "disk_total_gb": 0,
+            "active_agent_sessions": 0,
+            "gateway_errors_30m": 0,
+            "dispatch_concurrency": int(os.environ.get("UA_HOOKS_AGENT_DISPATCH_CONCURRENCY", "2")),
+        },
+        "findings": [],
+    }
+
+
 @app.post("/api/v1/dashboard/system/commands")
 async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     text = str(payload.text or "").strip()
