@@ -1096,22 +1096,19 @@ export default function ToDoListDashboardPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
             Work Allocation
           </h2>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-6 sm:grid-cols-2">
             <div>
               <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">By Source</h3>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {allocationBySource.map(([kind, count]) => {
                   const pct = Math.round((count / allQueueItems.length) * 100);
                   return (
-                    <div key={kind} className="flex items-center gap-2 text-xs">
-                      <div className="w-20 shrink-0">{sourceKindPill(kind)}</div>
-                      <div className="flex-1 rounded-full bg-slate-800/60 h-1.5">
-                        <div
-                          className="h-1.5 rounded-full bg-sky-600/60"
-                          style={{ width: `${pct}%` }}
-                        />
+                    <div key={kind} className="grid items-center gap-3 text-xs" style={{ gridTemplateColumns: "8rem 1fr 4rem" }}>
+                      <div className="overflow-hidden">{sourceKindPill(kind)}</div>
+                      <div className="rounded-full bg-slate-800/60 h-1.5 min-w-0">
+                        <div className="h-1.5 rounded-full bg-sky-600/60 transition-all" style={{ width: `${pct}%` }} />
                       </div>
-                      <span className="w-14 text-right text-slate-400 tabular-nums">{count} ({pct}%)</span>
+                      <span className="text-right text-slate-400 tabular-nums whitespace-nowrap">{count} ({pct}%)</span>
                     </div>
                   );
                 })}
