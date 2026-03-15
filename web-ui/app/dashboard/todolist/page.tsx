@@ -25,6 +25,7 @@ type AgentQueueItem = {
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
+  url?: string;
 };
 
 type ApprovalRow = {
@@ -235,6 +236,21 @@ function sourceKindPill(kind?: string) {
 
 function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
   return status === 502 && detail.toLowerCase().includes("gateway upstream unavailable");
+}
+
+/** Derive the external/internal reference URL for a task based on its source. */
+function taskSourceUrl(taskId: string, sourceKind?: string, explicitUrl?: string): string | null {
+  if (explicitUrl) return explicitUrl;
+  const k = String(sourceKind || "").toLowerCase();
+  if (k === "todoist") {
+    // task_id for Todoist tasks is the raw Todoist task ID
+    return `https://app.todoist.com/app/task/${encodeURIComponent(taskId)}`;
+  }
+  if (k === "approval") {
+    return "/dashboard/approvals";
+  }
+  // internal / system_command / csi / etc. — no external reference
+  return null;
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -540,7 +556,25 @@ export default function ToDoListDashboardPage() {
                 </span>
               ) : null}
             </div>
-            <h3 className="font-semibold text-slate-200 text-sm leading-snug">{item.title}</h3>
+            <h3 className="font-semibold text-slate-200 text-sm leading-snug">
+              {(() => {
+                const href = taskSourceUrl(item.task_id, item.source_kind, item.url);
+                if (href) {
+                  const isExternal = href.startsWith("http");
+                  return isExternal ? (
+                    <a href={href} target="_blank" rel="noopener noreferrer"
+                       className="hover:text-sky-300 hover:underline transition-colors" title="Open in source">
+                      {item.title}
+                    </a>
+                  ) : (
+                    <Link href={href} className="hover:text-sky-300 hover:underline transition-colors" title="Open reference">
+                      {item.title}
+                    </Link>
+                  );
+                }
+                return item.title;
+              })()}
+            </h3>
             {item.description ? (
               <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p>
             ) : null}
@@ -651,7 +685,28 @@ export default function ToDoListDashboardPage() {
           <div className="flex flex-wrap items-center gap-1.5 mb-1">
             {sourceKindPill(item.source_kind)}
           </div>
-          <h3 className="truncate font-semibold text-slate-200 text-sm">{item.title}</h3>
+          <h3 className="truncate font-semibold text-slate-200 text-sm">
+            {(() => {
+              // Prefer session link, then Todoist/source URL
+              const sessionHref = item.links?.session_href;
+              const sourceHref = taskSourceUrl(item.task_id, item.source_kind);
+              const href = sessionHref || sourceHref;
+              if (href) {
+                const isExternal = href.startsWith("http");
+                return isExternal ? (
+                  <a href={href} target="_blank" rel="noopener noreferrer"
+                     className="hover:text-sky-300 hover:underline transition-colors" title="Open in source">
+                    {item.title}
+                  </a>
+                ) : (
+                  <Link href={href} className="hover:text-sky-300 hover:underline transition-colors" title="Open session">
+                    {item.title}
+                  </Link>
+                );
+              }
+              return item.title;
+            })()}
+          </h3>
           {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
         </div>
         <div className={`text-right text-[10px] shrink-0 font-semibold ${priorityColor(item.priority)}`}>
