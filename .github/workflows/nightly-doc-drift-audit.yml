@@ -1,0 +1,121 @@
+name: Nightly Documentation Drift Audit
+
+on:
+  schedule:
+    # 08:00 UTC = 3:00 AM CDT (America/Chicago)
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      since_hours:
+        description: 'Hours of git history to scan (default: 24)'
+        required: false
+        default: '24'
+
+jobs:
+  doc-drift-audit:
+    name: Run Documentation Drift Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          # Need full history so doc_drift_auditor.py can run `git log`
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install project dependencies
+        run: uv sync --frozen --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
+
+      - name: Run Stage 1 — Documentation Drift Auditor
+        id: audit
+        env:
+          SINCE_HOURS: ${{ github.event.inputs.since_hours || '24' }}
+        run: |
+          echo "Running doc_drift_auditor.py (scanning last ${SINCE_HOURS}h of git history)..."
+          set +e
+          uv run python src/universal_agent/scripts/doc_drift_auditor.py \
+            --since-hours "${SINCE_HOURS}"
+          EXIT_CODE=$?
+          set -e
+
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          # Determine date for report path
+          REPORT_DATE=$(date -u +%Y-%m-%d)
+          echo "report_date=${REPORT_DATE}" >> "$GITHUB_OUTPUT"
+          echo "report_dir=artifacts/doc-drift-reports/${REPORT_DATE}" >> "$GITHUB_OUTPUT"
+
+          if [ "${EXIT_CODE}" -eq 0 ]; then
+            echo "✅ Audit complete — no documentation drift issues found."
+          else
+            echo "⚠️  Audit complete — documentation drift issues detected (exit ${EXIT_CODE})."
+          fi
+          # A non-zero exit from the auditor means issues were found — this is expected.
+          # We don't fail the workflow here; the report is still useful for Stage 2.
+
+      - name: Verify report files were produced
+        run: |
+          REPORT_DIR="artifacts/doc-drift-reports/$(date -u +%Y-%m-%d)"
+          echo "Checking for reports in ${REPORT_DIR}..."
+          if [ ! -f "${REPORT_DIR}/drift_report.json" ]; then
+            echo "::error::drift_report.json was not produced by the auditor!"
+            exit 1
+          fi
+          if [ ! -f "${REPORT_DIR}/DRIFT_REPORT.md" ]; then
+            echo "::error::DRIFT_REPORT.md was not produced by the auditor!"
+            exit 1
+          fi
+          echo "✅ Both report files confirmed present."
+          echo "--- drift_report.json summary ---"
+          python3 -c "
+          import json
+          r = json.load(open('${REPORT_DIR}/drift_report.json'))
+          print(f\"Issues found: {r['total_issues']}\")
+          print(f\"  P0: {r['issues_by_severity']['P0']}\")
+          print(f\"  P1: {r['issues_by_severity']['P1']}\")
+          print(f\"  P2: {r['issues_by_severity']['P2']}\")
+          print(f\"  Git files scanned: {r['git_summary']['files_changed']}\")
+          "
+
+      - name: Commit drift report to develop
+        run: |
+          REPORT_DIR="artifacts/doc-drift-reports/$(date -u +%Y-%m-%d)"
+          REPORT_DATE=$(date -u +%Y-%m-%d)
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage only the report files (don't pick up anything else)
+          git add "${REPORT_DIR}/drift_report.json"
+          git add "${REPORT_DIR}/DRIFT_REPORT.md"
+
+          # Check if there's actually anything new to commit
+          if git diff --cached --quiet; then
+            echo "ℹ️  No changes in report files — report is identical to last run. Skipping commit."
+          else
+            ISSUE_COUNT=$(python3 -c "import json; r = json.load(open('${REPORT_DIR}/drift_report.json')); print(r['total_issues'])")
+            COMMIT_MSG="chore(docs): nightly drift report ${REPORT_DATE} — ${ISSUE_COUNT} issues [auto]"
+            git commit -m "${COMMIT_MSG}"
+
+            git push origin develop
+            echo "✅ Drift report committed and pushed to develop."
+          fi
+
+      - name: Summarize in Job Summary
+        if: always()
+        run: |
+          REPORT_DIR="artifacts/doc-drift-reports/$(date -u +%Y-%m-%d)"
+          if [ -f "${REPORT_DIR}/DRIFT_REPORT.md" ]; then
+            echo "## 📋 Documentation Drift Report" >> "$GITHUB_STEP_SUMMARY"
+            cat "${REPORT_DIR}/DRIFT_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ❌ Report not generated" >> "$GITHUB_STEP_SUMMARY"
+          fi

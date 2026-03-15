@@ -1,8 +1,13 @@
 """
 Documentation Maintenance Agent — Stage 2
 
-Consumes the structured drift report produced by Stage 1 (doc_drift_auditor.py)
-and dispatches a VP agent mission to fix the identified issues.
+Consumes the structured drift report produced by Stage 1.
+
+Stage 1 (doc_drift_auditor.py) runs as a GitHub Actions scheduled workflow at
+3:00 AM CDT (08:00 UTC) and commits the drift report directly to the develop
+branch under artifacts/doc-drift-reports/<date>/. After the deploy workflow
+pulls the latest develop SHA onto the VPS, Stage 2 reads the report from disk
+and dispatches a VP coder mission to fix the issues.
 
 The VP agent will:
   1. Create a feature branch docs/nightly-drift-fix-{date}
@@ -26,20 +31,48 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[3]  # src/universal_agent/scripts -> repo root
 ARTIFACTS_BASE = REPO_ROOT / "artifacts" / "doc-drift-reports"
 
+# Additional search roots when running on the VPS.  Stage 1 commits the drift
+# report to develop via GHA; after the staging/prod deploy pulls the latest
+# SHA the report lives under one of these paths.
+_VPS_SEARCH_ROOTS = [
+    ARTIFACTS_BASE,
+    Path("/opt/universal-agent-staging/artifacts/doc-drift-reports"),
+    Path("/opt/universal_agent/artifacts/doc-drift-reports"),
+]
+
 
 def _find_todays_report() -> Path | None:
-    """Locate the most recent drift report JSON."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    report_path = ARTIFACTS_BASE / today / "drift_report.json"
-    if report_path.exists():
-        return report_path
+    """Locate the most recent drift report JSON.
 
-    # Fallback: check if there's a report from the last few hours
-    # (in case Stage 1 ran just before midnight UTC)
-    for subdir in sorted(ARTIFACTS_BASE.iterdir(), reverse=True):
-        candidate = subdir / "drift_report.json"
-        if candidate.exists():
-            return candidate
+    Stage 1 runs as a GitHub Actions workflow that commits the report into
+    the develop branch.  After the VPS deploy workflow pulls the latest code
+    the file is available at:
+        artifacts/doc-drift-reports/<YYYY-MM-DD>/drift_report.json
+
+    We search all known repo roots so the script works both locally and on the
+    staging / production VPS.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    for base in _VPS_SEARCH_ROOTS:
+        report_path = base / today / "drift_report.json"
+        if report_path.exists():
+            logger.info(f"Found today's drift report at {report_path}")
+            return report_path
+
+    # Fallback: most-recent report from any date (covers brief UTC day boundary
+    # window where today's GHA run hasn't committed yet)
+    for base in _VPS_SEARCH_ROOTS:
+        if not base.exists():
+            continue
+        try:
+            for subdir in sorted(base.iterdir(), reverse=True):
+                candidate = subdir / "drift_report.json"
+                if candidate.exists():
+                    logger.info(f"Using most-recent fallback report: {candidate}")
+                    return candidate
+        except PermissionError:
+            continue
 
     return None
 
