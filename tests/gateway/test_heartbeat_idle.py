@@ -121,8 +121,8 @@ class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result)
         self.assertIn("s5", self.service.active_sessions)
 
-    async def test_idle_unregistration_disabled_by_default(self):
-        """Should keep idle sessions registered unless explicit unregister flag is enabled."""
+    async def test_idle_unregistration_enabled_by_default(self):
+        """Should UNREGISTER idle sessions when UA_HEARTBEAT_UNREGISTER_IDLE is not set (defaults to True)."""
         last_activity = datetime.now() - timedelta(hours=2)
         session = GatewaySession(
             session_id="s6", user_id="u1", workspace_dir="/tmp/ws6",
@@ -138,5 +138,6 @@ class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
             os.environ.pop("UA_HEARTBEAT_UNREGISTER_IDLE", None)
             result = self.service._check_session_idle(session)
 
-        self.assertFalse(result)
-        self.assertIn("s6", self.service.active_sessions)
+        # Default is True — idle sessions should be unregistered
+        self.assertTrue(result)
+        self.assertNotIn("s6", self.service.active_sessions)
