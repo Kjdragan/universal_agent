@@ -2,6 +2,16 @@
 
 This document defines the current supported deployment model for Universal Agent.
 
+> [!IMPORTANT]
+> ## 🔗 Key Dashboard URLs
+>
+> | Environment | URL | Notes |
+> |---|---|---|
+> | **Staging** | `https://srv1360701.taildcc090.ts.net:9443/dashboard` | Tailscale required — yellow staging banner visible |
+> | **Production** | `https://app.clearspringcg.com/dashboard` | Public — no VPN needed |
+>
+> Staging deploys from `develop` automatically. Production deploys via manual SHA promotion from `main`.
+
 ## Git Branching Model
 
 We use branch-driven automated deployment with a single PR review gate on `develop`.
