@@ -114,8 +114,9 @@ logs/
 # === RLM Data ===
 RLM/corpora/
 
-# === Claude Internal ===
+# === Claude / Playwright Internal ===
 .claude/worktrees/
+.playwright-cli/
 .claude/settings.local.json
 .claude/skills/**/.git/
 .claude/skills/visual-explainer/
