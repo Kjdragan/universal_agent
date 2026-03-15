@@ -10828,6 +10828,90 @@ async def send_csi_digest_to_simone(digest_id: str, request: Request):
         )
 
 
+@app.post("/api/v1/dashboard/csi/purge")
+async def dashboard_csi_purge():
+    """Wipe all stale CSI data from the database and in-memory stores.
+
+    Clears:
+    - CSI notifications from activity_events
+    - csi_specialist_loops table
+    - CSI-related task_hub_items
+    - In-memory _csi_digests and CSI _notifications
+    """
+    counts: dict[str, int] = {}
+
+    # 1. Clear in-memory CSI digests
+    mem_digests = len(_csi_digests)
+    _csi_digests.clear()
+    counts["memory_digests_cleared"] = mem_digests
+
+    # 2. Clear CSI-related in-memory notifications
+    csi_notification_kinds = {
+        "csi_event", "csi_trend", "csi_digest",
+        "csi_specialist_confidence_reached",
+        "csi_specialist_followup_requested",
+        "csi_specialist_followup_request_failed",
+        "csi_specialist_followup_budget_exhausted",
+        "csi_specialist_confidence_drift",
+        "csi_specialist_evidence_stale",
+        "csi_specialist_low_signal_suppressed",
+        "csi_specialist_hourly_synthesis",
+        "csi_specialist_daily_rollup",
+        "csi_human_action_required",
+    }
+    before_count = len(_notifications)
+    _notifications[:] = [
+        n for n in _notifications
+        if str(n.get("kind", "")) not in csi_notification_kinds
+    ]
+    counts["memory_notifications_cleared"] = before_count - len(_notifications)
+
+    # 3. Clear CSI data from the database
+    try:
+        with _activity_store_lock:
+            conn = _activity_connect()
+            _ensure_activity_schema(conn)
+            try:
+                # Remove CSI notifications from activity_events
+                cursor = conn.execute(
+                    "DELETE FROM activity_events WHERE kind LIKE 'csi_%'"
+                )
+                counts["db_activity_events_deleted"] = cursor.rowcount
+
+                # Wipe csi_specialist_loops entirely
+                try:
+                    cursor = conn.execute("DELETE FROM csi_specialist_loops")
+                    counts["db_specialist_loops_deleted"] = cursor.rowcount
+                except Exception:
+                    counts["db_specialist_loops_deleted"] = 0
+
+                # Remove CSI task_hub_items
+                try:
+                    cursor = conn.execute(
+                        "DELETE FROM task_hub_items WHERE source_kind LIKE 'csi%' OR labels LIKE '%CSI%'"
+                    )
+                    counts["db_task_hub_items_deleted"] = cursor.rowcount
+                except Exception:
+                    counts["db_task_hub_items_deleted"] = 0
+
+                # Remove CSI mirror map entries
+                try:
+                    cursor = conn.execute("DELETE FROM task_hub_mirror_map")
+                    counts["db_mirror_map_deleted"] = cursor.rowcount
+                except Exception:
+                    counts["db_mirror_map_deleted"] = 0
+
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.exception("Failed to purge CSI database data: %s", exc)
+        counts["db_error"] = str(exc)  # type: ignore[assignment]
+
+    total = sum(v for v in counts.values() if isinstance(v, int))
+    return {"ok": True, "total_purged": total, "detail": counts}
+
+
 
 @app.post("/api/v1/youtube/ingest")
 async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
