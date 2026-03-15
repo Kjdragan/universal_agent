@@ -565,61 +565,69 @@ export default function DashboardCorporationPage() {
                             </div>
                           </td>
                           <td className="px-2 py-2">
-                            {asText(row.factory_role).toUpperCase() !== "HEADQUARTERS" && (
-                              (() => {
-                                const currentStatus = asText(row.registration_status).toLowerCase();
-                                const isPaused = currentStatus === "paused";
-                                const isControlling = controllingFactory === row.factory_id;
-                                const isServiceControlling = serviceControllingFactory === row.factory_id;
-                                const localControlSupported = Boolean(row.local_control_supported);
-                                const localServiceState = asText(row.local_service_state).toLowerCase();
-                                const localServiceActive = row.local_service_active === true || localServiceState === "active";
-                                return (
-                                  <div className="flex min-w-[190px] flex-col gap-2">
-                                    <button
-                                      type="button"
-                                      disabled={isControlling}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        void controlFactory(row.factory_id, isPaused ? "resume" : "pause");
-                                      }}
-                                      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-                                        isControlling
-                                          ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
-                                          : isPaused
-                                            ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
-                                            : "border-amber-700/50 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
-                                      }`}
-                                    >
-                                      {isControlling ? "..." : isPaused ? "Resume Intake" : "Pause Intake"}
-                                    </button>
-                                    {localControlSupported && (
-                                      <>
-                                        <button
-                                          type="button"
-                                          disabled={isServiceControlling}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            void controlLocalFactoryService(row.factory_id, localServiceActive ? "stop" : "start");
-                                          }}
-                                          className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-                                            isServiceControlling
-                                              ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
-                                              : localServiceActive
-                                                ? "border-rose-700/50 bg-rose-900/30 text-rose-200 hover:bg-rose-900/50"
-                                                : "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
-                                          }`}
-                                        >
-                                          {isServiceControlling ? "..." : localServiceActive ? "Stop Local Factory" : "Start Local Factory"}
-                                        </button>
-                                        <div className="text-[11px] text-slate-500">
-                                          Service: {localServiceState || "unknown"}
-                                        </div>
-                                        <div className="text-[11px] text-slate-500">
-                                          Pause stops mission intake only. Stop turns off the local worker service to preserve desktop/API resources.
-                                        </div>
-                                      </>
-                                    )}
+                            {(() => {
+                              const isHQ = asText(row.factory_role).toUpperCase() === "HEADQUARTERS";
+                              const isActiveHQ = row.factory_id === headquartersFactoryId;
+                              const currentStatus = asText(row.registration_status).toLowerCase();
+                              const isPaused = currentStatus === "paused";
+                              const isControlling = controllingFactory === row.factory_id;
+                              const isServiceControlling = serviceControllingFactory === row.factory_id;
+                              const localControlSupported = Boolean(row.local_control_supported);
+                              const localServiceState = asText(row.local_service_state).toLowerCase();
+                              const localServiceActive = row.local_service_active === true || localServiceState === "active";
+                              return (
+                                <div className="flex min-w-[190px] flex-col gap-2">
+                                  {/* Pause/Resume and local service controls — non-HQ only */}
+                                  {!isHQ && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={isControlling}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void controlFactory(row.factory_id, isPaused ? "resume" : "pause");
+                                        }}
+                                        className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                          isControlling
+                                            ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                            : isPaused
+                                              ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
+                                              : "border-amber-700/50 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
+                                        }`}
+                                      >
+                                        {isControlling ? "..." : isPaused ? "Resume Intake" : "Pause Intake"}
+                                      </button>
+                                      {localControlSupported && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            disabled={isServiceControlling}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              void controlLocalFactoryService(row.factory_id, localServiceActive ? "stop" : "start");
+                                            }}
+                                            className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                              isServiceControlling
+                                                ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                                : localServiceActive
+                                                  ? "border-rose-700/50 bg-rose-900/30 text-rose-200 hover:bg-rose-900/50"
+                                                  : "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
+                                            }`}
+                                          >
+                                            {isServiceControlling ? "..." : localServiceActive ? "Stop Local Factory" : "Start Local Factory"}
+                                          </button>
+                                          <div className="text-[11px] text-slate-500">
+                                            Service: {localServiceState || "unknown"}
+                                          </div>
+                                          <div className="text-[11px] text-slate-500">
+                                            Pause stops mission intake only. Stop turns off the local worker service to preserve desktop/API resources.
+                                          </div>
+                                        </>
+                                      )}
+                                    </>
+                                  )}
+                                  {/* Remove button — all factories except the currently active HQ */}
+                                  {!isActiveHQ && (
                                     <button
                                       type="button"
                                       disabled={removingFactory === row.factory_id}
@@ -631,10 +639,13 @@ export default function DashboardCorporationPage() {
                                     >
                                       {removingFactory === row.factory_id ? "Removing…" : "Remove"}
                                     </button>
-                                  </div>
-                                );
-                              })()
-                            )}
+                                  )}
+                                  {isActiveHQ && (
+                                    <span className="text-[10px] text-slate-500 italic">Active HQ</span>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </td>
                         </tr>
                       );
