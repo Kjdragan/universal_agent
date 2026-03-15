@@ -40,15 +40,71 @@ from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 logger = logging.getLogger(__name__)
 
 
-def _extract_reply_text(text_body: str) -> str:
+def _strip_html_quotes(html_body: str) -> str:
+    """Strip quoted reply blocks from HTML emails.
+
+    Handles Gmail (div.gmail_quote), Outlook (OLK_SRC_BODY_SECTION, #divRplyFwdMsg),
+    Apple Mail / Thunderbird (blockquote[type=cite]), and generic blockquotes.
+    Returns plain text content with quotes removed.
+    """
+    if not html_body or not html_body.strip():
+        return ""
+    try:
+        import re as _re
+        # Remove Gmail quote divs
+        clean = _re.sub(
+            r'<div[^>]*class\s*=\s*["\']gmail_quote["\'][^>]*>.*$',
+            '', html_body, flags=_re.DOTALL | _re.IGNORECASE,
+        )
+        # Remove Outlook quote sections
+        clean = _re.sub(
+            r'<div[^>]*id\s*=\s*["\']divRplyFwdMsg["\'][^>]*>.*$',
+            '', clean, flags=_re.DOTALL | _re.IGNORECASE,
+        )
+        clean = _re.sub(
+            r'<span[^>]*id\s*=\s*["\']OLK_SRC_BODY_SECTION["\'][^>]*>.*$',
+            '', clean, flags=_re.DOTALL | _re.IGNORECASE,
+        )
+        # Remove Thunderbird forward containers
+        clean = _re.sub(
+            r'<div[^>]*class\s*=\s*["\']moz-forward-container["\'][^>]*>.*$',
+            '', clean, flags=_re.DOTALL | _re.IGNORECASE,
+        )
+        # Remove blockquote[type=cite] (Apple Mail / generic)
+        clean = _re.sub(
+            r'<blockquote[^>]*type\s*=\s*["\']cite["\'][^>]*>.*?</blockquote>',
+            '', clean, flags=_re.DOTALL | _re.IGNORECASE,
+        )
+        # Strip remaining HTML tags → plain text
+        text = _re.sub(r'<br\s*/?>|<br>', '\n', clean, flags=_re.IGNORECASE)
+        text = _re.sub(r'<[^>]+>', '', text)
+        # Collapse whitespace
+        text = _re.sub(r'\n{3,}', '\n\n', text).strip()
+        import html as _html
+        text = _html.unescape(text)
+        return text
+    except Exception:
+        logger.debug("HTML quote stripping failed", exc_info=True)
+        return ""
+
+
+def _extract_reply_text(text_body: str, html_body: str = "") -> str:
     """Extract only the new reply content, stripping quoted thread history.
 
-    Uses email-reply-parser to identify and remove quoted blocks so the
-    email-handler agent only sees the actionable new content.
-    Returns the original text if extraction fails or yields nothing.
+    Uses HTML-aware quote stripping for HTML emails (handles Gmail, Outlook,
+    Thunderbird, Apple Mail patterns), then falls back to email-reply-parser
+    for plain text. Returns the original text if extraction fails.
     """
+    if not text_body and not html_body:
+        return text_body or ""
+    # Try HTML extraction first (more accurate for rich emails)
+    if html_body and html_body.strip():
+        html_result = _strip_html_quotes(html_body)
+        if html_result and html_result.strip() and len(html_result.strip()) > 5:
+            return html_result.strip()
+    # Fallback to plain text extraction
     if not text_body or not text_body.strip():
-        return text_body
+        return text_body or ""
     try:
         from email_reply_parser import EmailReplyParser
 
@@ -689,7 +745,8 @@ class AgentMailService:
                     return
 
             # Extract clean reply content (strips quoted thread history)
-            reply_text = _extract_reply_text(text_body)
+            # Uses HTML-aware extraction for richer accuracy
+            reply_text = _extract_reply_text(text_body, html_body)
             reply_is_extracted = reply_text != text_body
 
             logger.info(
@@ -897,9 +954,23 @@ class AgentMailService:
                 );
                 """
             )
+            # Migration-safe column additions for post-triage lifecycle tracking
+            _migration_columns = [
+                ("completed_at", "TEXT DEFAULT ''"),
+                ("session_exit_status", "TEXT DEFAULT ''"),
+                ("reply_sent", "INTEGER DEFAULT 0"),
+                ("classification", "TEXT DEFAULT ''"),
+            ]
+            for col_name, col_type in _migration_columns:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE agentmail_inbox_queue ADD COLUMN {col_name} {col_type}"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists — safe to ignore
 
     def _queue_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        d = {
             "queue_id": str(row["queue_id"]),
             "message_id": str(row["message_id"]),
             "thread_id": str(row["thread_id"] or ""),
@@ -921,6 +992,17 @@ class AgentMailService:
             "updated_at": str(row["updated_at"] or ""),
             "action_payload": _safe_json_loads(row["action_payload_json"]),
         }
+        # Include migration columns if present
+        for col in ("completed_at", "session_exit_status", "classification"):
+            try:
+                d[col] = str(row[col] or "")
+            except (IndexError, KeyError):
+                d[col] = ""
+        try:
+            d["reply_sent"] = int(row["reply_sent"] or 0)
+        except (IndexError, KeyError):
+            d["reply_sent"] = 0
+        return d
 
     def _trusted_queue_overview(self) -> dict[str, Any]:
         self._ensure_queue_schema()
@@ -1412,6 +1494,110 @@ class AgentMailService:
                     lines.append(f"- {getattr(att, 'filename', 'unnamed')} ({getattr(att, 'content_type', 'unknown')}, {getattr(att, 'size', '?')} bytes)")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Post-Triage Lifecycle
+    # ------------------------------------------------------------------
+
+    def mark_queue_completed(
+        self,
+        queue_id: str,
+        *,
+        session_exit_status: str = "ok",
+        classification: str = "",
+        reply_sent: bool = False,
+    ) -> None:
+        """Mark a queue item as completed with lifecycle metadata."""
+        try:
+            self._ensure_queue_schema()
+            now = _iso_now()
+            with self._queue_connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE agentmail_inbox_queue
+                    SET status = 'completed',
+                        completed_at = ?,
+                        session_exit_status = ?,
+                        classification = ?,
+                        reply_sent = ?,
+                        updated_at = ?
+                    WHERE queue_id = ?
+                    """,
+                    (now, session_exit_status, classification, int(reply_sent), now, queue_id),
+                )
+        except Exception as exc:
+            logger.warning("📧 mark_queue_completed failed queue_id=%s: %s", queue_id, exc)
+
+    def mark_queue_failed(
+        self,
+        queue_id: str,
+        *,
+        error: str = "",
+        session_exit_status: str = "crashed",
+    ) -> None:
+        """Mark a queue item as failed due to session crash or error."""
+        try:
+            self._ensure_queue_schema()
+            now = _iso_now()
+            with self._queue_connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE agentmail_inbox_queue
+                    SET status = 'failed',
+                        completed_at = ?,
+                        session_exit_status = ?,
+                        last_error = ?,
+                        updated_at = ?
+                    WHERE queue_id = ?
+                    """,
+                    (now, session_exit_status, error, now, queue_id),
+                )
+            self._emit_notification(
+                kind="agentmail_processing_failed",
+                title="Email Processing Failed",
+                message=f"Email handler session crashed for queue_id={queue_id}: {error[:200]}",
+                severity="warning",
+                metadata={"queue_id": queue_id, "error": error[:500]},
+            )
+        except Exception as exc:
+            logger.warning("📧 mark_queue_failed failed queue_id=%s: %s", queue_id, exc)
+
+    async def check_reply_sent_in_thread(
+        self,
+        thread_id: str,
+        *,
+        since_message_id: str = "",
+    ) -> bool:
+        """Check if an outbound reply exists in a thread since a given message.
+
+        Used for the mandatory reply verification — after Simone processes
+        a triage brief, we check if she actually sent a reply to Kevin.
+        """
+        if not self._client or not self._inbox_id or not thread_id:
+            return False
+        try:
+            messages_resp = await self._client.inboxes.messages.list(
+                inbox_id=self._inbox_id,
+            )
+            all_msgs = getattr(messages_resp, "messages", []) or []
+            thread_msgs = [
+                m for m in all_msgs
+                if getattr(m, "thread_id", "") == thread_id
+            ]
+            # Check for any outbound message from Simone's inbox in the thread
+            inbox_addr = self._inbox_address.lower()
+            for msg in thread_msgs:
+                from_addr = str(getattr(msg, "from_", "") or "").lower()
+                msg_id = str(getattr(msg, "message_id", "") or "")
+                # Skip the original ack reply and the inbound message itself
+                if msg_id == since_message_id:
+                    continue
+                if inbox_addr in from_addr and msg_id != since_message_id:
+                    return True
+            return False
+        except Exception as exc:
+            logger.debug("📧 check_reply_sent_in_thread failed: %s", exc)
+            return False
 
     # ------------------------------------------------------------------
     # Helpers

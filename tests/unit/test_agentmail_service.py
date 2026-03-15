@@ -737,3 +737,241 @@ class TestAssertReady:
         svc._inbox_id = ""
         with pytest.raises(RuntimeError, match="inbox not configured"):
             await svc.send_email(to="x@y.com", subject="s", text="t")
+
+
+# ── HTML-Aware Reply Extraction ────────────────────────────────────────
+
+
+class TestHTMLQuoteStripping:
+    """Test the new _strip_html_quotes and enhanced _extract_reply_text."""
+
+    def test_strips_gmail_quote(self):
+        from universal_agent.services.agentmail_service import _strip_html_quotes
+
+        html = (
+            '<html><body>'
+            '<div>Thanks for the update!</div>'
+            '<div class="gmail_quote">'
+            '<div>On Mon, Alice wrote:</div>'
+            '<blockquote>Original message here</blockquote>'
+            '</div></body></html>'
+        )
+        result = _strip_html_quotes(html)
+        assert "Thanks for the update" in result
+        assert "Original message" not in result
+        assert "Alice wrote" not in result
+
+    def test_strips_outlook_quote(self):
+        from universal_agent.services.agentmail_service import _strip_html_quotes
+
+        html = (
+            '<html><body>'
+            '<div>Reply</div>'
+            '<span id="OLK_SRC_BODY_SECTION">'
+            '<div>From: Bob</div><div>Hi</div>'
+            '</span></body></html>'
+        )
+        result = _strip_html_quotes(html)
+        assert "Reply" in result
+        assert "Bob" not in result
+
+    def test_strips_thunderbird_forward(self):
+        from universal_agent.services.agentmail_service import _strip_html_quotes
+
+        html = (
+            '<html><body>'
+            '<p>My new content</p>'
+            '<div class="moz-forward-container">'
+            '-------- Forwarded Message --------'
+            '<div>Dear John, This is a test.</div>'
+            '</div></body></html>'
+        )
+        result = _strip_html_quotes(html)
+        assert "My new content" in result
+        assert "Forwarded Message" not in result
+
+    def test_strips_blockquote_cite(self):
+        from universal_agent.services.agentmail_service import _strip_html_quotes
+
+        html = (
+            '<html><body>'
+            '<div>New reply here</div>'
+            '<blockquote type="cite">'
+            '<div>Original quoted message</div>'
+            '</blockquote></body></html>'
+        )
+        result = _strip_html_quotes(html)
+        assert "New reply" in result
+        assert "Original quoted" not in result
+
+    def test_returns_empty_for_empty_input(self):
+        from universal_agent.services.agentmail_service import _strip_html_quotes
+
+        assert _strip_html_quotes("") == ""
+        assert _strip_html_quotes("   ") == ""
+
+    def test_handles_html_entities(self):
+        from universal_agent.services.agentmail_service import _strip_html_quotes
+
+        html = "<div>I&apos;m &amp; you&apos;re great</div>"
+        result = _strip_html_quotes(html)
+        assert "I'm" in result or "I'" in result
+        assert "&amp;" not in result
+
+
+class TestEnhancedReplyExtraction:
+    """Test _extract_reply_text with HTML body support."""
+
+    def test_html_extraction_preferred_over_plain(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        text = "Good work!\n\nOn Mon, Bob wrote:\n> Some old content"
+        html = (
+            '<div>Good work!</div>'
+            '<div class="gmail_quote">On Mon, Bob wrote:<blockquote>Some old</blockquote></div>'
+        )
+        result = _extract_reply_text(text, html)
+        assert "Good work" in result
+        # The old content should be stripped by HTML extraction
+        assert "Some old" not in result
+
+    def test_falls_back_to_plain_text_when_html_empty(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        text = "Just new content"
+        result = _extract_reply_text(text, "")
+        assert result == "Just new content"
+
+    def test_falls_back_to_plain_text_when_html_yields_nothing(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        text = "Some plain text reply"
+        html = '<div class="gmail_quote">Only quoted content</div>'
+        result = _extract_reply_text(text, html)
+        # HTML yields nothing useful, falls back to plain text
+        assert result == "Some plain text reply"
+
+    def test_handles_both_empty(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        result = _extract_reply_text("", "")
+        assert result == ""
+
+
+# ── Queue Schema Migration ─────────────────────────────────────────────
+
+
+class TestQueueSchemaMigration:
+    """Test that new columns are added during schema migration."""
+
+    def test_migration_adds_new_columns(self, tmp_path, monkeypatch):
+        import sqlite3
+
+        monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "test_migration.db"))
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        svc._ensure_queue_schema()
+
+        # Verify new columns exist
+        conn = svc._queue_connect()
+        cursor = conn.execute("PRAGMA table_info(agentmail_inbox_queue)")
+        columns = {row[1] for row in cursor.fetchall()}
+        conn.close()
+
+        assert "completed_at" in columns
+        assert "session_exit_status" in columns
+        assert "reply_sent" in columns
+        assert "classification" in columns
+
+    def test_migration_is_idempotent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "test_idempotent.db"))
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        # Run schema setup twice — should not raise
+        svc._ensure_queue_schema()
+        svc._ensure_queue_schema()
+
+
+# ── Post-Triage Lifecycle Methods ──────────────────────────────────────
+
+
+class TestPostTriageLifecycle:
+    """Test mark_queue_completed, mark_queue_failed methods."""
+
+    def _insert_test_queue_item(self, svc, queue_id: str, message_id: str) -> None:
+        """Helper to insert a test queue item."""
+        import json
+
+        svc._ensure_queue_schema()
+        now = "2026-03-15T17:00:00Z"
+        with svc._queue_connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agentmail_inbox_queue
+                (queue_id, message_id, thread_id, sender, sender_email,
+                 session_key, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'dispatching', ?, ?)
+                """,
+                (queue_id, message_id, "thread1", "Kevin", "kevinjdragan@gmail.com",
+                 "test_session", now, now),
+            )
+
+    def test_mark_completed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "test_completed.db"))
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        self._insert_test_queue_item(svc, "q1", "msg1")
+
+        svc.mark_queue_completed(
+            "q1",
+            session_exit_status="ok",
+            classification="feedback_approval",
+            reply_sent=True,
+        )
+
+        with svc._queue_connect() as conn:
+            row = conn.execute(
+                "SELECT status, session_exit_status, classification, reply_sent, completed_at "
+                "FROM agentmail_inbox_queue WHERE queue_id = 'q1'"
+            ).fetchone()
+
+        assert row["status"] == "completed"
+        assert row["session_exit_status"] == "ok"
+        assert row["classification"] == "feedback_approval"
+        assert row["reply_sent"] == 1
+        assert row["completed_at"] != ""
+
+    def test_mark_failed_emits_notification(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "test_failed.db"))
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        notifications = []
+        svc = AgentMailService()
+        svc._notification_sink = lambda n: notifications.append(n)
+
+        self._insert_test_queue_item(svc, "q2", "msg2")
+
+        svc.mark_queue_failed(
+            "q2",
+            error="Agent session exited with code -2",
+            session_exit_status="crashed",
+        )
+
+        with svc._queue_connect() as conn:
+            row = conn.execute(
+                "SELECT status, session_exit_status, last_error "
+                "FROM agentmail_inbox_queue WHERE queue_id = 'q2'"
+            ).fetchone()
+
+        assert row["status"] == "failed"
+        assert row["session_exit_status"] == "crashed"
+        assert "code -2" in row["last_error"]
+
+        # Verify notification was emitted
+        assert len(notifications) == 1
+        assert notifications[0]["kind"] == "agentmail_processing_failed"
+        assert "q2" in notifications[0]["message"]
+
