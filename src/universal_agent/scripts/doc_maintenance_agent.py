@@ -155,24 +155,41 @@ async def main():
 
     from universal_agent.tools.vp_orchestration import _vp_dispatch_mission_impl
 
-    result = await _vp_dispatch_mission_impl({
-        "vp_id": "vp.coder.primary",
-        "objective": objective,
-        "mission_type": "doc-maintenance",
-        "idempotency_key": f"doc-maintenance-{today}",
-        "execution_mode": "sdk",
-    })
+    # Retry with backoff if VP is unavailable
+    max_retries = 3
+    retry_delays = [30, 60, 120]  # seconds between retries
 
-    if result.get("content", [{}])[0].get("text"):
-        res_data = json.loads(result["content"][0]["text"])
-        if res_data.get("ok"):
-            logger.info(f"✅ Successfully dispatched doc maintenance mission: {res_data.get('mission_id')}")
-        else:
-            logger.error(f"❌ Failed to dispatch mission: {res_data}")
-            sys.exit(1)
-    else:
-        logger.error(f"❌ Unexpected result format: {result}")
-        sys.exit(1)
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"VP dispatch attempt {attempt}/{max_retries}")
+            result = await _vp_dispatch_mission_impl({
+                "vp_id": "vp.coder.primary",
+                "objective": objective,
+                "mission_type": "doc-maintenance",
+                "idempotency_key": f"doc-maintenance-{today}",
+                "execution_mode": "sdk",
+            })
+
+            if result.get("content", [{}])[0].get("text"):
+                res_data = json.loads(result["content"][0]["text"])
+                if res_data.get("ok"):
+                    logger.info(f"✅ Successfully dispatched doc maintenance mission: {res_data.get('mission_id')}")
+                    sys.exit(0)
+                else:
+                    logger.warning(f"Attempt {attempt} — VP returned non-ok: {res_data}")
+            else:
+                logger.warning(f"Attempt {attempt} — unexpected result format: {result}")
+
+        except Exception as exc:
+            logger.warning(f"Attempt {attempt} — VP dispatch failed: {exc}")
+
+        if attempt < max_retries:
+            delay = retry_delays[attempt - 1]
+            logger.info(f"Retrying in {delay}s...")
+            await asyncio.sleep(delay)
+
+    logger.error(f"❌ All {max_retries} VP dispatch attempts failed. Health check will alert Simone.")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
