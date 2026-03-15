@@ -1,216 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatDateTimeTz, toEpochMs } from "@/lib/timezone";
 
-type CSIReport = {
-    id: number | string;
-    report_type: string;
-    report_class?: string;
-    window_hours?: number | null;
-    source_mix?: Record<string, number>;
-    divergence_score?: number;
-    divergence_note?: string;
-    metadata?: Record<string, any>;
-    report_data: any;
-    usage: any;
-    created_at: string;
-};
+/* ── Types ──────────────────────────────────────────────────────────────── */
 
-type PipelineNotification = {
+type CSIDigest = {
     id: string;
-    kind: string;
-    title: string;
-    message: string;
-    summary?: string;
-    full_message?: string;
-    severity: string;
-    status?: string;
-    created_at: string;
-    metadata?: any;
-};
-
-type SelectedItem =
-    | { type: "report"; data: CSIReport }
-    | { type: "notification"; data: PipelineNotification }
-    | null;
-
-type CSIHealth = {
-    status: string;
-    stale_pipelines?: Array<{ event_type: string }>;
-    undelivered_last_24h?: number;
-    dead_letter_last_24h?: number;
-    specialist_quality?: {
-        total_loops?: number;
-        open_loops?: number;
-        suppressed_low_signal?: number;
-        budget_exhausted?: number;
-        stale_evidence_loops?: number;
-        evidence_model_loops?: number;
-    };
-    timezone?: string;
-    source_health?: Array<{
-        source: string;
-        status: string;
-        lag_minutes?: number | null;
-        events_last_48h?: number;
-        events_last_6h?: number;
-        throughput_per_hour_6h?: number;
-        failures_last_24h?: number;
-        last_seen?: string | null;
-    }>;
-    overnight_continuity?: {
-        window_start_utc?: string;
-        window_end_utc?: string;
-        window_start_local?: string;
-        window_end_local?: string;
-        checks?: Array<{
-            event_type: string;
-            expected_runs: number;
-            observed_runs: number;
-            missing_runs: number;
-            status: string;
-            expected_max_lag_minutes: number;
-        }>;
-    };
-};
-
-type CSIDeliveryHint = {
-    code: string;
-    severity: string;
-    title: string;
-    action: string;
-    runbook_command?: string;
-    detail?: string;
-};
-
-type CSIDeliverySource = {
+    event_id: string;
     source: string;
-    status: string;
-    events_recent: number;
-    expected_min_events?: number;
-    delivered_recent: number;
-    undelivered_recent: number;
-    dlq_recent: number;
-    lag_minutes?: number | null;
-    failed_attempt_ratio?: number;
-    repair_hints?: CSIDeliveryHint[];
-    adapter_health?: Record<string, any>;
-};
-
-type CSIDeliveryHealth = {
-    status: string;
-    overall?: {
-        status?: string;
-        window_hours?: number;
-        stale_threshold_minutes?: number;
-        failing_sources?: string[];
-        stale_sources?: string[];
-    };
-    tuning?: {
-        max_failed_attempt_ratio?: number;
-        min_rss_events?: number;
-        min_reddit_events?: number;
-        max_dlq_recent?: number;
-        adapter_consecutive_failures?: number;
-        stale_threshold_minutes?: number;
-        window_hours?: number;
-    };
-    sources?: CSIDeliverySource[];
-};
-
-type CSIReliabilitySLO = {
-    status?: string;
-    detail?: string;
-    target_day_utc?: string;
-    last_checked_at?: string;
-    window_start_utc?: string;
-    window_end_utc?: string;
-    metrics?: {
-        delivery_success_ratio?: number;
-        dlq_backlog_current?: number;
-        dlq_backlog_delta?: number;
-        canary_regression_count?: number;
-    };
-    thresholds?: {
-        min_delivery_success_ratio?: number;
-        max_dlq_backlog?: number;
-        max_dlq_backlog_delta?: number;
-        max_canary_regressions?: number;
-    };
-    top_root_causes?: Array<{
-        code?: string;
-        title?: string;
-        detail?: string;
-        runbook_command?: string;
-        severity?: string;
-    }>;
-};
-
-type CSISpecialistLoop = {
-    topic_key: string;
-    topic_label: string;
-    status: string;
-    confidence_target: number;
-    confidence_score: number;
-    confidence_method?: string;
-    confidence_evidence?: Record<string, any>;
-    follow_up_budget_total?: number;
-    follow_up_budget_remaining: number;
-    events_count: number;
-    low_signal_streak?: number;
-    suppressed_until?: string | null;
-    updated_at: string;
-};
-
-type CSIOpportunity = {
-    opportunity_id: string;
+    event_type: string;
     title: string;
-    thesis: string;
-    source_mix?: Record<string, number>;
-    evidence_refs?: string[];
-    novelty_score?: number;
-    confidence_score?: number;
-    risk_flags?: string[];
-    recommended_action?: string;
-    followup_task_template?: string;
-};
-
-type CSIOpportunityBundle = {
-    bundle_id: string;
-    report_key?: string;
-    window_start_utc?: string;
-    window_end_utc?: string;
-    confidence_method?: string;
-    quality_summary?: {
-        signal_volume?: number;
-        freshness_minutes?: number;
-        delivery_health?: string;
-        coverage_score?: number;
-    };
-    source_mix?: Record<string, number>;
-    opportunities?: CSIOpportunity[];
-    artifact_paths?: { markdown?: string; json?: string };
+    summary: string;
+    full_report_md: string;
+    source_types: string[];
     created_at: string;
 };
 
 const API_BASE = "/api/dashboard/gateway";
 
-const SEVERITY_STYLES: Record<string, string> = {
-    success: "border-emerald-600/50 bg-emerald-900/20 text-emerald-200",
-    error: "border-rose-600/50 bg-rose-900/20 text-rose-200",
-    warning: "border-amber-600/50 bg-amber-900/20 text-amber-200",
-    info: "border-sky-600/50 bg-sky-900/20 text-sky-200",
-};
-
-const SEVERITY_DOTS: Record<string, string> = {
-    success: "bg-emerald-400",
-    error: "bg-rose-400",
-    warning: "bg-amber-400",
-    info: "bg-sky-400",
-};
+/* ── Helpers ────────────────────────────────────────────────────────────── */
 
 function timeAgo(dateStr: string): string {
     const ts = toEpochMs(dateStr);
@@ -222,161 +33,54 @@ function timeAgo(dateStr: string): string {
     return `${Math.floor(delta / 86400)}d ago`;
 }
 
-function normalizeArtifactPath(rawPath: string): string {
-    const cleaned = String(rawPath || "").trim().replace(/\\/g, "/");
-    if (!cleaned) return "";
-    if (cleaned.startsWith("/")) {
-        const marker = "/artifacts/";
-        const idx = cleaned.indexOf(marker);
-        if (idx >= 0) return cleaned.slice(idx + marker.length).replace(/^\/+/, "");
-        return cleaned.replace(/^\/+/, "");
-    }
-    if (cleaned.startsWith("artifacts/")) return cleaned.slice("artifacts/".length);
-    return cleaned;
+function sourceLabel(source: string): string {
+    return source
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function artifactPathFromHref(href: string): string {
-    const raw = String(href || "").trim();
-    if (!raw) return "";
-    if (raw.startsWith("/opt/universal_agent/artifacts/")) {
-        return normalizeArtifactPath(raw);
-    }
-    if (raw.startsWith("artifacts/")) {
-        return normalizeArtifactPath(raw);
-    }
-    try {
-        const parsed = new URL(raw, "http://local");
-        if (parsed.pathname.includes("/storage")) {
-            const fromPreview = parsed.searchParams.get("preview");
-            if (fromPreview) return normalizeArtifactPath(fromPreview);
-            const fromPath = parsed.searchParams.get("path");
-            if (fromPath) return normalizeArtifactPath(fromPath);
-        }
-        if (parsed.pathname.includes("/artifacts/files/")) {
-            const rel = parsed.pathname.split("/artifacts/files/")[1] || "";
-            return normalizeArtifactPath(decodeURIComponent(rel));
-        }
-    } catch {
-        // Not a parseable URL; ignore.
-    }
-    return "";
+function sourceColor(source: string): string {
+    const s = source.toLowerCase();
+    if (s.includes("rss") || s.includes("youtube")) return "text-rose-300 bg-rose-500/15 border-rose-500/30";
+    if (s.includes("reddit")) return "text-orange-300 bg-orange-500/15 border-orange-500/30";
+    if (s.includes("threads")) return "text-purple-300 bg-purple-500/15 border-purple-500/30";
+    if (s.includes("global") || s.includes("brief")) return "text-cyan-300 bg-cyan-500/15 border-cyan-500/30";
+    return "text-slate-300 bg-slate-500/15 border-slate-500/30";
 }
+
+function eventTypeIcon(eventType: string): string {
+    const t = eventType.toLowerCase();
+    if (t.includes("trend")) return "📊";
+    if (t.includes("brief")) return "📋";
+    if (t.includes("daily") || t.includes("summary")) return "📅";
+    if (t.includes("digest")) return "📰";
+    return "📄";
+}
+
+/* ── Component ──────────────────────────────────────────────────────────── */
 
 export default function CSIDashboard() {
-    const [reports, setReports] = useState<CSIReport[]>([]);
-    const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
+    const [digests, setDigests] = useState<CSIDigest[]>([]);
+    const [totalDigests, setTotalDigests] = useState(0);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [selectedItem, setSelectedItem] = useState<SelectedItem>(null);
+    const [selectedDigest, setSelectedDigest] = useState<CSIDigest | null>(null);
+    const [sourceFilter, setSourceFilter] = useState<string>("all");
     const [purgeBusy, setPurgeBusy] = useState(false);
     const [purgeStatus, setPurgeStatus] = useState<string | null>(null);
-    const [previewPath, setPreviewPath] = useState<string | null>(null);
-    const [previewLabel, setPreviewLabel] = useState<string | null>(null);
-    const [previewContent, setPreviewContent] = useState<string>("");
-    const [previewLoading, setPreviewLoading] = useState(false);
-    const [previewError, setPreviewError] = useState<string | null>(null);
-    const [health, setHealth] = useState<CSIHealth | null>(null);
-    const [deliveryHealth, setDeliveryHealth] = useState<CSIDeliveryHealth | null>(null);
-    const [reliabilitySlo, setReliabilitySlo] = useState<CSIReliabilitySLO | null>(null);
-    const [loops, setLoops] = useState<CSISpecialistLoop[]>([]);
-    const [opportunityBundles, setOpportunityBundles] = useState<CSIOpportunityBundle[]>([]);
-    const [deepLinkApplied, setDeepLinkApplied] = useState(false);
-    const [loopActionBusy, setLoopActionBusy] = useState<Record<string, boolean>>({});
-    const [triageBusy, setTriageBusy] = useState(false);
-    const [cleanupBusy, setCleanupBusy] = useState(false);
-    const [loopsStatus, setLoopsStatus] = useState<string | null>(null);
-    const [deliveryStatus, setDeliveryStatus] = useState<string | null>(null);
-    const [activeView, setActiveView] = useState<"trend" | "health">("trend");
+    const [sendBusy, setSendBusy] = useState(false);
+    const [sendStatus, setSendStatus] = useState<string | null>(null);
+    const [sendComment, setSendComment] = useState("");
 
-    const openArtifactPreview = useCallback(async (path: string, label: string) => {
-        const normalized = normalizeArtifactPath(path);
-        if (!normalized) {
-            setPreviewError("Invalid artifact path.");
-            return;
-        }
-        setPreviewPath(normalized);
-        setPreviewLabel(label);
-        setPreviewLoading(true);
-        setPreviewError(null);
-        setPreviewContent("");
-        try {
-            const resp = await fetch(`${API_BASE}/api/vps/file?scope=artifacts&path=${encodeURIComponent(normalized)}`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            let text = await resp.text();
-            if (normalized.toLowerCase().endsWith(".json")) {
-                try {
-                    text = JSON.stringify(JSON.parse(text), null, 2);
-                } catch {
-                    // Keep raw text if payload is not valid JSON.
-                }
-            }
-            setPreviewContent(text);
-        } catch (err: any) {
-            setPreviewError(err?.message || "Failed to load artifact preview.");
-        } finally {
-            setPreviewLoading(false);
-        }
-    }, []);
+    /* ── Data Loading ─────────────────────────────────────────────────── */
 
     const loadData = useCallback(async () => {
         try {
-            const [repRes, notifRes, healthRes, deliveryRes, sloRes, loopsRes, oppRes] = await Promise.all([
-                fetch(`${API_BASE}/api/v1/dashboard/csi/reports`, { cache: "no-store" }),
-                fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100&source_domain=csi`, { cache: "no-store" }),
-                fetch(`${API_BASE}/api/v1/dashboard/csi/health`, { cache: "no-store" }),
-                fetch(`${API_BASE}/api/v1/dashboard/csi/delivery-health?window_hours=24`, { cache: "no-store" }),
-                fetch(`${API_BASE}/api/v1/dashboard/csi/reliability-slo`, { cache: "no-store" }),
-                fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops?limit=8`, { cache: "no-store" }),
-                fetch(`${API_BASE}/api/v1/dashboard/csi/opportunities?limit=5`, { cache: "no-store" }),
-            ]);
-
-            if (!repRes.ok) throw new Error(`HTTP ${repRes.status}`);
-            const data = await repRes.json();
-            if (data.status === "error" || data.status === "unavailable") {
-                throw new Error(data.detail || "CSI unavailable");
-            }
-            setReports(data.reports || []);
-
-            if (notifRes.ok) {
-                const ndata = await notifRes.json();
-                if (Array.isArray(ndata.notifications)) {
-                    const csiNotifs = ndata.notifications.filter(
-                        (n: PipelineNotification) =>
-                            (n.kind && n.kind.startsWith("csi")) || String(n.kind || "").includes("simone_handoff")
-                    );
-                    setNotifications(csiNotifs);
-                }
-            }
-            if (healthRes.ok) {
-                const hData = await healthRes.json();
-                setHealth(hData as CSIHealth);
-            }
-            if (deliveryRes.ok) {
-                const dData = await deliveryRes.json();
-                setDeliveryHealth(dData as CSIDeliveryHealth);
-            } else {
-                setDeliveryHealth(null);
-            }
-            if (sloRes.ok) {
-                const sData = await sloRes.json();
-                setReliabilitySlo((sData?.slo || null) as CSIReliabilitySLO | null);
-            } else {
-                setReliabilitySlo(null);
-            }
-            if (loopsRes.ok) {
-                const loopsData = await loopsRes.json();
-                if (Array.isArray(loopsData.loops)) {
-                    setLoops(loopsData.loops as CSISpecialistLoop[]);
-                }
-            }
-            if (oppRes.ok) {
-                const oppData = await oppRes.json();
-                if (Array.isArray(oppData.bundles)) {
-                    setOpportunityBundles(oppData.bundles as CSIOpportunityBundle[]);
-                } else {
-                    setOpportunityBundles([]);
-                }
-            }
+            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/digests?limit=100`, { cache: "no-store" });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            setDigests(data.digests || []);
+            setTotalDigests(data.total || 0);
             setError(null);
         } catch (err: any) {
             setError(err.message);
@@ -387,1217 +91,367 @@ export default function CSIDashboard() {
 
     useEffect(() => {
         void loadData();
-        const timer = window.setInterval(() => void loadData(), 30000);
+        const timer = window.setInterval(() => void loadData(), 30_000);
         return () => window.clearInterval(timer);
     }, [loadData]);
 
-    useEffect(() => {
-        if (deepLinkApplied || loading) return;
-        const params = new URLSearchParams(window.location.search);
-        const reportKey = String(params.get("report_key") || "").trim();
-        const artifactPath = String(params.get("artifact_path") || "").trim();
-        const notificationId = String(params.get("notification_id") || "").trim();
-        const eventId = String(params.get("event_id") || "").trim();
-        if (!reportKey && !artifactPath && !notificationId && !eventId) {
-            setDeepLinkApplied(true);
-            return;
-        }
+    /* ── Source filters ───────────────────────────────────────────────── */
 
-        let selected = false;
-        if (reportKey) {
-            const matchedReport = reports.find((report) => String(report?.report_data?.report_key || report?.metadata?.report_key || "").trim() === reportKey);
-            if (matchedReport) {
-                setSelectedItem({ type: "report", data: matchedReport });
-                selected = true;
-            }
-        }
+    const sources = useMemo(() => {
+        const set = new Set<string>();
+        digests.forEach((d) => set.add(d.source));
+        return Array.from(set).sort();
+    }, [digests]);
 
-        if (!selected && (notificationId || eventId)) {
-            const matchedNotification = notifications.find((item) => {
-                const itemId = String(item?.id || "").trim();
-                const itemEventId = String(item?.metadata?.event_id || "").trim();
-                if (notificationId && itemId === notificationId) return true;
-                if (eventId && itemEventId === eventId) return true;
-                return false;
-            });
-            if (matchedNotification) {
-                setSelectedItem({ type: "notification", data: matchedNotification });
-            }
-        }
+    const filteredDigests = useMemo(() => {
+        if (sourceFilter === "all") return digests;
+        return digests.filter((d) => d.source === sourceFilter);
+    }, [digests, sourceFilter]);
 
-        if (artifactPath) {
-            window.setTimeout(() => {
-                void openArtifactPreview(artifactPath, "Linked Artifact");
-            }, 0);
-        }
-        setDeepLinkApplied(true);
-    }, [deepLinkApplied, loading, notifications, openArtifactPreview, reports]);
+    /* ── Summary cards ───────────────────────────────────────────────── */
 
-    useEffect(() => {
-        setPreviewPath(null);
-        setPreviewLabel(null);
-        setPreviewContent("");
-        setPreviewError(null);
-        setPreviewLoading(false);
-    }, [selectedItem?.type, selectedItem?.data?.id]);
+    const latestTime = digests.length > 0 ? formatDateTimeTz(digests[0].created_at, { placeholder: "N/A" }) : "N/A";
 
-    const totalReports = reports.length;
-    const lastReportTime = reports.length > 0 ? formatDateTimeTz(reports[0].created_at, { placeholder: "N/A" }) : "N/A";
-    const latestBundle = opportunityBundles.length > 0 ? opportunityBundles[0] : null;
-    const latestGlobalBrief = reports.find((report) => String(report.report_class || "").toLowerCase() === "brief") || null;
+    const sourceMix = useMemo(() => {
+        const counts: Record<string, number> = {};
+        digests.forEach((d) => {
+            counts[d.source] = (counts[d.source] || 0) + 1;
+        });
+        return counts;
+    }, [digests]);
 
-    async function purgeCsiSessions() {
-        if (!confirm("Purge older CSI hook sessions and keep only the latest 2?")) return;
+    /* ── Actions ──────────────────────────────────────────────────────── */
+
+    async function purgeData() {
+        if (!confirm("Purge all stale CSI data from the database?\nThis clears old notifications, specialist loops, and task hub items.")) return;
         setPurgeBusy(true);
         setPurgeStatus(null);
         try {
-            const resp = await fetch(`${API_BASE}/api/v1/ops/sessions/csi/purge`, {
+            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/purge`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    dry_run: false,
-                    keep_latest: 2,
-                    older_than_minutes: 30,
-                    include_active: false,
-                }),
             });
             const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) {
-                const detail = (payload && payload.detail) ? String(payload.detail) : `HTTP ${resp.status}`;
-                throw new Error(detail);
-            }
-            const deletedCount = Array.isArray(payload.deleted) ? payload.deleted.length : 0;
-            setPurgeStatus(`CSI session cleanup complete. Deleted ${deletedCount} session(s).`);
-            window.setTimeout(() => window.location.reload(), 900);
+            if (!resp.ok) throw new Error(payload?.detail || `HTTP ${resp.status}`);
+            setPurgeStatus(`Purged ${payload.total_purged || 0} items.`);
+            setSelectedDigest(null);
+            await loadData();
         } catch (err: any) {
-            setPurgeStatus(`CSI session cleanup failed: ${err.message || "unknown error"}`);
+            setPurgeStatus(`Purge failed: ${err.message}`);
         } finally {
             setPurgeBusy(false);
         }
     }
 
-    async function runLoopAction(topicKey: string, action: string, followUpBudget?: number) {
-        const actionKey = `${topicKey}:${action}`;
-        setLoopActionBusy((prev) => ({ ...prev, [actionKey]: true }));
-        setLoopsStatus(null);
+    async function sendToSimone(digest: CSIDigest) {
+        setSendBusy(true);
+        setSendStatus(null);
         try {
             const resp = await fetch(
-                `${API_BASE}/api/v1/dashboard/csi/specialist-loops/${encodeURIComponent(topicKey)}/action`,
+                `${API_BASE}/api/v1/dashboard/csi/digests/${encodeURIComponent(digest.id)}/send-to-simone`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action,
-                        follow_up_budget: typeof followUpBudget === "number" ? followUpBudget : undefined,
-                    }),
+                    body: JSON.stringify({ comment: sendComment }),
                 },
             );
             const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) {
-                const detail = payload?.detail ? String(payload.detail) : `HTTP ${resp.status}`;
-                throw new Error(detail);
-            }
-            const loopLabel = String(payload?.loop?.topic_label || topicKey);
-            setLoopsStatus(`Applied ${action} to ${loopLabel}.`);
-            await loadData();
+            if (!resp.ok) throw new Error(payload?.detail || `HTTP ${resp.status}`);
+            setSendStatus("✓ Sent to Simone");
+            setSendComment("");
         } catch (err: any) {
-            setLoopsStatus(`Loop action failed: ${err?.message || "unknown error"}`);
+            setSendStatus(`Send failed: ${err.message}`);
         } finally {
-            setLoopActionBusy((prev) => ({ ...prev, [actionKey]: false }));
+            setSendBusy(false);
         }
     }
 
-    async function runLoopTriage(withFollowup: boolean) {
-        setTriageBusy(true);
-        setLoopsStatus(null);
-        try {
-            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops/triage`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    apply: true,
-                    max_items: 50,
-                    request_followup: withFollowup,
-                }),
-            });
-            const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) {
-                const detail = payload?.detail ? String(payload.detail) : `HTTP ${resp.status}`;
-                throw new Error(detail);
-            }
-            const appliedCount = Array.isArray(payload?.applied) ? payload.applied.length : 0;
-            const followupCount = Array.isArray(payload?.followups) ? payload.followups.length : 0;
-            const errorCount = Array.isArray(payload?.errors) ? payload.errors.length : 0;
-            setLoopsStatus(
-                `Triage complete: ${appliedCount} remediation action(s), ${followupCount} follow-up dispatch(es), ${errorCount} error(s).`,
-            );
-            await loadData();
-        } catch (err: any) {
-            setLoopsStatus(`Triage failed: ${err?.message || "unknown error"}`);
-        } finally {
-            setTriageBusy(false);
-        }
-    }
-
-    async function runLoopCleanup() {
-        setCleanupBusy(true);
-        setLoopsStatus(null);
-        try {
-            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops/cleanup`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    apply: true,
-                    older_than_days: 7,
-                    max_items: 300,
-                }),
-            });
-            const payload = await resp.json().catch(() => ({}));
-            if (!resp.ok) {
-                const detail = payload?.detail ? String(payload.detail) : `HTTP ${resp.status}`;
-                throw new Error(detail);
-            }
-            const deleted = Array.isArray(payload?.deleted) ? payload.deleted.length : 0;
-            const candidates = Array.isArray(payload?.candidates) ? payload.candidates.length : 0;
-            setLoopsStatus(`Cleanup complete: deleted ${deleted} of ${candidates} stale specialist loop(s).`);
-            await loadData();
-        } catch (err: any) {
-            setLoopsStatus(`Cleanup failed: ${err?.message || "unknown error"}`);
-        } finally {
-            setCleanupBusy(false);
-        }
-    }
-
-    async function copyCommand(command: string) {
-        const trimmed = String(command || "").trim();
-        if (!trimmed) return;
-        try {
-            await navigator.clipboard.writeText(trimmed);
-            setDeliveryStatus("Runbook command copied.");
-        } catch {
-            setDeliveryStatus("Clipboard copy failed.");
-        }
-    }
+    /* ── Render ────────────────────────────────────────────────────────── */
 
     return (
-        <div className="flex h-full flex-col gap-6">
+        <div className="flex h-full flex-col gap-5">
+            {/* ─── Header ──────────────────────────────────────────── */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-100">Creator Signal Intelligence (CSI)</h1>
-                    <p className="text-sm text-slate-400">Automated insight and trend analysis across defined watchlists.</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-100">
+                        Creator Signal Intelligence
+                    </h1>
+                    <p className="text-sm text-slate-400">
+                        Trend reports and digests from your watchlists
+                    </p>
                 </div>
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={purgeCsiSessions}
+                        onClick={purgeData}
                         disabled={purgeBusy}
                         className="rounded-md bg-amber-600/20 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-600/30 transition-colors border border-amber-500/30 disabled:opacity-60"
                     >
-                        {purgeBusy ? "Cleaning..." : "Clean CSI Sessions"}
+                        {purgeBusy ? "Purging…" : "Purge Stale Data"}
                     </button>
                     <button
                         onClick={() => void loadData()}
                         className="rounded-md bg-cyan-600/20 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30"
                     >
-                        Refresh Feed
+                        Refresh
                     </button>
                 </div>
             </div>
+
             {purgeStatus && (
                 <div className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
                     {purgeStatus}
                 </div>
             )}
 
-            <div className="flex items-center gap-2">
+            {/* ─── Summary Cards ───────────────────────────────────── */}
+            <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-slate-400">Total Digests</div>
+                    <div className="mt-2">
+                        <span className="text-3xl font-bold text-slate-100">{loading ? "…" : totalDigests}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                        {filteredDigests.length !== digests.length
+                            ? `${filteredDigests.length} shown (filtered)`
+                            : "In memory"}
+                    </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-slate-400">Latest Report</div>
+                    <div className="mt-2">
+                        <span className="text-lg font-bold text-slate-100">{loading ? "…" : latestTime}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                        {digests.length > 0 ? timeAgo(digests[0].created_at) : "No reports yet"}
+                    </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-slate-400">Source Mix</div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                        {loading ? (
+                            <span className="text-lg font-bold text-slate-100">…</span>
+                        ) : Object.keys(sourceMix).length === 0 ? (
+                            <span className="text-sm text-slate-500">No data</span>
+                        ) : (
+                            Object.entries(sourceMix)
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([src, count]) => (
+                                    <span
+                                        key={src}
+                                        className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${sourceColor(src)}`}
+                                    >
+                                        {sourceLabel(src)} {count}
+                                    </span>
+                                ))
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* ─── Source Filter Tabs ──────────────────────────────── */}
+            <div className="flex items-center gap-1.5 flex-wrap">
                 <button
-                    type="button"
-                    onClick={() => setActiveView("trend")}
-                    className={`rounded-md border px-3 py-1.5 text-xs font-semibold tracking-wide transition-colors ${
-                        activeView === "trend"
+                    onClick={() => setSourceFilter("all")}
+                    className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
+                        sourceFilter === "all"
                             ? "border-cyan-500/60 bg-cyan-600/20 text-cyan-200"
                             : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
                     }`}
                 >
-                    Trend Briefing
+                    All ({digests.length})
                 </button>
-                <button
-                    type="button"
-                    onClick={() => setActiveView("health")}
-                    className={`rounded-md border px-3 py-1.5 text-xs font-semibold tracking-wide transition-colors ${
-                        activeView === "health"
-                            ? "border-emerald-500/60 bg-emerald-600/20 text-emerald-200"
-                            : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
-                    }`}
-                >
-                    CSI Health
-                </button>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">Total Reports (Recent)</div>
-                    <div className="mt-2 flex items-baseline gap-2">
-                        <span className="text-3xl font-bold text-slate-100">{loading ? "..." : totalReports}</span>
-                    </div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">Latest Report Time</div>
-                    <div className="mt-2 flex items-baseline gap-2">
-                        <span className="text-lg font-bold text-slate-100">{loading ? "..." : lastReportTime}</span>
-                    </div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    {activeView === "trend" ? (
-                        <>
-                            <div className="text-sm font-medium text-slate-400">Latest Global Brief</div>
-                            <div className="mt-2 flex items-center gap-2">
-                                <span className="text-lg font-bold text-cyan-200">
-                                    {loading ? "..." : latestGlobalBrief ? "Ready" : "None"}
-                                </span>
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                                {latestGlobalBrief
-                                    ? `Created: ${formatDateTimeTz(latestGlobalBrief.created_at, { placeholder: "--" })}`
-                                    : "No global brief artifacts yet."}
-                            </div>
-                        </>
-                    ) : (
-                        <>
-                            <div className="text-sm font-medium text-slate-400">CSI Pipeline Health</div>
-                            <div className="mt-2 flex items-center gap-2">
-                                <span className={`text-lg font-bold ${(health?.stale_pipelines?.length || 0) > 0 ? "text-amber-300" : "text-emerald-300"}`}>
-                                    {loading ? "..." : `${health?.stale_pipelines?.length || 0} stale`}
-                                </span>
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                                DLQ 24h: {health?.dead_letter_last_24h ?? 0} | Undelivered 24h: {health?.undelivered_last_24h ?? 0}
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                                Specialist loops: {health?.specialist_quality?.total_loops ?? 0} | Suppressed: {health?.specialist_quality?.suppressed_low_signal ?? 0}
-                            </div>
-                        </>
-                    )}
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">Latest Opportunity Bundle</div>
-                    <div className="mt-2 flex items-center gap-2">
-                        <span className="text-lg font-bold text-cyan-200">
-                            {loading ? "..." : `${latestBundle?.opportunities?.length || 0} ranked`}
-                        </span>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                        Method: {latestBundle?.confidence_method || "n/a"} | Coverage: {latestBundle?.quality_summary?.coverage_score ?? 0}
-                    </div>
-                </div>
-            </div>
-
-            {activeView === "health" && (
-                <>
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Daily Reliability SLO</h2>
-                    <span
-                        className={`text-xs ${
-                            reliabilitySlo?.status === "ok"
-                                ? "text-emerald-300"
-                                : reliabilitySlo?.status === "breached"
-                                  ? "text-rose-300"
-                                  : "text-slate-400"
+                {sources.map((src) => (
+                    <button
+                        key={src}
+                        onClick={() => setSourceFilter(src)}
+                        className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
+                            sourceFilter === src
+                                ? "border-cyan-500/60 bg-cyan-600/20 text-cyan-200"
+                                : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
                         }`}
                     >
-                        {reliabilitySlo?.status || "unknown"}
-                    </span>
-                </div>
-                <div className="mt-1 text-[11px] text-slate-500">
-                    day={reliabilitySlo?.target_day_utc || "--"} | delivery_ratio=
-                    {reliabilitySlo?.metrics?.delivery_success_ratio ?? "--"} | dlq=
-                    {reliabilitySlo?.metrics?.dlq_backlog_current ?? "--"} | canary_regressions=
-                    {reliabilitySlo?.metrics?.canary_regression_count ?? "--"}
-                </div>
-                {(reliabilitySlo?.top_root_causes || []).length > 0 && (
-                    <div className="mt-3 space-y-1.5">
-                        {(reliabilitySlo?.top_root_causes || []).slice(0, 3).map((cause, idx) => (
-                            <div
-                                key={`slo-cause-${idx}`}
-                                className="rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-[11px]"
-                            >
-                                <div className="text-slate-200">{cause.title || cause.code || "SLO root cause"}</div>
-                                {cause.detail && <div className="text-slate-400">{cause.detail}</div>}
-                                {cause.runbook_command && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void copyCommand(cause.runbook_command || "")}
-                                        className="mt-1 rounded border border-cyan-700/40 bg-cyan-700/10 px-1.5 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-700/20"
-                                    >
-                                        Copy Runbook Cmd
-                                    </button>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                )}
+                        {sourceLabel(src)} ({sourceMix[src] || 0})
+                    </button>
+                ))}
             </div>
 
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Data Plane Delivery Health</h2>
-                    <span
-                        className={`text-xs ${
-                            deliveryHealth?.overall?.status === "ok"
-                                ? "text-emerald-300"
-                                : deliveryHealth?.overall?.status === "failing"
-                                  ? "text-rose-300"
-                                  : "text-amber-300"
-                        }`}
-                    >
-                        {deliveryHealth?.overall?.status || "unknown"}
-                    </span>
+            {/* ─── Error State ─────────────────────────────────────── */}
+            {error && (
+                <div className="rounded-xl border border-rose-700/40 bg-rose-900/20 p-4 text-sm text-rose-200">
+                    <span className="font-semibold">Error:</span> {error}
                 </div>
-                <div className="mt-1 text-[11px] text-slate-500">
-                    window={deliveryHealth?.tuning?.window_hours ?? 24}h | stale&gt;{deliveryHealth?.tuning?.stale_threshold_minutes ?? 240}m |
-                    max_failed_ratio={deliveryHealth?.tuning?.max_failed_attempt_ratio ?? 0.2}
-                </div>
-                {deliveryStatus && (
-                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-300">
-                        {deliveryStatus}
-                    </div>
-                )}
-                <div className="mt-3 overflow-auto rounded border border-slate-800">
-                    <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-900/70 text-slate-400">
-                            <tr>
-                                <th className="px-2 py-1.5">Source</th>
-                                <th className="px-2 py-1.5">Status</th>
-                                <th className="px-2 py-1.5">Events</th>
-                                <th className="px-2 py-1.5">Delivery</th>
-                                <th className="px-2 py-1.5">DLQ</th>
-                                <th className="px-2 py-1.5">Hints</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {(deliveryHealth?.sources || []).map((row) => (
-                                <tr key={`delivery-${row.source}`} className="border-t border-slate-800/60 align-top">
-                                    <td className="px-2 py-1.5 text-slate-300">{row.source}</td>
-                                    <td
-                                        className={`px-2 py-1.5 ${
-                                            row.status === "ok"
-                                                ? "text-emerald-300"
-                                                : row.status === "failing"
-                                                  ? "text-rose-300"
-                                                  : "text-amber-300"
-                                        }`}
-                                    >
-                                        {row.status}
-                                    </td>
-                                    <td className="px-2 py-1.5 text-slate-400">
-                                        {row.events_recent ?? 0}
-                                        {typeof row.expected_min_events === "number" ? (
-                                            <span className="ml-1 text-[10px] text-slate-500">/ min {row.expected_min_events}</span>
-                                        ) : null}
-                                        <div className="text-[10px] text-slate-500">
-                                            lag {typeof row.lag_minutes === "number" ? row.lag_minutes : "--"}m
-                                        </div>
-                                    </td>
-                                    <td className="px-2 py-1.5 text-slate-400">
-                                        {row.delivered_recent ?? 0}/{row.undelivered_recent ?? 0}
-                                        <div className="text-[10px] text-slate-500">
-                                            fail ratio {typeof row.failed_attempt_ratio === "number" ? row.failed_attempt_ratio : "--"}
-                                        </div>
-                                    </td>
-                                    <td className="px-2 py-1.5 text-slate-400">{row.dlq_recent ?? 0}</td>
-                                    <td className="px-2 py-1.5 text-slate-300">
-                                        {(row.repair_hints || []).length === 0 ? (
-                                            <span className="text-[11px] text-slate-500">No action needed.</span>
-                                        ) : (
-                                            <div className="space-y-1.5">
-                                                {(row.repair_hints || []).slice(0, 3).map((hint, idx) => (
-                                                    <div key={`${row.source}-hint-${idx}`} className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
-                                                        <div
-                                                            className={`text-[10px] ${
-                                                                hint.severity === "critical" ? "text-rose-300" : "text-amber-300"
-                                                            }`}
-                                                        >
-                                                            {hint.title}
-                                                        </div>
-                                                        <div className="text-[10px] text-slate-400">{hint.action}</div>
-                                                        {hint.runbook_command && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void copyCommand(hint.runbook_command || "")}
-                                                                className="mt-1 rounded border border-cyan-700/40 bg-cyan-700/10 px-1.5 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-700/20"
-                                                            >
-                                                                Copy Runbook Cmd
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                            {(!deliveryHealth?.sources || deliveryHealth.sources.length === 0) && (
-                                <tr>
-                                    <td className="px-2 py-2 text-slate-500" colSpan={6}>
-                                        No delivery health samples available yet.
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">CSI Overnight Continuity</h2>
-                    <span className="text-[11px] text-slate-500">
-                        Timezone: {health?.timezone || "UTC"}
-                    </span>
-                </div>
-                <div className="mt-1 text-[11px] text-slate-500">
-                    Local window: {health?.overnight_continuity?.window_start_local ? formatDateTimeTz(health.overnight_continuity.window_start_local, { placeholder: "--" }) : "--"} →{" "}
-                    {health?.overnight_continuity?.window_end_local ? formatDateTimeTz(health.overnight_continuity.window_end_local, { placeholder: "--" }) : "--"}
-                </div>
-                <div className="mt-3 grid gap-4 xl:grid-cols-2">
-                    <div className="overflow-auto rounded border border-slate-800">
-                        <table className="w-full text-left text-xs">
-                            <thead className="bg-slate-900/70 text-slate-400">
-                                <tr>
-                                    <th className="px-2 py-1.5">Pipeline</th>
-                                    <th className="px-2 py-1.5">Expected</th>
-                                    <th className="px-2 py-1.5">Observed</th>
-                                    <th className="px-2 py-1.5">Missing</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(health?.overnight_continuity?.checks || []).slice(0, 12).map((row) => (
-                                    <tr key={`overnight-${row.event_type}`} className="border-t border-slate-800/60">
-                                        <td className="px-2 py-1.5 text-slate-300">{row.event_type}</td>
-                                        <td className="px-2 py-1.5 text-slate-400">{row.expected_runs}</td>
-                                        <td className="px-2 py-1.5 text-slate-400">{row.observed_runs}</td>
-                                        <td className={`px-2 py-1.5 ${row.missing_runs > 0 ? "text-amber-300" : "text-emerald-300"}`}>
-                                            {row.missing_runs}
-                                        </td>
-                                    </tr>
-                                ))}
-                                {(!health?.overnight_continuity?.checks || health?.overnight_continuity?.checks?.length === 0) && (
-                                    <tr>
-                                        <td className="px-2 py-2 text-slate-500" colSpan={4}>
-                                            No overnight continuity checks available yet.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div className="overflow-auto rounded border border-slate-800">
-                        <table className="w-full text-left text-xs">
-                            <thead className="bg-slate-900/70 text-slate-400">
-                                <tr>
-                                    <th className="px-2 py-1.5">Source</th>
-                                    <th className="px-2 py-1.5">Status</th>
-                                    <th className="px-2 py-1.5">Lag (min)</th>
-                                    <th className="px-2 py-1.5">6h / hr</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(health?.source_health || []).slice(0, 10).map((row) => (
-                                    <tr key={`source-${row.source}`} className="border-t border-slate-800/60">
-                                        <td className="px-2 py-1.5 text-slate-300">{row.source}</td>
-                                        <td
-                                            className={`px-2 py-1.5 ${
-                                                row.status === "ok" ? "text-emerald-300" : row.status === "degraded" ? "text-amber-300" : "text-rose-300"
-                                            }`}
-                                        >
-                                            {row.status}
-                                        </td>
-                                        <td className="px-2 py-1.5 text-slate-400">
-                                            {typeof row.lag_minutes === "number" ? row.lag_minutes : "--"}
-                                        </td>
-                                        <td className="px-2 py-1.5 text-slate-400">
-                                            {row.events_last_6h ?? 0} / {row.throughput_per_hour_6h ?? 0}
-                                        </td>
-                                    </tr>
-                                ))}
-                                {(!health?.source_health || health?.source_health?.length === 0) && (
-                                    <tr>
-                                        <td className="px-2 py-2 text-slate-500" colSpan={4}>
-                                            No source health samples available yet.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Trend Specialist Loops</h2>
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={() => void runLoopTriage(false)}
-                            disabled={triageBusy || cleanupBusy}
-                            className="rounded border border-cyan-700/40 bg-cyan-700/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-700/20 disabled:opacity-60"
-                        >
-                            {triageBusy ? "Triaging..." : "Run Triage"}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => void runLoopTriage(true)}
-                            disabled={triageBusy || cleanupBusy}
-                            className="rounded border border-indigo-700/40 bg-indigo-700/10 px-2 py-1 text-[11px] text-indigo-200 hover:bg-indigo-700/20 disabled:opacity-60"
-                        >
-                            {triageBusy ? "Triaging..." : "Triage + Follow-up"}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => void runLoopCleanup()}
-                            disabled={cleanupBusy || triageBusy}
-                            className="rounded border border-amber-700/40 bg-amber-700/10 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-700/20 disabled:opacity-60"
-                        >
-                            {cleanupBusy ? "Cleaning..." : "Cleanup Closed"}
-                        </button>
-                    </div>
-                </div>
-                {loopsStatus && (
-                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-300">
-                        {loopsStatus}
-                    </div>
-                )}
-                <div className="mt-2 overflow-auto rounded border border-slate-800">
-                    <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-900/70 text-slate-400">
-                            <tr>
-                                <th className="px-2 py-1.5">Topic</th>
-                                <th className="px-2 py-1.5">Status</th>
-                                <th className="px-2 py-1.5">Confidence</th>
-                                <th className="px-2 py-1.5">Method</th>
-                                <th className="px-2 py-1.5">Budget</th>
-                                <th className="px-2 py-1.5 text-right">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {loops.map((loop) => (
-                                <tr key={loop.topic_key} className="border-t border-slate-800/60">
-                                    <td className="px-2 py-1.5 text-slate-300">{loop.topic_label}</td>
-                                    <td
-                                        className={`px-2 py-1.5 ${
-                                            loop.status === "closed"
-                                                ? "text-emerald-300"
-                                                : loop.status === "budget_exhausted" || loop.status === "suppressed_low_signal"
-                                                  ? "text-amber-300"
-                                                  : "text-sky-300"
-                                        }`}
-                                    >
-                                        {loop.status}
-                                    </td>
-                                    <td className="px-2 py-1.5 text-slate-400">
-                                        {loop.confidence_score} / {loop.confidence_target}
-                                    </td>
-                                    <td className="px-2 py-1.5 text-slate-400">{loop.confidence_method || "heuristic"}</td>
-                                    <td className="px-2 py-1.5 text-slate-400">
-                                        {loop.follow_up_budget_remaining}
-                                        {typeof loop.low_signal_streak === "number" && loop.low_signal_streak > 0 ? (
-                                            <span className="ml-2 text-[10px] text-amber-300">streak {loop.low_signal_streak}</span>
-                                        ) : null}
-                                    </td>
-                                    <td className="px-2 py-1.5">
-                                        <div className="flex justify-end gap-1">
-                                            {loop.status === "suppressed_low_signal" && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void runLoopAction(loop.topic_key, "unsuppress")}
-                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:unsuppress`])}
-                                                    className="rounded border border-sky-700/40 bg-sky-700/10 px-1.5 py-0.5 text-[10px] text-sky-200 hover:bg-sky-700/20 disabled:opacity-60"
-                                                >
-                                                    Unsuppress
-                                                </button>
-                                            )}
-                                            {(loop.status === "budget_exhausted" || loop.follow_up_budget_remaining <= 0) && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void runLoopAction(loop.topic_key, "reset_budget")}
-                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:reset_budget`])}
-                                                    className="rounded border border-amber-700/40 bg-amber-700/10 px-1.5 py-0.5 text-[10px] text-amber-200 hover:bg-amber-700/20 disabled:opacity-60"
-                                                >
-                                                    Reset Budget
-                                                </button>
-                                            )}
-                                            {loop.status !== "closed" ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void runLoopAction(loop.topic_key, "close")}
-                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:close`])}
-                                                    className="rounded border border-rose-700/40 bg-rose-700/10 px-1.5 py-0.5 text-[10px] text-rose-200 hover:bg-rose-700/20 disabled:opacity-60"
-                                                >
-                                                    Close
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void runLoopAction(loop.topic_key, "reopen")}
-                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:reopen`])}
-                                                    className="rounded border border-emerald-700/40 bg-emerald-700/10 px-1.5 py-0.5 text-[10px] text-emerald-200 hover:bg-emerald-700/20 disabled:opacity-60"
-                                                >
-                                                    Reopen
-                                                </button>
-                                            )}
-                                            {loop.status !== "closed" && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void runLoopAction(loop.topic_key, "request_followup")}
-                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:request_followup`])}
-                                                    className="rounded border border-indigo-700/40 bg-indigo-700/10 px-1.5 py-0.5 text-[10px] text-indigo-200 hover:bg-indigo-700/20 disabled:opacity-60"
-                                                >
-                                                    Follow-up
-                                                </button>
-                                            )}
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                            {loops.length === 0 && (
-                                <tr>
-                                    <td className="px-2 py-2 text-slate-500" colSpan={6}>
-                                        No specialist loops tracked yet.
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-                </>
             )}
 
-            {activeView === "trend" && (
-                <>
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Latest Opportunity Bundle</h2>
-                    <span className="text-[11px] text-slate-500">
-                        {latestBundle?.created_at ? formatDateTimeTz(latestBundle.created_at, { placeholder: "--" }) : "No bundle yet"}
-                    </span>
+            {/* ─── Loading State ───────────────────────────────────── */}
+            {loading && (
+                <div className="flex items-center justify-center py-20 text-slate-400">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-600 border-t-cyan-400" />
+                    <span className="ml-3 text-sm">Loading digests…</span>
                 </div>
-                {!latestBundle ? (
-                    <div className="mt-3 text-xs text-slate-500">No opportunity bundles available yet.</div>
-                ) : (
-                    <div className="mt-3 space-y-3">
-                        <div className="rounded border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-300">
-                            <div>Bundle: <span className="font-mono text-slate-400">{latestBundle.bundle_id || "--"}</span></div>
-                            <div className="mt-1">
-                                Window: {latestBundle.window_start_utc ? formatDateTimeTz(latestBundle.window_start_utc, { placeholder: "--" }) : "--"} →{" "}
-                                {latestBundle.window_end_utc ? formatDateTimeTz(latestBundle.window_end_utc, { placeholder: "--" }) : "--"}
-                            </div>
-                            <div className="mt-1">
-                                Signal volume: {latestBundle.quality_summary?.signal_volume ?? 0} | Freshness (min): {latestBundle.quality_summary?.freshness_minutes ?? "--"} | Delivery: {latestBundle.quality_summary?.delivery_health || "--"}
-                            </div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                                {latestBundle.artifact_paths?.markdown && (
-                                    <button
-                                        type="button"
-                                        onClick={() => openArtifactPreview(latestBundle.artifact_paths?.markdown || "", "Opportunity Markdown")}
-                                        className="rounded border border-cyan-700/40 bg-cyan-700/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-700/20"
-                                    >
-                                        Preview Bundle Markdown
-                                    </button>
-                                )}
-                                {latestBundle.artifact_paths?.json && (
-                                    <button
-                                        type="button"
-                                        onClick={() => openArtifactPreview(latestBundle.artifact_paths?.json || "", "Opportunity JSON")}
-                                        className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60"
-                                    >
-                                        Preview Bundle JSON
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                        <div className="overflow-auto rounded border border-slate-800">
-                            <table className="w-full text-left text-xs">
-                                <thead className="bg-slate-900/70 text-slate-400">
-                                    <tr>
-                                        <th className="px-2 py-1.5">Opportunity</th>
-                                        <th className="px-2 py-1.5">Confidence</th>
-                                        <th className="px-2 py-1.5">Novelty</th>
-                                        <th className="px-2 py-1.5">Sources</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {(latestBundle.opportunities || []).slice(0, 8).map((opp) => (
-                                        <tr key={opp.opportunity_id || opp.title} className="border-t border-slate-800/60">
-                                            <td className="px-2 py-1.5 text-slate-300">
-                                                <div className="font-medium">{opp.title}</div>
-                                                <div className="text-[11px] text-slate-500 line-clamp-2">{opp.thesis}</div>
-                                            </td>
-                                            <td className="px-2 py-1.5 text-slate-300">{opp.confidence_score ?? "--"}</td>
-                                            <td className="px-2 py-1.5 text-slate-300">{opp.novelty_score ?? "--"}</td>
-                                            <td className="px-2 py-1.5 text-slate-400">
-                                                {Object.entries(opp.source_mix || {}).map(([k, v]) => `${k}:${v}`).join(", ") || "--"}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                    {(latestBundle.opportunities || []).length === 0 && (
-                                        <tr>
-                                            <td className="px-2 py-2 text-slate-500" colSpan={4}>
-                                                No opportunities ranked in latest bundle.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
-            </div>
+            )}
 
-            <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3 min-h-0">
-                {/* ── LEFT PANEL: Lists ── */}
-                <div className="flex flex-col gap-6 lg:col-span-1 overflow-y-auto pr-2 scrollbar-thin">
+            {/* ─── Empty State ─────────────────────────────────────── */}
+            {!loading && !error && filteredDigests.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                    <div className="text-4xl mb-3">📡</div>
+                    <h3 className="text-lg font-semibold text-slate-300">No Digests Yet</h3>
+                    <p className="text-sm text-slate-500 mt-1 max-w-sm">
+                        CSI trend reports will appear here as they are generated by your hourly analysis pipeline.
+                    </p>
+                </div>
+            )}
 
-                    {/* Pipeline Notifications List */}
-                    <div id="notifications" className="scroll-mt-24 rounded-xl border border-slate-800 bg-slate-900/50 shadow-sm backdrop-blur shrink-0">
-                        <div className="border-b border-slate-800 bg-slate-900/80 px-4 py-3 sticky top-0 z-10">
-                            <h2 className="text-sm font-semibold tracking-wide text-slate-300">
-                                CSI Pipeline Notifications
+            {/* ─── List/Detail Split ──────────────────────────────── */}
+            {!loading && !error && filteredDigests.length > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 flex-1 min-h-0">
+                    {/* Digest List */}
+                    <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
+                        <div className="sticky top-0 z-10 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-2.5">
+                            <h2 className="text-sm font-semibold text-slate-300 tracking-wide">
+                                Recent Reports
+                                <span className="ml-2 text-xs text-slate-500 font-normal">
+                                    {filteredDigests.length}
+                                </span>
                             </h2>
                         </div>
-                        {notifications.length === 0 && !loading ? (
-                            <div className="text-sm text-slate-400 py-4 px-4">No recent CSI notifications.</div>
-                        ) : (
-                            <div className="p-2 space-y-1">
-                                {notifications.map((n) => {
-                                    const style = SEVERITY_STYLES[n.severity] || SEVERITY_STYLES.info;
-                                    const dot = SEVERITY_DOTS[n.severity] || SEVERITY_DOTS.info;
-                                    const isSelected = selectedItem?.type === "notification" && selectedItem.data.id === n.id;
-                                    return (
-                                        <button
-                                            key={n.id}
-                                            onClick={() => setSelectedItem({ type: "notification", data: n })}
-                                            className={`w-full text-left flex items-start gap-2 rounded border px-3 py-2 text-sm transition-all focus:outline-none focus:ring-1 focus:ring-cyan-500 hover:brightness-110 ${style} ${isSelected ? 'ring-1 ring-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : ''}`}
-                                        >
-                                            <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-                                            <div className="min-w-0 flex-1">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="font-medium pr-2">{n.title}</span>
-                                                    <span className="flex items-center gap-1.5 shrink-0">
-                                                        {n.metadata?.quality?.quality_grade && (
-                                                            <span className={`px-1 py-0.5 rounded text-[9px] font-bold leading-none ${
-                                                                n.metadata.quality.quality_grade === "A" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
-                                                                n.metadata.quality.quality_grade === "B" ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" :
-                                                                n.metadata.quality.quality_grade === "C" ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" :
-                                                                "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                                                            }`} title={`Quality: ${(n.metadata.quality.quality_score * 100).toFixed(0)}%`}>
-                                                                {n.metadata.quality.quality_grade}
-                                                            </span>
-                                                        )}
-                                                        <span className="text-[10px] opacity-70">{timeAgo(n.created_at)}</span>
-                                                    </span>
-                                                </div>
-                                                <p className="mt-0.5 line-clamp-2 text-xs opacity-80">{n.summary || n.message}</p>
+                        <div className="divide-y divide-slate-800/60">
+                            {filteredDigests.map((digest) => (
+                                <button
+                                    key={digest.id}
+                                    onClick={() => {
+                                        setSelectedDigest(digest);
+                                        setSendStatus(null);
+                                        setSendComment("");
+                                    }}
+                                    className={`w-full text-left px-4 py-3 transition-colors hover:bg-slate-800/40 ${
+                                        selectedDigest?.id === digest.id
+                                            ? "bg-cyan-900/20 border-l-2 border-l-cyan-400"
+                                            : "border-l-2 border-l-transparent"
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-1.5 mb-1">
+                                                <span className="text-sm">{eventTypeIcon(digest.event_type)}</span>
+                                                <span className="text-sm font-medium text-slate-200 truncate">
+                                                    {digest.title || "Untitled Report"}
+                                                </span>
                                             </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
+                                            <p className="text-xs text-slate-400 line-clamp-2">
+                                                {digest.summary || "No summary"}
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-col items-end gap-1 shrink-0">
+                                            <span className="text-[10px] text-slate-500 whitespace-nowrap">
+                                                {timeAgo(digest.created_at)}
+                                            </span>
+                                            <span
+                                                className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${sourceColor(digest.source)}`}
+                                            >
+                                                {sourceLabel(digest.source)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
-                    {/* Reports List */}
-                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 shadow-sm backdrop-blur flex-1 flex flex-col min-h-[300px]">
-                        <div className="border-b border-slate-800 bg-slate-900/80 px-4 py-3 sticky top-0 z-10">
-                            <h2 className="text-sm font-semibold tracking-wide text-slate-300">Recent Insights & Trends</h2>
-                        </div>
-
-                        {loading ? (
-                            <div className="p-8 text-center text-slate-400">Loading CSI feed...</div>
-                        ) : error ? (
-                            <div className="p-8 text-center text-rose-400">Error loading feed: {error}</div>
-                        ) : reports.length === 0 ? (
-                            <div className="p-8 text-center text-slate-400">No CSI reports found in the database.</div>
+                    {/* Detail Pane */}
+                    <div className="lg:col-span-3 rounded-xl border border-slate-800 bg-slate-900/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
+                        {!selectedDigest ? (
+                            <div className="flex flex-col items-center justify-center h-full py-20 text-center">
+                                <div className="text-3xl mb-3 opacity-40">←</div>
+                                <p className="text-sm text-slate-500">
+                                    Select a report to read
+                                </p>
+                            </div>
                         ) : (
-                            <div className="divide-y divide-slate-800/60 overflow-y-auto">
-                                {reports.map((report) => {
-                                    const isSelected = selectedItem?.type === "report" && selectedItem.data.id === report.id;
-                                    return (
-                                        <button
-                                            key={report.id}
-                                            onClick={() => setSelectedItem({ type: "report", data: report })}
-                                            className={`w-full text-left p-4 hover:bg-slate-800/40 transition-colors focus:outline-none ${isSelected ? 'bg-slate-800/60 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}`}
-                                        >
-                                            <div className="flex items-center justify-between mb-2">
-                                                <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-medium lowercase tracking-wide">
-                                                    {report.report_type}
+                            <div className="flex flex-col h-full">
+                                {/* Detail Header */}
+                                <div className="sticky top-0 z-10 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-5 py-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <h2 className="text-lg font-bold text-slate-100 leading-tight">
+                                                {eventTypeIcon(selectedDigest.event_type)}{" "}
+                                                {selectedDigest.title || "Untitled Report"}
+                                            </h2>
+                                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                                <span
+                                                    className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${sourceColor(selectedDigest.source)}`}
+                                                >
+                                                    {sourceLabel(selectedDigest.source)}
                                                 </span>
-                                                <span className="text-[10px] text-slate-500">
-                                                    {timeAgo(report.created_at)}
+                                                <span className="text-xs text-slate-500">
+                                                    {formatDateTimeTz(selectedDigest.created_at, { placeholder: "--" })}
                                                 </span>
-                                            </div>
-                                            <div className="text-sm text-slate-300 line-clamp-2">
-                                                {report.report_data?.markdown_content || "Data payload (No markdown content)"}
-                                            </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* ── RIGHT PANEL: Detail View ── */}
-                <div className="lg:col-span-2 flex flex-col rounded-xl border border-slate-800 bg-slate-950/80 shadow-inner overflow-hidden min-h-[500px]">
-                    {!selectedItem ? (
-                        <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-500">
-                            <svg className="w-12 h-12 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                            <p>Select a notification or report from the left panel to view details.</p>
-                        </div>
-                    ) : selectedItem.type === "notification" ? (
-                        <div className="flex flex-col h-full">
-                            <div className="border-b border-slate-800 bg-slate-900 px-6 py-4 shrink-0">
-                                <div className="flex items-center gap-2 mb-1">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${SEVERITY_STYLES[selectedItem.data.severity] || SEVERITY_STYLES.info}`}>
-                                        {selectedItem.data.severity}
-                                    </span>
-                                    <span
-                                        className="text-xs text-slate-500"
-                                        title={`UTC: ${formatDateTimeTz(selectedItem.data.created_at, { timeZone: "UTC", placeholder: "--" })}`}
-                                    >
-                                        Local: {formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}
-                                    </span>
-                                </div>
-                                <h2 className="text-lg font-semibold text-slate-100">{selectedItem.data.title}</h2>
-                                <p className="text-xs text-slate-400 font-mono mt-1">ID: {selectedItem.data.id} | Kind: {selectedItem.data.kind}</p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                    {selectedItem.data.metadata?.report_key && (
-                                        <a
-                                            href={`/dashboard/csi?report_key=${encodeURIComponent(selectedItem.data.metadata.report_key)}`}
-                                            className="rounded border border-indigo-700/60 bg-indigo-600/15 px-2 py-1 text-[11px] text-indigo-100 hover:bg-indigo-600/25 no-underline"
-                                        >
-                                            Open Report
-                                        </a>
-                                    )}
-                                    {selectedItem.data.metadata?.session_key && (
-                                        <a
-                                            href={`/dashboard/sessions?session_id=${encodeURIComponent(selectedItem.data.metadata.session_key)}`}
-                                            className="rounded border border-emerald-700/60 bg-emerald-600/15 px-2 py-1 text-[11px] text-emerald-100 hover:bg-emerald-600/25 no-underline"
-                                        >
-                                            Open Session
-                                        </a>
-                                    )}
-                                    {selectedItem.data.metadata?.artifact_paths?.markdown && (
-                                        <button
-                                            type="button"
-                                            onClick={() => openArtifactPreview(selectedItem.data.metadata.artifact_paths.markdown, "Report Markdown")}
-                                            className="rounded border border-cyan-700/60 bg-cyan-600/15 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-600/25"
-                                        >
-                                            Open Artifact
-                                        </button>
-                                    )}
-                                    <button
-                                        type="button"
-                                        className="rounded border border-cyan-700/60 bg-cyan-600/15 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-600/25"
-                                        onClick={async () => {
-                                            const instruction = window.prompt("Add context for Simone:");
-                                            if (!instruction || !instruction.trim()) return;
-                                            const resp = await fetch(
-                                                `${API_BASE}/api/v1/dashboard/activity/${encodeURIComponent(String(selectedItem.data.id))}/send-to-simone`,
-                                                {
-                                                    method: "POST",
-                                                    headers: { "Content-Type": "application/json" },
-                                                    body: JSON.stringify({ instruction: instruction.trim() }),
-                                                },
-                                            );
-                                            if (!resp.ok) {
-                                                const txt = await resp.text();
-                                                alert(`Failed to send to Simone: ${txt}`);
-                                                return;
-                                            }
-                                            alert("Sent to Simone.");
-                                        }}
-                                    >
-                                        Send to Simone
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
-                                {selectedItem.data.metadata?.quality && (
-                                    <div className="mb-6 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
-                                        <h3 className="text-sm font-medium text-slate-300 mb-3 uppercase tracking-wide">Quality Score</h3>
-                                        <div className="flex items-center gap-4 mb-3">
-                                            <span className={`text-2xl font-bold ${
-                                                selectedItem.data.metadata.quality.quality_grade === "A" ? "text-emerald-400" :
-                                                selectedItem.data.metadata.quality.quality_grade === "B" ? "text-cyan-400" :
-                                                selectedItem.data.metadata.quality.quality_grade === "C" ? "text-amber-400" :
-                                                "text-rose-400"
-                                            }`}>
-                                                {selectedItem.data.metadata.quality.quality_grade}
-                                            </span>
-                                            <div className="flex-1">
-                                                <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
-                                                    <div
-                                                        className={`h-full rounded-full transition-all ${
-                                                            selectedItem.data.metadata.quality.quality_score >= 0.8 ? "bg-emerald-500" :
-                                                            selectedItem.data.metadata.quality.quality_score >= 0.6 ? "bg-cyan-500" :
-                                                            selectedItem.data.metadata.quality.quality_score >= 0.4 ? "bg-amber-500" :
-                                                            "bg-rose-500"
-                                                        }`}
-                                                        style={{ width: `${(selectedItem.data.metadata.quality.quality_score * 100).toFixed(0)}%` }}
-                                                    />
-                                                </div>
-                                                <span className="text-[10px] text-slate-500 mt-0.5">
-                                                    {(selectedItem.data.metadata.quality.quality_score * 100).toFixed(0)}% composite
+                                                <span className="text-xs text-slate-600">•</span>
+                                                <span className="text-xs text-slate-500">
+                                                    {selectedDigest.event_type}
                                                 </span>
                                             </div>
                                         </div>
-                                        {selectedItem.data.metadata.quality.dimensions && (
-                                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                                                {Object.entries(selectedItem.data.metadata.quality.dimensions as Record<string, number>).map(([dim, val]) => (
-                                                    <div key={dim} className="flex items-center justify-between rounded border border-slate-800/60 bg-slate-900/30 px-2 py-1">
-                                                        <span className="text-slate-400">{dim.replace(/_/g, " ")}</span>
-                                                        <span className={`font-mono font-semibold ${
-                                                            val >= 0.8 ? "text-emerald-400" : val >= 0.5 ? "text-cyan-400" : val >= 0.3 ? "text-amber-400" : "text-rose-400"
-                                                        }`}>{(val * 100).toFixed(0)}%</span>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
+                                        <button
+                                            onClick={() => setSelectedDigest(null)}
+                                            className="shrink-0 rounded p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800/60 transition-colors"
+                                            title="Close"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
                                     </div>
-                                )}
-                                <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Message Content</h3>
-                                <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-6 whitespace-pre-wrap text-sm text-slate-300">
-                                    {selectedItem.data.full_message || selectedItem.data.message}
                                 </div>
 
-                                {selectedItem.data.metadata && Object.keys(selectedItem.data.metadata).length > 0 && (
-                                    <>
-                                        <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Metadata</h3>
-                                        <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-4 flex flex-col gap-4">
-                                            {selectedItem.data.metadata.artifact_paths ? (
-                                                <div className="space-y-1">
-                                                    <h4 className="text-xs font-semibold text-slate-400">ARTIFACT FILES</h4>
-                                                    {selectedItem.data.metadata.artifact_paths.markdown && (
-                                                        <div className="flex flex-col gap-1">
-                                                            <span className="text-[10px] text-slate-500">MARKDOWN</span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => openArtifactPreview(selectedItem.data.metadata.artifact_paths.markdown, "Markdown")}
-                                                                className="text-left text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all hover:border-cyan-500/40 hover:bg-cyan-950/10 transition-colors"
-                                                                title="Preview markdown artifact"
-                                                            >
-                                                                {selectedItem.data.metadata.artifact_paths.markdown}
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                    {selectedItem.data.metadata.artifact_paths.json && (
-                                                        <div className="flex flex-col gap-1">
-                                                            <span className="text-[10px] text-slate-500">JSON</span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => openArtifactPreview(selectedItem.data.metadata.artifact_paths.json, "JSON")}
-                                                                className="text-left text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all hover:border-cyan-500/40 hover:bg-cyan-950/10 transition-colors"
-                                                                title="Preview JSON artifact"
-                                                            >
-                                                                {selectedItem.data.metadata.artifact_paths.json}
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ) : (
-                                                <div className="rounded border border-slate-800 bg-slate-900/40 px-3 py-2">
-                                                    <h4 className="text-xs font-semibold text-slate-400 mb-1">ARTIFACT FILES</h4>
-                                                    <p className="text-[11px] text-slate-500">
-                                                        No artifact files attached to this notification. The originating CSI pipeline may not have produced
-                                                        downloadable artifacts for this event type, or the event was emitted before artifact generation completed.
-                                                    </p>
-                                                </div>
-                                            )}
-                                            {previewPath && (
-                                                <div className="space-y-2 pt-2 border-t border-slate-800/50">
-                                                    <h4 className="text-xs font-semibold text-slate-400">
-                                                        ARTIFACT PREVIEW {previewLabel ? `(${previewLabel})` : ""}
-                                                    </h4>
-                                                    <div className="text-[10px] text-slate-500 font-mono break-all">{previewPath}</div>
-                                                    <div className="max-h-80 overflow-auto rounded border border-slate-800 bg-slate-900/60 p-3">
-                                                        {previewLoading ? (
-                                                            <div className="text-xs text-slate-400">Loading preview...</div>
-                                                        ) : previewError ? (
-                                                            <div className="text-xs text-rose-400">Preview error: {previewError}</div>
-                                                        ) : previewPath.toLowerCase().endsWith(".md") ? (
-                                                            <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400">
-                                                            <ReactMarkdown
-                                                                remarkPlugins={[remarkGfm]}
-                                                                components={{
-                                                                    a: ({ href = "", children }) => {
-                                                                        const artifactPath = artifactPathFromHref(String(href));
-                                                                        if (artifactPath) {
-                                                                            return (
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() => openArtifactPreview(artifactPath, "Markdown Link")}
-                                                                                    className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
-                                                                                >
-                                                                                    {children}
-                                                                                </button>
-                                                                            );
-                                                                        }
-                                                                        return (
-                                                                            <a
-                                                                                href={href}
-                                                                                target="_blank"
-                                                                                rel="noopener noreferrer"
-                                                                                className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
-                                                                            >
-                                                                                {children}
-                                                                            </a>
-                                                                        );
-                                                                    },
-                                                                }}
-                                                            >
-                                                                {previewContent || "_Empty file_"}
-                                                            </ReactMarkdown>
-                                                        </div>
-                                                        ) : (
-                                                            <pre className="text-[11px] text-slate-300 whitespace-pre-wrap break-words font-mono">
-                                                                {previewContent || "Empty file"}
-                                                            </pre>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )}
-                                            <div className="overflow-x-auto pt-2 border-t border-slate-800/50">
-                                                <h4 className="text-xs font-semibold text-slate-400 mb-1">RAW JSON</h4>
-                                                <pre className="text-[10px] text-slate-500 font-mono leading-relaxed">
-                                                    {JSON.stringify(selectedItem.data.metadata, null, 2)}
-                                                </pre>
-                                            </div>
+                                {/* Report Content */}
+                                <div className="flex-1 px-5 py-4 overflow-auto">
+                                    {selectedDigest.full_report_md ? (
+                                        <div className="prose prose-invert prose-sm max-w-none prose-headings:text-slate-200 prose-p:text-slate-300 prose-li:text-slate-300 prose-strong:text-slate-200 prose-a:text-cyan-400 prose-code:text-cyan-300 prose-pre:bg-slate-950/60 prose-pre:border prose-pre:border-slate-800">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {selectedDigest.full_report_md}
+                                            </ReactMarkdown>
                                         </div>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col h-full">
-                            <div className="border-b border-slate-800 bg-slate-900 px-6 py-4 shrink-0">
-                                <div className="flex flex-wrap items-center gap-4 justify-between">
-                                    <div className="flex items-center gap-3">
-                                        <span className="px-2.5 py-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wide">
-                                            {selectedItem.data.report_class || selectedItem.data.report_type}
-                                        </span>
-                                        {typeof selectedItem.data.window_hours === "number" && selectedItem.data.window_hours > 0 && (
-                                            <span className="text-[11px] rounded border border-slate-700 px-2 py-0.5 text-slate-300">
-                                                {selectedItem.data.window_hours}h window
-                                            </span>
-                                        )}
-                                        <span
-                                            className="text-xs text-slate-400"
-                                            title={`UTC: ${formatDateTimeTz(selectedItem.data.created_at, { timeZone: "UTC", placeholder: "--" })}`}
-                                        >
-                                            {formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}
-                                        </span>
-                                    </div>
-                                    <span className="text-xs text-slate-500 font-mono">Report #{selectedItem.data.id}</span>
-                                </div>
-                                {typeof selectedItem.data.divergence_score === "number" && (
-                                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300">
-                                        Daily/Emerging divergence: {selectedItem.data.divergence_score}
-                                        {selectedItem.data.divergence_note ? ` — ${selectedItem.data.divergence_note}` : ""}
-                                    </div>
-                                )}
-                                {selectedItem.data.usage && (
-                                    <div className="mt-3 flex items-center gap-3 text-xs text-slate-500">
-                                        <div className="flex items-center gap-1.5" title="Prompt Tokens">
-                                            <span className="w-2 h-2 rounded-full bg-slate-600"></span>
-                                            {selectedItem.data.usage.prompt_tokens} prompt
+                                    ) : selectedDigest.summary ? (
+                                        <div className="prose prose-invert prose-sm max-w-none prose-p:text-slate-300">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {selectedDigest.summary}
+                                            </ReactMarkdown>
                                         </div>
-                                        <div className="flex items-center gap-1.5" title="Completion Tokens">
-                                            <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                                            {selectedItem.data.usage.completion_tokens} completion
-                                        </div>
-                                        <div className="font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-slate-400">
-                                            {(selectedItem.data.usage.completion_tokens || 0) + (selectedItem.data.usage.prompt_tokens || 0)} total
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
-                                <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400 hover:prose-a:text-cyan-300 prose-headings:text-slate-200">
-                                    {selectedItem.data.report_data?.markdown_content ? (
-                                        <ReactMarkdown
-                                            remarkPlugins={[remarkGfm]}
-                                            components={{
-                                                a: ({ href = "", children }) => {
-                                                    const artifactPath = artifactPathFromHref(String(href));
-                                                    if (artifactPath) {
-                                                        return (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => openArtifactPreview(artifactPath, "Report Link")}
-                                                                className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
-                                                            >
-                                                                {children}
-                                                            </button>
-                                                        );
-                                                    }
-                                                    return (
-                                                        <a
-                                                            href={href}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
-                                                        >
-                                                            {children}
-                                                        </a>
-                                                    );
-                                                },
-                                            }}
-                                        >
-                                            {selectedItem.data.report_data.markdown_content}
-                                        </ReactMarkdown>
                                     ) : (
-                                        <pre className="text-xs text-amber-500/80 overflow-x-auto p-4 bg-slate-900 rounded-lg border border-slate-800">
-                                            {JSON.stringify(selectedItem.data.report_data, null, 2)}
-                                        </pre>
+                                        <p className="text-sm text-slate-500 italic">No report content available.</p>
                                     )}
                                 </div>
-                                {previewPath && (
-                                    <div className="mt-6 space-y-2 border-t border-slate-800/50 pt-4">
-                                        <h4 className="text-xs font-semibold text-slate-400">
-                                            ARTIFACT PREVIEW {previewLabel ? `(${previewLabel})` : ""}
-                                        </h4>
-                                        <div className="text-[10px] text-slate-500 font-mono break-all">{previewPath}</div>
-                                        <div className="max-h-80 overflow-auto rounded border border-slate-800 bg-slate-900/60 p-3">
-                                            {previewLoading ? (
-                                                <div className="text-xs text-slate-400">Loading preview...</div>
-                                            ) : previewError ? (
-                                                <div className="text-xs text-rose-400">Preview error: {previewError}</div>
-                                            ) : previewPath.toLowerCase().endsWith(".md") ? (
-                                                <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400">
-                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                        {previewContent || "_Empty file_"}
-                                                    </ReactMarkdown>
-                                                </div>
-                                            ) : (
-                                                <pre className="text-[11px] text-slate-300 whitespace-pre-wrap break-words font-mono">
-                                                    {previewContent || "Empty file"}
-                                                </pre>
-                                            )}
-                                        </div>
+
+                                {/* Send to Simone Bar */}
+                                <div className="sticky bottom-0 border-t border-slate-800 bg-slate-900/95 backdrop-blur px-5 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="text"
+                                            value={sendComment}
+                                            onChange={(e) => setSendComment(e.target.value)}
+                                            placeholder="Add a note for Simone (optional)…"
+                                            className="flex-1 rounded-md border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20"
+                                        />
+                                        <button
+                                            onClick={() => void sendToSimone(selectedDigest)}
+                                            disabled={sendBusy}
+                                            className="rounded-md bg-cyan-600/20 px-4 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30 disabled:opacity-60 whitespace-nowrap"
+                                        >
+                                            {sendBusy ? "Sending…" : "📨 Send to Simone"}
+                                        </button>
                                     </div>
-                                )}
+                                    {sendStatus && (
+                                        <div className={`mt-2 text-xs ${sendStatus.startsWith("✓") ? "text-emerald-300" : "text-rose-300"}`}>
+                                            {sendStatus}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
-            </div>
-                </>
             )}
         </div>
     );
