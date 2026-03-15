@@ -289,60 +289,16 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
     """
     Map CSI-native analytics/analyst events to an internal UA agent action.
 
-    These events should be consumed by UA trend/data agents instead of the
-    manual YouTube tutorial pipeline.
+    CSI Redesign (2026-03-15): Disabled. CSI analytics events are no longer
+    dispatched as agent actions. The operational monitoring layer (auto-remediation,
+    SLO, delivery health, specialist loops) was generating excessive noise and
+    burning tokens without producing user value. CSI now operates as a passive
+    trend digest system — interesting findings are stored as digests for the
+    UI to display, not dispatched to agent lanes.
+
+    YouTube playlist processing is unaffected (handled by to_manual_youtube_payload).
     """
-    source = str(event.source or "").strip().lower()
-    if source not in {"csi_analytics", "csi_analyst"}:
-        return None
-
-    event_type = str(event.event_type or "").strip().lower()
-    route = "csi-trend-analyst"
-    if event_type in {"delivery_health_regression", "delivery_health_recovered"}:
-        route = "data-analyst"
-    if event_type.startswith("delivery_health_auto_remediation"):
-        route = "data-analyst"
-    if event_type.startswith("delivery_reliability_slo_"):
-        route = "data-analyst"
-    if event_type == "hourly_token_usage_report":
-        route = "data-analyst"
-    timeout_seconds = _int_env(
-        "UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS",
-        420,
-        minimum=30,
-        maximum=3_600,
-    )
-    follow_up_budget = 3
-    confidence_target = 0.72
-
-    # Keep CSI analytics context concentrated in a small number of durable lanes
-    # so dashboard/session lists do not explode into one lane per event type.
-    route_lane = route.replace("-", "_")
-    session_key = route_lane if route_lane.startswith("csi_") else f"csi_{route_lane}"
-    message = _analytics_message(event)
-    if route == "csi-trend-analyst":
-        message = (
-            f"{message}\n\n"
-            "specialist_followup_policy:\n"
-            f"- confidence_target: {confidence_target}\n"
-            f"- follow_up_budget: {follow_up_budget}\n"
-            "- follow_up_strategy: request focused CSI analysis tasks only when confidence is below target\n"
-            "- stop_condition: stop after budget exhausted or confidence target is reached\n"
-        )
-    return {
-        "kind": "agent",
-        "name": "CSIAnalyticsEvent",
-        "session_key": session_key,
-        "to": route,
-        "message": message,
-        "timeout_seconds": timeout_seconds,
-        "metadata": {
-            "event_type": event_type,
-            "source": source,
-            "follow_up_budget": follow_up_budget if route == "csi-trend-analyst" else 0,
-            "confidence_target": confidence_target if route == "csi-trend-analyst" else None,
-        },
-    }
+    return None
 
 
 def _verify_auth(headers: dict[str, str], payload: dict[str, Any]) -> tuple[bool, int, dict[str, Any]]:

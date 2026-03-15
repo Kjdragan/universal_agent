@@ -155,8 +155,10 @@ from universal_agent.mission_guardrails import build_mission_contract, MissionGu
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.memory.memory_index import load_index
-from universal_agent.csi_confidence import confidence_baseline as _csi_confidence_baseline_model
-from universal_agent.csi_confidence import score_event_confidence as _csi_score_event_confidence
+# CSI Redesign (2026-03-15): csi_confidence module deleted.
+# These stubs prevent NameErrors in any remaining dead-code references.
+def _csi_confidence_baseline_model(*a, **kw): return {}  # noqa: E731
+def _csi_score_event_confidence(*a, **kw): return {}  # noqa: E731
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.timeout_policy import (
     gateway_ws_send_timeout_seconds,
@@ -4987,16 +4989,9 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
     _followup_correlation_id: str | None = None
     if request_followup:
         try:
-            from universal_agent.csi_followup_contract import build_followup_request
-            _fu_req = build_followup_request(
-                topic_key=topic_key,
-                reason=f"confidence {confidence_score:.3f} < target {confidence_target:.3f}",
-                budget_remaining=max(0, followup_remaining),
-                budget_total=int(_csi_specialist_followup_budget),
-                request_type="targeted_followup",
-                quality_threshold=confidence_target,
-            )
-            _followup_correlation_id = _fu_req.correlation_id
+            # CSI Redesign: csi_followup_contract deleted — generate a simple correlation ID
+            import uuid as _uuid_mod
+            _followup_correlation_id = f"fu_{_uuid_mod.uuid4().hex[:12]}"
         except Exception:
             import uuid as _uuid_mod
             _followup_correlation_id = f"fu_{_uuid_mod.uuid4().hex[:12]}"
@@ -10727,7 +10722,7 @@ async def signals_ingest_endpoint(request: Request):
             # Packet 16: compute report quality score
             _quality_result: dict[str, Any] | None = None
             try:
-                from universal_agent.csi_quality_score import score_report_quality
+                score_report_quality = lambda **kw: None  # CSI Redesign: module deleted  # noqa: E731
                 for opp in (subject_obj.get("opportunities") or []):
                     if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
                         for k, v in opp["source_mix"].items():
