@@ -9080,9 +9080,27 @@ def _calendar_heartbeat_session_label(session_id: str) -> str:
     if not sid:
         return "unknown"
 
-    # Preserve full short hash suffix so similarly-timed sessions stay distinct.
+    # ── Friendly labels for known session types ──────────────────────
+    if sid.startswith("session_hook_simone_heartbeat_"):
+        return "Simone Webhook Listener"
+    if sid.startswith("session_hook_simone_"):
+        return "Simone Webhook Listener"
+    if sid.startswith("session_hook_agentmail_"):
+        return "AgentMail Listener"
+    if sid.startswith("session_hook_yt_"):
+        return "YouTube Watcher"
+    if sid.startswith("tg_"):
+        return "Telegram Session"
+    if sid.startswith("api_"):
+        return "API Session"
+
+    # Regular chat sessions: session_YYYYMMDD_HHMMSS_<hash>
     parts = sid.split("_")
     if sid.startswith("session_") and len(parts) >= 4:
+        # Check if second part looks like a date (8 digits)
+        if len(parts[1]) == 8 and parts[1].isdigit():
+            return "Chat Session"
+        # Other session_ patterns: show a shortened form
         hash_suffix = parts[-1][-8:]
         base = "_".join(parts[:3])
         return f"{base}[{hash_suffix}]"

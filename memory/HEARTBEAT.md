@@ -30,7 +30,7 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
     7. **Recent errors (last 30min)**: `journalctl -u universal-agent-gateway --since '30 min ago' --no-pager | grep -ci 'error\|exception\|locked'`
     8. **Dispatch gate / concurrency**: check `UA_HOOKS_AGENT_DISPATCH_CONCURRENCY` env value
   - Summarize as a compact table: metric | value | status (OK/WARN/CRITICAL)
-  - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN, errors > 10 in 30min = WARN
+  - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN, errors > 50 in 30min = WARN
   - If any metric is WARN or CRITICAL, flag it in the heartbeat response for Kevin's attention.
   - Write the full human-readable report to `work_products/system_health_latest.md` (overwrite each cycle).
   - Also write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle).
@@ -49,7 +49,7 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
           "severity": "ok|warn|critical",
           "metric_key": "recent_errors_30m",
           "observed_value": 67,
-          "threshold_text": ">10",
+          "threshold_text": ">50",
           "known_rule_match": true,
           "confidence": "low|medium|high",
           "title": "Gateway Errors Elevated",
@@ -90,7 +90,7 @@ Checkbox semantics:
 **Proactive Improvement Suggestions:**
 Kevin explicitly stated: "I love this type of interaction. More for other elements of our project for anything that you see that needs improvement or suggestions etc. this is a great way to work together."
 
-**Key Takeaway:** 
+**Key Takeaway:**
 - Kevin WANTS agents to proactively identify improvement opportunities
 - He appreciates specific, actionable suggestions with rationale
 - This applies across ALL project elements, not just CSI
@@ -104,3 +104,26 @@ Kevin explicitly stated: "I love this type of interaction. More for other elemen
 - Any optimization that reduces friction while maintaining effectiveness
 
 **Action:** When working on any part of the system, actively look for improvement opportunities and present them with clear reasoning.
+
+## Recent Communications Log
+
+### 2026-03-14: NotebookLM Integration Announcement
+**From:** Kevin Dragan <kevinjdragan@gmail.com>
+**Subject:** New Capability: NotebookLM Integration — Research & Artifact Engine
+**Thread ID:** 0b2eab4c-b779-4645-800e-f0b62f8e8355
+**Message ID:** <CAEi7pTm_XBcjnN1AmOUFMVCFGcxkVWGgHUg0+VZKh+pTZXVvsQ@mail.gmail.com>
+**Classification:** Capability Announcement / Configuration Update
+**Action Taken:** Acknowledged receipt, reviewed documentation at docs/03_Operations/96_NotebookLM_Integration_And_Research_Pipeline_2026-03-14.md, drafted professional confirmation reply
+**Status:** Complete
+
+**Key Capabilities Added:**
+- Web research (fast ~30s, deep ~5min)
+- Artifact generation: written, audio, visual, interactive, data, video
+- Delegation model: main agent → nlm-operator sub-agent → MCP tools
+- Latency tradeoffs documented: default to fast research
+- Delivery separation: NLM sub-agent produces artifacts, main agent handles delivery via AgentMail
+
+**Operational Impact:**
+- Can now produce high-quality research deliverables with superior output quality
+- Must be mindful of latency (deep research + artifacts = 8-15min total)
+- Use for important deliverables where quality matters, not routine tasks

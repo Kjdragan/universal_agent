@@ -113,6 +113,7 @@ const EMPTY_SUMMARY: SummaryResponse = {
 
 const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
 const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
+const MISSION_MAX_AGE_MS = 36 * 60 * 60 * 1000; // 36 hours — auto-hide old missions
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -255,7 +256,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
-  const [sessionFilter, setSessionFilter] = useState<"all" | "active">("all");
+  const [sessionFilter, setSessionFilter] = useState<"all" | "active">("active");
   const [notificationFilter, setNotificationFilter] = useState<"all" | "unread">("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
@@ -567,11 +568,19 @@ export default function DashboardPage() {
     return Array.from(ids);
   }, [vpMissions, vpSessions]);
 
+
   const filteredVpMissions = useMemo(
     () =>
-      vpMissions.filter((mission) =>
-        selectedVpId === "all" ? true : mission.vp_id === selectedVpId,
-      ),
+      vpMissions.filter((mission) => {
+        if (selectedVpId !== "all" && mission.vp_id !== selectedVpId) return false;
+        // Auto-clear missions older than 36 hours
+        const ts = mission.updated_at || mission.created_at;
+        if (ts) {
+          const age = Date.now() - new Date(ts).getTime();
+          if (Number.isFinite(age) && age > MISSION_MAX_AGE_MS) return false;
+        }
+        return true;
+      }),
     [selectedVpId, vpMissions],
   );
 
@@ -1136,16 +1145,32 @@ export default function DashboardPage() {
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Session Directory</h2>
-            {sessionFilter === "active" && (
+            <div className="flex rounded-full border border-slate-700 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setSessionFilter("active")}
+                className={[
+                  "px-2.5 py-0.5 text-[10px] font-medium transition",
+                  sessionFilter === "active"
+                    ? "bg-emerald-600/20 text-emerald-200 border-r border-slate-700"
+                    : "bg-slate-800/40 text-slate-400 hover:text-slate-200 border-r border-slate-700",
+                ].join(" ")}
+              >
+                Active
+              </button>
               <button
                 type="button"
                 onClick={() => setSessionFilter("all")}
-                className="flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-300 hover:bg-white/[0.06] transition"
+                className={[
+                  "px-2.5 py-0.5 text-[10px] font-medium transition",
+                  sessionFilter === "all"
+                    ? "bg-blue-600/20 text-blue-200"
+                    : "bg-slate-800/40 text-slate-400 hover:text-slate-200",
+                ].join(" ")}
               >
-                Active only
-                <span className="ml-0.5">×</span>
+                All
               </button>
-            )}
+            </div>
           </div>
           <span className="text-xs text-slate-500">
             {filteredSessions.length} session{filteredSessions.length !== 1 ? "s" : ""}
