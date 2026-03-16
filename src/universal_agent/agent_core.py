@@ -16,7 +16,7 @@ import uuid
 import re
 import inspect
 from datetime import datetime
-from typing import AsyncGenerator, Any, Callable, Optional
+from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -38,7 +38,8 @@ from claude_agent_sdk.types import (
     UserMessage,
     HookMatcher,
 )
-from composio import Composio
+if TYPE_CHECKING:
+    from composio import Composio
 from universal_agent.durable.tool_gateway import (
     is_malformed_tool_name,
     parse_malformed_tool_name,
@@ -1187,7 +1188,7 @@ class UniversalAgent:
         self.run_id = str(uuid.uuid4())
         self.trace: dict = {}
         self.start_ts: float = 0
-        self.composio: Optional[Composio] = None
+        self.composio: Optional["Composio"] = None
         self.session = None
         self.options = None
         self._initialized = False
