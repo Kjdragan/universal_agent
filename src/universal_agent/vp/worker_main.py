@@ -27,6 +27,16 @@ def parse_args() -> argparse.Namespace:
 
 async def _run() -> None:
     args = parse_args()
+
+    # Bootstrap runtime secrets from Infisical so API keys (COMPOSIO_API_KEY,
+    # ANTHROPIC_API_KEY, etc.) are available before any agent code runs.
+    try:
+        from universal_agent.infisical_loader import initialize_runtime_secrets
+        initialize_runtime_secrets()
+        logger.info("Infisical runtime secrets loaded for VP worker")
+    except Exception as exc:
+        logger.warning("Infisical secret bootstrap skipped: %s", exc)
+
     if args.vp_id not in set(vp_enabled_ids(default=("vp.coder.primary", "vp.general.primary"))):
         raise SystemExit(f"vp_id '{args.vp_id}' is not enabled by UA_VP_ENABLED_IDS")
 
