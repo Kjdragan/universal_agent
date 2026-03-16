@@ -8230,6 +8230,9 @@ async def process_turn(
     """
 
     session_ctx = execution_session or current_execution_session
+    # Ensure runtime_db_conn is always defined even when no session context
+    # provides it (e.g. VP worker external process path).
+    runtime_db_conn = None
     if session_ctx:
         if session_ctx.trace is not None:
             trace = session_ctx.trace
