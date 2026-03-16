@@ -93,9 +93,9 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Stage only the report files (don't pick up anything else)
-          git add "${REPORT_DIR}/drift_report.json"
-          git add "${REPORT_DIR}/DRIFT_REPORT.md"
+          # Stage only the report files — force because artifacts/ is gitignored
+          git add -f "${REPORT_DIR}/drift_report.json"
+          git add -f "${REPORT_DIR}/DRIFT_REPORT.md"
 
           # Check if there's actually anything new to commit
           if git diff --cached --quiet; then
