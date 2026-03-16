@@ -98,9 +98,10 @@ def test_dedup_expires_after_cooldown(monkeypatch):
     assert len(sent_messages) == 2
 
 
-def test_non_ready_kinds_not_affected(monkeypatch):
-    """Non youtube_tutorial_ready kinds should not be affected by dedup."""
-    tutorial_telegram_notifier._video_ready_last_sent.clear()
+def test_new_video_kind_is_deduped(monkeypatch):
+    """youtube_playlist_new_video should also be deduped per video_id."""
+    tutorial_telegram_notifier._video_new_last_sent.clear()
+    monkeypatch.setattr(tutorial_telegram_notifier, "VIDEO_NEW_DEDUP_SECONDS", 60.0)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
 
@@ -120,6 +121,33 @@ def test_non_ready_kinds_not_affected(monkeypatch):
         result1 = tutorial_telegram_notifier.maybe_send(payload)
         result2 = tutorial_telegram_notifier.maybe_send(payload)
         assert result1 is True
+        assert result2 is False  # second should be suppressed
+
+    assert len(sent_messages) == 1
+
+
+def test_non_deduped_kinds_not_affected(monkeypatch):
+    """Kinds without per-video dedup should not be affected."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
+
+    sent_messages: list[str] = []
+
+    with patch.object(
+        tutorial_telegram_notifier,
+        "_send",
+        side_effect=lambda text: (sent_messages.append(text), True)[-1],
+    ):
+        payload = {
+            "kind": "youtube_hook_recovery_queued",
+            "title": "Recovery Queued",
+            "message": "Test recovery",
+            "metadata": {"video_id": "vid123"},
+        }
+        result1 = tutorial_telegram_notifier.maybe_send(payload)
+        result2 = tutorial_telegram_notifier.maybe_send(payload)
+        assert result1 is True
         assert result2 is True
 
     assert len(sent_messages) == 2
+
