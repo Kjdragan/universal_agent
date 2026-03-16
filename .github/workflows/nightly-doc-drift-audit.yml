@@ -87,7 +87,16 @@ jobs:
           print(f\"  Git files scanned: {r['git_summary']['files_changed']}\")
           "
 
+      - name: Upload drift report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report-${{ steps.audit.outputs.report_date }}
+          path: artifacts/doc-drift-reports/
+          retention-days: 30
+
       - name: Commit drift report to develop
+        continue-on-error: true
         run: |
           REPORT_DIR="artifacts/doc-drift-reports/$(date -u +%Y-%m-%d)"
           REPORT_DATE=$(date -u +%Y-%m-%d)
