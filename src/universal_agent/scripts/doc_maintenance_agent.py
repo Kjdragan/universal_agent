@@ -9,6 +9,11 @@ branch under artifacts/doc-drift-reports/<date>/. After the deploy workflow
 pulls the latest develop SHA onto the VPS, Stage 2 reads the report from disk
 and dispatches a VP coder mission to fix the issues.
 
+Dispatch is performed via the gateway HTTP API (POST /api/v1/ops/vp/missions/dispatch)
+to ensure the mission is written to the same DB the VP workers poll.  When running
+on the VPS (cron), the gateway is at localhost:8000.  A fallback URL is resolved
+from UA_GATEWAY_URL or the public endpoint.
+
 The VP agent will:
   1. Create a feature branch docs/nightly-drift-fix-{date}
   2. Make documentation fixes
@@ -21,10 +26,10 @@ import json
 import logging
 import os
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-
-from universal_agent.infisical_loader import initialize_runtime_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,39 @@ _VPS_SEARCH_ROOTS = [
     Path("/opt/universal-agent-staging/artifacts/doc-drift-reports"),
     Path("/opt/universal_agent/artifacts/doc-drift-reports"),
 ]
+
+# Gateway URLs to try in order.  On the VPS the gateway runs on the same host.
+_GATEWAY_URLS = [
+    "http://localhost:8000",
+    "https://app.clearspringcg.com",
+]
+
+
+def _resolve_gateway_url() -> str:
+    """Return the gateway base URL, preferring env var, then localhost, then public."""
+    from_env = os.getenv("UA_GATEWAY_URL", "").strip()
+    if from_env:
+        return from_env.rstrip("/")
+    # On the VPS the gateway is colocated; prefer localhost to avoid DNS.
+    for url in _GATEWAY_URLS:
+        try:
+            req = urllib.request.Request(f"{url}/api/health", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    return url.rstrip("/")
+        except Exception:
+            continue
+    # Fallback to public endpoint
+    return _GATEWAY_URLS[-1].rstrip("/")
+
+
+def _resolve_auth_token() -> str:
+    """Resolve the ops/auth token for gateway API calls."""
+    for key in ("UA_OPS_TOKEN", "AUTH_TOKEN"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _find_todays_report() -> Path | None:
@@ -150,6 +188,41 @@ def _build_mission_objective(report: dict) -> str:
     return "\n".join(objective_parts)
 
 
+def _dispatch_via_gateway(
+    gateway_url: str,
+    auth_token: str,
+    objective: str,
+    idempotency_key: str,
+) -> dict:
+    """Dispatch a VP mission via the gateway HTTP API.
+
+    Returns the parsed JSON response body on success, raises on failure.
+    """
+    payload = json.dumps({
+        "vp_id": "vp.coder.primary",
+        "objective": objective,
+        "mission_type": "doc-maintenance",
+        "source_session_id": "doc-maintenance-agent",
+        "reply_mode": "async",
+        "priority": 100,
+        "idempotency_key": idempotency_key,
+        "execution_mode": "sdk",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{gateway_url}/api/v1/ops/vp/missions/dispatch",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_token}",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 async def main():
     """Entry point for cron script execution."""
     logging.basicConfig(
@@ -157,13 +230,21 @@ async def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # Initialize runtime secrets
-    initialize_runtime_secrets(profile="local_workstation")
+    # Initialize runtime secrets (Infisical)
+    try:
+        from universal_agent.infisical_loader import initialize_runtime_secrets
+        initialize_runtime_secrets(profile="local_workstation")
+    except Exception as exc:
+        logger.warning(f"Infisical init skipped: {exc}")
 
-    api_key = os.getenv("UA_OPS_TOKEN", "")
-    if not api_key:
-        logger.error("UA_OPS_TOKEN is required for autonomous operations.")
+    auth_token = _resolve_auth_token()
+    if not auth_token:
+        logger.error("No auth token found (UA_OPS_TOKEN or AUTH_TOKEN). Cannot dispatch.")
         sys.exit(1)
+
+    # Resolve the gateway URL (prefers localhost on VPS)
+    gateway_url = _resolve_gateway_url()
+    logger.info(f"Using gateway: {gateway_url}")
 
     # Find today's drift report
     report_path = _find_todays_report()
@@ -185,43 +266,42 @@ async def main():
     objective = _build_mission_objective(report)
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
+    idempotency_key = f"doc-maintenance-{today}"
 
-    from universal_agent.tools.vp_orchestration import _vp_dispatch_mission_impl
-
-    # Retry with backoff if VP is unavailable
+    # Retry with backoff if gateway is unavailable
     max_retries = 3
     retry_delays = [30, 60, 120]  # seconds between retries
 
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info(f"VP dispatch attempt {attempt}/{max_retries}")
-            result = await _vp_dispatch_mission_impl({
-                "vp_id": "vp.coder.primary",
-                "objective": objective,
-                "mission_type": "doc-maintenance",
-                "idempotency_key": f"doc-maintenance-{today}",
-                "execution_mode": "sdk",
-            })
+            logger.info(f"Gateway dispatch attempt {attempt}/{max_retries}")
+            result = _dispatch_via_gateway(gateway_url, auth_token, objective, idempotency_key)
 
-            if result.get("content", [{}])[0].get("text"):
-                res_data = json.loads(result["content"][0]["text"])
-                if res_data.get("ok"):
-                    logger.info(f"✅ Successfully dispatched doc maintenance mission: {res_data.get('mission_id')}")
-                    sys.exit(0)
-                else:
-                    logger.warning(f"Attempt {attempt} — VP returned non-ok: {res_data}")
-            else:
-                logger.warning(f"Attempt {attempt} — unexpected result format: {result}")
+            mission = result.get("mission", {})
+            mission_id = mission.get("mission_id", "unknown")
+            status = mission.get("status", "unknown")
+            logger.info(f"✅ Successfully dispatched doc maintenance mission: {mission_id} (status={status})")
+            sys.exit(0)
+
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8")[:500]
+            except Exception:
+                pass
+            logger.warning(
+                f"Attempt {attempt} — HTTP {exc.code}: {exc.reason}. Body: {body}"
+            )
 
         except Exception as exc:
-            logger.warning(f"Attempt {attempt} — VP dispatch failed: {exc}")
+            logger.warning(f"Attempt {attempt} — dispatch failed: {type(exc).__name__}: {exc}")
 
         if attempt < max_retries:
             delay = retry_delays[attempt - 1]
             logger.info(f"Retrying in {delay}s...")
             await asyncio.sleep(delay)
 
-    logger.error(f"❌ All {max_retries} VP dispatch attempts failed. Health check will alert Simone.")
+    logger.error(f"❌ All {max_retries} dispatch attempts failed. Health check will alert Simone.")
     sys.exit(1)
 
 

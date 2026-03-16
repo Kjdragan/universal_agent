@@ -113,6 +113,16 @@ class VpWorkerLoop:
             lease_owner=self.worker_id,
             lease_ttl_seconds=self.lease_ttl_seconds,
         )
+        # Fix: reset degraded → idle after successful heartbeat so the
+        # dashboard correctly reports the worker as available.
+        try:
+            from universal_agent.durable.state import get_vp_session
+            session = get_vp_session(self.conn, self.vp_id)
+            if session and str(session["status"] or "") == "degraded":
+                self._upsert_session(status="idle")
+                logger.info("VP worker recovered from degraded: vp_id=%s", self.vp_id)
+        except Exception:
+            pass  # Non-critical; don't let recovery check block the tick
         claimed = claim_next_vp_mission(
             self.conn,
             vp_id=self.vp_id,
@@ -165,10 +175,55 @@ class VpWorkerLoop:
         )
 
         client = self._select_client_for_mission(mission)
-        outcome = await client.run_mission(
-            mission=dict(mission),
-            workspace_root=self.profile.workspace_root,
-        )
+
+        # Fix: run a background heartbeat task that extends the mission claim
+        # lease while client.run_mission() is executing.  Without this, the
+        # lease expires after lease_ttl_seconds and the mission is re-claimed
+        # and restarted by the next _tick(), causing an infinite restart loop.
+        heartbeat_stop = asyncio.Event()
+
+        async def _heartbeat_mission_claim() -> None:
+            interval = max(5, self.lease_ttl_seconds // 3)  # heartbeat at 1/3 of TTL
+            while not heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval)
+                    break  # stop event was set
+                except asyncio.TimeoutError:
+                    pass  # interval elapsed, heartbeat now
+                try:
+                    heartbeat_vp_mission_claim(
+                        self.conn,
+                        mission_id=mission_id,
+                        vp_id=self.vp_id,
+                        worker_id=self.worker_id,
+                        lease_ttl_seconds=self.lease_ttl_seconds,
+                    )
+                    # Also heartbeat the session lease
+                    heartbeat_vp_session_lease(
+                        self.conn,
+                        vp_id=self.vp_id,
+                        lease_owner=self.worker_id,
+                        lease_ttl_seconds=self.lease_ttl_seconds,
+                    )
+                except Exception as hb_exc:
+                    logger.warning(
+                        "VP mission heartbeat failed: mission_id=%s err=%s",
+                        mission_id, hb_exc,
+                    )
+
+        heartbeat_task = asyncio.create_task(_heartbeat_mission_claim())
+        try:
+            outcome = await client.run_mission(
+                mission=dict(mission),
+                workspace_root=self.profile.workspace_root,
+            )
+        finally:
+            heartbeat_stop.set()
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
         if outcome.status == "cancelled":
             finalize_vp_mission(self.conn, mission_id, "cancelled", result_ref=outcome.result_ref)
             event_type = "vp.mission.cancelled"

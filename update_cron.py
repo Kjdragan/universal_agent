@@ -16,7 +16,7 @@ new_job = {
     "workspace_dir": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/cron_knowledge_base_maintenance",
     "command": "!script universal_agent/scripts/doc_maintenance_agent.py",
     "every_seconds": 0,
-    "cron_expr": "0 2 * * *",
+    "cron_expr": "30 8 * * *",
     "timezone": "UTC",
     "run_at": None,
     "delete_after_run": False,
