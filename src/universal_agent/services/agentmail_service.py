@@ -817,36 +817,8 @@ class AgentMailService:
                     session_key=session_key,
                     action_payload=action_payload,
                 )
-                if created:
-                    try:
-                        ack_result = await self.reply(
-                            message_id=message_id,
-                            text=(
-                                "Received your email. I'm processing it now and will "
-                                "follow up here."
-                            ),
-                            html=(
-                                "<p>Received your email. I'm processing it now and will "
-                                "follow up here.</p>"
-                            ),
-                        )
-                    except Exception as exc:
-                        self._mark_queue_ack_status(
-                            queue_id=queue_id,
-                            ack_status="failed",
-                            last_error=str(exc),
-                        )
-                        logger.warning(
-                            "📧 Trusted inbound ack failed message_id=%s: %s",
-                            message_id,
-                            exc,
-                        )
-                    else:
-                        self._mark_queue_ack_status(
-                            queue_id=queue_id,
-                            ack_status="sent",
-                            ack_message_id=str(ack_result.get("message_id") or ""),
-                        )
+                # No automatic ack reply — Kevin trusts Simone is working
+                # on the email and only expects a meaningful reply when done.
                 self._emit_notification(
                     kind="agentmail_trusted_queued",
                     title="Trusted Email Queued",
@@ -863,25 +835,8 @@ class AgentMailService:
                 self._queue_wakeup.set()
                 return
 
-            if sender_trusted and message_id:
-                try:
-                    await self.reply(
-                        message_id=message_id,
-                        text=(
-                            "Received your email. I'm processing it now and will "
-                            "follow up here."
-                        ),
-                        html=(
-                            "<p>Received your email. I'm processing it now and will "
-                            "follow up here.</p>"
-                        ),
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "📧 Trusted inbound ack failed message_id=%s: %s",
-                        message_id,
-                        exc,
-                    )
+            # No automatic ack reply for trusted senders — only
+            # the meaningful post-triage response is sent.
 
             # Dispatch through hooks pipeline if dispatch_fn available
             if self._dispatch_fn:

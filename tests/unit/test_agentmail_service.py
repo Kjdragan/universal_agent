@@ -307,7 +307,7 @@ class TestTrustedInboundHandling:
 
         await service._handle_inbound_email(_Event())
 
-        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
+        mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
         dispatch_payload = service._dispatch_fn.await_args.args[0]
         assert dispatch_payload["to"] == "email-handler"
         assert "sender_email: kevin.dragan@outlook.com" in dispatch_payload["message"]
@@ -358,10 +358,9 @@ class TestTrustedInboundHandling:
         items = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)
         assert len(items) == 1
         assert items[0]["status"] == "completed"
-        assert items[0]["ack_status"] == "sent"
         assert items[0]["sender_role"] == "trusted_operator"
         service_with_queue._dispatch_with_admission_fn.assert_awaited_once()
-        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
+        mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_trusted_inbound_queue_retries_when_busy(
@@ -417,7 +416,7 @@ class TestTrustedInboundHandling:
         assert item["status"] == "completed"
         assert item["attempt_count"] == 2
         assert service_with_queue._dispatch_with_admission_fn.await_count == 2
-        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
+        mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_trusted_inbound_calls_trusted_ingress_hook_immediately(

@@ -22,16 +22,24 @@ type SessionSummary = {
   channel?: string;
   owner?: string;
   memory_mode?: string;
+  created_at?: string;
   last_activity?: string;
   last_modified?: string;
   workspace_dir?: string;
   active_connections?: number;
   active_runs?: number;
+  description?: string;
   rehydrate_ready?: boolean;
   rehydrate_reason?: string;
   has_checkpoint?: boolean;
+  has_run_log?: boolean;
+  has_memory?: boolean;
   checkpoint_tasks_completed?: number;
   checkpoint_artifacts_count?: number;
+  heartbeat_last?: string;
+  heartbeat_summary?: string;
+  last_run_source?: string;
+  terminal_reason?: string;
 };
 type SkillStatus = { name: string; enabled: boolean; available: boolean; unavailable_reason?: string | null };
 type SystemEventItem = { id: string; event_type: string; payload: Record<string, unknown>; created_at?: string; session_id?: string; timestamp: number };
@@ -198,6 +206,7 @@ type OpsCtx = {
 
 const OpsContext = createContext<OpsCtx | null>(null);
 function useOps() { const c = useContext(OpsContext); if (!c) throw new Error("useOps requires OpsProvider"); return c; }
+export { useOps };
 
 export function OpsProvider({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);

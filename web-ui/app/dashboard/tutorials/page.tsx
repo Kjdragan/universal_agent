@@ -755,20 +755,9 @@ export default function DashboardTutorialsPage() {
                       {n.message && n.message !== n.title && (
                         <p className="mt-0.5 truncate opacity-80">{n.message}</p>
                       )}
-                      {videoId && (
-                        <p className="mt-0.5 text-[10px] opacity-80">
-                          Video ID: <span className="font-mono text-slate-100">{videoId}</span>
-                          {!!(n.metadata?.tutorial_title || n.metadata?.video_title || n.metadata?.youtube_video_title || n.metadata?.title) && (
-                            <>
-                              <span className="mx-1.5 opacity-50">·</span>
-                              <span className="text-slate-200">
-                                {asText(n.metadata?.tutorial_title as string) ||
-                                  asText(n.metadata?.video_title as string) ||
-                                  asText(n.metadata?.youtube_video_title as string) ||
-                                  asText(n.metadata?.title as string)}
-                              </span>
-                            </>
-                          )}
+                      {videoId && !(n.message || "").includes(videoId) && (
+                        <p className="mt-0.5 text-[10px] font-mono opacity-60">
+                          {videoId}
                         </p>
                       )}
                       {videoUrl && (

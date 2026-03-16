@@ -302,8 +302,11 @@ class OpsService:
             status = "active"
         else:
             status = "idle"
-        last_modified_dt = datetime.fromtimestamp(session_path.stat().st_mtime, tz=timezone.utc)
+        stat_info = session_path.stat()
+        last_modified_dt = datetime.fromtimestamp(stat_info.st_mtime, tz=timezone.utc)
         last_modified = last_modified_dt.isoformat()
+        created_dt = datetime.fromtimestamp(stat_info.st_ctime, tz=timezone.utc)
+        created_at = created_dt.isoformat()
         
         journal_path = session_path / "activity_journal.log"
         run_log_path = session_path / "run.log"
@@ -328,6 +331,7 @@ class OpsService:
             "owner": owner or "unknown",
             "memory_mode": memory_mode,
             "description": description,
+            "created_at": created_at,
             "last_modified": last_modified,
             "last_activity": last_activity,
             "active_connections": active_connections,

@@ -65,21 +65,30 @@ def build_factory_snapshot(
     source_counts = _as_dict(queue_health.get("source_counts"))
 
     stale_count = 0
-    offline_count = 0
+    offline_fleet_count = 0
+    offline_local_count = 0
     for row in registrations:
-        status = str(_as_dict(row).get("registration_status") or "").strip().lower()
+        r = _as_dict(row)
+        status = str(r.get("registration_status") or "").strip().lower()
+        role = str(r.get("factory_role") or "").strip().upper()
         if status == "stale":
             stale_count += 1
         elif status == "offline":
-            offline_count += 1
+            if role == "LOCAL_WORKER":
+                offline_local_count += 1
+            else:
+                offline_fleet_count += 1
+
+    offline_count = offline_fleet_count + offline_local_count
 
     critical_conditions = [
-        offline_count > 0,
+        offline_fleet_count > 0,
         dispatch_eligible >= 40,
         backlog_open >= 80,
     ]
     warning_conditions = [
         stale_count > 0,
+        offline_local_count > 0,
         open_csi_incidents >= 8,
         dispatch_eligible >= 15,
         backlog_open >= 30,

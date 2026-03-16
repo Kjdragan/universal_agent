@@ -15419,7 +15419,7 @@ async def dashboard_notification_purge(payload: NotificationPurgeRequest):
 
 # --- System Resources endpoint ---
 @app.get("/api/v1/dashboard/system-resources")
-async def handle_dashboard_system_resources(request):
+async def handle_dashboard_system_resources(request: Request):
     """Return latest VPS system resource metrics from heartbeat findings."""
     import glob as glob_mod
 
