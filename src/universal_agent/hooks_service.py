@@ -138,7 +138,7 @@ class HookTransformConfig(BaseModel):
     export: Optional[str] = None
 
 class HookAuthConfig(BaseModel):
-    strategy: str = "token"  # token | composio_hmac | none
+    strategy: str = "token"  # token | none
     secret_env: Optional[str] = None
     timestamp_tolerance_seconds: int = 300
     replay_window_seconds: int = 600
@@ -367,22 +367,12 @@ class HooksService:
         self.config = self._load_config()
         self.transform_cache = {}
         self._seen_webhook_ids: Dict[str, float] = {}
-        self._forward_youtube_manual_url = (os.getenv("UA_HOOKS_FORWARD_YOUTUBE_MANUAL_URL") or "").strip()
-        self._forward_youtube_token = (os.getenv("UA_HOOKS_FORWARD_YOUTUBE_TOKEN") or "").strip()
-        # Best-effort forwarding must not degrade primary hook handling when the
-        # local stack is offline. Use a simple cooldown to avoid log spam.
-        self._forward_failures = 0
-        self._forward_disabled_until_ts = 0.0
+
         self._deployment_profile = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
         if self._deployment_profile not in {"local_workstation", "standalone_node", "vps"}:
             self._deployment_profile = "local_workstation"
         self._youtube_ingest_mode = (os.getenv("UA_HOOKS_YOUTUBE_INGEST_MODE") or "").strip().lower()
         default_ingest_url = ""
-        if self._forward_youtube_manual_url.endswith("/api/v1/hooks/youtube/manual"):
-            default_ingest_url = self._forward_youtube_manual_url.replace(
-                "/api/v1/hooks/youtube/manual",
-                "/api/v1/youtube/ingest",
-            )
         self._youtube_ingest_url = (
             os.getenv("UA_HOOKS_YOUTUBE_INGEST_URL", default_ingest_url).strip()
         )
@@ -395,7 +385,7 @@ class HooksService:
         if self._youtube_ingest_urls:
             self._youtube_ingest_url = self._youtube_ingest_urls[0]
         self._youtube_ingest_token = (
-            os.getenv("UA_HOOKS_YOUTUBE_INGEST_TOKEN") or self._forward_youtube_token
+            os.getenv("UA_HOOKS_YOUTUBE_INGEST_TOKEN") or ""
         ).strip()
         self._youtube_ingest_timeout_seconds = self._safe_int_env(
             "UA_HOOKS_YOUTUBE_INGEST_TIMEOUT_SECONDS", 120
@@ -470,7 +460,7 @@ class HooksService:
         )
         # Video-level dispatch dedup: prevents the same YouTube video from being
         # processed concurrently by multiple dispatch sources (e.g. playlist watcher
-        # + Composio webhook).  Key = video_id, value = start timestamp.
+        # + any other webhook source).  Key = video_id, value = start timestamp.
         self._youtube_video_dispatch_inflight: Dict[str, float] = {}
         self._youtube_video_dispatch_lock = asyncio.Lock()
         self._youtube_video_dispatch_dedup_ttl_seconds = max(
@@ -516,31 +506,11 @@ class HooksService:
         transforms_dir = str(hooks_data.get("transforms_dir") or "").strip() or DEFAULT_BOOTSTRAP_TRANSFORMS_DIR
         ops_dir = resolve_ops_config_path().parent
         transforms_root = (ops_dir / transforms_dir).resolve()
-        composio_transform_path = transforms_root / "composio_youtube_transform.py"
         manual_transform_path = transforms_root / "manual_youtube_transform.py"
 
         token_configured = bool((hooks_data.get("token") or "").strip() or (os.getenv("UA_HOOKS_TOKEN") or "").strip())
-        composio_secret_configured = bool((os.getenv("COMPOSIO_WEBHOOK_SECRET") or "").strip())
 
         bootstrap_mappings: list[dict[str, Any]] = []
-        if composio_transform_path.exists() and composio_secret_configured:
-            bootstrap_mappings.append(
-                {
-                    "id": "composio-youtube-trigger",
-                    "match": {"path": "composio"},
-                    "action": "agent",
-                    "auth": {
-                        "strategy": "composio_hmac",
-                        "secret_env": "COMPOSIO_WEBHOOK_SECRET",
-                        "timestamp_tolerance_seconds": 300,
-                        "replay_window_seconds": 600,
-                    },
-                    "transform": {
-                        "module": "composio_youtube_transform.py",
-                        "export": "transform",
-                    },
-                }
-            )
 
         # Never expose manual ingestion without token auth.
         if manual_transform_path.exists() and token_configured:
@@ -1512,17 +1482,6 @@ class HooksService:
                 matched = True
                 mapping_id = mapping.id or "<unlabeled>"
                 if not self._authenticate_request(mapping, request, context):
-                    if context.get("_composio_replay_detected"):
-                        logger.info(
-                            "Hook ingress deduped replay path=%s mapping=%s",
-                            subpath,
-                            mapping_id,
-                        )
-                        return Response(
-                            json.dumps({"ok": True, "deduped": True}),
-                            media_type="application/json",
-                            status_code=200,
-                        )
                     auth_failed = True
                     logger.warning(
                         "Hook ingress auth failed path=%s mapping=%s strategy=%s",
@@ -1542,7 +1501,7 @@ class HooksService:
                     )
 
                 asyncio.create_task(self._dispatch_action(action))
-                asyncio.create_task(self._maybe_forward_youtube_manual(mapping_id, action))
+
                 logger.info(
                     "Hook ingress accepted path=%s mapping=%s action=%s",
                     subpath,
@@ -1666,70 +1625,6 @@ class HooksService:
             return False
         return self._allow_degraded_transcript_only(action)
 
-    async def _maybe_forward_youtube_manual(self, mapping_id: str, action: HookAction) -> None:
-        """
-        Optional YouTube hook mirroring:
-
-        If this gateway receives a Composio YouTube playlist webhook (mapping id
-        'composio-youtube-trigger'), optionally forward a normalized payload to a
-        secondary UA gateway running elsewhere (typically a local dev stack).
-
-        This is disabled unless `UA_HOOKS_FORWARD_YOUTUBE_MANUAL_URL` is set.
-        """
-        url = self._forward_youtube_manual_url
-        if not url:
-            return
-        now = time.time()
-        if self._forward_disabled_until_ts and now < self._forward_disabled_until_ts:
-            return
-        if (mapping_id or "").strip().lower() != "composio-youtube-trigger":
-            return
-        if action.kind != "agent" or not action.message:
-            return
-
-        video_url = self._extract_action_field(action.message, "video_url")
-        if not video_url:
-            return
-        video_id = self._extract_action_field(action.message, "video_id")
-        mode = self._extract_action_field(action.message, "mode")
-        allow_degraded_raw = self._extract_action_field(action.message, "allow_degraded_transcript_only")
-        allow_degraded = True
-        if allow_degraded_raw:
-            allow_degraded = allow_degraded_raw.strip().lower() in {"1", "true", "yes", "on"}
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._forward_youtube_token:
-            headers["Authorization"] = f"Bearer {self._forward_youtube_token}"
-        payload = {
-            "video_url": video_url,
-            "video_id": video_id,
-            "mode": mode or "explainer_only",
-            "allow_degraded_transcript_only": allow_degraded,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-            if 200 <= resp.status_code < 300:
-                self._forward_failures = 0
-                self._forward_disabled_until_ts = 0.0
-                logger.info("Hook forward ok mapping=%s url=%s status=%s", mapping_id, url, resp.status_code)
-            else:
-                self._forward_failures += 1
-                if self._forward_failures >= 3:
-                    self._forward_disabled_until_ts = now + 300.0
-                logger.warning(
-                    "Hook forward failed mapping=%s url=%s status=%s body=%s",
-                    mapping_id,
-                    url,
-                    resp.status_code,
-                    (resp.text or "")[:200],
-                )
-        except Exception as exc:
-            self._forward_failures += 1
-            if self._forward_failures >= 3:
-                self._forward_disabled_until_ts = now + 300.0
-            logger.warning("Hook forward error mapping=%s url=%s err=%s", mapping_id, url, exc)
 
     def _safe_int_env(self, name: str, default: int) -> int:
         raw = (os.getenv(name) or "").strip()
@@ -2500,62 +2395,12 @@ class HooksService:
 
         if strategy == "none":
             return True
-        if strategy == "composio_hmac":
-            return self._verify_composio_hmac(context, auth)
-
         # default: token strategy
         if not self.config.token:
             # Explicitly allow open webhook mappings when no token is configured.
             return True
         token = self._extract_token(request)
         return bool(token and token == self.config.token)
-
-    def _verify_composio_hmac(self, context: Dict, auth: HookAuthConfig) -> bool:
-        headers = context.get("headers", {})
-        signature = headers.get("webhook-signature") or headers.get("x-composio-signature")
-        webhook_id = headers.get("webhook-id")
-        webhook_timestamp_raw = headers.get("webhook-timestamp")
-        secret_env = auth.secret_env or "COMPOSIO_WEBHOOK_SECRET"
-        secret = os.getenv(secret_env)
-
-        if not signature or not webhook_id or not webhook_timestamp_raw or not secret:
-            return False
-
-        received_sig = signature.strip()
-        if received_sig.lower().startswith("v1,"):
-            received_sig = received_sig.split(",", 1)[1].strip()
-        if not received_sig:
-            return False
-
-        try:
-            webhook_timestamp = int(webhook_timestamp_raw)
-        except (TypeError, ValueError):
-            return False
-
-        now = int(time.time())
-        if abs(now - webhook_timestamp) > auth.timestamp_tolerance_seconds:
-            return False
-
-        raw_body_text = context.get("raw_body_text", "")
-        signing_string = f"{webhook_id}.{webhook_timestamp_raw}.{raw_body_text}"
-        expected_sig = base64.b64encode(
-            hmac.new(
-                secret.encode("utf-8"),
-                signing_string.encode("utf-8"),
-                hashlib.sha256,
-            ).digest()
-        ).decode("utf-8")
-
-        if not hmac.compare_digest(received_sig, expected_sig):
-            return False
-
-        self._cleanup_seen_webhook_ids(now)
-        if webhook_id in self._seen_webhook_ids:
-            context["_composio_replay_detected"] = True
-            return False
-
-        self._seen_webhook_ids[webhook_id] = float(now + auth.replay_window_seconds)
-        return True
 
     def _cleanup_seen_webhook_ids(self, now_epoch: int) -> None:
         expired = [wid for wid, exp in self._seen_webhook_ids.items() if exp <= now_epoch]
