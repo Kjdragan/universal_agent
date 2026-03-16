@@ -364,6 +364,7 @@ export default function DashboardPage() {
       return stored ? new Set(JSON.parse(stored)) : new Set();
     } catch { return new Set(); }
   });
+  const [expandedMissionEvents, setExpandedMissionEvents] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1241,6 +1242,55 @@ export default function DashboardPage() {
                   <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
                   <RefLine label="artifact_relpath" value={artifactRelpath} />
                   <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
+                  {/* Inline event timeline */}
+                  {(() => {
+                    const missionEvents = recentVpEvents.filter(
+                      (e) => (e.mission_id === mission.mission_id || asText(asRecord(e.payload).mission_id) === mission.mission_id)
+                    );
+                    if (missionEvents.length === 0) return null;
+                    const isExpanded = expandedMissionEvents.has(mission.mission_id);
+                    return (
+                      <div className="mt-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedMissionEvents((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(mission.mission_id)) next.delete(mission.mission_id);
+                              else next.add(mission.mission_id);
+                              return next;
+                            });
+                          }}
+                          className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition"
+                        >
+                          <span className="select-none">{isExpanded ? "▾" : "▸"}</span>
+                          <span>{missionEvents.length} event{missionEvents.length !== 1 ? "s" : ""}</span>
+                        </button>
+                        {isExpanded && (
+                          <div className="mt-1 ml-2 space-y-1 border-l border-slate-800 pl-2">
+                            {missionEvents.map((evt, ei) => {
+                              const ep = asRecord(evt.payload);
+                              const evtResultRef = asText(vpMissionById.get(mission.mission_id)?.result_ref);
+                              const evtResultPath = workspacePathFromResultRef(evtResultRef);
+                              const wpPath = evtResultPath ? `${evtResultPath.replace(/\/+$/, "")}/work_products` : "";
+                              const rlPath = evtResultPath ? `${evtResultPath.replace(/\/+$/, "")}/run.log` : "";
+                              const rcptRel = asText(ep.mission_receipt_relpath);
+                              const rcptPath = missionArtifactPath(evtResultRef, rcptRel);
+                              return (
+                                <div key={`${evt.event_id || evt.created_at || "e"}-${ei}`} className="text-[10px] text-slate-400">
+                                  <span className="text-slate-500">{formatLocalDateTime(evt.created_at)}</span>{" "}
+                                  <span className="text-slate-300">{evt.event_type || "event"}</span>
+                                  <RefLine label="work_products" value={wpPath} storagePath={wpPath} />
+                                  <RefLine label="run_log" value={rlPath} storagePath={rlPath} />
+                                  <RefLine label="receipt" value={rcptPath} storagePath={rcptPath} />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -1250,76 +1300,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {recentVpEvents.length > 0 && (
-          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-xs">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">Recent VP Events</p>
-              <button
-                type="button"
-                onClick={clearAllVpEvents}
-                className="rounded border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200"
-              >
-                Clear All
-              </button>
-            </div>
-            <div className="mt-2 space-y-2 text-slate-200">
-              {recentVpEvents.map((event, idx) => {
-                const eventPayload = asRecord(event.payload);
-                const missionId = asText(event.mission_id) || asText(eventPayload.mission_id);
-                const vpId = asText(event.vp_id) || asText(eventPayload.vp_id);
-                const mission = missionId ? vpMissionById.get(missionId) : undefined;
-                const missionStatus = asText(mission?.status);
-                const resultRef = asText(mission?.result_ref);
-                const resultPath = workspacePathFromResultRef(resultRef);
-                const artifactRelpath = asText(eventPayload.artifact_relpath);
-                const artifactPath = missionArtifactPath(resultRef, artifactRelpath);
-                const workProductsPath = resultPath
-                  ? `${resultPath.replace(/\/+$/, "")}/work_products`
-                  : "";
-                const runLogPath = resultPath
-                  ? `${resultPath.replace(/\/+$/, "")}/run.log`
-                  : "";
-                const receiptRelpath = asText(eventPayload.mission_receipt_relpath);
-                const receiptPath = missionArtifactPath(resultRef, receiptRelpath);
-                const syncReadyRelpath = asText(eventPayload.sync_ready_marker_relpath);
-                const syncReadyPath = missionArtifactPath(resultRef, syncReadyRelpath);
-                return (
-                  <div
-                    key={`${event.event_id || event.created_at || "event"}-${idx}`}
-                    className="relative rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5"
-                  >
-                    {event.event_id && (
-                      <button
-                        type="button"
-                        onClick={() => dismissVpEvent(event.event_id!)}
-                        className="absolute top-1 right-1.5 rounded px-1 py-0.5 text-[10px] text-slate-600 transition hover:bg-white/[0.06] hover:text-slate-300"
-                        title="Dismiss"
-                      >
-                        ✕
-                      </button>
-                    )}
-                    <p>
-                      {formatLocalDateTime(event.created_at)} · {event.event_type || "event"}
-                    </p>
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      {missionId || "--"} · {vpId || "--"} · {missionStatus || "--"}
-                    </p>
-                    <RefLine label="result_ref" value={resultRef} />
-                    <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
-                    <RefLine label="work_products_path" value={workProductsPath} storagePath={workProductsPath} />
-                    <RefLine label="run_log_path" value={runLogPath} storagePath={runLogPath} />
-                    <RefLine label="artifact_relpath" value={artifactRelpath} />
-                    <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
-                    <RefLine label="mission_receipt_relpath" value={receiptRelpath} />
-                    <RefLine label="mission_receipt_path" value={receiptPath} storagePath={receiptPath} />
-                    <RefLine label="sync_ready_marker_relpath" value={syncReadyRelpath} />
-                    <RefLine label="sync_ready_marker_path" value={syncReadyPath} storagePath={syncReadyPath} />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+
       </section>
 
       <section ref={sessionSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
