@@ -156,7 +156,7 @@ class PhasePlanner:
         self.max_tasks_per_phase = max_tasks_per_phase or self.DEFAULT_MAX_TASKS_PER_PHASE
         self.llm_client = llm_client
         self.use_llm_assessment = use_llm_assessment and llm_client is not None
-        self.llm_model = llm_model or os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")
+        self.llm_model = llm_model or os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "opus")
 
     
     def plan_phases(

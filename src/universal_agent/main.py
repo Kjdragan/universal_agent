@@ -866,7 +866,7 @@ def _resolve_default_anthropic_model() -> str:
     return (
         (os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") or "").strip()
         or (os.getenv("MODEL_NAME") or "").strip()
-        or "glm-5"
+        or "opus"
     )
 
 

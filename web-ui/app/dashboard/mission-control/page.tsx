@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Activity, BarChart3, Clock, CheckCircle, XCircle, RefreshCw, Loader2, TrendingUp, Cpu } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, Download, RefreshCw, XCircle, Loader2, TrendingUp, Cpu } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -943,6 +944,27 @@ function SystemResourcesPanel() {
  * - CSI Signals: Content & Signal Intelligence feed
  */
 export default function MissionControlPage() {
+  const router = useRouter();
+
+  const exportReport = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/system-resources`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mission-control-report-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // silently fail — could add toast notification later
+    }
+  };
+
   return (
     <div className="flex h-full flex-col gap-6">
       {/* Page Header */}
@@ -953,6 +975,47 @@ export default function MissionControlPage() {
         <div>
           <h1 className="text-lg font-semibold text-slate-100">Mission Control</h1>
           <p className="text-sm text-slate-500">Centralized task monitoring and system overview</p>
+        </div>
+      </div>
+
+      {/* Quick Actions Bar */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh All
+          </button>
+          <button
+            onClick={() => router.push("/dashboard/mission-control")}
+            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+          >
+            <Activity className="h-4 w-4" />
+            Run Health Check
+          </button>
+          <button
+            onClick={() => router.push("/dashboard/notifications")}
+            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+          >
+            <Bell className="h-4 w-4" />
+            View Notifications
+          </button>
+          <button
+            onClick={() => router.push("/dashboard/todolist")}
+            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+          >
+            <Briefcase className="h-4 w-4" />
+            Freelance Board
+          </button>
+          <button
+            onClick={exportReport}
+            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+          >
+            <Download className="h-4 w-4" />
+            Export Report
+          </button>
         </div>
       </div>
 
