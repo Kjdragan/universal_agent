@@ -41,8 +41,7 @@ jobs:
         run: |
           echo "Running doc_drift_auditor.py (scanning last ${SINCE_HOURS}h of git history)..."
           set +e
-          uv run --no-install-package manim --no-install-package pycairo --no-install-package manimpango \
-            python src/universal_agent/scripts/doc_drift_auditor.py \
+          uv run --no-sync python src/universal_agent/scripts/doc_drift_auditor.py \
             --since-hours "${SINCE_HOURS}"
           EXIT_CODE=$?
           set -e
