@@ -166,8 +166,21 @@ jobs:
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
                 sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+                # Restart VP workers so they pick up new code (graceful: systemd sends SIGTERM)
+                for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
+                  if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
+                    echo "--> Restarting VP worker: $vp_svc"
+                    sudo systemctl restart "$vp_svc"
+                  fi
+                done
               else
                 systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+                for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
+                  if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
+                    echo "--> Restarting VP worker: $vp_svc"
+                    systemctl restart "$vp_svc"
+                  fi
+                done
               fi
             elif command -v service >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
