@@ -74,6 +74,14 @@ HEALTH_ALERT_COOLDOWN_SECONDS: float = float(
 # Resets on restart which is intentional — a restart is a meaningful event.
 _health_alert_last_sent: dict[str, float] = {}
 
+# Per-video dedup for youtube_tutorial_ready: prevents the same video from
+# generating multiple "artifacts ready" Telegram messages within a window.
+# Key = video_id, value = monotonic timestamp of last send.
+VIDEO_READY_DEDUP_SECONDS: float = float(
+    os.getenv("UA_TUTORIAL_VIDEO_READY_DEDUP_SECONDS", "1800")
+)
+_video_ready_last_sent: dict[str, float] = {}
+
 _KIND_EMOJI: dict[str, str] = {
     "youtube_playlist_new_video": "🎬",
     "youtube_playlist_dispatch_failed": "⚠️",
@@ -229,6 +237,22 @@ def maybe_send(payload: dict[str, Any]) -> bool:
             return False
         _health_alert_last_sent[kind] = now
 
+    # --- per-video dedup for youtube_tutorial_ready ---
+    if kind == "youtube_tutorial_ready":
+        video_id = str((payload.get("metadata") or {}).get("video_id") or "").strip()
+        if video_id:
+            now_mono = time.monotonic()
+            last = _video_ready_last_sent.get(video_id, 0.0)
+            remaining = VIDEO_READY_DEDUP_SECONDS - (now_mono - last)
+            if remaining > 0:
+                logger.debug(
+                    "tutorial_telegram_notifier: suppressed duplicate "
+                    "youtube_tutorial_ready video_id=%s cooldown_remaining=%.0fs",
+                    video_id,
+                    remaining,
+                )
+                return False
+
     title = str(payload.get("title") or "Tutorial Event")
     message = str(payload.get("message") or "")
     metadata = payload.get("metadata") or {}
@@ -236,7 +260,13 @@ def maybe_send(payload: dict[str, Any]) -> bool:
         metadata = {}
     try:
         text = _build_message(kind, title, message, metadata)
-        return _send(text)
+        sent = _send(text)
+        # Record successful send for per-video dedup
+        if sent and kind == "youtube_tutorial_ready":
+            video_id = str(metadata.get("video_id") or "").strip()
+            if video_id:
+                _video_ready_last_sent[video_id] = time.monotonic()
+        return sent
     except Exception:
         logger.exception("tutorial_telegram_notifier.maybe_send failed kind=%s", kind)
         return False

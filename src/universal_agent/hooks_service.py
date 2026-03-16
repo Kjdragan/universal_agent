@@ -468,6 +468,15 @@ class HooksService:
             300,
             self._safe_int_env("UA_HOOKS_STARTUP_RECOVERY_COOLDOWN_SECONDS", 1800),
         )
+        # Video-level dispatch dedup: prevents the same YouTube video from being
+        # processed concurrently by multiple dispatch sources (e.g. playlist watcher
+        # + Composio webhook).  Key = video_id, value = start timestamp.
+        self._youtube_video_dispatch_inflight: Dict[str, float] = {}
+        self._youtube_video_dispatch_lock = asyncio.Lock()
+        self._youtube_video_dispatch_dedup_ttl_seconds = max(
+            60,
+            self._safe_int_env("UA_HOOKS_YOUTUBE_DISPATCH_DEDUP_TTL_SECONDS", 3600),
+        )
 
     def _load_config(self) -> HooksConfig:
         ops_config = load_ops_config()
@@ -2686,6 +2695,30 @@ class HooksService:
         is_youtube_tutorial = _is_youtube_agent_route(action.to)
         expected_video_id = self._extract_action_field(action.message or "", "video_id")
         expected_video_title = self._extract_action_field(action.message or "", "title")
+
+        # --- Video-level dispatch dedup guard ---
+        if is_youtube_tutorial and expected_video_id:
+            async with self._youtube_video_dispatch_lock:
+                self._evict_stale_video_dispatch_entries()
+                existing_ts = self._youtube_video_dispatch_inflight.get(expected_video_id)
+                if existing_ts is not None:
+                    age = time.time() - existing_ts
+                    logger.info(
+                        "Duplicate YouTube dispatch rejected video_id=%s "
+                        "session_key=%s hook=%s inflight_age=%.0fs",
+                        expected_video_id,
+                        session_key,
+                        action.name or "Hook",
+                        age,
+                    )
+                    return {
+                        "decision": "skipped",
+                        "reason": "duplicate_video_dispatch",
+                        "video_id": expected_video_id,
+                        "inflight_age_seconds": int(age),
+                    }
+                self._youtube_video_dispatch_inflight[expected_video_id] = time.time()
+
         if is_youtube_tutorial:
             if timeout_seconds is None:
                 timeout_seconds = self._youtube_hook_timeout_seconds
@@ -2966,7 +2999,6 @@ class HooksService:
                     title="YouTube Tutorial Pipeline Started",
                     message=(
                         f"{'Processing in degraded mode' if degraded_fail_open else 'Processing'}: {processing_label}"
-                        f"{f' [video_id: {expected_video_id}]' if expected_video_id else ''}"
                     ),
                     session_id=session_id,
                     severity="info",
@@ -3369,6 +3401,9 @@ class HooksService:
                         0,
                         self._agent_dispatch_pending_count - 1,
                     )
+            # Release video-level dispatch dedup guard
+            if is_youtube_tutorial and expected_video_id:
+                self._youtube_video_dispatch_inflight.pop(expected_video_id, None)
 
     @staticmethod
     def _run_log_progress_marker(run_log_path: Path) -> tuple[int, float]:
@@ -3563,6 +3598,17 @@ class HooksService:
             workspace_dir = Path("AGENT_RUN_WORKSPACES") / session_id
             logger.info("Creating webhook session session_id=%s workspace=%s", session_id, workspace_dir)
             return await self.gateway.create_session(user_id="webhook", workspace_dir=str(workspace_dir))
+
+    def _evict_stale_video_dispatch_entries(self) -> None:
+        """Remove expired entries from the video dispatch inflight dict."""
+        now = time.time()
+        ttl = float(self._youtube_video_dispatch_dedup_ttl_seconds)
+        stale = [
+            vid for vid, ts in self._youtube_video_dispatch_inflight.items()
+            if (now - ts) >= ttl
+        ]
+        for vid in stale:
+            self._youtube_video_dispatch_inflight.pop(vid, None)
 
     def _session_id_from_key(self, session_key: str) -> str:
         raw = session_key.strip()
