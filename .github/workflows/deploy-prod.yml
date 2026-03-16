@@ -95,10 +95,10 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             
-            # Use find instead of chown -R: transient SQLite WAL/SHM files
-            # may vanish mid-chown (race with running service), which aborts
-            # chown -R. find's -exec tolerates ENOENT on individual files.
-            find "$PROD_DIR" \( -user ua -a -group ua \) -prune -o -exec chown ua:ua {} + 2>/dev/null || true
+            echo "--> Transferring ownership to service user before dependency sync..."
+            # || true: tolerate ENOENT from transient SQLite WAL/SHM files
+            # that may vanish mid-scan while the running service writes to DB.
+            sudo chown -R ua:ua "$PROD_DIR" || true
 
             echo "--> Preparing production Infisical bootstrap..."
             export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
