@@ -115,6 +115,58 @@ const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
 const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
 const MISSION_MAX_AGE_MS = 36 * 60 * 60 * 1000; // 36 hours — auto-hide old missions
 
+// ── Notification filter categories ──────────────────────────────────────────
+const NOTIFICATION_CATEGORIES = {
+  important: {
+    label: "Important",
+    icon: "🔔",
+    match: (n: DashboardNotification) =>
+      n.severity === "error" || n.severity === "critical" ||
+      Boolean(n.requires_action) ||
+      n.kind === "continuity_alert" || n.kind === "system_error" ||
+      n.kind === "heartbeat_mediation_dispatch_failed" ||
+      n.kind === "heartbeat_operator_review_required" ||
+      n.kind === "heartbeat_findings_parse_failed" ||
+      n.kind.startsWith("simone_"),
+  },
+  heartbeat: {
+    label: "Heartbeat",
+    icon: "♥",
+    match: (n: DashboardNotification) =>
+      n.kind.startsWith("heartbeat_") || n.kind.startsWith("autonomous_heartbeat_") ||
+      n.kind === "agentmail_heartbeat_wake_queued",
+  },
+  csi: {
+    label: "CSI",
+    icon: "📊",
+    match: (n: DashboardNotification) => n.kind.startsWith("csi_"),
+  },
+  tutorials: {
+    label: "Tutorials",
+    icon: "🎬",
+    match: (n: DashboardNotification) =>
+      n.kind.startsWith("tutorial_") || n.kind.startsWith("youtube_"),
+  },
+  system: {
+    label: "System",
+    icon: "⚙",
+    match: (n: DashboardNotification) =>
+      n.kind === "continuity_recovered" || n.kind === "system_command_routed" ||
+      n.kind === "cancelled" || n.kind === "calendar_missed" ||
+      n.kind === "hook_event",
+  },
+  simone: {
+    label: "Simone",
+    icon: "🤖",
+    match: (n: DashboardNotification) => n.kind.startsWith("simone_"),
+  },
+} as const;
+type NotificationCategoryKey = keyof typeof NOTIFICATION_CATEGORIES | "all";
+const NOTIF_CATEGORY_KEYS: NotificationCategoryKey[] = [
+  "important", "heartbeat", "csi", "tutorials", "system", "simone", "all",
+];
+const SEVERITY_OPTIONS = ["all", "info", "warning", "error", "critical"] as const;
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -258,6 +310,18 @@ export default function DashboardPage() {
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [sessionFilter, setSessionFilter] = useState<"all" | "active">("active");
   const [notificationFilter, setNotificationFilter] = useState<"all" | "unread">("all");
+  const [notifCategoryFilter, setNotifCategoryFilter] = useState<NotificationCategoryKey>(
+    () => {
+      if (typeof window === "undefined") return "important";
+      return (localStorage.getItem("ua.notif_category_filter.v1") as NotificationCategoryKey) || "important";
+    },
+  );
+  const [notifSeverityFilter, setNotifSeverityFilter] = useState<string>(
+    () => {
+      if (typeof window === "undefined") return "all";
+      return localStorage.getItem("ua.notif_severity_filter.v1") || "all";
+    },
+  );
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
@@ -285,7 +349,7 @@ export default function DashboardPage() {
     try {
       const [summaryRes, notificationsRes, approvalsHighlightRes, vpSessionsRes, vpMissionsRes, vpMetricResponses] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/summary`),
-        fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`),
+        fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100`),
         fetch(`${API_BASE}/api/v1/dashboard/approvals/highlight`),
         fetch(`${API_BASE}/api/v1/ops/vp/sessions?status=all&limit=50`),
         fetch(`${API_BASE}/api/v1/ops/vp/missions?status=all&limit=100`),
@@ -456,6 +520,18 @@ export default function DashboardPage() {
     return () => window.clearInterval(timer);
   }, [load]);
 
+  // Persist notification filter preferences
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ua.notif_category_filter.v1", notifCategoryFilter);
+    }
+  }, [notifCategoryFilter]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ua.notif_severity_filter.v1", notifSeverityFilter);
+    }
+  }, [notifSeverityFilter]);
+
   const handleCardClick = useCallback(
     (label: string) => {
       switch (label) {
@@ -494,13 +570,34 @@ export default function DashboardPage() {
       ),
     [notifications],
   );
-  const visibleNotifications = useMemo(
-    () =>
-      notificationFilter === "unread"
-        ? notifications.filter((item) => item.status === "new")
-        : notifications,
-    [notificationFilter, notifications],
-  );
+  const visibleNotifications = useMemo(() => {
+    let filtered = notifications;
+    // Status filter (unread only)
+    if (notificationFilter === "unread") {
+      filtered = filtered.filter((item) => item.status === "new");
+    }
+    // Category filter
+    if (notifCategoryFilter !== "all") {
+      const cat = NOTIFICATION_CATEGORIES[notifCategoryFilter];
+      if (cat) filtered = filtered.filter(cat.match);
+    }
+    // Severity filter
+    if (notifSeverityFilter !== "all") {
+      filtered = filtered.filter((item) => item.severity === notifSeverityFilter);
+    }
+    return filtered;
+  }, [notificationFilter, notifCategoryFilter, notifSeverityFilter, notifications]);
+
+  const categoryBadgeCounts = useMemo(() => {
+    const base = notificationFilter === "unread"
+      ? notifications.filter((item) => item.status === "new")
+      : notifications;
+    const counts: Record<string, number> = { all: base.length };
+    for (const [key, cat] of Object.entries(NOTIFICATION_CATEGORIES)) {
+      counts[key] = base.filter(cat.match).length;
+    }
+    return counts;
+  }, [notificationFilter, notifications]);
   const tutorialProgressByVideo = useMemo(() => {
     const index = new Map<string, TutorialProgressEntry>();
     for (const item of notifications) {
@@ -1343,19 +1440,35 @@ export default function DashboardPage() {
       </section >
 
       <section ref={notificationSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        {/* ── Header row ── */}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Notification Center</h2>
-            {notificationFilter === "unread" && (
-              <button
-                type="button"
-                onClick={() => setNotificationFilter("all")}
-                className="flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-300 hover:bg-white/[0.06] transition"
-              >
-                Unread only
-                <span className="ml-0.5">×</span>
-              </button>
-            )}
+            {/* Unread chip */}
+            <button
+              type="button"
+              onClick={() => setNotificationFilter(notificationFilter === "unread" ? "all" : "unread")}
+              className={[
+                "rounded-full px-2 py-0.5 text-[10px] font-medium border transition",
+                notificationFilter === "unread"
+                  ? "border-amber-600/50 bg-amber-500/15 text-amber-200"
+                  : "border-slate-700 bg-slate-800/40 text-slate-500 hover:text-slate-300",
+              ].join(" ")}
+            >
+              Unread only
+            </button>
+            {/* Severity dropdown */}
+            <select
+              value={notifSeverityFilter}
+              onChange={(e) => setNotifSeverityFilter(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[11px] text-slate-300"
+            >
+              {SEVERITY_OPTIONS.map((sev) => (
+                <option key={sev} value={sev}>
+                  {sev === "all" ? "All severities" : sev}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex items-center gap-2">
             {visibleNotifications.length > 0 && (
@@ -1398,6 +1511,46 @@ export default function DashboardPage() {
             )}
             {loading && <span className="text-xs text-slate-500">Refreshing…</span>}
           </div>
+        </div>
+
+        {/* ── Category filter pill bar ── */}
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {NOTIF_CATEGORY_KEYS.map((catKey) => {
+            const isAll = catKey === "all";
+            const cat = isAll ? null : NOTIFICATION_CATEGORIES[catKey];
+            const label = isAll ? "All" : cat!.label;
+            const icon = isAll ? "📋" : cat!.icon;
+            const count = categoryBadgeCounts[catKey] ?? 0;
+            const isActive = notifCategoryFilter === catKey;
+            return (
+              <button
+                key={catKey}
+                type="button"
+                onClick={() => setNotifCategoryFilter(catKey)}
+                className={[
+                  "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium border transition",
+                  isActive
+                    ? catKey === "important"
+                      ? "border-amber-500/40 bg-amber-500/15 text-amber-200"
+                      : "border-blue-500/30 bg-blue-500/10 text-blue-200"
+                    : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:border-slate-600",
+                ].join(" ")}
+              >
+                <span className="text-[10px]">{icon}</span>
+                {label}
+                <span className={[
+                  "ml-0.5 rounded-full px-1.5 py-0 text-[9px] font-semibold tabular-nums",
+                  isActive
+                    ? catKey === "important"
+                      ? "bg-amber-500/25 text-amber-300"
+                      : "bg-blue-500/20 text-blue-300"
+                    : "bg-slate-700/60 text-slate-500",
+                ].join(" ")}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
         <div className="space-y-2">
           {notifications.length === 0 && (
