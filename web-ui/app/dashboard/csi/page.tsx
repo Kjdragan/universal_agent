@@ -57,6 +57,48 @@ function eventTypeIcon(eventType: string): string {
     return "📄";
 }
 
+/** Derive a real headline for a digest.
+ *  The batch-brief generator often stores `title = "Headline"` literally,
+ *  with the actual headline buried in the markdown body as:
+ *    ### Headline\n<actual headline text>
+ *  This helper extracts the real text in that case. */
+function extractHeadline(digest: CSIDigest): string {
+    const raw = (digest.title ?? "").trim();
+    const isGeneric =
+        !raw ||
+        raw.toLowerCase() === "headline" ||
+        raw.toLowerCase() === "untitled" ||
+        raw.toLowerCase() === "untitled report";
+
+    if (!isGeneric) return raw;
+
+    // Try to extract from full_report_md or summary
+    const md = digest.full_report_md || digest.summary || "";
+    if (!md) return raw || "Untitled Report";
+
+    const lines = md.split("\n").map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Skip markdown headings that are just "Headline" or "### Headline"
+        if (/^#{1,4}\s*(Headline|Summary|Overview|Report)\s*$/i.test(line)) {
+            // Grab the NEXT non-empty, non-heading line as the real headline
+            for (let j = i + 1; j < lines.length; j++) {
+                const next = lines[j].trim();
+                if (!next) continue;
+                if (/^#{1,4}\s/.test(next)) break; // hit another heading, stop
+                // Truncate if very long
+                return next.length > 120 ? next.slice(0, 117) + "…" : next;
+            }
+            continue;
+        }
+        // If the first line itself is meaningful text (not a heading)
+        if (!/^#{1,4}\s/.test(line)) {
+            return line.length > 120 ? line.slice(0, 117) + "…" : line;
+        }
+    }
+    return raw || "Untitled Report";
+}
+
 /* ── Component ──────────────────────────────────────────────────────────── */
 
 export default function CSIDashboard() {
@@ -336,7 +378,7 @@ export default function CSIDashboard() {
                                             <div className="flex items-center gap-1.5 mb-1">
                                                 <span className="text-sm">{eventTypeIcon(digest.event_type)}</span>
                                                 <span className="text-sm font-medium text-slate-200 truncate">
-                                                    {digest.title || "Untitled Report"}
+                                                    {extractHeadline(digest)}
                                                 </span>
                                             </div>
                                             <p className="text-xs text-slate-400 line-clamp-2">
@@ -376,7 +418,7 @@ export default function CSIDashboard() {
                                         <div className="min-w-0">
                                             <h2 className="text-lg font-bold text-slate-100 leading-tight">
                                                 {eventTypeIcon(selectedDigest.event_type)}{" "}
-                                                {selectedDigest.title || "Untitled Report"}
+                                                {extractHeadline(selectedDigest)}
                                             </h2>
                                             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                                                 <span
