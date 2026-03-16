@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, Download, RefreshCw, XCircle, Loader2, TrendingUp, Cpu } from "lucide-react";
+import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, Download, Loader2, RefreshCw, Timer, TrendingUp, Cpu, XCircle } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -106,9 +106,23 @@ function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded bg-slate-700/50 ${className}`} />;
 }
 
+// Coordinated refresh context -- single timer drives all panels
+type RefreshContextType = {
+  refreshKey: number;
+  lastRefresh: Date | null;
+  isRefreshing: boolean;
+};
+
+const RefreshContext = createContext<RefreshContextType>({
+  refreshKey: 0,
+  lastRefresh: null,
+  isRefreshing: false,
+});
+
 // Active Tasks Panel (Task Queue Overview)
 function ActiveTasksPanel() {
   const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AgentQueuePayload | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -135,9 +149,7 @@ function ActiveTasksPanel() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, REFRESH_INTERVAL);
-    return () => clearInterval(id);
-  }, [load]);
+  }, [load, refreshKey]);
 
   if (loading) {
     return (
@@ -283,6 +295,7 @@ function ActiveTasksPanel() {
 // System Status Panel
 function SystemStatusPanel() {
   const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<HealthPayload | null>(null);
 
@@ -305,9 +318,7 @@ function SystemStatusPanel() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, REFRESH_INTERVAL);
-    return () => clearInterval(id);
-  }, [load]);
+  }, [load, refreshKey]);
 
   if (loading) {
     return (
@@ -423,6 +434,7 @@ const CLEARED_EVENTS_LS_KEY = "mc_cleared_events_before";
 // Recent Events Panel
 function RecentEventsPanel() {
   const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<DispatchQueuePayload | null>(null);
   const [clearedBefore, setClearedBefore] = useState<string | null>(null);
@@ -456,9 +468,7 @@ function RecentEventsPanel() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, REFRESH_INTERVAL);
-    return () => clearInterval(id);
-  }, [load]);
+  }, [load, refreshKey]);
 
   const handleClearAll = () => {
     const now = new Date().toISOString();
@@ -606,9 +616,10 @@ type CSINotificationItem = {
   status?: string;
 };
 
-// CSI Signals Panel — fetches from the working notifications endpoint filtered by source_domain=csi
+// CSI Signals Panel -- fetches from the working notifications endpoint filtered by source_domain=csi
 function CSISignalsPanel() {
   const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<CSINotificationItem[]>([]);
 
@@ -641,9 +652,7 @@ function CSISignalsPanel() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, REFRESH_INTERVAL);
-    return () => clearInterval(id);
-  }, [load]);
+  }, [load, refreshKey]);
 
   if (loading) {
     return (
@@ -789,6 +798,7 @@ function MetricBar({ label, value, percent, unit }: { label: string; value: numb
 
 function SystemResourcesPanel() {
   const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SystemResourcesPayload | null>(null);
 
@@ -810,9 +820,7 @@ function SystemResourcesPanel() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, REFRESH_INTERVAL);
-    return () => clearInterval(id);
-  }, [load]);
+  }, [load, refreshKey]);
 
   if (loading) {
     return (
@@ -933,6 +941,47 @@ function SystemResourcesPanel() {
   );
 }
 
+
+// Heartbeat status chip -- shows last system-resources check time + status dot
+function HeartbeatChip() {
+  const { refreshKey } = useContext(RefreshContext);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [overallStatus, setOverallStatus] = useState<"ok" | "warn" | "critical" | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/system-resources`, { cache: "no-store" });
+      if (!res.ok) return;
+      const json = await res.json();
+      setGeneratedAt(json.generated_at_utc ?? null);
+      setOverallStatus(json.overall_status ?? null);
+    } catch {
+      // silently ignore -- chip stays empty
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load, refreshKey]);
+
+  if (!generatedAt) return null;
+
+  const dotColor =
+    overallStatus === "critical"
+      ? "bg-red-500"
+      : overallStatus === "warn"
+      ? "bg-yellow-500"
+      : "bg-green-500";
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700/50 bg-slate-800/50 px-2.5 py-1 text-xs text-slate-400">
+      <span className={`inline-block h-2 w-2 rounded-full ${dotColor}`} />
+      <Activity className="h-3 w-3 text-slate-500" />
+      Last check: {formatTs(generatedAt)}
+    </span>
+  );
+}
+
 /**
  * Mission Control Dashboard
  *
@@ -945,6 +994,27 @@ function SystemResourcesPanel() {
  */
 export default function MissionControlPage() {
   const router = useRouter();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const triggerRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    setRefreshKey((k) => k + 1);
+    setLastRefresh(new Date());
+    // Brief spin indicator -- clear after panels have had time to fire their loads
+    setTimeout(() => setIsRefreshing(false), 1500);
+  }, []);
+
+  // Single coordinated interval -- drives all child panels via context
+  useEffect(() => {
+    triggerRefresh(); // initial load
+    intervalRef.current = setInterval(triggerRefresh, REFRESH_INTERVAL);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [triggerRefresh]);
 
   const exportReport = async () => {
     try {
@@ -961,72 +1031,86 @@ export default function MissionControlPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch {
-      // silently fail — could add toast notification later
+      // silently fail -- could add toast notification later
     }
   };
 
   return (
-    <div className="flex h-full flex-col gap-6">
-      {/* Page Header */}
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 ring-1 ring-blue-500/20">
-          <Activity className="h-5 w-5 text-blue-400" />
+    <RefreshContext.Provider value={{ refreshKey, lastRefresh, isRefreshing }}>
+      <div className="flex h-full flex-col gap-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 ring-1 ring-blue-500/20">
+              <Activity className="h-5 w-5 text-blue-400" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold text-slate-100">Mission Control</h1>
+              <p className="text-sm text-slate-500">Centralized task monitoring and system overview</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <HeartbeatChip />
+            {lastRefresh && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <Timer className="h-3.5 w-3.5" />
+                Updated {formatDistanceToNow(lastRefresh, { addSuffix: true })}
+              </div>
+            )}
+          </div>
         </div>
-        <div>
-          <h1 className="text-lg font-semibold text-slate-100">Mission Control</h1>
-          <p className="text-sm text-slate-500">Centralized task monitoring and system overview</p>
-        </div>
-      </div>
 
-      {/* Quick Actions Bar */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => window.location.reload()}
-            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Refresh All
-          </button>
-          <button
-            onClick={() => router.push("/dashboard/mission-control")}
-            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
-          >
-            <Activity className="h-4 w-4" />
-            Run Health Check
-          </button>
-          <button
-            onClick={() => router.push("/dashboard/notifications")}
-            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
-          >
-            <Bell className="h-4 w-4" />
-            View Notifications
-          </button>
-          <button
-            onClick={() => router.push("/dashboard/todolist")}
-            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
-          >
-            <Briefcase className="h-4 w-4" />
-            Freelance Board
-          </button>
-          <button
-            onClick={exportReport}
-            className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
-          >
-            <Download className="h-4 w-4" />
-            Export Report
-          </button>
+        {/* Quick Actions Bar */}
+        <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={triggerRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              Refresh All
+            </button>
+            <button
+              onClick={() => router.push("/dashboard/mission-control")}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+            >
+              <Activity className="h-4 w-4" />
+              Run Health Check
+            </button>
+            <button
+              onClick={() => router.push("/dashboard/notifications")}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+            >
+              <Bell className="h-4 w-4" />
+              View Notifications
+            </button>
+            <button
+              onClick={() => router.push("/dashboard/todolist")}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+            >
+              <Briefcase className="h-4 w-4" />
+              Freelance Board
+            </button>
+            <button
+              onClick={exportReport}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+            >
+              <Download className="h-4 w-4" />
+              Export Report
+            </button>
+          </div>
+        </div>
+
+        {/* Main Content Grid - 3 cols desktop, 1 col mobile */}
+        <div className="grid flex-1 gap-4 md:grid-cols-3">
+          <ActiveTasksPanel />
+          <SystemStatusPanel />
+          <SystemResourcesPanel />
+          <RecentEventsPanel />
+          <CSISignalsPanel />
         </div>
       </div>
-
-      {/* Main Content Grid - 3 cols desktop, 1 col mobile */}
-      <div className="grid flex-1 gap-4 md:grid-cols-3">
-        <ActiveTasksPanel />
-        <SystemStatusPanel />
-        <SystemResourcesPanel />
-        <RecentEventsPanel />
-        <CSISignalsPanel />
-      </div>
-    </div>
+    </RefreshContext.Provider>
   );
 }

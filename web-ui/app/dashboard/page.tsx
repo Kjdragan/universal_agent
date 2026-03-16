@@ -60,6 +60,7 @@ type VpSessionSnapshot = {
   lease_expires_at?: string;
   last_heartbeat_at?: string;
   updated_at?: string;
+  last_error?: string | null;
 };
 
 type VpMissionSnapshot = {
@@ -114,6 +115,26 @@ const EMPTY_SUMMARY: SummaryResponse = {
 const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
 const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
 const MISSION_MAX_AGE_MS = 36 * 60 * 60 * 1000; // 36 hours — auto-hide old missions
+const VP_STATUS_COLORS: Record<string, { dot: string; text: string; bg: string }> = {
+  idle: { dot: "bg-emerald-400", text: "text-emerald-300", bg: "border-emerald-900/40" },
+  active: { dot: "bg-sky-400 animate-pulse", text: "text-sky-300", bg: "border-sky-900/40" },
+  running: { dot: "bg-sky-400 animate-pulse", text: "text-sky-300", bg: "border-sky-900/40" },
+  degraded: { dot: "bg-rose-400", text: "text-rose-300", bg: "border-rose-900/40" },
+  stale: { dot: "bg-amber-400", text: "text-amber-300", bg: "border-amber-900/40" },
+  unknown: { dot: "bg-slate-500", text: "text-slate-400", bg: "border-slate-800" },
+};
+
+function formatElapsed(ms: number): string {
+  if (ms < 0) return "--";
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min < 60) return `${min}m ${sec}s`;
+  const hr = Math.floor(min / 60);
+  const rmMin = min % 60;
+  return `${hr}h ${rmMin}m`;
+}
 
 // ── Notification filter categories ──────────────────────────────────────────
 const NOTIFICATION_CATEGORIES = {
@@ -1095,19 +1116,38 @@ export default function DashboardPage() {
             const vpSession = vpSessions.find((row) => row.vp_id === vpId);
             const p95Latency = metrics?.latency_seconds?.p95_seconds;
             const workerStatus = String(vpSession?.effective_status || vpSession?.status || metrics?.session?.status || "unknown");
+            const statusColors = VP_STATUS_COLORS[workerStatus] || VP_STATUS_COLORS.unknown;
+            const lastError = vpSession?.last_error || null;
+            const leaseExpires = vpSession?.lease_expires_at ? new Date(vpSession.lease_expires_at).getTime() : NaN;
+            const leaseSecondsLeft = Number.isFinite(leaseExpires) ? Math.max(0, Math.floor((leaseExpires - Date.now()) / 1000)) : NaN;
             return (
-              <div key={vpId} className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{vpId}</p>
-                <p className="mt-1">worker status: {workerStatus}</p>
-                <p className="mt-1">session: {vpSession?.session_id || metrics?.session?.session_id || "--"}</p>
-                <p className="mt-1">
-                  queue/running: {metrics?.mission_counts?.queued ?? 0}/{metrics?.mission_counts?.running ?? 0}
-                </p>
-                <p className="mt-1">
-                  p95 latency:{" "}
-                  {typeof p95Latency === "number" ? `${p95Latency.toFixed(1)}s` : "--"}
-                </p>
-                <p className="mt-1 text-slate-500">
+              <div key={vpId} className={`rounded-lg border bg-slate-950/50 p-3 text-xs text-slate-300 ${statusColors.bg}`}>
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{vpId}</p>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`inline-block h-2 w-2 rounded-full ${statusColors.dot}`} />
+                    <span className={`text-[11px] font-semibold uppercase ${statusColors.text}`}>{workerStatus}</span>
+                  </div>
+                </div>
+                {lastError && workerStatus === "degraded" && (
+                  <div className="mt-2 rounded border border-rose-900/50 bg-rose-950/40 px-2 py-1.5">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-rose-400">Last Error</p>
+                    <p className="mt-0.5 text-[11px] text-rose-200 break-all">{lastError}</p>
+                  </div>
+                )}
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+                  <p className="text-slate-500">session</p>
+                  <p className="text-right font-mono text-[10px]">{vpSession?.session_id || metrics?.session?.session_id || "--"}</p>
+                  <p className="text-slate-500">queue / running</p>
+                  <p className="text-right">{metrics?.mission_counts?.queued ?? 0} / {metrics?.mission_counts?.running ?? 0}</p>
+                  <p className="text-slate-500">p95 latency</p>
+                  <p className="text-right">{typeof p95Latency === "number" ? `${p95Latency.toFixed(1)}s` : "--"}</p>
+                  {Number.isFinite(leaseSecondsLeft) && (
+                    <><p className="text-slate-500">lease TTL</p>
+                    <p className={`text-right ${leaseSecondsLeft < 30 ? "text-rose-300" : leaseSecondsLeft < 60 ? "text-amber-300" : "text-emerald-300"}`}>{formatElapsed(leaseSecondsLeft * 1000)}</p></>
+                  )}
+                </div>
+                <p className="mt-2 text-[10px] text-slate-600">
                   heartbeat: {formatLocalDateTime(vpSession?.last_heartbeat_at || vpSession?.updated_at)}
                 </p>
               </div>
@@ -1122,6 +1162,7 @@ export default function DashboardPage() {
               const missionStatus = String(mission.status || "unknown").toLowerCase();
               const claimTs = mission.claim_expires_at ? new Date(mission.claim_expires_at).getTime() : Number.NaN;
               const updatedTs = mission.updated_at ? new Date(mission.updated_at).getTime() : Number.NaN;
+              const startedTs = mission.started_at ? new Date(mission.started_at).getTime() : Number.NaN;
               const staleByClaim = missionStatus === "running" && Number.isFinite(claimTs) && claimTs < Date.now();
               const staleByNoClaim =
                 missionStatus === "running" &&
@@ -1135,12 +1176,36 @@ export default function DashboardPage() {
               const resultRef = asText(mission.result_ref);
               const resultPath = workspacePathFromResultRef(resultRef);
               const artifactPath = missionArtifactPath(resultRef, artifactRelpath);
+              // Restart detection: count started events for this mission
+              const restartCount = recentVpEvents.filter(
+                (e) => (e.mission_id === mission.mission_id || asText(asRecord(e.payload).mission_id) === mission.mission_id) && e.event_type === "vp.mission.started"
+              ).length;
+              // Elapsed time for running missions
+              const elapsedMs = missionStatus === "running" && Number.isFinite(startedTs) ? Date.now() - startedTs : NaN;
+              // Claim lease remaining
+              const claimSecsLeft = Number.isFinite(claimTs) ? Math.max(0, Math.floor((claimTs - Date.now()) / 1000)) : NaN;
+              // Status styling
+              const statusStyle = effectiveStatus === "completed" ? "text-emerald-300"
+                : effectiveStatus === "running" ? "text-sky-300"
+                : effectiveStatus === "failed" ? "text-rose-300"
+                : effectiveStatus === "stalled" ? "text-amber-300"
+                : effectiveStatus === "cancelled" ? "text-slate-500"
+                : "text-slate-400";
               return (
                 <div key={mission.mission_id} className="rounded border border-slate-800 bg-slate-900/40 px-2 py-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-mono text-[11px] text-slate-300">
-                      {mission.mission_id} · {mission.vp_id} · {effectiveStatus}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono text-[11px] text-slate-300">
+                        {mission.mission_id} · {mission.vp_id}
+                      </p>
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${statusStyle} bg-white/5`}>{effectiveStatus}</span>
+                      {missionStatus === "running" && Number.isFinite(elapsedMs) && (
+                        <span className="rounded bg-sky-900/30 px-1.5 py-0.5 text-[10px] font-mono text-sky-200" title={`Started ${formatLocalDateTime(mission.started_at)}`}>⏱ {formatElapsed(elapsedMs)}</span>
+                      )}
+                      {restartCount > 1 && (
+                        <span className="rounded bg-rose-900/30 px-1.5 py-0.5 text-[10px] font-semibold text-rose-200" title={`${restartCount} vp.mission.started events detected — indicates restart loop`}>⟳ {restartCount} restarts</span>
+                      )}
+                    </div>
                     {cancellable && (
                       <button
                         type="button"
@@ -1152,7 +1217,26 @@ export default function DashboardPage() {
                     )}
                   </div>
                   <p className="mt-1 text-slate-200">{mission.objective || "(no objective)"}</p>
-                  <p className="mt-1 text-[10px] text-slate-500">updated: {formatLocalDateTime(mission.updated_at)}</p>
+                  {missionStatus === "running" && Number.isFinite(claimSecsLeft) && (
+                    <div className="mt-1.5">
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-slate-500">claim lease</span>
+                        <span className={claimSecsLeft < 30 ? "text-rose-300" : claimSecsLeft < 60 ? "text-amber-300" : "text-emerald-300"}>{formatElapsed(claimSecsLeft * 1000)} remaining</span>
+                      </div>
+                      <div className="mt-0.5 h-1 w-full rounded-full bg-slate-800">
+                        <div
+                          className={`h-1 rounded-full transition-all ${claimSecsLeft < 30 ? "bg-rose-500" : claimSecsLeft < 60 ? "bg-amber-500" : "bg-emerald-500"}`}
+                          style={{ width: `${Math.min(100, (claimSecsLeft / 120) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-slate-500">
+                    {mission.started_at && <span>started: {formatLocalDateTime(mission.started_at)}</span>}
+                    <span>updated: {formatLocalDateTime(mission.updated_at)}</span>
+                    {mission.completed_at && <span>completed: {formatLocalDateTime(mission.completed_at)}</span>}
+                    {typeof mission.duration_seconds === "number" && <span>duration: {formatElapsed(mission.duration_seconds * 1000)}</span>}
+                  </div>
                   <RefLine label="result_ref" value={resultRef} />
                   <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
                   <RefLine label="artifact_relpath" value={artifactRelpath} />
