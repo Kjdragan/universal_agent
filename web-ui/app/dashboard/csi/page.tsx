@@ -121,7 +121,12 @@ export default function CSIDashboard() {
             const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/digests?limit=100`, { cache: "no-store" });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
-            setDigests(data.digests || []);
+            // Filter out empty stubs (csi_analytics trend reports with no content)
+            const allDigests: CSIDigest[] = data.digests || [];
+            const contentDigests = allDigests.filter(
+                (d: CSIDigest) => !!(d.summary || d.full_report_md),
+            );
+            setDigests(contentDigests);
             setTotalDigests(data.total || 0);
             setError(null);
         } catch (err: any) {

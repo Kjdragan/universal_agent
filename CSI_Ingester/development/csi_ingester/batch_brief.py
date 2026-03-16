@@ -26,10 +26,11 @@ _DEFAULT_MODEL = "gemini-3-flash-preview"
 _SYSTEM_PROMPT = """\
 You are a concise trend analyst.  Given a batch of creator-signal events
 collected over the last few hours, produce a Markdown brief with:
-1. **Headline** — one punchy sentence summarising the most interesting signal.
+1. A **title line** as an H1 heading — a specific, descriptive headline summarising the most notable signal (NOT the word "Headline" — use an actual summary, e.g. "# AI Hardware Race Intensifies as NPU Adoption Surges").
 2. **By Source** — bullet list grouped by source (YouTube, Reddit, Threads, etc.) with 1-2 sentence summaries per event.
 3. **Emerging Themes** — 2-3 bullet points on patterns or themes you notice (or "No strong themes" if none).
 Keep it under 600 words.  Do NOT fabricate data — only summarise what is provided.
+IMPORTANT: The first line MUST be a concrete, descriptive H1 heading — never use generic labels like "Headline" or "Summary".
 """
 
 
@@ -173,8 +174,17 @@ async def run_batch_cycle(
         logger.info("No Gemini API key configured; using plain-text batch brief")
         brief_md = _fallback_brief(rows)
 
-    # Extract headline from first line of brief
-    headline = brief_md.split("\n", 1)[0].lstrip("#").strip()[:200] or "CSI Batch Brief"
+    # Extract headline from brief — find first heading with real content
+    headline = "CSI Batch Brief"
+    for ln in brief_md.split("\n"):
+        stripped = ln.lstrip("#").strip().strip("*").strip()
+        if not stripped:
+            continue
+        # Skip lines that are just generic labels
+        if stripped.lower() in ("headline", "summary", "overview", "report", "brief"):
+            continue
+        headline = stripped[:200]
+        break
     summary = brief_md[:500]
 
     # ── Build batch brief event ──
