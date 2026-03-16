@@ -69,10 +69,13 @@ jobs:
             git reset --hard origin/develop
 
             echo '--> Transferring ownership to service user before dependency sync...'
+            # Use find instead of chown -R: transient SQLite WAL/SHM files
+            # may vanish mid-chown (race with running service), which aborts
+            # chown -R. find tolerates ENOENT on individual files.
             if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R ua:ua \$STAGING_DIR
+              sudo find \$STAGING_DIR \( -user ua -a -group ua \) -prune -o -exec chown ua:ua {} + 2>/dev/null || true
             else
-              chown -R ua:ua \$STAGING_DIR
+              find \$STAGING_DIR \( -user ua -a -group ua \) -prune -o -exec chown ua:ua {} + 2>/dev/null || true
             fi
             
             echo '--> Preparing Infisical bootstrap...'

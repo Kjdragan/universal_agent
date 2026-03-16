@@ -95,8 +95,10 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             
-            echo "--> Transferring ownership to service user before dependency sync..."
-            sudo chown -R ua:ua "$PROD_DIR"
+            # Use find instead of chown -R: transient SQLite WAL/SHM files
+            # may vanish mid-chown (race with running service), which aborts
+            # chown -R. find's -exec tolerates ENOENT on individual files.
+            find "$PROD_DIR" \( -user ua -a -group ua \) -prune -o -exec chown ua:ua {} + 2>/dev/null || true
 
             echo "--> Preparing production Infisical bootstrap..."
             export INFISICAL_CLIENT_ID='${{ secrets.INFISICAL_CLIENT_ID }}'
