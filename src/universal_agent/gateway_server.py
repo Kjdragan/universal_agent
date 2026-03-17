@@ -2025,10 +2025,51 @@ _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
 
 # ── CSI Trend Digest Storage ─────────────────────────────────────────────
-# Lean in-memory store for CSI trend digests.  The new CSI tab reads these
-# instead of the old notification/task-hub/specialist-loop machinery.
-_csi_digests: list[dict] = []
+# ---------------------------------------------------------------------------
+# SQLite-backed store for CSI trend digests (survives gateway restarts).
+# ---------------------------------------------------------------------------
 _csi_digests_max = int(os.getenv("UA_CSI_DIGESTS_MAX", "200"))
+_csi_digest_db_path: Path | None = None
+_csi_digest_db_lock = threading.Lock()
+
+
+def _csi_digest_db_init() -> None:
+    """Initialise the CSI digest SQLite DB.  Called during lifespan startup."""
+    global _csi_digest_db_path
+    db_dir = WORKSPACES_DIR
+    db_dir.mkdir(parents=True, exist_ok=True)
+    _csi_digest_db_path = db_dir / ".csi_digests.db"
+    conn = sqlite3.connect(str(_csi_digest_db_path), timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS csi_digests (
+            id          TEXT PRIMARY KEY,
+            event_id    TEXT,
+            source      TEXT,
+            event_type  TEXT,
+            title       TEXT,
+            summary     TEXT,
+            full_report_md TEXT,
+            source_types TEXT,
+            created_at  TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_csi_digests_created
+        ON csi_digests(created_at DESC)
+    """)
+    conn.commit()
+    conn.close()
+    logger.info("CSI digest SQLite DB initialised at %s", _csi_digest_db_path)
+
+
+def _csi_digest_conn() -> sqlite3.Connection:
+    """Return a fresh connection to the digest DB."""
+    if _csi_digest_db_path is None:
+        raise RuntimeError("CSI digest DB not initialised")
+    conn = sqlite3.connect(str(_csi_digest_db_path), timeout=5)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def _add_csi_digest(
@@ -2042,7 +2083,7 @@ def _add_csi_digest(
     source_types: list[str] | None = None,
     created_at: str | None = None,
 ) -> dict:
-    """Store a CSI trend digest for the dashboard feed."""
+    """Persist a CSI trend digest to SQLite for the dashboard feed."""
     import uuid as _uuid
 
     digest = {
@@ -2056,11 +2097,69 @@ def _add_csi_digest(
         "source_types": source_types or [source],
         "created_at": created_at or datetime.now(timezone.utc).isoformat(),
     }
-    _csi_digests.insert(0, digest)
-    # Trim to max size
-    while len(_csi_digests) > _csi_digests_max:
-        _csi_digests.pop()
+    try:
+        with _csi_digest_db_lock:
+            conn = _csi_digest_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO csi_digests "
+                "(id, event_id, source, event_type, title, summary, full_report_md, source_types, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    digest["id"], event_id, source, event_type, title, summary,
+                    full_report_md, json.dumps(digest["source_types"]), digest["created_at"],
+                ),
+            )
+            # Trim to max size — keep newest
+            conn.execute(
+                "DELETE FROM csi_digests WHERE id NOT IN "
+                "(SELECT id FROM csi_digests ORDER BY created_at DESC LIMIT ?)",
+                (_csi_digests_max,),
+            )
+            conn.commit()
+            conn.close()
+    except Exception as exc:
+        logger.warning("CSI digest DB write failed: %s", exc)
     return digest
+
+
+def _get_csi_digests(limit: int = 50) -> tuple[list[dict], int]:
+    """Read the most recent CSI digests from SQLite."""
+    try:
+        with _csi_digest_db_lock:
+            conn = _csi_digest_conn()
+            rows = conn.execute(
+                "SELECT * FROM csi_digests ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM csi_digests").fetchone()[0]
+            conn.close()
+        digests = []
+        for row in rows:
+            d = dict(row)
+            try:
+                d["source_types"] = json.loads(d["source_types"]) if d.get("source_types") else []
+            except (json.JSONDecodeError, TypeError):
+                d["source_types"] = []
+            digests.append(d)
+        return digests, total
+    except Exception as exc:
+        logger.warning("CSI digest DB read failed: %s", exc)
+        return [], 0
+
+
+def _purge_csi_digests() -> int:
+    """Delete all CSI digests from SQLite.  Returns count deleted."""
+    try:
+        with _csi_digest_db_lock:
+            conn = _csi_digest_conn()
+            cursor = conn.execute("DELETE FROM csi_digests")
+            count = cursor.rowcount
+            conn.commit()
+            conn.close()
+        return count
+    except Exception as exc:
+        logger.warning("CSI digest DB purge failed: %s", exc)
+        return 0
 _activity_events_retention_days = max(
     7,
     int(os.getenv("UA_ACTIVITY_EVENTS_RETENTION_DAYS", "90") or 90),
@@ -10273,6 +10372,12 @@ async def lifespan(app: FastAPI):
     _refresh_ops_auth_config_from_env()
     _maybe_instrument_logfire_fastapi()
 
+    # Initialise the CSI digest persistence store
+    try:
+        _csi_digest_db_init()
+    except Exception as _csi_init_exc:
+        logger.warning("CSI digest DB init failed (non-fatal): %s", _csi_init_exc)
+
     logger.info("Lifespan: Probing Todoist token health...")
     # Probe Todoist token health at startup so failures are discovered immediately.
     _todoist_startup_token = (
@@ -10873,19 +10978,22 @@ async def signals_ingest_endpoint(request: Request):
 # CSI Digest Dashboard Endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/v1/dashboard/csi/digests")
 async def dashboard_csi_digests(limit: int = 50):
     """Return the most recent CSI trend digests for the dashboard feed."""
     limit = max(1, min(limit, 500))
-    return {"digests": list(_csi_digests[:limit]), "total": len(_csi_digests)}
+    digests, total = _get_csi_digests(limit)
+    return {"digests": digests, "total": total}
 
 
 @app.post("/api/v1/dashboard/csi/digests/{digest_id}/send-to-simone")
 async def send_csi_digest_to_simone(digest_id: str, request: Request):
     """Email a CSI digest to Simone via AgentMail with optional user comment."""
-    # Find the digest
+    # Find the digest from SQLite
     target = None
-    for d in _csi_digests:
+    digests, _ = _get_csi_digests(500)
+    for d in digests:
         if d.get("id") == digest_id:
             target = d
             break
@@ -10945,17 +11053,16 @@ async def dashboard_csi_purge():
     """Wipe all stale CSI data from the database and in-memory stores.
 
     Clears:
+    - CSI digests from SQLite
     - CSI notifications from activity_events
     - csi_specialist_loops table
     - CSI-related task_hub_items
-    - In-memory _csi_digests and CSI _notifications
+    - CSI _notifications from memory
     """
     counts: dict[str, int] = {}
 
-    # 1. Clear in-memory CSI digests
-    mem_digests = len(_csi_digests)
-    _csi_digests.clear()
-    counts["memory_digests_cleared"] = mem_digests
+    # 1. Clear CSI digests from SQLite
+    counts["db_digests_cleared"] = _purge_csi_digests()
 
     # 2. Clear CSI-related in-memory notifications
     csi_notification_kinds = {
