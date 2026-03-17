@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
@@ -35,6 +36,136 @@ from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralist
 from universal_agent.vp.profiles import get_vp_profile
 
 logger = logging.getLogger(__name__)
+
+# ── GitHub repo for doc-maintenance PRs ──────────────────────────────────────
+_GH_REPO = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
+
+
+def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None:
+    """Push the agent's doc branch, create a PR, and squash-merge it.
+
+    Runs OUTSIDE the Claude CLI sandbox (in the VP worker process) so it has
+    full network access.  The agent inside the sandbox creates a branch and
+    commits but cannot push (sandbox blocks outbound HTTPS auth).
+    """
+    import re
+    import urllib.request
+    import urllib.error
+
+    cwd = workspace_root
+
+    # 1. Determine current branch (agent should have checked out a docs/* branch)
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    branch = result.stdout.strip()
+    if not branch or not branch.startswith("docs/"):
+        logger.info("Post-mission hook: not on a docs/ branch (%s), skipping push", branch)
+        return
+
+    # 2. Check if there are commits on this branch that aren't on develop
+    result = subprocess.run(
+        ["git", "log", "develop..HEAD", "--oneline"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    commits = result.stdout.strip()
+    if not commits:
+        logger.info("Post-mission hook: no new commits on %s vs develop, skipping", branch)
+        return
+
+    logger.info("Post-mission hook [%s]: pushing branch %s (%d commits)",
+                mission_id, branch, len(commits.splitlines()))
+
+    # 3. Extract GitHub PAT from remote URL
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    remote_url = result.stdout.strip()
+    token_match = re.search(r"x-access-token:([^@]+)@", remote_url)
+    if not token_match:
+        # Try GITHUB_TOKEN env var as fallback
+        gh_token = os.getenv("GITHUB_TOKEN", "").strip()
+        if not gh_token:
+            logger.warning("Post-mission hook: no GitHub token found in remote URL or env, cannot push")
+            return
+    else:
+        gh_token = token_match.group(1)
+
+    # 4. Push the branch
+    result = subprocess.run(
+        ["git", "push", "-u", "origin", branch],
+        capture_output=True, text=True, cwd=cwd, timeout=60,
+    )
+    if result.returncode != 0:
+        logger.warning("Post-mission hook: git push failed: %s", result.stderr.strip())
+        return
+    logger.info("Post-mission hook: pushed %s successfully", branch)
+
+    # 5. Create PR via GitHub API
+    commit_title = commits.splitlines()[0].split(" ", 1)[-1] if commits else f"docs: {branch}"
+    pr_body = json.dumps({
+        "title": commit_title,
+        "head": branch,
+        "base": "develop",
+        "body": f"Automated doc maintenance (mission {mission_id}).",
+    }).encode()
+
+    headers = {
+        "Authorization": f"token {gh_token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_GH_REPO}/pulls",
+            data=pr_body, headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            pr_data = json.loads(resp.read())
+            pr_number = pr_data.get("number")
+            logger.info("Post-mission hook: created PR #%s — %s", pr_number, commit_title)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        logger.warning("Post-mission hook: PR creation failed (HTTP %d): %s", exc.code, body)
+        return
+    except Exception as exc:
+        logger.warning("Post-mission hook: PR creation failed: %s", exc)
+        return
+
+    if not pr_number:
+        logger.warning("Post-mission hook: PR created but no number returned")
+        return
+
+    # 6. Squash-merge the PR
+    import time as _time
+    _time.sleep(3)  # brief pause for GitHub to process the PR
+
+    merge_body = json.dumps({
+        "merge_method": "squash",
+        "commit_title": commit_title,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_GH_REPO}/pulls/{pr_number}/merge",
+            data=merge_body, headers=headers, method="PUT",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            merge_data = json.loads(resp.read())
+            logger.info("Post-mission hook: PR #%s merged — %s", pr_number, merge_data.get("message", "ok"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        logger.warning("Post-mission hook: merge failed (HTTP %d): %s", exc.code, body)
+    except Exception as exc:
+        logger.warning("Post-mission hook: merge failed: %s", exc)
+
+    # 7. Switch back to develop so the next mission starts clean
+    subprocess.run(["git", "checkout", "develop"], capture_output=True, cwd=cwd)
+    subprocess.run(["git", "pull", "origin", "develop"], capture_output=True, cwd=cwd)
+    logger.info("Post-mission hook: switched back to develop, ready for next mission")
 
 
 class VpWorkerLoop:
@@ -233,6 +364,16 @@ class VpWorkerLoop:
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
+            # Post-mission hook: push branch, create PR, merge for doc-maintenance missions
+            mission_type = (mission.get("mission_type") or "").strip()
+            if mission_type.startswith("doc-maintenance"):
+                try:
+                    _post_mission_push_pr_merge(
+                        workspace_root=str(self.profile.workspace_root),
+                        mission_id=mission_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Post-mission push/PR hook failed for %s: %s", mission_id, exc)
 
         payload = dict(outcome.payload or {})
         if outcome.message:

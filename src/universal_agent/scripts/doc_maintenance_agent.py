@@ -162,7 +162,8 @@ def _build_batched_objectives(report: dict) -> list[dict]:
         branch_name = f"docs/{severity.lower()}-fix-{date}"
         commit_msg = f"docs: fix {len(sev_issues)} {severity} issues — nightly drift {date}"
 
-        # Build compact objective
+        # Build compact objective — agent only needs to branch, fix, commit.
+        # Push + PR + merge is handled by the post-mission hook in worker_loop.py.
         lines = [
             f"You are the Documentation Maintenance Agent. Today is {date}.",
             f"Fix ONLY these {len(sev_issues)} {severity} issues.",
@@ -171,23 +172,7 @@ def _build_batched_objectives(report: dict) -> list[dict]:
             f"1. Create and checkout branch: `{branch_name}`",
             "2. Fix each issue below",
             f"3. Commit: `{commit_msg}`",
-            f"4. Push the branch: `git push -u origin {branch_name}`",
-            "5. Create a PR and auto-merge it using the GitHub API:",
-            "```bash",
-            "# Extract token from git remote URL",
-            'GH_TOKEN=$(git remote get-url origin | grep -oP "x-access-token:\\K[^@]+")',
-            "REPO=Kjdragan/universal_agent",
-            f'PR_URL=$(curl -s -X POST -H "Authorization: token $GH_TOKEN" \\',
-            f'  -H "Accept: application/vnd.github+json" \\',
-            f'  https://api.github.com/repos/$REPO/pulls \\',
-            f'  -d \'{{"title":"{commit_msg}","head":"{branch_name}","base":"develop","body":"Automated {severity} doc maintenance."}}\' \\',
-            '  | python3 -c "import sys,json; print(json.load(sys.stdin).get(\'number\',\'\'))")',
-            '# Squash-merge the PR',
-            'curl -s -X PUT -H "Authorization: token $GH_TOKEN" \\',
-            '  -H "Accept: application/vnd.github+json" \\',
-            f'  https://api.github.com/repos/$REPO/pulls/$PR_URL/merge \\',
-            f'  -d \'{{"merge_method":"squash","commit_title":"{commit_msg}"}}\'',
-            "```",
+            "4. Do NOT push — the build system handles push and PR creation automatically.",
             "",
             "## Rules",
             "- All documentation MUST reside within `docs/`",
