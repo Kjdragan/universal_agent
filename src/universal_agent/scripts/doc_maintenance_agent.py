@@ -153,48 +153,58 @@ def _build_batched_objectives(report: dict) -> list[dict]:
         "code_doc_drift": "Update docs to accurately reflect current code behavior.",
     }
 
+    MAX_ISSUES_PER_BATCH = 15  # larger batches stall the agent
+
     batches = []
     for severity in ["P0", "P1", "P2"]:
         sev_issues = by_severity.get(severity, [])
         if not sev_issues:
             continue
 
-        branch_name = f"docs/{severity.lower()}-fix-{date}"
-        commit_msg = f"docs: fix {len(sev_issues)} {severity} issues — nightly drift {date}"
-
-        # Build compact objective — agent only needs to branch, fix, commit.
-        # Push + PR + merge is handled by the post-mission hook in worker_loop.py.
-        lines = [
-            f"You are the Documentation Maintenance Agent. Today is {date}.",
-            f"Fix ONLY these {len(sev_issues)} {severity} issues.",
-            "",
-            "## Process",
-            f"1. Create and checkout branch: `{branch_name}`",
-            "2. Fix each issue below",
-            f"3. Commit: `{commit_msg}`",
-            "4. Do NOT push — the build system handles push and PR creation automatically.",
-            "",
-            "## Rules",
-            "- All documentation MUST reside within `docs/`",
-            "- Update BOTH `docs/README.md` AND `docs/Documentation_Status.md` when adding entries",
-            "- Update existing docs rather than creating new ones",
-            "",
-            f"## {severity} Issues",
-            "",
+        # Chunk into sub-batches of MAX_ISSUES_PER_BATCH
+        chunks = [
+            sev_issues[i : i + MAX_ISSUES_PER_BATCH]
+            for i in range(0, len(sev_issues), MAX_ISSUES_PER_BATCH)
         ]
 
-        for i, issue in enumerate(sev_issues, 1):
-            cat = issue["category"]
-            instruction = fix_instructions.get(cat, issue.get("suggested_action", "Review and fix."))
-            lines.append(f"{i}. **{issue['file']}**: {issue['description'][:120]}")
-            lines.append(f"   Fix: {instruction}")
+        for chunk_idx, chunk in enumerate(chunks):
+            suffix = f"-{chr(97 + chunk_idx)}" if len(chunks) > 1 else ""
+            branch_name = f"docs/{severity.lower()}-fix{suffix}-{date}"
+            commit_msg = f"docs: fix {len(chunk)} {severity} issues — nightly drift {date}"
 
-        objective = "\n".join(lines)
-        batches.append({
-            "severity": severity,
-            "objective": objective,
-            "issue_count": len(sev_issues),
-        })
+            # Build compact objective — agent only needs to branch, fix, commit.
+            # Push + PR + merge is handled by the post-mission hook in worker_loop.py.
+            lines = [
+                f"You are the Documentation Maintenance Agent. Today is {date}.",
+                f"Fix ONLY these {len(chunk)} {severity} issues.",
+                "",
+                "## Process",
+                f"1. Create and checkout branch: `{branch_name}`",
+                "2. Fix each issue below",
+                f"3. Commit: `{commit_msg}`",
+                "4. Do NOT push — the build system handles push and PR creation automatically.",
+                "",
+                "## Rules",
+                "- All documentation MUST reside within `docs/`",
+                "- Update BOTH `docs/README.md` AND `docs/Documentation_Status.md` when adding entries",
+                "- Update existing docs rather than creating new ones",
+                "",
+                f"## {severity} Issues",
+                "",
+            ]
+
+            for i, issue in enumerate(chunk, 1):
+                cat = issue["category"]
+                instruction = fix_instructions.get(cat, issue.get("suggested_action", "Review and fix."))
+                lines.append(f"{i}. **{issue['file']}**: {issue['description'][:120]}")
+                lines.append(f"   Fix: {instruction}")
+
+            objective = "\n".join(lines)
+            batches.append({
+                "severity": f"{severity}{suffix}",
+                "objective": objective,
+                "issue_count": len(chunk),
+            })
 
     return batches
 

@@ -365,7 +365,10 @@ class VpWorkerLoop:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
             # Post-mission hook: push branch, create PR, merge for doc-maintenance missions
-            mission_type = (mission.get("mission_type") or "").strip()
+            try:
+                mission_type = (dict(mission)["mission_type"] or "").strip()
+            except (KeyError, TypeError):
+                mission_type = ""
             if mission_type.startswith("doc-maintenance"):
                 try:
                     _post_mission_push_pr_merge(
