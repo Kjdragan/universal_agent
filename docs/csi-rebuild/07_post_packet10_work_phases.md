@@ -5,10 +5,10 @@ Owner: Codex
 Audience: next AI coder taking over CSI rebuild execution
 
 ## Read This First
-1. [00_master_plan.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/00_master_plan.md)
-2. [06_packet_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/06_packet_handoff.md)
-3. [status.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/status.md)
-4. [05_incident_log.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/05_incident_log.md)
+1. [00_master_plan.md](./00_master_plan.md)
+2. [06_packet_handoff.md](./06_packet_handoff.md)
+3. [status.md](./status.md)
+4. [05_incident_log.md](./05_incident_log.md)
 
 ## Current Baseline
 - Packets `1-13`: complete in source (packet 11-13 now implemented with tests and docs updates).

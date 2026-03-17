@@ -1,7 +1,7 @@
 # 79 - Golden Run Reference: Research -> Report -> PDF -> Gmail (2026-02-28)
 
-> **⚠️ MOVED**: This content has been consolidated into [`/golden_run_reference/`](/golden_run_reference/).
-> See [`golden_run_anatomy.md`](/golden_run_reference/golden_run_anatomy.md) and [`reference_sessions/`](/golden_run_reference/reference_sessions/).
+> **⚠️ MOVED**: This content has been consolidated into [`/golden_run_reference/`](../../golden_run_reference/).
+> See [`golden_run_anatomy.md`](../../golden_run_reference/golden_run_anatomy.md) and [`reference_sessions/`](../../golden_run_reference/reference_sessions/).
 > This file is kept for historical reference only.
 
 ## Purpose
