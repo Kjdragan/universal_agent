@@ -284,6 +284,21 @@ DEFAULT_WORKSPACES_ROOT = (Path(PROJECT_ROOT) / "AGENT_RUN_WORKSPACES").resolve(
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
+def _is_valid_session_workspace(path: str) -> bool:
+    """Check if a path is a proper session workspace (under AGENT_RUN_WORKSPACES/session_*)."""
+    try:
+        p = Path(path).resolve()
+        # Quick check: is this a session_* directory?
+        if p.name.startswith("session_"):
+            return True
+        # Also accept if it has the hallmarks of a session workspace
+        if (p / "session_policy.json").exists() and (p / "search_results").exists():
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def _resolve_workspace(preferred: str | None = None) -> str | None:
     candidates = []
     if preferred:
@@ -309,11 +324,34 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
     if env_workspace:
         candidates.append(env_workspace)
 
+    # First pass: prefer candidates that are proper session workspaces
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = fix_path_typos(candidate)
+        if os.path.exists(resolved) and _is_valid_session_workspace(resolved):
+            return resolved
+
+    # Second pass: fall back to latest session workspace by mtime
+    workspaces_root = Path(PROJECT_ROOT) / "AGENT_RUN_WORKSPACES"
+    if workspaces_root.exists():
+        session_dirs = sorted(
+            (p for p in workspaces_root.iterdir() if p.is_dir() and p.name.startswith("session_")),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if session_dirs:
+            latest = str(session_dirs[0].resolve())
+            mcp_log(f"[workspace] Fell back to latest session workspace: {latest}", level="INFO")
+            return latest
+
+    # Last resort: accept any existing candidate (may be stale)
     for candidate in candidates:
         if not candidate:
             continue
         resolved = fix_path_typos(candidate)
         if os.path.exists(resolved):
+            mcp_log(f"[workspace] WARNING: using non-session path: {resolved}", level="WARN")
             return resolved
     return None
 

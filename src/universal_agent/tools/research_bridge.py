@@ -58,18 +58,23 @@ def _infer_latest_session_workspace() -> str | None:
 
 def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
     """Best-effort workspace resolution for research bridge tools."""
+    import sys
+
     explicit = str(args.get("workspace_dir", "") or "").strip()
     if explicit and Path(explicit).exists() and _is_session_workspace(explicit):
+        sys.stderr.write(f"[research_bridge] workspace resolved from explicit arg: {explicit}\n")
         return str(Path(explicit).resolve())
 
     ctx_ws = str(_ctx_get_workspace() or "").strip()
     if ctx_ws and Path(ctx_ws).exists() and _is_session_workspace(ctx_ws):
+        sys.stderr.write(f"[research_bridge] workspace resolved from context var: {ctx_ws}\n")
         return str(Path(ctx_ws).resolve())
 
     marker_ws = resolve_current_session_workspace(
         repo_root=str(Path(__file__).resolve().parents[3])
     )
     if marker_ws and Path(marker_ws).exists() and _is_session_workspace(marker_ws):
+        sys.stderr.write(f"[research_bridge] workspace resolved from marker file: {marker_ws}\n")
         return str(Path(marker_ws).resolve())
 
     try:
@@ -77,11 +82,17 @@ def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
 
         observer_ws = str(getattr(ua_main, "OBSERVER_WORKSPACE_DIR", "") or "").strip()
         if observer_ws and Path(observer_ws).exists() and _is_session_workspace(observer_ws):
+            sys.stderr.write(f"[research_bridge] workspace resolved from observer: {observer_ws}\n")
             return str(Path(observer_ws).resolve())
     except Exception:
         pass
 
-    return _infer_latest_session_workspace()
+    inferred = _infer_latest_session_workspace()
+    if inferred:
+        sys.stderr.write(f"[research_bridge] workspace resolved from latest session inference: {inferred}\n")
+    else:
+        sys.stderr.write(f"[research_bridge] WARNING: could not resolve workspace. explicit={explicit!r}, ctx={ctx_ws!r}\n")
+    return inferred
 
 
 @tool(
