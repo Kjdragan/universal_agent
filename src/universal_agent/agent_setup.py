@@ -536,7 +536,8 @@ class AgentSetup:
                 "command": "npx",
                 "args": ["-y", "@z_ai/mcp-server"],
                 "env": {
-                    "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
+                    # Infisical stores key as ZAI_API_KEY; npm package expects Z_AI_API_KEY
+                    "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY") or os.environ.get("ZAI_API_KEY", ""),
                     "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
                 },
             },

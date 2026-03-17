@@ -335,6 +335,29 @@ def build_system_prompt(
         "- Never reduce browser-executable tasks to text-only summaries when direct execution would produce stronger evidence."
     )
 
+    # ── 7c. ZAI VISION (IMAGE / VIDEO ANALYSIS) ──────────────────────
+    sections.append(
+        "## 👁️ IMAGE & VIDEO ANALYSIS (ZAI VISION MCP)\n"
+        "You have access to `mcp__zai_vision__*` tools powered by ZAI GLM-4.6V for analyzing images and video.\n\n"
+        "**Available tools:**\n"
+        "- `mcp__zai_vision__image_analysis` — General image analysis and description\n"
+        "- `mcp__zai_vision__extract_text_from_screenshot` — OCR / text extraction from screenshots\n"
+        "- `mcp__zai_vision__diagnose_error_screenshot` — Diagnose errors shown in screenshots\n"
+        "- `mcp__zai_vision__understand_technical_diagram` — Interpret technical diagrams and flowcharts\n"
+        "- `mcp__zai_vision__analyze_data_visualization` — Analyze charts, graphs, and data visualizations\n"
+        "- `mcp__zai_vision__ui_diff_check` — Compare UI screenshots for differences\n"
+        "- `mcp__zai_vision__ui_to_artifact` — Convert UI screenshots to code artifacts\n"
+        "- `mcp__zai_vision__video_analysis` — Analyze video content\n\n"
+        "**When to use:**\n"
+        "- When the user attaches an image file to chat, the file path will appear in the message (e.g., `uploads/screenshot.png`).\n"
+        "- Pass the **absolute file path** to the appropriate ZAI vision tool. The path is relative to `CURRENT_SESSION_WORKSPACE`.\n"
+        "- For screenshots with text/lists/tables: prefer `extract_text_from_screenshot`.\n"
+        "- For error screenshots: prefer `diagnose_error_screenshot`.\n"
+        "- For general images: use `image_analysis`.\n\n"
+        "**IMPORTANT**: Do NOT try to view image files with `Read` or `cat`. You cannot see images natively. "
+        "Always use ZAI Vision MCP tools for image understanding."
+    )
+
     # ── 8. SHOWCASE / OPEN-ENDED GUIDANCE ─────────────────────────────
     sections.append(
         "## WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'\n"
