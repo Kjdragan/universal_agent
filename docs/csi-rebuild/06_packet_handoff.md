@@ -21,7 +21,7 @@ Purpose: low-context transfer document so a new developer can continue immediate
 | 1 | Establish CSI rebuild program baseline docs + source-control hygiene | Complete | `fa017cb` (`docs/csi-rebuild/*`, cleanup baseline) |
 | 2 | Reliability foundation setup (delivery tracking, replay pattern, routing guardrails) | Complete | `457eb34`, `d7d634f`, `f20e4ae` |
 | 3 | Output contract upgrade (trend + opportunities) | Complete | `8ccb8ba` |
-| 4 | VPS deployment + runtime rollout verification | Complete | Recorded in [status.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/status.md) progress board (“VPS deployment (packet 4)”) |
+| 4 | VPS deployment + runtime rollout verification | Complete | Recorded in [status.md](status.md) progress board (“VPS deployment (packet 4)”) |
 | 5 | Specialist confidence/orchestration baseline | Complete | `8c6ee88`, `96a9683`, `6a47173` |
 | 6 | Reliability packet continuation (loop triage and remediation controls) | Complete | `6a47173`; API + UI loop actions/triage/cleanup |
 | 7 | Specialist quality guardrails and health surfacing | Complete | `96a9683`; stale/low-signal/confidence-drift alerts |
@@ -31,19 +31,19 @@ Purpose: low-context transfer document so a new developer can continue immediate
 
 ## Packet 8/9 Work Already Implemented Locally (Pending Commit)
 - Backend:
-  - [service.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/csi_ingester/service.py)
-  - [youtube_channel_rss.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/csi_ingester/adapters/youtube_channel_rss.py)
-  - [reddit_discovery.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/csi_ingester/adapters/reddit_discovery.py)
-  - [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py)
-  - [csi_validate_live_flow.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/scripts/csi_validate_live_flow.py)
+  - [service.py](../../CSI_Ingester/development/csi_ingester/service.py)
+  - [youtube_channel_rss.py](../../CSI_Ingester/development/csi_ingester/adapters/youtube_channel_rss.py)
+  - [reddit_discovery.py](../../CSI_Ingester/development/csi_ingester/adapters/reddit_discovery.py)
+  - [gateway_server.py](../../src/universal_agent/gateway_server.py)
+  - [csi_validate_live_flow.py](../../CSI_Ingester/development/scripts/csi_validate_live_flow.py)
 - UI:
-  - [page.tsx](/home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/csi/page.tsx)
+  - [page.tsx](../../web-ui/app/dashboard/csi/page.tsx)
 - Tests/Docs:
-  - [test_service_flow.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/tests/unit/test_service_flow.py)
-  - [test_reddit_discovery_adapter.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/tests/unit/test_reddit_discovery_adapter.py)
-  - [test_youtube_rss_adapter.py](/home/kjdragan/lrepos/universal_agent/CSI_Ingester/development/tests/unit/test_youtube_rss_adapter.py)
-  - [test_ops_api.py](/home/kjdragan/lrepos/universal_agent/tests/gateway/test_ops_api.py)
-  - [status.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/status.md), [04_validation_matrix.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/04_validation_matrix.md), [05_incident_log.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/05_incident_log.md)
+  - [test_service_flow.py](../../CSI_Ingester/development/tests/unit/test_service_flow.py)
+  - [test_reddit_discovery_adapter.py](../../CSI_Ingester/development/tests/unit/test_reddit_discovery_adapter.py)
+  - [test_youtube_rss_adapter.py](../../CSI_Ingester/development/tests/unit/test_youtube_rss_adapter.py)
+  - [test_ops_api.py](../../tests/gateway/test_ops_api.py)
+  - [status.md](status.md), [04_validation_matrix.md](04_validation_matrix.md), [05_incident_log.md](05_incident_log.md)
 
 ## Validation Evidence (Latest Local)
 - `uv run pytest -q tests/gateway/test_ops_api.py -k "dashboard_csi_delivery_health_reports_source_and_adapter_state or dashboard_csi_"` -> 12 passed
@@ -64,7 +64,7 @@ Purpose: low-context transfer document so a new developer can continue immediate
    - `CSI_Ingester/development/deployment/systemd/csi-delivery-health-canary.timer`
    - Wire both into `csi_install_systemd_extras.sh`.
 3. Wire ingest-side notifications:
-   - Extend CSI event policy/handler in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py) so canary regression events:
+   - Extend CSI event policy/handler in [gateway_server.py](../../src/universal_agent/gateway_server.py) so canary regression events:
      - are high-priority,
      - require action,
      - preserve remediation metadata/runbook command for operator actions.
