@@ -33,7 +33,10 @@ def _ensure_playwright_chromium() -> None:
     _PLAYWRIGHT_CHECKED = True
 
     cache_dir = Path.home() / ".cache" / "ms-playwright"
-    if any(cache_dir.glob("chromium-*")) if cache_dir.exists() else False:
+    # Check for the headless shell specifically — Playwright uses chromium_headless_shell-*
+    # at runtime, not plain chromium-*. Stale versions (e.g. chromium-1212 when SDK needs
+    # 1208) would pass the old check but fail at launch time.
+    if cache_dir.exists() and any(cache_dir.glob("chromium_headless_shell-*")):
         return
 
     print("[pdf_bridge] Playwright Chromium not found — installing automatically...")
