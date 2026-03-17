@@ -12,7 +12,6 @@ Primary references:
 5. `docs/03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md`
 6. `docs/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
 7. `docs/03_Operations/30_Local_Dev_Startup_With_Youtube_Forwarding_Tunnel_2026-02-13.md`
-8. `docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 
 ---
 

@@ -187,7 +187,6 @@ This path is used for Composio-triggered events such as YouTube-related triggers
 
 Associated runbooks/reference docs:
 - `03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
-- `03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 - `03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md`
 
 ## 2. Manual YouTube Hook
@@ -213,7 +212,6 @@ Canonical flow:
 5. downstream tutorial/explainer work proceeds on VPS
 
 This flow is documented in detail in:
-- `03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 
 ## Webhook-Related Environment Variables
 
@@ -294,7 +292,6 @@ Primary implementation:
 
 Primary operational references:
 - `docs/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
-- `docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 - `docs/03_Operations/45_YouTube_Webhook_Robustness_And_Gemini_Video_Analysis_Implementation_Ticket_2026-02-19.md`
 
 ## Bottom Line

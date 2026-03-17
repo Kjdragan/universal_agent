@@ -79,7 +79,6 @@ This document is a prioritized, self-contained cleanup plan derived from a compr
 - `heartbeat/08_Telegram_Revival_and_Enhancement_Plan.md` — may reference CSI playlist assumptions
 - `CSI_Ingester/development/README.md` — youtube_playlist section
 - `CSI_Ingester/documentation/` — older runbooks
-- `docs/03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md`
 
 **Expected fix:** Add a clear note at the top of each stale section stating that native UA playlist watching is now authoritative. Do not delete the CSI playlist adapter code or config, just ensure docs accurately reflect the current split.
 
