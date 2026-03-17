@@ -431,16 +431,103 @@ const API_BASE = "";
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
-  const [mode, setMode] = useState<"session" | "artifacts" | "vps_workspaces" | "vps_artifacts">("session");
+  const [mode, setMode] = useState<"session" | "artifacts" | "vps_workspaces" | "vps_artifacts" | "local">("session");
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [syncingVps, setSyncingVps] = useState(false);
 
+  // ── Local filesystem (File System Access API) ──
+  const localRootHandleRef = React.useRef<FileSystemDirectoryHandle | null>(null);
+  const [localRootName, setLocalRootName] = useState<string>("");
+
+  const openLocalFolder = async () => {
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: "read" });
+      localRootHandleRef.current = handle;
+      setLocalRootName(handle.name);
+      setPath("");
+      setMode("local");
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        console.warn("showDirectoryPicker failed:", err);
+      }
+    }
+  };
+
+  const resolveLocalHandle = async (subpath: string): Promise<FileSystemDirectoryHandle | null> => {
+    let handle = localRootHandleRef.current;
+    if (!handle) return null;
+    if (!subpath) return handle;
+    for (const seg of subpath.split("/").filter(Boolean)) {
+      try {
+        handle = await handle.getDirectoryHandle(seg);
+      } catch {
+        return null;
+      }
+    }
+    return handle;
+  };
+
+  const loadLocalEntries = async () => {
+    setLoading(true);
+    try {
+      const dirHandle = await resolveLocalHandle(path);
+      if (!dirHandle) {
+        setFiles([]);
+        return;
+      }
+      const items: any[] = [];
+      for await (const [name, handle] of (dirHandle as any).entries()) {
+        const isDir = handle.kind === "directory";
+        let size: number | null = null;
+        if (!isDir) {
+          try {
+            const file = await (handle as FileSystemFileHandle).getFile();
+            size = file.size;
+          } catch { /* skip */ }
+        }
+        items.push({ name, path: path ? `${path}/${name}` : name, is_dir: isDir, size });
+      }
+      items.sort((a: any, b: any) => {
+        if (a.is_dir === b.is_dir) return a.name.localeCompare(b.name);
+        return a.is_dir ? -1 : 1;
+      });
+      setFiles(items);
+    } catch (err: any) {
+      console.warn("Local dir read error:", err);
+      setFiles([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLocalFileClick = async (itemPath: string, fileName: string) => {
+    const parts = itemPath.split("/").filter(Boolean);
+    const dirParts = parts.slice(0, -1);
+    let dirHandle = localRootHandleRef.current;
+    if (!dirHandle) return;
+    for (const seg of dirParts) {
+      try { dirHandle = await dirHandle.getDirectoryHandle(seg); } catch { return; }
+    }
+    try {
+      const fileHandle = await dirHandle.getFileHandle(fileName);
+      const file = await fileHandle.getFile();
+      // Dispatch custom event so ChatPanel picks it up
+      window.dispatchEvent(new CustomEvent("ua:attach-local-file", { detail: { file } }));
+    } catch (err: any) {
+      console.warn("Failed to read local file:", err);
+    }
+  };
+
   useEffect(() => {
     const sessionId = currentSession?.session_id;
     if (mode === "session" && !sessionId) return;
+    if (mode === "local") {
+      void loadLocalEntries();
+      return;
+    }
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
@@ -464,6 +551,7 @@ function FileExplorer() {
       })
       .catch(err => console.error("Failed to fetch files:", err))
       .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession?.session_id, path, mode]);
 
   const handleSyncVps = () => {
@@ -541,7 +629,9 @@ function FileExplorer() {
                 ? (path ? `VPS WS/.../${path.split("/").pop()}` : "VPS Workspaces")
                 : mode === "vps_artifacts"
                   ? (path ? `VPS Artifacts/.../${path.split("/").pop()}` : "VPS Artifacts")
-                  : (path ? `.../${path.split("/").pop()}` : "Files")}
+                  : mode === "local"
+                    ? (path ? `Local/.../${path.split("/").pop()}` : `Local: ${localRootName || "(none)"}`)
+                    : (path ? `.../${path.split("/").pop()}` : "Files")}
           </h2>
         </div>
         {!isCollapsed && (
@@ -578,6 +668,14 @@ function FileExplorer() {
             >
               VPS ART
             </button>
+            <button
+              type="button"
+              onClick={openLocalFolder}
+              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "local" ? "bg-amber-500/20 text-amber-300 border-amber-500/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
+              title="Browse local desktop files"
+            >
+              📂 LOCAL
+            </button>
             {(mode === "vps_workspaces" || mode === "vps_artifacts") && (
               <button
                 type="button"
@@ -587,6 +685,16 @@ function FileExplorer() {
                 title="Sync VPS mirror now"
               >
                 {syncingVps ? "SYNC..." : "SYNC VPS"}
+              </button>
+            )}
+            {mode === "local" && localRootHandleRef.current && (
+              <button
+                type="button"
+                onClick={openLocalFolder}
+                className="text-[9px] px-2 py-1 rounded border font-medium transition-all bg-amber-600/15 text-amber-300 border-amber-700/40 hover:bg-amber-600/25"
+                title="Switch to a different local folder"
+              >
+                CHANGE
               </button>
             )}
             {path && (
@@ -612,10 +720,19 @@ function FileExplorer() {
                   key={i}
                   className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all ${file.is_dir ? "hover:bg-cyan-500/10 text-cyan-400/80" : "hover:bg-slate-800/60 text-slate-300/70"
                     }`}
-                  onClick={() => handleNavigate(file.name, file.is_dir)}
+                  onClick={() => {
+                    if (mode === "local" && !file.is_dir) {
+                      handleLocalFileClick(file.path, file.name);
+                    } else {
+                      handleNavigate(file.name, file.is_dir);
+                    }
+                  }}
                 >
                   <span className="opacity-60">{file.is_dir ? ICONS.folder : ICONS.file}</span>
                   <span className="truncate flex-1 font-mono">{file.name}</span>
+                  {mode === "local" && !file.is_dir && (
+                    <span className="text-[8px] font-bold uppercase text-amber-400/60 tracking-wider" title="Click to attach to chat">ATTACH</span>
+                  )}
                   {file.size && <span className="text-[9px] opacity-40 font-mono">{formatFileSize(file.size)}</span>}
                 </div>
               ))}
@@ -1055,6 +1172,142 @@ function ChatInterface() {
   const effectiveSessionId = (currentSession?.session_id || requestedSessionIdFromUrl || "").trim();
   const isVpObserverSession = /^vp_/i.test(effectiveSessionId);
 
+  // ── File Attachment State ──
+  type AttachedFile = {
+    filename: string;
+    path: string;
+    size: number;
+    type: "text" | "image";
+    content?: string; // text file content for injection
+  };
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const ALLOWED_EXTENSIONS = ".py,.ts,.tsx,.js,.jsx,.md,.txt,.json,.yaml,.yml,.csv,.log,.toml,.cfg,.ini,.html,.css,.xml,.sql,.sh,.bash,.rs,.go,.java,.c,.cpp,.h,.hpp,.rb,.php,.env,.gitignore,.dockerignore,.conf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg";
+
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || !files.length || !effectiveSessionId) return;
+    setIsUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch(
+          `${API_BASE}/api/v1/sessions/${encodeURIComponent(effectiveSessionId)}/upload`,
+          { method: "POST", body: formData }
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          console.warn("Upload failed:", err.detail || res.statusText);
+          useAgentStore.getState().setLastError(`Upload failed: ${err.detail || res.statusText}`);
+          continue;
+        }
+        const result = await res.json();
+        setAttachedFiles((prev) => [
+          ...prev,
+          {
+            filename: result.filename,
+            path: result.path,
+            size: result.size,
+            type: result.type,
+            content: result.content, // only for text files
+          },
+        ]);
+      }
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const removeAttachment = (idx: number) => {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // ── Drag-and-Drop state ──
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = React.useRef(0);
+
+  const handleDragEnter = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer?.types?.includes("Files")) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    if (e.dataTransfer?.files?.length) {
+      handleFileUpload(e.dataTransfer.files);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSessionId]);
+
+  // ── Clipboard paste handler (screenshots) ──
+  useEffect(() => {
+    if (chatRole === "viewer" || isVpObserverSession) return;
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith("image/")) {
+          const blob = item.getAsFile();
+          if (blob) {
+            // Wrap the blob with a descriptive filename
+            const ext = item.type.split("/")[1] || "png";
+            const named = new File([blob], `pasted-screenshot-${Date.now()}.${ext}`, { type: item.type });
+            imageFiles.push(named);
+          }
+        }
+      }
+      if (imageFiles.length) {
+        e.preventDefault();
+        const dt = new DataTransfer();
+        imageFiles.forEach((f) => dt.items.add(f));
+        handleFileUpload(dt.files);
+      }
+    };
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatRole, isVpObserverSession, effectiveSessionId]);
+
+  // ── Local file explorer attach bridge ──
+  useEffect(() => {
+    const handleLocalAttach = (e: Event) => {
+      const file = (e as CustomEvent)?.detail?.file as File | undefined;
+      if (!file) return;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      handleFileUpload(dt.files);
+    };
+    window.addEventListener("ua:attach-local-file", handleLocalAttach);
+    return () => window.removeEventListener("ua:attach-local-file", handleLocalAttach);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSessionId]);
+
   const focusInput = React.useCallback(() => {
     if (chatRole === "viewer") return;
     const el = inputRef.current;
@@ -1117,11 +1370,27 @@ function ChatInterface() {
 
   const handleSend = async (textOverride?: string) => {
     if (chatRole === "viewer") return;
-    const query = textOverride ?? input;
-    if (!query.trim() || (isSending && !textOverride)) return;
+    let query = textOverride ?? input;
+    if (!query.trim() && attachedFiles.length === 0) return;
+    if (isSending && !textOverride) return;
 
     setIsSending(true);
     if (!textOverride) setInput("");
+
+    // ── Inject attached file content into query ──
+    const fileParts: string[] = [];
+    for (const f of attachedFiles) {
+      if (f.type === "text" && f.content) {
+        const ext = f.filename.split(".").pop() || "txt";
+        fileParts.push(`\n\n--- Attached: ${f.filename} ---\n\`\`\`${ext}\n${f.content}\n\`\`\``);
+      } else if (f.type === "image") {
+        fileParts.push(`\n\n[Attached image: ${f.path}] — Use ZAI vision tools to analyze this image.`);
+      }
+    }
+    if (fileParts.length) {
+      query = query + fileParts.join("");
+    }
+    setAttachedFiles([]);
 
     // Set Start Time if not already set (new run)
     if (!useAgentStore.getState().startTime) {
@@ -1493,8 +1762,77 @@ function ChatInterface() {
       </div>
 
       {/* Input - Floating Bar Style */}
-      <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300">
+      <div
+        className={`relative p-4 bg-slate-900/60 border backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300 ${
+          isDragging
+            ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_24px_rgba(34,211,238,0.15)]"
+            : "border-slate-800"
+        }`}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {/* Drag-and-drop overlay */}
+        {isDragging && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-cyan-500/10 border-2 border-dashed border-cyan-400/50 pointer-events-none">
+            <span className="text-cyan-300 text-sm font-semibold tracking-wide animate-pulse">
+              📁 Drop files here
+            </span>
+          </div>
+        )}
+        {/* Attachment preview badges */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {attachedFiles.map((f, idx) => (
+              <span
+                key={`${f.filename}-${idx}`}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
+                  f.type === "image"
+                    ? "bg-purple-500/15 border-purple-500/30 text-purple-300"
+                    : "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                }`}
+              >
+                <span>{f.type === "image" ? "🖼️" : "📄"}</span>
+                <span className="max-w-[140px] truncate">{f.filename}</span>
+                <span className="text-[10px] opacity-60">
+                  {f.size < 1024 ? `${f.size}B` : f.size < 1048576 ? `${(f.size / 1024).toFixed(1)}KB` : `${(f.size / 1048576).toFixed(1)}MB`}
+                </span>
+                <button
+                  onClick={() => removeAttachment(idx)}
+                  className="ml-0.5 opacity-50 hover:opacity-100 transition-opacity font-bold"
+                  title="Remove attachment"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {isUploading && (
+          <div className="mb-2 text-xs text-cyan-400/70 animate-pulse">📤 Uploading file…</div>
+        )}
         <div className="flex gap-3">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ALLOWED_EXTENSIONS}
+            multiple
+            className="hidden"
+            onChange={(e) => handleFileUpload(e.target.files)}
+          />
+          {/* Attach button */}
+          {chatRole !== "viewer" && !isVpObserverSession && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!effectiveSessionId || isUploading}
+              className="bg-slate-800/60 hover:bg-slate-700/60 disabled:opacity-30 border border-slate-700 text-slate-400 hover:text-cyan-400 px-3 py-2 rounded-lg transition-all flex items-center"
+              title="Attach a file"
+            >
+              📎
+            </button>
+          )}
           <input
             ref={inputRef}
             type="text"
@@ -1519,7 +1857,9 @@ function ChatInterface() {
                 ? "Viewer mode: input disabled"
                 : connectionStatus === "processing"
                   ? "Type to redirect (Enter to stop & send)..."
-                  : "Enter your neural query..."
+                  : attachedFiles.length > 0
+                    ? "Add a message for your attachments…"
+                    : "Enter your neural query..."
             }
             disabled={chatRole === "viewer" || isVpObserverSession}
             className="flex-1 bg-slate-950/50 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500/50 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
@@ -1535,7 +1875,7 @@ function ChatInterface() {
           ) : (
             <button
               onClick={() => handleSend()}
-              disabled={chatRole === "viewer" || isVpObserverSession || isSending || !input.trim()}
+              disabled={chatRole === "viewer" || isVpObserverSession || isSending || (!input.trim() && attachedFiles.length === 0)}
               className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/20 disabled:text-cyan-400/40 text-white px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
               <span>Send</span>

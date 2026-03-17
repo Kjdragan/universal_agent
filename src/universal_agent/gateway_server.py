@@ -56,7 +56,7 @@ from universal_agent.delegation.redis_bus import (
 from universal_agent.delegation.factory_registry import FactoryRegistry, connect_registry_db
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 
-from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -11876,6 +11876,107 @@ async def get_session_file(session_id: str, file_path: str):
     if not session_root.is_dir():
         raise HTTPException(status_code=404, detail="Session workspace not found")
     return _read_file_from_root(session_root, file_path)
+
+
+# --------------------------------------------------------------------------- #
+#  File Upload for Chat Attachments
+# --------------------------------------------------------------------------- #
+
+_UPLOAD_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
+_TEXT_EXTENSIONS = frozenset({
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".txt", ".json",
+    ".yaml", ".yml", ".csv", ".log", ".toml", ".cfg", ".ini",
+    ".html", ".css", ".xml", ".sql", ".sh", ".bash", ".rs",
+    ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".rb", ".php",
+    ".env", ".gitignore", ".dockerignore", ".conf",
+})
+
+_IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg",
+})
+
+_ALLOWED_EXTENSIONS = _TEXT_EXTENSIONS | _IMAGE_EXTENSIONS
+
+
+@app.post("/api/v1/sessions/{session_id}/upload")
+async def upload_session_file(
+    session_id: str,
+    file: UploadFile = File(...),
+):
+    """Upload a file to a session workspace for chat attachment.
+
+    Text files (.py, .md, .txt, …) are saved and their content is returned
+    so the frontend can inject it into the user prompt.
+    Image files (.png, .jpg, …) are saved and their path is returned
+    so the agent can reference them via ZAI Vision MCP tools.
+    """
+    safe_id = _sanitize_session_id_or_400(session_id)
+    session_root = WORKSPACES_DIR / safe_id
+    if not session_root.is_dir():
+        raise HTTPException(status_code=404, detail="Session workspace not found")
+
+    filename = (file.filename or "upload").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    # Validate extension
+    ext = Path(filename).suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}",
+        )
+
+    # Read with size check
+    content_bytes = await file.read()
+    if len(content_bytes) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content_bytes)} bytes). Max {_UPLOAD_MAX_BYTES // (1024*1024)} MB.",
+        )
+
+    # Save to uploads/ subdirectory
+    uploads_dir = session_root / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Avoid path traversal in filename
+    safe_filename = Path(filename).name
+    if not safe_filename:
+        safe_filename = f"upload{ext}"
+    dest = uploads_dir / safe_filename
+
+    # Deduplicate: if file exists, add a numeric suffix
+    counter = 1
+    stem = dest.stem
+    while dest.exists():
+        dest = uploads_dir / f"{stem}_{counter}{ext}"
+        counter += 1
+
+    dest.write_bytes(content_bytes)
+    relative_path = f"uploads/{dest.name}"
+
+    is_text = ext in _TEXT_EXTENSIONS
+    is_image = ext in _IMAGE_EXTENSIONS
+
+    result: dict = {
+        "status": "ok",
+        "filename": dest.name,
+        "path": relative_path,
+        "size": len(content_bytes),
+        "type": "text" if is_text else "image",
+    }
+
+    # For text files, also return content so frontend can inject it
+    if is_text:
+        try:
+            text_content = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text_content = content_bytes.decode("utf-8", errors="replace")
+        result["content"] = text_content
+
+    logger.info(f"📎 File uploaded: {relative_path} ({len(content_bytes)} bytes) for session {safe_id}")
+    return result
 
 
 @app.get("/api/v1/dashboard/metrics/coder-vp")
