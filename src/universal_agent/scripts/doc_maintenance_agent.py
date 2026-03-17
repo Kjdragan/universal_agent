@@ -46,8 +46,10 @@ _VPS_SEARCH_ROOTS = [
 ]
 
 # Gateway URLs to try in order.  On the VPS the gateway runs on the same host.
+# Port 8002 = ops API (dispatch endpoint), 8001 = main gateway (health check).
 _GATEWAY_URLS = [
-    "http://localhost:8000",
+    "http://localhost:8002",
+    "http://localhost:8001",
     "https://app.clearspringcg.com",
 ]
 
@@ -57,13 +59,19 @@ def _resolve_gateway_url() -> str:
     from_env = os.getenv("UA_GATEWAY_URL", "").strip()
     if from_env:
         return from_env.rstrip("/")
-    # On the VPS the gateway is colocated; prefer localhost to avoid DNS.
+    # On the VPS the gateway runs two workers: port 8002 (ops API with dispatch
+    # endpoint) and port 8001 (main gateway).  Probe the actual dispatch endpoint
+    # rather than /api/health to find the correct port.
+    dispatch_path = "/api/v1/ops/vp/missions/dispatch"
     for url in _GATEWAY_URLS:
         try:
-            req = urllib.request.Request(f"{url}/api/health", method="GET")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                if resp.status == 200:
-                    return url.rstrip("/")
+            req = urllib.request.Request(f"{url}{dispatch_path}", method="POST",
+                                         data=b"{}", headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=3)
+        except urllib.error.HTTPError as exc:
+            # 401/422 = endpoint exists (auth required or bad payload) → correct port
+            if exc.code in (401, 422):
+                return url.rstrip("/")
         except Exception:
             continue
     # Fallback to public endpoint
