@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-16
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -19,10 +19,15 @@ Written from source code review — these describe the system as it actually exi
 | 01 | System Architecture Overview — component map, services, data stores, deployment topology |
 | 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
 | 03 | VP Workers & Delegation — mission lifecycle, cross-machine delegation, factory heartbeat |
+| 04 | Dual Factory and Capability Expansion Brainstorm |
 
+## Root Architecture Docs
+
+| Doc | Subject |
+|-----|---------|
 | 001 | Agent Architecture (agent_core.py vs main.py) — entry points, AgentSetup sync, URW session reuse |
-
-| Glossary | Project terminology and definitions |
+| 002 | SDK Permissions, Hooks & Subagents — permission model, hooks architecture, subagent patterns |
+| 003 | Regression Control and Golden Runs — testing stability, golden run preservation |
 
 ## Canonical Source-of-Truth Documents (03_Operations/)
 
@@ -60,21 +65,85 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 93 | Prioritized Cleanup Plan from Canonical Review |
 | 94 | Architectural Integration Review |
-| 95 | Integration Architectural Decisions (ADRs) |
+| 95 | Heartbeat Issue Mediation and Auto-Triage |
 
-## Deployment and Environment Continuity Docs
+## Deployment and Environment Continuity Docs (06_Deployment_And_Environments/)
 
 | Doc | Subject |
 |-----|---------|
-| 01 | Deployment architecture continuity pointer |
-| 02 | Stage-based Infisical environment and factory bootstrap continuity |
-| 03 | Branch-driven CI/CD continuity |
 | 04 | Branching and release workflow |
 | 05 | Local HQ dev vs desktop worker runtime modes |
 | 06 | Production deploy incident |
 | 07 | Stage-based Infisical and machine bootstrap migration plan |
 
-## Remaining Operational References
+## Run Reviews (03_Run_Reviews/)
+
+| # | Subject |
+|---|---------|
+| 01 | Russia Ukraine Report Session (2026-02-06) |
+| 02 | Cron Breakthrough Briefing (2026-02-08) |
+| 03 | Scheduling Runtime V2 Short Soak Readiness (2026-02-08) |
+| 04 | Scheduling Runtime V2 24h Soak In Progress (2026-02-08) |
+| 05 | Self-Improving Agent Notes (2026-02-13) |
+| 06 | Final Integration Sprint Review (2026-02-14) |
+| 07 | Happy Path Review and Markdown Remediation (2026-02-19) |
+
+## CSI Rebuild (csi-rebuild/)
+
+| Doc | Subject |
+|-----|---------|
+| 00_master_plan.md | CSI rebuild master plan |
+| 01_architecture_v2.md | Revised CSI architecture |
+| 02_interfaces_and_schemas.md | CSI interfaces and schemas |
+| 03_rollout_and_runbooks.md | Rollout plan and runbook index |
+| 04_validation_matrix.md | Validation test matrix |
+| 05_incident_log.md | Incident tracking log |
+| 06_packet_handoff.md | Packet handoff documentation |
+| 07_post_packet10_work_phases.md | Post-packet work phases |
+| 08_rc_soak_ga_gate.md | Release candidate soak gate |
+| status.md | CSI rebuild status tracker |
+| kevin_handoff_for CSI.md | Handoff documentation |
+
+## CSI Rebuild Runbooks (csi-rebuild/runbooks/)
+
+| Doc | Subject |
+|-----|---------|
+| 01_incident_triage.md | Incident triage runbook |
+| 02_remediation_escalation.md | Remediation escalation runbook |
+| 03_rollback.md | Rollback runbook |
+| 04_data_repair.md | Data repair runbook |
+| 05_quick_commands.md | Quick command reference |
+
+## SDK Phases and Integration Docs
+
+| Doc | Subject |
+|-----|---------|
+| 004 | Threads Infisical Sync Workflow |
+| 005 | CSI YouTube Proxy Usage Audit |
+| 006 | CSI Trend Analysis Functional Review and Plan |
+| 007 | CSI Persistence Briefing and Reminder Operations |
+| 008 | Threads Rollout Next Phases |
+| 009 | Threads Phase 2 Permission Readiness Runbook |
+| 010 | Threads Phase 2/3 Closeout Go/No-Go Report |
+| 011 | SDK Phase 5 Accelerated Canary Rollout |
+| 012 | NotebookLM Integration |
+
+## Reference Docs
+
+| Doc | Subject |
+|-----|---------|
+| ZAI_OPENAI_COMPATIBLE_SETUP.md | ZAI API setup guide |
+| durability_test_matrix.md | Durability testing matrix |
+| notebooklm_vps_infisical_runbook.md | NotebookLM VPS setup |
+| Glossary.md | Project terminology |
+
+## Reports (reports/)
+
+| Doc | Subject |
+|-----|---------|
+| todolist-task-pipeline-audit-2026-03-11.md | Todoist pipeline audit |
+
+## Remaining Operational References (03_Operations/)
 
 | Doc | Subject |
 |-----|---------|
