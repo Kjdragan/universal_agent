@@ -78,7 +78,7 @@ Validation helpers added for this model:
 
 ### Localhost HQ development
 
-Use [bootstrap_local_hq_dev.sh](/home/kjdragan/lrepos/universal_agent/scripts/bootstrap_local_hq_dev.sh).
+Use [bootstrap_local_hq_dev.sh](../../scripts/bootstrap_local_hq_dev.sh).
 
 This writes:
 
@@ -90,7 +90,7 @@ This writes:
 
 ### Desktop worker for deployed stages
 
-Use [bootstrap_local_worker_stage.sh](/home/kjdragan/lrepos/universal_agent/scripts/bootstrap_local_worker_stage.sh).
+Use [bootstrap_local_worker_stage.sh](../../scripts/bootstrap_local_worker_stage.sh).
 
 This writes:
 
@@ -135,6 +135,6 @@ as the bootstrap-only template for `.env`.
 
 ## Related Docs
 
-- [architecture_overview.md](/home/kjdragan/lrepos/universal_agent/docs/deployment/architecture_overview.md)
-- [ci_cd_pipeline.md](/home/kjdragan/lrepos/universal_agent/docs/deployment/ci_cd_pipeline.md)
-- [07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md](/home/kjdragan/lrepos/universal_agent/docs/06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)
+- [architecture_overview.md](./architecture_overview.md)
+- [ci_cd_pipeline.md](./ci_cd_pipeline.md)
+- [07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md](../06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)

@@ -1,7 +1,7 @@
 # 003 - Regression Control and Golden Run Validation
 
-> **⚠️ MOVED**: This content has been consolidated into [`/golden_run_reference/`](/golden_run_reference/).
-> See [`regression_control.md`](/golden_run_reference/regression_control.md) and [`lessons_learned.md`](/golden_run_reference/lessons_learned.md).
+> **⚠️ MOVED**: This content has been consolidated into [`/golden_run_reference/`](../golden_run_reference/).
+> See [`regression_control.md`](../golden_run_reference/regression_control.md) and [`lessons_learned.md`](../golden_run_reference/lessons_learned.md).
 > This file is kept for historical reference only.
 
 > **Purpose**: Prevent pipeline drift by defining golden run baselines, regression
