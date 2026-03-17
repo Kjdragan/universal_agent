@@ -24,6 +24,8 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 ### 1. [Architecture](01_Architecture)
 
 > Architecture docs have been consolidated. See `docs/Documentation_Status.md` for current references.
+- **[Agent Architecture: agent_core.py vs main.py](001_AGENT_ARCHITECTURE.md)**: Entry point comparison, AgentSetup synchronization, URW session management.
+
 
 ### 2. [Subsystems](02_Subsystems)
 

@@ -20,6 +20,10 @@ Written from source code review — these describe the system as it actually exi
 | 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
 | 03 | VP Workers & Delegation — mission lifecycle, cross-machine delegation, factory heartbeat |
 
+| 001 | Agent Architecture (agent_core.py vs main.py) — entry points, AgentSetup sync, URW session reuse |
+
+| Glossary | Project terminology and definitions |
+
 ## Canonical Source-of-Truth Documents (03_Operations/)
 
 These are the authoritative references for each subsystem. When any other document conflicts, **the canonical doc wins**.
