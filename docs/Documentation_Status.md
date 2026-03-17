@@ -49,6 +49,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 92 | CSI Architecture |
 | 96 | NotebookLM Integration & Research Pipeline |
 | 97 | Infisical CLI Reference & Lessons Learned |
+| 98 | Agent Skills Directory (`.agents/skills/`) |
 
 ## Deployment Canonical Docs (deployment/)
 

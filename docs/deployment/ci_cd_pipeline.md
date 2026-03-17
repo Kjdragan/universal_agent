@@ -13,12 +13,24 @@ This is the only supported app deployment path in this repository.
 
 ## Workflows
 
+### Primary Deployment Workflows
+
 | Name | Trigger | Target |
 |------|---------|--------|
 | `Codex Review Develop PR` | Pull request to `develop` | Automated PR review |
 | `Deploy Staging` | Push to `develop` | Staging Service |
 | `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA, then dispatch production deploy |
 | `Deploy Production` | Push to `main` | Production Service |
+
+### Utility and Debug Workflows
+
+| Name | Trigger | Purpose |
+|------|---------|---------|
+| `Debug Production Services` | Manual workflow dispatch | Fetch logs and status from production services (gateway, API) for troubleshooting |
+| `Fix Production Repo Directory` | Manual workflow dispatch | Reconstitute git repository in production checkout if `.git` directory is corrupted |
+| `Run Clear Agent Queue` | Manual workflow dispatch | Clear all pending tasks in the agent task hub (staging + production) |
+| `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift where code changes lack corresponding doc updates |
+
 ## Current Targets
 
 | Area | Staging | Production |
