@@ -218,6 +218,15 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
                 f"Untrusted numeric `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
                 "task_id from TaskStarted/TaskProgress/TaskNotification."
             )
+        # Reject human-readable composite IDs like task_research_001,
+        # task_report_001, task_russia_ukraine_research_001. Real SDK IDs
+        # use opaque alphanumeric tokens (ULIDs, UUIDs), not English words.
+        if re.fullmatch(r"[a-z][a-z0-9_]*", suffix) and re.search(r"[a-z]{3,}", suffix):
+            return (
+                f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
+                "are opaque tokens (e.g., 'task_01HZYQ7QF1'), not descriptive names. "
+                "Use a concrete SDK-emitted task_id from TaskStarted/TaskProgress."
+            )
 
     # Common malformed placeholders from model retries.
     if lowered in {"all-tasks", "stop-all", "cancel-all"}:
@@ -229,14 +238,17 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
             "task_id from TaskStarted/TaskProgress/TaskNotification."
         )
 
-    # Golden runs should use provider-generated IDs, not natural-language aliases.
-    if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
-        has_separator = ("_" in clean_id) or ("-" in clean_id)
-        has_digit = any(ch.isdigit() for ch in clean_id)
-        if not has_separator and not has_digit:
+    # Reject IDs composed of only lowercase words + digits + separators.
+    # Real SDK IDs contain uppercase chars (e.g., task_01HZYQ7QF1).
+    # Human-composed IDs like 'ru_news_20260317' are all-lowercase word tokens.
+    # IMPORTANT: check the ORIGINAL case (clean_id), not lowered.
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", clean_id):
+        tokens = re.split(r"[_-]", clean_id)
+        # If every token is a short lowercase word or number, it's human-composed.
+        if all(len(t) <= 12 for t in tokens) and any(re.fullmatch(r"[a-z]{2,}", t) for t in tokens):
             return (
-                f"Untrusted `task_id` ({clean_id!r}). Use an SDK-emitted task_id from "
-                "TaskStarted/TaskProgress/TaskNotification."
+                f"Untrusted human-composed `task_id` ({clean_id!r}). "
+                "Use an SDK-emitted task_id from TaskStarted/TaskProgress."
             )
 
     return None
@@ -787,6 +799,7 @@ class AgentHookSet:
         self._requires_youtube_skill_first = False
         self._youtube_skill_seen_this_turn = False
         self._stopped_task_ids: set[str] = set()
+        self._taskstop_consecutive_failures: int = 0
         self._initial_decomposition_prompt_injected = False
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
@@ -1070,15 +1083,38 @@ class AgentHookSet:
                 tool_input = patched_tool_input
 
         if normalized_tool_name in ("taskstop", "task_stop"):
+            # Circuit-breaker: after 2 consecutive failures, hard-redirect
+            if self._taskstop_consecutive_failures >= 2:
+                self._taskstop_consecutive_failures += 1
+                return {
+                    "systemMessage": (
+                        "⛔ TaskStop circuit-breaker tripped — you have attempted TaskStop "
+                        f"{self._taskstop_consecutive_failures} times with no valid task ID.\n\n"
+                        "You have NO active tasks to stop. Skip TaskStop entirely and proceed "
+                        "directly with your assigned work:\n"
+                        "→ Decompose the user request into steps\n"
+                        "→ Call `Task(subagent_type='research-specialist', ...)` or equivalent\n"
+                        "→ Chain results through the pipeline\n\n"
+                        "Do NOT call TaskStop again unless you receive a real task_id from a "
+                        "TaskStarted event in this session."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "TaskStop circuit-breaker: too many consecutive failures.",
+                    },
+                }
             task_id = _extract_task_stop_id(tool_input)
             reason = _task_stop_rejection_reason(task_id)
             if reason:
+                self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
                         "⚠️ Invalid TaskStop request blocked.\n\n"
                         f"{reason}\n"
-                        "Use a concrete task ID emitted by the SDK task lifecycle messages "
-                        "(TaskStarted/TaskProgress/TaskNotification)."
+                        "You likely have no tasks to stop yet. Begin executing the user's "
+                        "request by calling Task() to delegate to the appropriate specialist."
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -1089,6 +1125,7 @@ class AgentHookSet:
                 }
             if task_id in self._stopped_task_ids:
                 reason = f"TaskStop for task_id {task_id!r} is a duplicate request."
+                self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
                         "⚠️ Duplicate TaskStop request blocked.\n\n"
@@ -1102,6 +1139,8 @@ class AgentHookSet:
                         "permissionDecisionReason": reason,
                     },
                 }
+            # Valid TaskStop — reset the circuit-breaker
+            self._taskstop_consecutive_failures = 0
 
         # Track transcript paths to detect sub-agent context.
         # The first transcript_path seen is the primary agent's; subsequent
@@ -1743,7 +1782,7 @@ class AgentHookSet:
             nlm_hint = ""
             if self._notebooklm_intent_this_turn:
                 nlm_hint = (
-                    "\n5. **NotebookLM Routing**: This request involves NotebookLM operations. "
+                    "\n\n**NotebookLM Routing**: This request involves NotebookLM operations. "
                     "You MUST delegate ALL NotebookLM work to the `notebooklm-operator` sub-agent using "
                     "`Task(subagent_type='notebooklm-operator', description='...', prompt='...')`. "
                     "NotebookLM has its OWN built-in web research via `research_start` — do NOT do separate web research. "
@@ -1757,10 +1796,23 @@ class AgentHookSet:
                         "\n### 🧭 Initial Task Assessment & Decomposition\n"
                         "Before beginning execution, decompose this request carefully:\n"
                         "1. **Analyze**: Break this request into atomic, logical steps.\n"
-                        "2. **Happy Path Backbone**: Consider the deterministic path (e.g., using `mcp__composio__get_actions` or deterministic tools if you need discovery).\n"
-                        "3. **Capability Match**: Evaluate your Capability Routing Doctrine. Route specific tasks (like specific forms of research) to the appropriate specialized agents.\n"
+                        "2. **Happy Path Backbone**: Consider the deterministic path — your FIRST tool call "
+                        "should be productive work (e.g., `Task()` delegation, `mcp__composio__*` search, or discovery).\n"
+                        "3. **Capability Match**: Evaluate your Capability Routing Doctrine. Route specific tasks "
+                        "to the appropriate specialized agents.\n"
                         "4. **Execution**: Proceed methodically, orchestrating subagents and validating each atomic step.\n"
-                        "5. **TaskStop**: NEVER call TaskStop with fabricated IDs like 'task_1'. Only use TaskStop with real task IDs received from TaskStarted/TaskProgress events. If you have no real task ID, do NOT call TaskStop at all."
+                        "\n### ✅ Example: Research → Report → PDF → Email (Golden Path)\n"
+                        "For a multi-part request like 'Search for X, create report, save as PDF, email it':\n"
+                        "```\n"
+                        "Step 1: Task(subagent_type='research-specialist', description='Research X', prompt='...')\n"
+                        "   → Specialist calls COMPOSIO_SEARCH_NEWS, run_research_phase → refined_corpus.md\n"
+                        "Step 2: Task(subagent_type='report-writer', description='Generate report from corpus', prompt='...')\n"
+                        "   → Specialist calls run_report_generation → report.html\n"
+                        "Step 3: mcp__internal__html_to_pdf (convert report.html → report.pdf)\n"
+                        "Step 4: mcp__internal__upload_to_composio + COMPOSIO_GMAIL_SEND (email PDF)\n"
+                        "```\n"
+                        "Key: Start with Step 1 immediately. Do not call lifecycle tools (e.g., TaskStop) "
+                        "before you have started any tasks — there is nothing to stop yet."
                         + nlm_hint
                     ),
                 }

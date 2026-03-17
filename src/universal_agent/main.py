@@ -1218,6 +1218,19 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
                 f"Untrusted numeric `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
                 "task_id from TaskStarted/TaskProgress/TaskNotification."
             )
+        # Reject human-readable composite IDs like task_research_001,
+        # task_report_001, task_russia_ukraine_research_001. Real SDK IDs
+        # use opaque alphanumeric tokens (ULIDs, UUIDs), not English words.
+        if re.fullmatch(r"[a-z][a-z0-9_]*", suffix) and re.search(r"[a-z]{3,}", suffix):
+            return (
+                f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
+                "are opaque tokens (e.g., 'task_01HZYQ7QF1'), not descriptive names. "
+                "Use a concrete SDK-emitted task_id from TaskStarted/TaskProgress."
+            )
+
+    # Common malformed placeholders from model retries.
+    if lowered in {"all-tasks", "stop-all", "cancel-all"}:
+        return f"Invalid bulk-stop token ({clean_id!r})."
 
     if not any(ch.isdigit() for ch in clean_id):
         return (
@@ -1225,14 +1238,17 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
             "task_id from TaskStarted/TaskProgress/TaskNotification."
         )
 
-    # Golden runs should use provider-generated IDs, not natural-language aliases.
-    if re.fullmatch(r"[a-z0-9\\-_]+", lowered) and len(clean_id) > 2:
-        has_separator = ("_" in clean_id) or ("-" in clean_id)
-        has_digit = any(ch.isdigit() for ch in clean_id)
-        if not has_separator and not has_digit:
+    # Reject IDs composed of only lowercase words + digits + separators.
+    # Real SDK IDs contain uppercase chars (e.g., task_01HZYQ7QF1).
+    # Human-composed IDs like 'ru_news_20260317' are all-lowercase word tokens.
+    # IMPORTANT: check the ORIGINAL case (clean_id), not lowered.
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", clean_id):
+        tokens = re.split(r"[_-]", clean_id)
+        # If every token is a short lowercase word or number, it's human-composed.
+        if all(len(t) <= 12 for t in tokens) and any(re.fullmatch(r"[a-z]{2,}", t) for t in tokens):
             return (
-                f"Untrusted `task_id` ({clean_id!r}). Use an SDK-emitted task_id from "
-                "TaskStarted/TaskProgress/TaskNotification."
+                f"Untrusted human-composed `task_id` ({clean_id!r}). "
+                "Use an SDK-emitted task_id from TaskStarted/TaskProgress."
             )
 
     return None

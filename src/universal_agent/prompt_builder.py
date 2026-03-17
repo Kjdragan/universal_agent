@@ -321,8 +321,9 @@ def build_system_prompt(
         "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
         "need handoff for delivery (e.g., gws Gmail send, Slack post, or AgentMail).\n"
-        "5. **Task lifecycle discipline**: Do NOT call `TaskStop(...)` unless you received a concrete "
-        "SDK-emitted task_id in this run (TaskStarted/TaskProgress/TaskNotification). Never invent IDs like `task_1`."
+        "5. **Task lifecycle discipline**: Only use SDK lifecycle tools when you have a concrete "
+        "SDK-emitted task_id received from a TaskStarted/TaskProgress event in this session. "
+        "Your first tool call should always be productive work (Task delegation, search, or discovery)."
     )
 
     # ── 7b. BROWSER LANE SELECTION ───────────────────────────────────

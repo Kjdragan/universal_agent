@@ -23,6 +23,9 @@ def _pre_task_stop(hooks: AgentHookSet, task_id: str | None):
     )
 
 
+# ── Existing Tests ─────────────────────────────────────────────────
+
+
 def test_blocks_task_stop_with_missing_task_id():
     hooks = AgentHookSet(run_id="unit-taskstop-missing")
     result = _pre_task_stop(hooks, None)
@@ -57,14 +60,14 @@ def test_blocks_task_stop_with_weak_synthetic_task_id():
     hooks = AgentHookSet(run_id="unit-taskstop-weak-id")
     result = _pre_task_stop(hooks, "task_1")
     assert result.get("decision") == "block"
-    assert "untrusted `task_id`" in str(result.get("systemMessage", "")).lower()
+    assert "untrusted" in str(result.get("systemMessage", "")).lower()
 
 
 def test_blocks_task_stop_with_natural_language_task_id():
     hooks = AgentHookSet(run_id="unit-taskstop-natural-language")
     result = _pre_task_stop(hooks, "research-specialist")
     assert result.get("decision") == "block"
-    assert "untrusted `task_id`" in str(result.get("systemMessage", "")).lower()
+    assert "untrusted" in str(result.get("systemMessage", "")).lower()
 
 
 def test_allows_task_stop_with_concrete_task_id():
@@ -94,3 +97,107 @@ def test_blocks_duplicate_task_stop_after_successful_stop():
     second = _pre_task_stop(hooks, "task_01HZYQ7QF1")
     assert second.get("decision") == "block"
     assert "duplicate" in str(second.get("systemMessage", "")).lower()
+
+
+# ── New Tests: Fabricated IDs from real incident ──────────────────
+
+
+def test_blocks_task_research_001():
+    """IDs like 'task_research_001' are human-readable composites, not SDK IDs."""
+    hooks = AgentHookSet(run_id="unit-taskstop-research-001")
+    result = _pre_task_stop(hooks, "task_research_001")
+    assert result.get("decision") == "block"
+    assert "human-readable" in str(result.get("systemMessage", "")).lower()
+
+
+def test_blocks_task_report_001():
+    """IDs like 'task_report_001' are human-readable composites, not SDK IDs."""
+    hooks = AgentHookSet(run_id="unit-taskstop-report-001")
+    result = _pre_task_stop(hooks, "task_report_001")
+    assert result.get("decision") == "block"
+    assert "human-readable" in str(result.get("systemMessage", "")).lower()
+
+
+def test_blocks_task_russia_ukraine_research_001():
+    """Long descriptive IDs like 'task_russia_ukraine_research_001' must be blocked."""
+    hooks = AgentHookSet(run_id="unit-taskstop-ru-research")
+    result = _pre_task_stop(hooks, "task_russia_ukraine_research_001")
+    assert result.get("decision") == "block"
+    assert "human-readable" in str(result.get("systemMessage", "")).lower()
+
+
+def test_blocks_task_russia_ukraine_research_no_digits():
+    """IDs like 'task_russia_ukraine_research' have no digits — should be blocked."""
+    hooks = AgentHookSet(run_id="unit-taskstop-ru-no-digits")
+    result = _pre_task_stop(hooks, "task_russia_ukraine_research")
+    assert result.get("decision") == "block"
+    assert "human-readable" in str(result.get("systemMessage", "")).lower()
+
+
+def test_blocks_ru_news_with_date():
+    """IDs like 'ru_news_20260317' are human-composed word+date tokens."""
+    hooks = AgentHookSet(run_id="unit-taskstop-ru-news-date")
+    result = _pre_task_stop(hooks, "ru_news_20260317")
+    assert result.get("decision") == "block"
+    assert "human-composed" in str(result.get("systemMessage", "")).lower()
+
+
+def test_blocks_short_id_with_digits():
+    """Short IDs like 'task_01' or 'stop_42' are too short to be real SDK IDs."""
+    hooks = AgentHookSet(run_id="unit-taskstop-short")
+    result = _pre_task_stop(hooks, "task_01")
+    assert result.get("decision") == "block"
+
+
+def test_allows_real_sdk_ulid():
+    """Real SDK ULIDs like 'task_01HZYQ7QF1' should pass through."""
+    hooks = AgentHookSet(run_id="unit-taskstop-ulid")
+    result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
+    assert result == {}
+
+
+def test_allows_real_toolu_style_id():
+    """Real tool-use IDs like 'toolu_vrtx_01234ABCdef56789' should pass through."""
+    hooks = AgentHookSet(run_id="unit-taskstop-toolu")
+    result = _pre_task_stop(hooks, "toolu_vrtx_01234ABCdef56789")
+    assert result == {}
+
+
+def test_allows_real_uuid_format():
+    """Real UUID-format task IDs should pass through."""
+    hooks = AgentHookSet(run_id="unit-taskstop-uuid")
+    result = _pre_task_stop(hooks, "550e8400-e29b-41d4-a716-446655440000")
+    assert result == {}
+
+
+# ── Circuit-breaker Tests ────────────────────────────────────────
+
+
+def test_circuit_breaker_after_consecutive_failures():
+    """After 2 consecutive failures, the circuit-breaker should trip."""
+    hooks = AgentHookSet(run_id="unit-taskstop-circuit-breaker")
+    # First failure
+    r1 = _pre_task_stop(hooks, "task_fake_001")
+    assert r1.get("decision") == "block"
+    # Second failure
+    r2 = _pre_task_stop(hooks, "task_report_002")
+    assert r2.get("decision") == "block"
+    # Third attempt: circuit-breaker should trip with different message
+    r3 = _pre_task_stop(hooks, "task_another_003")
+    assert r3.get("decision") == "block"
+    assert "circuit-breaker" in str(r3.get("systemMessage", "")).lower()
+
+
+def test_circuit_breaker_resets_on_valid_stop():
+    """A valid TaskStop resets the circuit-breaker counter."""
+    hooks = AgentHookSet(run_id="unit-taskstop-cb-reset")
+    # One failure
+    r1 = _pre_task_stop(hooks, "task_fake_001")
+    assert r1.get("decision") == "block"
+    # Valid stop — should pass and reset counter
+    r2 = _pre_task_stop(hooks, "task_01HZYQ7QF1")
+    assert r2 == {}
+    # Another failure — counter starts from 0, so should NOT trip circuit-breaker
+    r3 = _pre_task_stop(hooks, "task_bad_001")
+    assert r3.get("decision") == "block"
+    assert "circuit-breaker" not in str(r3.get("systemMessage", "")).lower()
