@@ -188,70 +188,64 @@ def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
 
 
 def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
+    """Return rejection reason if the task_id is fabricated, or None if valid.
+    
+    Uses an ALLOWLIST approach: only SDK-emitted opaque tokens (ULIDs, UUIDs,
+    or similarly long random alphanumeric strings) are accepted. Everything
+    else — human-readable names, short IDs, descriptive names — is rejected.
+    """
     clean_id = str(task_id or "").strip()
     if not clean_id:
         return "Missing `task_id`."
 
     lowered = clean_id.lower()
-    if lowered.startswith("session_") or lowered.startswith("run_"):
-        return f"Invalid session/run identifier used as task_id ({clean_id!r})."
+
+    # Obvious misuse patterns
+    if "," in clean_id:
+        return "Multiple task IDs are not supported in a single call."
     if lowered in _TASK_STOP_PLACEHOLDER_IDS:
         return f"Invalid placeholder `task_id` ({clean_id!r})."
-
-    if "," in clean_id:
-        return "Multiple task IDs are not supported in one TaskStop call."
-
-    if any(lowered.startswith(prefix) for prefix in ("dummy", "fake", "placeholder", "example", "test-")):
-        return f"Likely fabricated `task_id` ({clean_id!r})."
-
-    # Reject weak synthetic task IDs commonly hallucinated by the model
-    # (e.g., "task_1"), which are not real SDK-emitted task IDs.
-    if lowered.startswith("task_"):
-        suffix = clean_id[5:]
-        if len(suffix) < 6:
-            return (
-                f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
-                "task_id from TaskStarted/TaskProgress/TaskNotification."
-            )
-        if suffix.isdigit() and len(suffix) < 10:
-            return (
-                f"Untrusted numeric `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
-                "task_id from TaskStarted/TaskProgress/TaskNotification."
-            )
-        # Reject human-readable composite IDs like task_research_001,
-        # task_report_001, task_russia_ukraine_research_001. Real SDK IDs
-        # use opaque alphanumeric tokens (ULIDs, UUIDs), not English words.
-        if re.fullmatch(r"[a-z][a-z0-9_]*", suffix) and re.search(r"[a-z]{3,}", suffix):
-            return (
-                f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
-                "are opaque tokens (e.g., 'task_01HZYQ7QF1'), not descriptive names. "
-                "Use a concrete SDK-emitted task_id from TaskStarted/TaskProgress."
-            )
-
-    # Common malformed placeholders from model retries.
     if lowered in {"all-tasks", "stop-all", "cancel-all"}:
         return f"Invalid bulk-stop token ({clean_id!r})."
+    if lowered.startswith("session_") or lowered.startswith("run_"):
+        return f"Invalid session/run identifier used as task_id ({clean_id!r})."
 
-    if not any(ch.isdigit() for ch in clean_id):
+    # ALLOWLIST: Real SDK task IDs are opaque tokens with high entropy.
+    # They follow patterns like: "task_01HZYQ7QF1ABCDE" (ULID-based) or 
+    # full UUIDs. They do NOT contain human-readable English words.
+    # Reject anything containing 3+ consecutive lowercase letters that
+    # form recognizable word patterns.
+    
+    # Strip known SDK prefixes to examine the token body
+    body = clean_id
+    for prefix in ("task_", "bg_", "background_"):
+        if lowered.startswith(prefix):
+            body = clean_id[len(prefix):]
+            break
+    
+    # Real SDK tokens are long (16+ chars) and mostly non-word characters
+    # Reject short IDs (< 12 chars in body) — SDK never emits these
+    if len(body) < 12:
         return (
-            f"Untrusted `task_id` ({clean_id!r}). Use a concrete SDK-emitted "
-            "task_id from TaskStarted/TaskProgress/TaskNotification."
+            f"Untrusted short `task_id` ({clean_id!r}). Real SDK task IDs are long "
+            "opaque tokens. Begin productive work instead."
         )
-
-    # Reject IDs composed of only lowercase words + digits + separators.
-    # Real SDK IDs contain uppercase chars (e.g., task_01HZYQ7QF1).
-    # Human-composed IDs like 'ru_news_20260317' are all-lowercase word tokens.
-    # IMPORTANT: check the ORIGINAL case (clean_id), not lowered.
-    if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", clean_id):
-        tokens = re.split(r"[_-]", clean_id)
-        # If every token is a short lowercase word or number, it's human-composed.
-        if all(len(t) <= 12 for t in tokens) and any(re.fullmatch(r"[a-z]{2,}", t) for t in tokens):
+    
+    # Reject IDs containing English-looking word segments (3+ consecutive lowercase letters)
+    # Real SDK IDs use base32/hex which rarely forms English words
+    english_words = re.findall(r'[a-z]{3,}', body.lower())
+    if english_words:
+        # Check if any segment looks like an English word (not hex/base32)
+        hex_base32_chars = set('0123456789abcdef')
+        non_hex_words = [w for w in english_words if not set(w).issubset(hex_base32_chars)]
+        if non_hex_words:
             return (
-                f"Untrusted human-composed `task_id` ({clean_id!r}). "
-                "Use an SDK-emitted task_id from TaskStarted/TaskProgress."
+                f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
+                "are opaque tokens, not descriptive names. Begin productive work instead."
             )
 
-    return None
+    return None  # Looks like a real SDK token
+
 
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
@@ -1099,7 +1093,7 @@ class AgentHookSet:
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
-                        "permissionDecisionReason": "TaskStop circuit-breaker: too many consecutive failures.",
+                        "permissionDecisionReason": "Circuit-breaker: too many consecutive invalid attempts.",
                     },
                 }
             task_id = _extract_task_stop_id(tool_input)
