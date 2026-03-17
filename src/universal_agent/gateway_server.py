@@ -10942,6 +10942,8 @@ async def signals_ingest_endpoint(request: Request):
             _digest_full_md = str(
                 subject_obj.get("full_report_md")
                 or subject_obj.get("report_markdown")
+                or subject_obj.get("markdown")
+                or subject_obj.get("markdown_preview")
                 or subject_obj.get("brief_body")
                 or subject_obj.get("analysis")
                 or _digest_summary
