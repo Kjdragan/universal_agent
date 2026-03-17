@@ -1423,9 +1423,10 @@ async def on_pre_tool_use_ledger(
         if reason:
             return {
                 "systemMessage": (
-                    "⚠️ Invalid TaskStop request blocked.\n\n"
+                    "⚠️ Action blocked — no active tasks to manage.\n\n"
                     f"{reason}\n"
-                    "Use a concrete task_id emitted by SDK task lifecycle messages."
+                    "Redirect: begin productive work now — delegate via Task(), "
+                    "call an MCP tool, or start a search."
                 ),
                 "decision": "block",
                 "hookSpecificOutput": {

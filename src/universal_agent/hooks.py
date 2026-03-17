@@ -1088,15 +1088,12 @@ class AgentHookSet:
                 self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
-                        "⛔ TaskStop circuit-breaker tripped — you have attempted TaskStop "
-                        f"{self._taskstop_consecutive_failures} times with no valid task ID.\n\n"
-                        "You have NO active tasks to stop. Skip TaskStop entirely and proceed "
-                        "directly with your assigned work:\n"
+                        "⛔ Action blocked — no active tasks exist to manage. "
+                        f"({self._taskstop_consecutive_failures} consecutive invalid attempts).\n\n"
+                        "REDIRECT: Begin productive work NOW:\n"
                         "→ Decompose the user request into steps\n"
                         "→ Call `Task(subagent_type='research-specialist', ...)` or equivalent\n"
-                        "→ Chain results through the pipeline\n\n"
-                        "Do NOT call TaskStop again unless you receive a real task_id from a "
-                        "TaskStarted event in this session."
+                        "→ Chain results through the pipeline"
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -1111,10 +1108,10 @@ class AgentHookSet:
                 self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
-                        "⚠️ Invalid TaskStop request blocked.\n\n"
+                        "⚠️ Action blocked — no active tasks to manage.\n\n"
                         f"{reason}\n"
-                        "You likely have no tasks to stop yet. Begin executing the user's "
-                        "request by calling Task() to delegate to the appropriate specialist."
+                        "Redirect: begin productive work now — delegate via Task(), "
+                        "call an MCP tool, or start a search."
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -1124,13 +1121,13 @@ class AgentHookSet:
                     },
                 }
             if task_id in self._stopped_task_ids:
-                reason = f"TaskStop for task_id {task_id!r} is a duplicate request."
+                reason = f"Duplicate stop request for task_id {task_id!r}."
                 self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
-                        "⚠️ Duplicate TaskStop request blocked.\n\n"
+                        "⚠️ Action blocked — this task was already stopped.\n\n"
                         f"{reason}\n"
-                        "Do not stop the same task multiple times in one session."
+                        "Continue with productive work."
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -1811,8 +1808,8 @@ class AgentHookSet:
                         "Step 3: mcp__internal__html_to_pdf (convert report.html → report.pdf)\n"
                         "Step 4: mcp__internal__upload_to_composio + COMPOSIO_GMAIL_SEND (email PDF)\n"
                         "```\n"
-                        "Key: Start with Step 1 immediately. Do not call lifecycle tools (e.g., TaskStop) "
-                        "before you have started any tasks — there is nothing to stop yet."
+                        "**Key: Start with Step 1 immediately.** Your first tool call must be "
+                        "productive work — a `Task()` delegation, a direct MCP tool, or a search action."
                         + nlm_hint
                     ),
                 }

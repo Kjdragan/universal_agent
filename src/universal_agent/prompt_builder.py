@@ -284,7 +284,7 @@ def build_system_prompt(
         "- **Computation**: Prefer local `Bash` + `uv run python ...` for stats/charts. Use CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) when you need isolation or a persistent sandbox.\n"
         "- **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations\n"
         "- **Communication**: Gmail (`mcp__gws__*`), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`mcp__gws__*`)\n"
-        "- **Browser Operations**: Bowser stack (`claude-bowser`, `playwright-bowser`, `bowser-qa-agent`) for interactive execution and validation; Browserbase for cloud-browser fallback cases\n"
+        "- **Browser Operations**: `agent-browser` (Vercel headless browser CLI) for all browser automation, testing, screenshots, and data extraction\n"
         "- **Real-World Actions**: GoPlaces, Google Maps directions (`mcp__composio__GOOGLEMAPS_*`), authenticated website actions, form filling\n"
         "- **Engineering**: GitHub (`mcp__composio__GITHUB_*`), code analysis, test execution\n"
         "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive (`mcp__gws__*`)\n"
@@ -314,25 +314,24 @@ def build_system_prompt(
         "   - Video production? -> `video-creation-expert` or `video-remotion-expert`\n"
         "   - Image generation? -> `image-expert`\n"
         "   - Diagrams? -> `mermaid-expert`\n"
-        "   - Browser automation/validation? -> Bowser lanes first (`claude-bowser-agent`, `playwright-bowser-agent`, `bowser-qa-agent`); `browserbase` only when Bowser is unavailable or cloud-browser behavior is explicitly required\n"
+        "   - Browser automation/validation? -> `agent-browser` via Bash for all browser tasks (screenshots, interaction, testing, scraping)\n"
         "   - YouTube transcript/metadata/tutorial tasks? -> `youtube-expert`\n"
         "   - Slack interactions? -> `slack-expert`\n"
         "   - System/cron config? -> `system-configuration-agent`\n"
         "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
         "need handoff for delivery (e.g., gws Gmail send, Slack post, or AgentMail).\n"
-        "5. **Task lifecycle discipline**: Only use SDK lifecycle tools when you have a concrete "
-        "SDK-emitted task_id received from a TaskStarted/TaskProgress event in this session. "
-        "Your first tool call should always be productive work (Task delegation, search, or discovery)."
+        "5. **First-action rule (mandatory)**: Your FIRST tool call in response to any user request "
+        "MUST be productive work — a `Task()` delegation to a specialist, a direct MCP tool call, "
+        "or a search/discovery action. Never begin a session with cleanup or housekeeping."
     )
 
-    # ── 7b. BROWSER LANE SELECTION ───────────────────────────────────
+    # ── 7b. BROWSER AUTOMATION ────────────────────────────────────────
     sections.append(
-        "## BROWSER LANE SELECTION (BOWSER-FIRST)\n"
-        "- Use `claude-bowser` / `claude-bowser-agent` when the task requires the user's real Chrome identity/session (cookies, extensions, existing logins).\n"
-        "- Use `playwright-bowser` / `playwright-bowser-agent` for isolated, repeatable, parallel browser runs and CI-style validation.\n"
-        "- Use `bowser-qa-agent` for structured user-story validation with screenshot evidence and pass/fail outputs.\n"
-        "- Use `browserbase` as fallback for cloud-browser workflows when Bowser is unavailable, not installed, or explicitly not suitable.\n"
+        "## BROWSER AUTOMATION\n"
+        "- Use `agent-browser` (Vercel headless browser CLI) as the primary tool for ALL browser-based tasks.\n"
+        "- Key workflow: `agent-browser open <url> && agent-browser snapshot -i` to get the accessibility tree, then interact via refs (`agent-browser click @e2`).\n"
+        "- Supports sessions, persistent profiles, authenticated browsing, annotated screenshots, and parallel instances.\n"
         "- Never reduce browser-executable tasks to text-only summaries when direct execution would produce stronger evidence."
     )
 
@@ -351,7 +350,7 @@ def build_system_prompt(
         "- Search Google Drive for related docs (via `mcp__gws__*` drive tools)\n"
         "- Create a Notion knowledge base page (`mcp__composio__NOTION_*`)\n"
         "- Fetch Google Sheets data and analyze it (via `mcp__gws__*` sheets tools)\n"
-        "- Execute and validate real browser workflows via Bowser (not just scrape snippets)\n"
+        "- Execute and validate real browser workflows via `agent-browser` (not just scrape snippets)\n"
         "- Generate video content, not just images\n"
         "- Discover NEW integrations on-the-fly with `mcp__composio__COMPOSIO_SEARCH_TOOLS`\n"
         "- Set up a recurring monitoring cron job via `system-configuration-agent`\n"
@@ -421,7 +420,9 @@ def build_system_prompt(
     # ── 13. EMAIL & ATTACHMENTS ───────────────────────────────────────
     sections.append(
         "## 📧 EMAIL & COMMUNICATION\n"
-        "- When sending emails, use `mcp__internal__upload_to_composio` to handle attachments.\n"
+        "- For sending emails on Kevin's behalf, use `mcp__gws__*` Google Workspace CLI tools (Gmail send, drafts, labels).\n"
+        "- GWS CLI is the primary email channel — NOT Composio Gmail.\n"
+        "- For attachments, use `mcp__internal__upload_to_composio` only if GWS attachment handling is unavailable.\n"
         "- **ONE ATTACHMENT PER EMAIL**: Composio drops attachments when you send multiple in one call.\n"
         "  Send separate emails for each attachment, or pick the single most important file.\n"
         "- Keep email bodies concise."
@@ -465,6 +466,34 @@ def build_system_prompt(
         "`Task(subagent_type='system-configuration-agent', ...)`.\n"
         "- Do NOT implement schedule changes via ad-hoc shell scripting.\n"
         "- NEVER use OS-level crontab for user scheduling requests."
+    )
+
+    # ── 16b. SECRETS & ENVIRONMENT MANAGEMENT (INFISICAL) ──────────
+    sections.append(
+        "## 🔐 SECRETS & ENVIRONMENT MANAGEMENT (INFISICAL)\n"
+        "Infisical is the **single source of truth** for all application secrets. Never hardcode secrets or store them in files.\n\n"
+        "### Architecture\n"
+        "- **Runtime loading**: `infisical_loader.py` fetches secrets from Infisical at process startup via SDK (REST fallback).\n"
+        "- **Bootstrap `.env`**: Each machine has a minimal `.env` with Infisical credentials (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`) — just enough to authenticate.\n"
+        "- **Strict mode**: VPS/standalone fail closed if Infisical is unreachable. Local workstation allows dotenv fallback.\n"
+        "- **Deploy-time rendering**: `render_service_env_from_infisical.py` extracts secrets for services that can't call Infisical at runtime (e.g., Next.js `web-ui/.env.local`).\n\n"
+        "### Environments\n"
+        "| Environment | Infisical Env | Machine Slug |\n"
+        "|---|---|---|\n"
+        "| Development | `development` | `kevins-desktop` |\n"
+        "| Staging | `staging` | `vps-hq-staging` |\n"
+        "| Production | `production` | `vps-hq-production` |\n\n"
+        "### Key CLI Commands\n"
+        "```bash\n"
+        "infisical secrets --env=production          # List all secrets\n"
+        "infisical secrets get KEY --env=prod --plain # Get single value\n"
+        "infisical secrets set KEY=value --env=staging # Set a secret\n"
+        "infisical run --env=development -- cmd       # Run with secrets injected\n"
+        "```\n\n"
+        "### Rules\n"
+        "- When changing secrets, use `infisical secrets set` or `scripts/infisical_upsert_secret.py`.\n"
+        "- After changing Infisical secrets, restart the affected service (`systemctl restart ...`).\n"
+        "- Reference doc: `docs/deployment/secrets_and_environments.md`"
     )
 
     # ── 17. MEMORY MANAGEMENT (ACTIVE USE) ──────────────────────────
