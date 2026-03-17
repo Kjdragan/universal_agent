@@ -23,9 +23,13 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 1. [Architecture](01_Architecture)
 
-> Architecture docs have been consolidated. See `docs/Documentation_Status.md` for current references.
+- **[System Architecture Overview](01_Architecture/01_System_Architecture_Overview.md)**: Component map, services, data stores, deployment topology.
+- **[Gateway, Sessions & Execution](01_Architecture/02_Gateway_Sessions_And_Execution.md)**: Session model, auth surfaces, execution engine, background services.
+- **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: Mission lifecycle, cross-machine delegation, factory heartbeat.
+- **[Dual Factory and Capability Expansion Brainstorm](01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md)**: Factory expansion concepts.
 - **[Agent Architecture: agent_core.py vs main.py](001_AGENT_ARCHITECTURE.md)**: Entry point comparison, AgentSetup synchronization, URW session management.
-
+- **[SDK Permissions, Hooks & Subagents](002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md)**: Permission model, hooks architecture, subagent patterns.
+- **[Regression Control and Golden Runs](003_REGRESSION_CONTROL_AND_GOLDEN_RUNS.md)**: Testing stability, golden run preservation.
 
 ### 2. [Subsystems](02_Subsystems)
 
@@ -87,6 +91,60 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 - **[Decisions](05_Archive/Decisions)**: Critical architectural decision records (ADRs).
 - **[Glossary.md](Glossary.md)**: Project terminology.
+
+### 7. [Run Reviews](03_Run_Reviews)
+
+- **[Session: Russia Ukraine Report (2026-02-06)](03_Run_Reviews/01_Session_20260206_160425_Russia_Ukraine_Report.md)**: First major report session.
+- **[Session: Cron Breakthrough Briefing (2026-02-08)](03_Run_Reviews/02_Session_20260208_Cron_Breakthrough_Briefing.md)**: Cron scheduling breakthrough.
+- **[Scheduling Runtime V2 Short Soak Readiness (2026-02-08)](03_Run_Reviews/03_Scheduling_Runtime_V2_Short_Soak_Readiness_2026-02-08.md)**: Short soak prep.
+- **[Scheduling Runtime V2 24h Soak In Progress (2026-02-08)](03_Run_Reviews/04_Scheduling_Runtime_V2_24h_Soak_In_Progress_2026-02-08.md)**: 24h soak status.
+- **[Self-Improving Agent Notes (2026-02-13)](03_Run_Reviews/05_Self_Improving_Agent_Notes_2026-02-13.md)**: Agent self-improvement patterns.
+- **[Final Integration Sprint Review (2026-02-14)](03_Run_Reviews/06_Final_Integration_Sprint_Review_2026-02-14.md)**: Integration sprint close.
+- **[Happy Path Review and Markdown Remediation (2026-02-19)](03_Run_Reviews/07_Session_20260218_232750_Happy_Path_Review_and_Markdown_Remediation_2026-02-19.md)**: Happy path validation.
+
+### 8. [CSI Rebuild](csi-rebuild)
+
+- **[Master Plan](csi-rebuild/00_master_plan.md)**: CSI rebuild master plan.
+- **[Architecture v2](csi-rebuild/01_architecture_v2.md)**: Revised CSI architecture.
+- **[Interfaces and Schemas](csi-rebuild/02_interfaces_and_schemas.md)**: CSI interfaces and schemas.
+- **[Rollout and Runbooks](csi-rebuild/03_rollout_and_runbooks.md)**: Rollout plan and runbook index.
+- **[Validation Matrix](csi-rebuild/04_validation_matrix.md)**: Validation test matrix.
+- **[Incident Log](csi-rebuild/05_incident_log.md)**: Incident tracking log.
+- **[Packet Handoff](csi-rebuild/06_packet_handoff.md)**: Packet handoff documentation.
+- **[Post Packet 10 Work Phases](csi-rebuild/07_post_packet10_work_phases.md)**: Post-packet work phases.
+- **[RC Soak GA Gate](csi-rebuild/08_rc_soak_ga_gate.md)**: Release candidate soak gate.
+- **[Status](csi-rebuild/status.md)**: CSI rebuild status tracker.
+- **[Kevin Handoff for CSI](csi-rebuild/kevin_handoff_for CSI.md)**: Handoff documentation.
+
+#### CSI Rebuild Runbooks
+
+- **[Incident Triage](csi-rebuild/runbooks/01_incident_triage.md)**: Incident triage runbook.
+- **[Remediation Escalation](csi-rebuild/runbooks/02_remediation_escalation.md)**: Remediation escalation runbook.
+- **[Rollback](csi-rebuild/runbooks/03_rollback.md)**: Rollback runbook.
+- **[Data Repair](csi-rebuild/runbooks/04_data_repair.md)**: Data repair runbook.
+- **[Quick Commands](csi-rebuild/runbooks/05_quick_commands.md)**: Quick command reference.
+
+### 9. [SDK Phases and Integration Docs](.)
+
+- **[Threads Infisical Sync Workflow](004_THREADS_INFISICAL_SYNC_WORKFLOW.md)**: Infisical sync workflow.
+- **[CSI YouTube Proxy Usage Audit](005_CSI_YOUTUBE_PROXY_USAGE_AUDIT.md)**: Proxy usage audit.
+- **[CSI Trend Analysis Functional Review and Plan](006_CSI_TREND_ANALYSIS_FUNCTIONAL_REVIEW_AND_PLAN.md)**: Trend analysis review.
+- **[CSI Persistence Briefing and Reminder Operations](007_CSI_PERSISTENCE_BRIEFING_AND_REMINDER_OPERATIONS.md)**: Persistence operations.
+- **[Threads Rollout Next Phases](008_THREADS_ROLLOUT_NEXT_PHASES.md)**: Threads rollout phases.
+- **[Threads Phase 2 Permission Readiness Runbook](009_THREADS_PHASE2_PERMISSION_READINESS_RUNBOOK.md)**: Permission readiness.
+- **[Threads Phase 2/3 Closeout Go/No-Go Report](010_THREADS_PHASE2_3_CLOSEOUT_GO_NO_GO_REPORT.md)**: Phase closeout report.
+- **[SDK Phase 5 Accelerated Canary Rollout](011_SDK_PHASE5_ACCELERATED_CANARY_ROLLOUT.md)**: Canary rollout.
+- **[NotebookLM Integration](012_NOTEBOOKLM_INTEGRATION.md)**: NotebookLM integration notes.
+
+### 10. [Reference Docs](.)
+
+- **[ZAI OpenAI Compatible Setup](ZAI_OPENAI_COMPATIBLE_SETUP.md)**: ZAI API setup guide.
+- **[Durability Test Matrix](durability_test_matrix.md)**: Durability testing matrix.
+- **[NotebookLM VPS Infisical Runbook](notebooklm_vps_infisical_runbook.md)**: NotebookLM VPS setup.
+
+### 11. [Reports](reports)
+
+- **[Todoist Task Pipeline Audit (2026-03-11)](reports/todolist-task-pipeline-audit-2026-03-11.md)**: Todoist pipeline audit.
 
 ---
 
