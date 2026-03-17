@@ -115,77 +115,76 @@ def _find_todays_report() -> Path | None:
     return None
 
 
-def _build_mission_objective(report: dict) -> str:
-    """Build a structured VP mission objective from the drift report."""
+def _build_batched_objectives(report: dict) -> list[dict]:
+    """Build compact, severity-batched VP mission objectives from the drift report.
+
+    Returns a list of dicts with keys: severity, objective, issue_count.
+    Each objective is kept under ~2KB to prevent agent stalling (observed with
+    large 30KB+ payloads that contain 75+ issues).
+    """
     date = report.get("report_date", "unknown")
-    total = report.get("total_issues", 0)
     issues = report.get("issues", [])
 
-    if total == 0:
-        return ""
+    if not issues:
+        return []
 
-    # Group issues by category for clearer instructions
-    by_category: dict[str, list[dict]] = {}
+    # Group by severity
+    by_severity: dict[str, list[dict]] = {}
     for issue in issues:
-        cat = issue["category"]
-        by_category.setdefault(cat, []).append(issue)
+        sev = issue.get("severity", "P2")
+        by_severity.setdefault(sev, []).append(issue)
 
-    objective_parts = [
-        f"You are the Documentation Maintenance Agent. Today is {date}.",
-        f"The nightly drift auditor found {total} documentation issues that need fixing.",
-        "",
-        "## Your Mission",
-        "",
-        "Fix all the issues listed below, then commit and push.",
-        "",
-        "## Process",
-        "",
-        f"1. Create and checkout branch: `docs/nightly-drift-fix-{date}`",
-        "2. Fix each issue below",
-        "3. Commit with message: `docs: nightly drift fix {date} — {total} issues`",
-        "4. Push the branch and open a PR against `develop`",
-        "5. The PR description should include the full issue list and what was fixed",
-        "",
-        "## Rules",
-        "",
-        "- All documentation MUST reside within `docs/`",
-        "- When adding new docs, you MUST update BOTH `docs/README.md` AND `docs/Documentation_Status.md`",
-        "- Update existing docs rather than creating new ones where possible",
-        "- Follow the existing documentation style and tone (professional engineer reference docs)",
-        "- Do NOT delete any documentation files without strong justification",
-        "- For glossary candidates (P2), only add terms that are genuinely project-specific",
-        "",
-        "## Issues to Fix",
-        "",
-    ]
-
-    severity_order = ["P0", "P1", "P2"]
-    category_instructions = {
-        "index_orphan": "Add the orphan file to both docs/README.md and docs/Documentation_Status.md in the appropriate section.",
-        "index_dead_entry": "Remove the stale entry from the index files. If the file was moved, update the link to point to the new location.",
-        "broken_link": "Fix the broken link — either correct the path or remove the link if the target was intentionally deleted.",
-        "glossary_candidate": "If the term is genuinely project-specific, add it to docs/Glossary.md with a concise definition. Skip generic industry terms.",
-        "deploy_cochange_violation": "Review the deployment workflow changes and update docs/deployment/ to reflect the current deployment behavior.",
-        "agentic_drift": "Review the agent code changes and determine if AGENTS.md, workflow files, or SKILL.md files need updating.",
-        "code_doc_drift": "Read the changed code and the corresponding documentation. Update the docs to accurately reflect current code behavior.",
+    # Instructions per category (compact)
+    fix_instructions = {
+        "index_dead_entry": "Remove stale entry from both index files. If file was moved, update the link.",
+        "index_orphan": "Add to both docs/README.md and docs/Documentation_Status.md in the correct section.",
+        "broken_link": "Fix the broken link or remove if target was intentionally deleted.",
+        "glossary_candidate": "Add project-specific terms to docs/Glossary.md. Skip generic terms.",
+        "deploy_cochange_violation": "Update docs/deployment/ to reflect current deployment behavior.",
+        "agentic_drift": "Update AGENTS.md or workflow/SKILL.md files to match code changes.",
+        "code_doc_drift": "Update docs to accurately reflect current code behavior.",
     }
 
-    for severity in severity_order:
-        sev_issues = [i for i in issues if i["severity"] == severity]
+    batches = []
+    for severity in ["P0", "P1", "P2"]:
+        sev_issues = by_severity.get(severity, [])
         if not sev_issues:
             continue
 
-        objective_parts.append(f"### {severity} Issues")
-        objective_parts.append("")
+        # Build compact objective
+        lines = [
+            f"You are the Documentation Maintenance Agent. Today is {date}.",
+            f"Fix ONLY these {len(sev_issues)} {severity} issues.",
+            "",
+            "## Process",
+            f"1. Create and checkout branch: `docs/{severity.lower()}-fix-{date}`",
+            "2. Fix each issue below",
+            f"3. Commit: `docs: fix {len(sev_issues)} {severity} issues — nightly drift {date}`",
+            "4. Push the branch and open a PR against `develop`",
+            "",
+            "## Rules",
+            "- All documentation MUST reside within `docs/`",
+            "- Update BOTH `docs/README.md` AND `docs/Documentation_Status.md` when adding entries",
+            "- Update existing docs rather than creating new ones",
+            "",
+            f"## {severity} Issues",
+            "",
+        ]
 
-        for issue in sev_issues:
+        for i, issue in enumerate(sev_issues, 1):
             cat = issue["category"]
-            instruction = category_instructions.get(cat, issue.get("suggested_action", "Review and fix."))
-            objective_parts.append(f"- **[{cat}] {issue['file']}**: {issue['description']}")
-            objective_parts.append(f"  - *How to fix:* {instruction}")
-        objective_parts.append("")
+            instruction = fix_instructions.get(cat, issue.get("suggested_action", "Review and fix."))
+            lines.append(f"{i}. **{issue['file']}**: {issue['description'][:120]}")
+            lines.append(f"   Fix: {instruction}")
 
-    return "\n".join(objective_parts)
+        objective = "\n".join(lines)
+        batches.append({
+            "severity": severity,
+            "objective": objective,
+            "issue_count": len(sev_issues),
+        })
+
+    return batches
 
 
 def _dispatch_via_gateway(
@@ -260,49 +259,73 @@ async def main():
         logger.info("✅ Drift report shows zero issues. All documentation is in sync!")
         sys.exit(0)
 
-    logger.info(f"Found {total_issues} issues — dispatching VP maintenance mission")
+    logger.info(f"Found {total_issues} issues — building batched objectives by severity")
 
-    # Build scoped objective
-    objective = _build_mission_objective(report)
+    # Build severity-batched objectives (P0, P1, P2 as separate missions)
+    batches = _build_batched_objectives(report)
+    if not batches:
+        logger.info("No actionable batches produced from drift report.")
+        sys.exit(0)
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
-    idempotency_key = f"doc-maintenance-{today}"
+    dispatched = 0
+    failed = 0
 
-    # Retry with backoff if gateway is unavailable
-    max_retries = 3
-    retry_delays = [30, 60, 120]  # seconds between retries
+    for batch in batches:
+        severity = batch["severity"]
+        objective = batch["objective"]
+        issue_count = batch["issue_count"]
+        idempotency_key = f"doc-maintenance-{severity.lower()}-{today}"
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            logger.info(f"Gateway dispatch attempt {attempt}/{max_retries}")
-            result = _dispatch_via_gateway(gateway_url, auth_token, objective, idempotency_key)
+        logger.info(
+            f"Dispatching {severity} batch: {issue_count} issues, "
+            f"objective={len(objective)} chars, key={idempotency_key}"
+        )
 
-            mission = result.get("mission", {})
-            mission_id = mission.get("mission_id", "unknown")
-            status = mission.get("status", "unknown")
-            logger.info(f"✅ Successfully dispatched doc maintenance mission: {mission_id} (status={status})")
-            sys.exit(0)
+        # Retry with backoff if gateway is unavailable
+        max_retries = 3
+        retry_delays = [30, 60, 120]
+        success = False
 
-        except urllib.error.HTTPError as exc:
-            body = ""
+        for attempt in range(1, max_retries + 1):
             try:
-                body = exc.read().decode("utf-8")[:500]
-            except Exception:
-                pass
-            logger.warning(
-                f"Attempt {attempt} — HTTP {exc.code}: {exc.reason}. Body: {body}"
-            )
+                logger.info(f"  {severity} dispatch attempt {attempt}/{max_retries}")
+                result = _dispatch_via_gateway(gateway_url, auth_token, objective, idempotency_key)
+                mission = result.get("mission", {})
+                mission_id = mission.get("mission_id", "unknown")
+                status = mission.get("status", "unknown")
+                logger.info(f"  ✅ {severity} mission dispatched: {mission_id} (status={status})")
+                dispatched += 1
+                success = True
+                break
+            except urllib.error.HTTPError as exc:
+                body = ""
+                try:
+                    body = exc.read().decode("utf-8")[:500]
+                except Exception:
+                    pass
+                logger.warning(f"  Attempt {attempt} — HTTP {exc.code}: {exc.reason}. Body: {body}")
+            except Exception as exc:
+                logger.warning(f"  Attempt {attempt} — dispatch failed: {type(exc).__name__}: {exc}")
 
-        except Exception as exc:
-            logger.warning(f"Attempt {attempt} — dispatch failed: {type(exc).__name__}: {exc}")
+            if attempt < max_retries:
+                delay = retry_delays[attempt - 1]
+                logger.info(f"  Retrying in {delay}s...")
+                await asyncio.sleep(delay)
 
-        if attempt < max_retries:
-            delay = retry_delays[attempt - 1]
-            logger.info(f"Retrying in {delay}s...")
-            await asyncio.sleep(delay)
+        if not success:
+            logger.error(f"  ❌ All {max_retries} attempts failed for {severity} batch")
+            failed += 1
 
-    logger.error(f"❌ All {max_retries} dispatch attempts failed. Health check will alert Simone.")
-    sys.exit(1)
+        # Small delay between batches to avoid queue flooding
+        if batch != batches[-1]:
+            logger.info("  Waiting 30s before next batch...")
+            await asyncio.sleep(30)
+
+    logger.info(f"Dispatch complete: {dispatched} batches dispatched, {failed} failed")
+    if failed > 0:
+        logger.error("❌ Some batches failed to dispatch. Health check will alert Simone.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

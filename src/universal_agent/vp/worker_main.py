@@ -5,12 +5,51 @@ import asyncio
 import logging
 import os
 
+import subprocess
+
 from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import vp_enabled_ids
 from universal_agent.vp.worker_loop import VpWorkerLoop
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_git_for_push() -> None:
+    """Configure git credentials so VP worker subprocesses can push.
+
+    Uses GITHUB_TOKEN from Infisical (loaded by initialize_runtime_secrets).
+    Falls back gracefully — if no token is available, git push will still
+    work if the repo remote URL has an embedded token.
+    """
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if not token:
+        logger.info("GITHUB_TOKEN not set — git push will rely on repo remote URL credentials")
+        return
+
+    try:
+        # Set git identity for commits made by the VP worker
+        subprocess.run(
+            ["git", "config", "--global", "user.name", "VP Coder Agent"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "--global", "user.email", "vp-coder@universal-agent.local"],
+            check=True, capture_output=True,
+        )
+        # Configure credential helper to supply the token for any https push
+        # This script echoes the token as the password when git asks for credentials
+        helper_script = (
+            f'!f() {{ echo "username=x-access-token"; '
+            f'echo "password={token}"; }}; f'
+        )
+        subprocess.run(
+            ["git", "config", "--global", "credential.helper", helper_script],
+            check=True, capture_output=True,
+        )
+        logger.info("Git credential helper configured for VP worker push")
+    except Exception as exc:
+        logger.warning("Failed to configure git credentials: %s", exc)
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +75,9 @@ async def _run() -> None:
         logger.info("Infisical runtime secrets loaded for VP worker")
     except Exception as exc:
         logger.warning("Infisical secret bootstrap skipped: %s", exc)
+
+    # Configure git credentials so agent subprocesses can push branches
+    _configure_git_for_push()
 
     if args.vp_id not in set(vp_enabled_ids(default=("vp.coder.primary", "vp.general.primary"))):
         raise SystemExit(f"vp_id '{args.vp_id}' is not enabled by UA_VP_ENABLED_IDS")

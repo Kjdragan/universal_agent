@@ -130,3 +130,51 @@ jobs:
           else
             echo "## ❌ Report not generated" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # ── Stage 2: Trigger VP doc-maintenance mission on VPS ──
+      - name: "Stage 2 — Connect to Tailscale"
+        if: steps.audit.outputs.exit_code != '0'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: gha-doc-stage2-${{ github.run_id }}
+
+      - name: "Stage 2 — Dispatch VP doc-maintenance missions"
+        if: steps.audit.outputs.exit_code != '0'
+        env:
+          SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          echo "🔄 Stage 2: Dispatching VP doc-maintenance missions to VPS..."
+
+          # Configure SSH key (same pattern as deploy workflows)
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Copy drift report to VPS (artifacts/ is gitignored so won't be on VPS)
+          REPORT_DIR="artifacts/doc-drift-reports/$(date -u +%Y-%m-%d)"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$SSH_USER@$SSH_HOST" "mkdir -p /opt/universal_agent/${REPORT_DIR}" || true
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${REPORT_DIR}/drift_report.json" \
+            "$SSH_USER@$SSH_HOST:/opt/universal_agent/${REPORT_DIR}/" || true
+
+          # Run Stage 2 doc maintenance agent on VPS
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /opt/universal_agent && PYTHONPATH=src ./.venv/bin/python3 -m universal_agent.scripts.doc_maintenance_agent" \
+            2>&1 | tee stage2_output.log
+
+          STAGE2_EXIT=$?
+          if [ "${STAGE2_EXIT}" -eq 0 ]; then
+            echo "✅ Stage 2 complete — VP missions dispatched"
+            echo "### 🤖 Stage 2: VP Missions Dispatched" >> "$GITHUB_STEP_SUMMARY"
+            tail -5 stage2_output.log >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ Stage 2 dispatch failed (exit ${STAGE2_EXIT})"
+            echo "### ⚠️ Stage 2: Dispatch Failed" >> "$GITHUB_STEP_SUMMARY"
+            tail -10 stage2_output.log >> "$GITHUB_STEP_SUMMARY"
+          fi
+
