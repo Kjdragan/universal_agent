@@ -403,7 +403,7 @@ def _discover_agent_profiles(project_root: str) -> list[dict]:
 
 def _agent_domain(name: str) -> str:
     lowered = name.lower()
-    if any(token in lowered for token in ("bowser", "playwright", "browserbase", "chrome")):
+    if any(token in lowered for token in ("agent-browser", "chrome")):
         return "🌐 Browser Operations"
     if any(token in lowered for token in ("research", "trend", "report", "data-analyst", "evaluation")):
         return "🔬 Research & Analysis"
@@ -432,8 +432,7 @@ def build_live_capabilities_snapshot(project_root: Optional[str] = None) -> str:
         "### Capability Routing Doctrine",
         "- Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.",
         "- Do not default to research/report unless explicitly requested or clearly required.",
-        "- Browser tasks are Bowser-first: `claude-bowser-agent` (identity/session), `playwright-bowser-agent` (parallel/repeatable), `bowser-qa-agent` (UI validation).",
-        "- Use `browserbase` when Bowser lanes are unavailable or cloud-browser behavior is explicitly needed.",
+        "- Browser tasks use `agent-browser` (Vercel headless browser CLI) as the primary tool for all web automation, testing, screenshots, and data extraction.",
         "",
         "### 🔍 Decomposing Research Requests",
         "The term 'research' is broad. You must decompose the user's intent and select the appropriate specialist:",
