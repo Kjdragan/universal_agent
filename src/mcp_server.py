@@ -987,7 +987,7 @@ def read_research_files(file_paths: list[str]) -> str:
 
 @mcp.tool()
 @trace_tool_output
-async def draft_report_parallel(retry_id: str = "", task_name: str = "default") -> str:
+async def draft_report_parallel(retry_id: str = "", task_name: str = "default", workspace: str | None = None) -> str:
     """
     Execute the Python-based parallel drafting system to generate report sections concurrently.
     
@@ -1002,6 +1002,7 @@ async def draft_report_parallel(retry_id: str = "", task_name: str = "default") 
     Args:
         retry_id: Optional string (e.g., timestamp) to force re-execution if previous call failed/was blocked.
         task_name: The task name to locate the specific research corpus (default: "default").
+        workspace: Pre-resolved workspace path (avoids re-resolution when called from pipeline).
     """
     
     # Lazy import to avoid circular dependencies or top-level errors
@@ -1010,7 +1011,7 @@ async def draft_report_parallel(retry_id: str = "", task_name: str = "default") 
     except ImportError:
         return "Error: Could not import draft_report_async. Check python path."
 
-    workspace = _resolve_workspace()
+    workspace = workspace or _resolve_workspace()
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
         
@@ -1030,7 +1031,7 @@ async def draft_report_parallel(retry_id: str = "", task_name: str = "default") 
 
 @mcp.tool()
 @trace_tool_output
-def compile_report(theme: str = "modern", custom_css: str = None) -> str:
+def compile_report(theme: str = "modern", custom_css: str = None, workspace: str | None = None) -> str:
     """
     Compile all section markdown files into a single professional HTML report.
     This tool handles:
@@ -1042,6 +1043,7 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
     Args:
         theme: "modern", "financial", or "creative" (default: "modern")
         custom_css: Optional raw CSS string to override/extend styles.
+        workspace: Pre-resolved workspace path (avoids re-resolution when called from pipeline).
     """
     import subprocess
     
@@ -1050,8 +1052,8 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
         "src", "universal_agent", "scripts", "compile_report.py"
     )
     
-    # Locate workspace - MUST be set in environment
-    workspace = _resolve_workspace()
+    # Locate workspace - use provided or resolve
+    workspace = workspace or _resolve_workspace()
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
         
@@ -1080,7 +1082,7 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
 
 @mcp.tool()
 @trace_tool_output
-async def cleanup_report() -> str:
+async def cleanup_report(workspace: str | None = None) -> str:
     """
     Run a cleanup pass over drafted report sections to normalize headings,
     remove duplicated content, and fix formatting inconsistencies.
@@ -1092,6 +1094,9 @@ async def cleanup_report() -> str:
     4. Validates for placeholder text like [INSERT STATS]
     
     Use this BEFORE compiling the report.
+
+    Args:
+        workspace: Pre-resolved workspace path (avoids re-resolution when called from pipeline).
     """
     # Lazy import
     try:
@@ -1099,7 +1104,7 @@ async def cleanup_report() -> str:
     except ImportError:
         return "Error: Could not import cleanup_report_async."
 
-    workspace = _resolve_workspace()
+    workspace = workspace or _resolve_workspace()
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set."
 
@@ -1115,17 +1120,22 @@ async def cleanup_report() -> str:
 
 @mcp.tool()
 @trace_tool_output
-async def generate_outline(topic: str, task_name: str = "default") -> str:
+async def generate_outline(topic: str, task_name: str = "default", workspace: str | None = None) -> str:
     """
     Generate a report outline from the refined corpus.
     Use this AFTER finalize_research and BEFORE drafted_report_parallel.
+
+    Args:
+        topic: Topic for the outline.
+        task_name: Task directory name.
+        workspace: Pre-resolved workspace path (avoids re-resolution when called from pipeline).
     """
     try:
         from universal_agent.scripts.generate_outline import generate_outline_async
     except ImportError:
         return "Error: Could not import generate_outline_async."
         
-    workspace = _resolve_workspace()
+    workspace = workspace or _resolve_workspace()
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set."
 
@@ -4264,7 +4274,7 @@ async def _run_research_pipeline_legacy(
     # 2. OUTLINE
     try:
         mcp_log("[Pipeline] Step 2/5: Generating Outline...", level="INFO")
-        res = await generate_outline(topic=query, task_name=task_name)
+        res = await generate_outline(topic=query, task_name=task_name, workspace=workspace)
     except Exception as e:
         return json.dumps({
             "status": "error",
@@ -4275,7 +4285,7 @@ async def _run_research_pipeline_legacy(
     # 3. DRAFT
     try:
         mcp_log("[Pipeline] Step 3/5: Drafting Sections (Parallel)...", level="INFO")
-        res = await draft_report_parallel(task_name=task_name)
+        res = await draft_report_parallel(task_name=task_name, workspace=workspace)
     except Exception as e:
          return json.dumps({
             "status": "error",
@@ -4286,7 +4296,7 @@ async def _run_research_pipeline_legacy(
     # 4. CLEANUP
     try:
         mcp_log("[Pipeline] Step 4/5: Cleaning & Synthesizing (LLM Audit)...", level="INFO")
-        res = await cleanup_report()
+        res = await cleanup_report(workspace=workspace)
     except Exception as e:
          return json.dumps({
             "status": "error",
@@ -4297,7 +4307,7 @@ async def _run_research_pipeline_legacy(
     # 5. COMPILE
     try:
         mcp_log("[Pipeline] Step 5/5: Compiling HTML...", level="INFO")
-        res = compile_report(theme="modern")
+        res = compile_report(theme="modern", workspace=workspace)
         
         return json.dumps({
             "status": "success",
@@ -4405,6 +4415,17 @@ async def _run_report_generation_legacy(
     # If explicit corpus data provided, write it to disk first
     if corpus_data:
         try:
+            # Detect if corpus_data is actually a file path instead of content
+            if os.path.isfile(corpus_data):
+                mcp_log(f"[Report Gen] corpus_data is a file path, reading: {corpus_data}", level="INFO")
+                with open(corpus_data, "r", encoding="utf-8") as f:
+                    corpus_data = f.read()
+                if len(corpus_data) < 100:
+                    return f"❌ corpus_data file at {corpus_data} is too small ({len(corpus_data)} bytes). Research phase may have failed."
+            elif corpus_data.startswith("/") and len(corpus_data) < 500 and "\n" not in corpus_data:
+                mcp_log(f"[Report Gen] WARNING: corpus_data looks like a path but file not found: {corpus_data}", level="WARNING")
+                return f"❌ corpus_data appears to be a file path but file not found: {corpus_data}"
+
             mcp_log("[Report Gen] Using provided corpus data...", level="INFO")
             os.makedirs(os.path.dirname(corpus_path), exist_ok=True)
             with open(corpus_path, "w", encoding="utf-8") as f:
@@ -4422,7 +4443,7 @@ async def _run_report_generation_legacy(
     # 1. OUTLINE
     try:
         mcp_log("[Report Gen] Step 1/4: Generating Outline...", level="INFO")
-        res = await generate_outline(topic=query, task_name=task_name)
+        res = await generate_outline(topic=query, task_name=task_name, workspace=workspace)
         if "Error" in res:
              return f"❌ Report Gen Failed at Outline Step: {res}"
     except Exception as e:
@@ -4431,7 +4452,7 @@ async def _run_report_generation_legacy(
     # 2. DRAFT
     try:
         mcp_log("[Report Gen] Step 2/4: Drafting Sections (Parallel)...", level="INFO")
-        res = await draft_report_parallel(task_name=task_name)
+        res = await draft_report_parallel(task_name=task_name, workspace=workspace)
         if "Error" in res:
              return f"❌ Report Gen Failed at Drafting Step: {res}"
     except Exception as e:
@@ -4440,7 +4461,7 @@ async def _run_report_generation_legacy(
     # 3. CLEANUP
     try:
         mcp_log("[Report Gen] Step 3/4: Cleaning & Synthesizing (LLM Audit)...", level="INFO")
-        res = await cleanup_report()
+        res = await cleanup_report(workspace=workspace)
     except Exception as e:
          return json.dumps({
             "status": "error",
@@ -4451,7 +4472,7 @@ async def _run_report_generation_legacy(
     # 4. COMPILE
     try:
         mcp_log("[Report Gen] Step 4/4: Compiling HTML...", level="INFO")
-        res = compile_report(theme="modern")
+        res = compile_report(theme="modern", workspace=workspace)
         
         return json.dumps({
             "status": "success",
