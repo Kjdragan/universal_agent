@@ -1672,7 +1672,7 @@ type DashboardAuthSession = {
   expires_at?: number | null;
 };
 
-void FileExplorer;
+// FileExplorer is now rendered as Panel 3 in the main layout.
 void WorkProductViewer;
 
 export default function HomePage() {
@@ -1686,9 +1686,10 @@ export default function HomePage() {
   // Layout State
   const [activityCollapsed, setActivityCollapsed] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [filesCollapsed, setFilesCollapsed] = useState(false);
 
   // Responsive State
-  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'dashboard'>('chat');
+  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
 
   const handleStartNewSession = () => {
     const store = useAgentStore.getState();
@@ -1965,14 +1966,14 @@ export default function HomePage() {
           </div>
         </header>
 
-        {/* Main Content Area: Chat + Activity only */}
+        {/* Main Content Area: Chat + Activity + Files */}
         <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative pb-14 md:pb-0">
           {/* PANEL 1: CHAT / VIEWER */}
           <main
             className={`
               min-w-0 bg-background/30 relative flex-col border-r border-border/40
               ${activeMobileTab === 'chat' ? 'flex' : 'hidden md:flex'}
-              ${chatCollapsed ? 'md:w-10 md:shrink-0 md:flex-none' : 'md:basis-1/2 md:flex-1'}
+              ${chatCollapsed ? 'md:w-10 md:shrink-0 md:flex-none' : 'md:basis-1/3 md:flex-1'}
             `}
           >
             {chatCollapsed ? (
@@ -2010,9 +2011,9 @@ export default function HomePage() {
           {/* PANEL 2: ACTIVITY LOG */}
           <div
             className={`
-              bg-slate-900/20 relative transition-all duration-300 flex-col
+              bg-slate-900/20 relative transition-all duration-300 flex-col border-r border-border/40
               ${activeMobileTab === 'activity' ? 'flex w-full' : 'hidden md:flex'}
-              ${activityCollapsed ? 'w-10 shrink-0' : chatCollapsed ? 'md:flex-1 md:basis-full' : 'md:basis-1/2 md:flex-1'}
+              ${activityCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
             `}
           >
             {activityCollapsed ? (
@@ -2027,6 +2028,46 @@ export default function HomePage() {
             ) : (
               <div className="h-full flex flex-col overflow-hidden">
                 <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
+              </div>
+            )}
+          </div>
+
+          {/* PANEL 3: FILE EXPLORER */}
+          <div
+            className={`
+              bg-slate-900/30 relative transition-all duration-300 flex-col
+              ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden md:flex'}
+              ${filesCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
+            `}
+          >
+            {filesCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setFilesCollapsed(false)}
+                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-slate-700/50 bg-slate-900/40"
+                title="Expand File Explorer"
+              >
+                <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.folder} Files ▶</span>
+              </button>
+            ) : (
+              <div className="h-full flex flex-col overflow-hidden">
+                <div className="h-10 border-b border-slate-800 flex items-center justify-between px-3 bg-slate-900/60 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{ICONS.folder}</span>
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Session Explorer</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFilesCollapsed(true)}
+                    className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200"
+                    title="Collapse File Explorer"
+                  >
+                    ▶
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <FileExplorer />
+                </div>
               </div>
             )}
           </div>
@@ -2086,6 +2127,13 @@ export default function HomePage() {
           >
             <span className="text-xl">{ICONS.activity}</span>
             <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
+          </button>
+          <button
+            onClick={() => setActiveMobileTab('files')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-emerald-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.folder}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
           </button>
           <button
             onClick={() => setActiveMobileTab('dashboard')}
