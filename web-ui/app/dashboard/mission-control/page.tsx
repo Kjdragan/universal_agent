@@ -1072,10 +1072,10 @@ export default function MissionControlPage() {
               Refresh All
             </button>
             <button
-              onClick={() => router.push("/dashboard/mission-control")}
+              onClick={() => triggerRefresh}
               className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
             >
-              <Activity className="h-4 w-4" />
+              <Activity className={`h-4 w-4 ${isRefreshing ? "animate-pulse" : ""}`} />
               Run Health Check
             </button>
             <button

@@ -2086,143 +2086,229 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
 }
 
 export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
-  const { heartbeatState, selected } = useOps();
-  const currentChatSessionId = useAgentStore((s) => s.currentSession?.session_id ?? null);
-  const heartbeatSessionId = currentChatSessionId || selected;
+  const isFull = variant === "full";
+  /* ── Local state for system-wide heartbeat aggregation ──────────────── */
+  type VpEntry = { vp_id: string; session_id?: string; status?: string; effective_status?: string; last_heartbeat_at?: string; lease_expires_at?: string };
+  type SessionEntry = { session_id: string; last_run?: string; busy: boolean; last_summary?: unknown };
+
+  const [vpSessions, setVpSessions] = useState<VpEntry[]>([]);
+  const [sessionHeartbeats, setSessionHeartbeats] = useState<SessionEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  if (variant === "full") {
-    return (
-      <div className="flex flex-col space-y-6">
-        <div className="p-6 bg-card/10 rounded-xl border border-border/40 space-y-4">
-          <div className="flex items-center justify-between border-b border-border/40 pb-4">
-            <h2 className="text-sm font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
-              <span className="text-primary/60">💓</span> System Heartbeat
-              <span className="text-xs text-muted-foreground/60 font-normal font-mono">({heartbeatState.status})</span>
-            </h2>
-          </div>
-          <div className="text-sm space-y-3">
-            {!heartbeatSessionId && <div className="text-muted-foreground">Select a session to view heartbeat.</div>}
-            {heartbeatSessionId && (
-              <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                <div>
-                    <span className="text-muted-foreground block mb-1">Session</span>
-                    <span className="font-mono text-xs">{heartbeatSessionId}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block mb-1">Last run</span>
-                  <span className="font-mono text-xs">
-                    {heartbeatState.last_run ? formatDateTimeTz(heartbeatState.last_run) : "--"}
-                  </span>
-                </div>
-                <div>
-                    <span className="text-muted-foreground block mb-1">Running</span>
-                    <span className="font-mono text-xs">{heartbeatState.busy ? "yes" : "no"}</span>
-                </div>
-                {(() => {
-                  const raw = heartbeatState.last_summary_raw;
-                  if (!raw || typeof raw !== "object") return null;
-                  const summary = raw as { sent?: boolean; suppressed_reason?: string };
-                  return (<>
-                    <div>
-                        <span className="text-muted-foreground block mb-1">Delivered</span>
-                        <span className="font-mono text-xs">{summary.sent ? "yes" : "no"}</span>
-                    </div>
-                    <div>
-                        <span className="text-muted-foreground block mb-1">Suppressed</span>
-                        <span className="font-mono text-xs">{summary.suppressed_reason ?? "--"}</span>
-                    </div>
-                  </>);
-                })()}
-                
-                <div className="col-span-2 mt-4">
-                    <span className="text-muted-foreground block mb-2">Last summary text</span>
-                    {heartbeatState.skip_marker && (
-                      <div className="text-xs text-amber-400 mb-2">{heartbeatState.skip_marker}</div>
-                    )}
-                    <div className="text-xs font-mono whitespace-pre-wrap bg-slate-950/50 p-4 rounded-lg border border-border/40">{heartbeatState.last_summary_text ?? "(none)"}</div>
-                </div>
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [vpRes, hbRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/ops/vp/sessions?status=all&limit=50`),
+        fetch(`${API_BASE}/api/v1/heartbeat/last`),
+      ]);
+      if (vpRes.ok) {
+        const d = await vpRes.json();
+        setVpSessions(d.sessions || []);
+      }
+      if (hbRes.ok) {
+        const d = await hbRes.json();
+        const hbs: Record<string, { last_run?: string; last_summary?: unknown; busy: boolean }> = d.heartbeats || {};
+        setSessionHeartbeats(
+          Object.entries(hbs).map(([sid, v]) => ({ session_id: sid, last_run: v.last_run, busy: v.busy, last_summary: v.last_summary })),
+        );
+      } else if (hbRes.status === 400) {
+        // heartbeat service disabled
+        setSessionHeartbeats([]);
+      }
+      setLastRefreshed(new Date());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-                {(() => {
-                  const raw = heartbeatState.last_summary_raw;
-                  if (!raw || typeof raw !== "object") return null;
-                  const artifacts = (raw as { artifacts?: { writes?: string[]; work_products?: string[] } }).artifacts;
-                  const writes = artifacts?.writes; const wp = artifacts?.work_products;
-                  if ((!writes || writes.length === 0) && (!wp || wp.length === 0)) return null;
-                  return (
-                    <div className="col-span-2 space-y-2 mt-2">
-                      <div className="text-muted-foreground font-semibold">Artifacts</div>
-                      <div className="grid grid-cols-2 gap-4">
-                          {writes && writes.length > 0 && <div className="text-xs font-mono whitespace-pre-wrap bg-slate-950/30 p-2 border border-border/20 rounded">{"writes:\n" + writes.slice(-5).join("\n")}</div>}
-                          {wp && wp.length > 0 && <div className="text-xs font-mono whitespace-pre-wrap bg-slate-950/30 p-2 border border-border/20 rounded">{"work_products:\n" + wp.slice(-5).join("\n")}</div>}
-                      </div>
-                    </div>
-                  );
-                })()}
-                {heartbeatState.error && <div className="col-span-2 text-xs text-amber-500 mt-2 p-2 bg-amber-500/10 border border-amber-500/20 rounded">{heartbeatState.error}</div>}
-              </div>
-            )}
-          </div>
+  // Auto-refresh every 30s
+  useEffect(() => {
+    void fetchAll();
+    const iv = setInterval(() => void fetchAll(), 30_000);
+    return () => clearInterval(iv);
+  }, [fetchAll]);
+
+  /* ── Helpers ───────────────────────────────────────────────────────── */
+  const ageSeconds = (ts?: string | null) => {
+    if (!ts) return Infinity;
+    return Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  };
+  const ageLabel = (ts?: string | null) => {
+    if (!ts) return "--";
+    const s = ageSeconds(ts);
+    if (s < 60) return `${Math.round(s)}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${(s / 3600).toFixed(1)}h ago`;
+    return `${(s / 86400).toFixed(1)}d ago`;
+  };
+  const statusDot = (ts?: string | null, status?: string) => {
+    if (status === "active" || status === "idle") {
+      const age = ageSeconds(ts);
+      if (age < 120) return "bg-emerald-500";
+      if (age < 300) return "bg-amber-500";
+      return "bg-rose-500";
+    }
+    return "bg-slate-600";
+  };
+
+  /* ── Deduplicate: VP sessions are the primary view, remove matching session HBs ── */
+  const vpSessionIds = new Set(vpSessions.map((v) => v.session_id).filter(Boolean));
+  const standaloneHbs = sessionHeartbeats.filter((h) => !vpSessionIds.has(h.session_id));
+  const totalSources = vpSessions.length + standaloneHbs.length;
+  const healthyCount = vpSessions.filter((v) => ageSeconds(v.last_heartbeat_at) < 300).length + standaloneHbs.filter((h) => ageSeconds(h.last_run) < 300).length;
+  const overallStatus = loading ? "loading" : totalSources === 0 ? "no sources" : healthyCount === totalSources ? "healthy" : healthyCount > 0 ? "degraded" : "offline";
+  const overallColor = overallStatus === "healthy" ? "text-emerald-400" : overallStatus === "degraded" ? "text-amber-400" : overallStatus === "offline" ? "text-rose-400" : "text-slate-400";
+
+  /* ── Render ────────────────────────────────────────────────────────── */
+  if (!isFull) {
+    return (
+      <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
+        <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => setIsCollapsed(!isCollapsed)}>
+          <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+            <span className="text-primary/60">💓</span> Heartbeat
+            <span className={`text-[9px] font-normal font-mono ${overallColor}`}>({overallStatus})</span>
+          </h2>
+          <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? "rotate-180" : ""}`}>▼</span>
         </div>
+        {!isCollapsed && (
+          <div className="p-3 text-xs space-y-1.5">
+            {totalSources === 0 && <div className="text-muted-foreground">No heartbeat sources detected.</div>}
+            {vpSessions.map((vp) => (
+              <div key={vp.vp_id} className="flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 rounded-full shrink-0 ${statusDot(vp.last_heartbeat_at, vp.effective_status || vp.status)}`} />
+                <span className="font-mono text-[11px] truncate flex-1">{vp.vp_id}</span>
+                <span className="text-[10px] text-muted-foreground">{ageLabel(vp.last_heartbeat_at)}</span>
+              </div>
+            ))}
+            {standaloneHbs.map((h) => (
+              <div key={h.session_id} className="flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 rounded-full shrink-0 ${statusDot(h.last_run)}`} />
+                <span className="font-mono text-[11px] truncate flex-1">{h.session_id}</span>
+                <span className="text-[10px] text-muted-foreground">{ageLabel(h.last_run)}</span>
+              </div>
+            ))}
+            {error && <div className="text-[10px] text-amber-500">{error}</div>}
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
-      <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => setIsCollapsed(!isCollapsed)}>
-        <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
-          <span className="text-primary/60">💓</span> Heartbeat
-          <span className="text-[9px] text-muted-foreground/60 font-normal font-mono">({heartbeatState.status})</span>
-        </h2>
-        <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? "rotate-180" : ""}`}>▼</span>
-      </div>
-      {!isCollapsed && (
-        <div className="p-3 text-xs space-y-1">
-          {!heartbeatSessionId && <div className="text-muted-foreground">Select a session to view heartbeat.</div>}
-          {heartbeatSessionId && (
-            <>
-              <div className="flex justify-between"><span className="text-muted-foreground">Session</span><span className="font-mono text-[11px] truncate max-w-[180px]" title={heartbeatSessionId}>{heartbeatSessionId}</span></div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Last run</span>
-                <span className="font-mono text-[11px]">
-                  {heartbeatState.last_run ? formatDateTimeTz(heartbeatState.last_run) : "--"}
-                </span>
-              </div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Running</span><span className="font-mono text-[11px]">{heartbeatState.busy ? "yes" : "no"}</span></div>
-              {(() => {
-                const raw = heartbeatState.last_summary_raw;
-                if (!raw || typeof raw !== "object") return null;
-                const summary = raw as { sent?: boolean; suppressed_reason?: string };
-                return (<>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Delivered</span><span className="font-mono text-[11px]">{summary.sent ? "yes" : "no"}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Suppressed</span><span className="font-mono text-[11px]">{summary.suppressed_reason ?? "--"}</span></div>
-                </>);
-              })()}
-              <div className="text-muted-foreground">Last summary</div>
-              {heartbeatState.skip_marker && (
-                <div className="text-[10px] text-amber-400">{heartbeatState.skip_marker}</div>
-              )}
-              <div className="text-[11px] font-mono whitespace-pre-wrap max-h-24 overflow-y-auto scrollbar-thin">{heartbeatState.last_summary_text ?? "(none)"}</div>
-              {(() => {
-                const raw = heartbeatState.last_summary_raw;
-                if (!raw || typeof raw !== "object") return null;
-                const artifacts = (raw as { artifacts?: { writes?: string[]; work_products?: string[] } }).artifacts;
-                const writes = artifacts?.writes; const wp = artifacts?.work_products;
-                if ((!writes || writes.length === 0) && (!wp || wp.length === 0)) return null;
+    <div className="flex flex-col space-y-6">
+      <div className="p-6 bg-card/10 rounded-xl border border-border/40 space-y-4">
+        <div className="flex items-center justify-between border-b border-border/40 pb-4">
+          <h2 className="text-sm font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+            <span className="text-primary/60">💓</span> System Heartbeat
+            <span className={`text-xs font-normal font-mono ${overallColor}`}>({overallStatus})</span>
+          </h2>
+          <div className="flex items-center gap-2">
+            {lastRefreshed && <span className="text-[10px] text-muted-foreground font-mono">updated {lastRefreshed.toLocaleTimeString()}</span>}
+            <button onClick={() => void fetchAll()} disabled={loading} className="text-[10px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all disabled:opacity-50">
+              {loading ? "Loading…" : "↻ Refresh"}
+            </button>
+          </div>
+        </div>
+
+        {/* Summary bar */}
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="rounded-lg border bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">Total Sources</p>
+            <p className="text-2xl font-bold text-slate-200">{totalSources}</p>
+          </div>
+          <div className="rounded-lg border bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">Healthy</p>
+            <p className={`text-2xl font-bold ${healthyCount === totalSources ? "text-emerald-400" : "text-amber-400"}`}>{healthyCount}</p>
+          </div>
+          <div className="rounded-lg border bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">Stale / Offline</p>
+            <p className={`text-2xl font-bold ${totalSources - healthyCount > 0 ? "text-rose-400" : "text-slate-500"}`}>{totalSources - healthyCount}</p>
+          </div>
+        </div>
+
+        {totalSources === 0 && !loading && (
+          <div className="text-muted-foreground text-sm text-center py-8">No heartbeat sources detected. Start a session or connect VP workers.</div>
+        )}
+
+        {/* VP Fleet Workers */}
+        {vpSessions.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">VP Fleet Workers</h3>
+            <div className="grid gap-2 md:grid-cols-2">
+              {vpSessions.map((vp) => {
+                const age = ageSeconds(vp.last_heartbeat_at);
+                const dot = statusDot(vp.last_heartbeat_at, vp.effective_status || vp.status);
+                const workerStatus = vp.effective_status || vp.status || "unknown";
+                const leaseSeconds = vp.lease_expires_at ? Math.max(0, (new Date(vp.lease_expires_at).getTime() - Date.now()) / 1000) : NaN;
                 return (
-                  <div className="space-y-1">
-                    <div className="text-muted-foreground">Artifacts</div>
-                    {writes && writes.length > 0 && <div className="text-[10px] font-mono whitespace-pre-wrap">{"writes:\n" + writes.slice(-5).join("\n")}</div>}
-                    {wp && wp.length > 0 && <div className="text-[10px] font-mono whitespace-pre-wrap">{"work_products:\n" + wp.slice(-5).join("\n")}</div>}
+                  <div key={vp.vp_id} className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{vp.vp_id}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-block h-2 w-2 rounded-full ${dot}`} />
+                        <span className={`text-[11px] font-semibold uppercase ${age < 120 ? "text-emerald-400" : age < 300 ? "text-amber-400" : "text-rose-400"}`}>{workerStatus}</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                      <span className="text-slate-500">Session</span>
+                      <span className="text-right font-mono text-[10px] truncate">{vp.session_id || "--"}</span>
+                      <span className="text-slate-500">Last Heartbeat</span>
+                      <span className="text-right font-mono text-[10px]">{vp.last_heartbeat_at ? formatDateTimeTz(vp.last_heartbeat_at) : "--"}</span>
+                      <span className="text-slate-500">Age</span>
+                      <span className={`text-right font-mono text-[10px] ${age < 120 ? "text-emerald-300" : age < 300 ? "text-amber-300" : "text-rose-300"}`}>{ageLabel(vp.last_heartbeat_at)}</span>
+                      {Number.isFinite(leaseSeconds) && (<>
+                        <span className="text-slate-500">Lease TTL</span>
+                        <span className={`text-right font-mono text-[10px] ${leaseSeconds < 30 ? "text-rose-300" : leaseSeconds < 60 ? "text-amber-300" : "text-emerald-300"}`}>{Math.round(leaseSeconds)}s</span>
+                      </>)}
+                    </div>
                   </div>
                 );
-              })()}
-              {heartbeatState.error && <div className="text-[10px] text-amber-500">{heartbeatState.error}</div>}
-            </>
-          )}
-        </div>
-      )}
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Per-Session Heartbeats */}
+        {standaloneHbs.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Session Heartbeats</h3>
+            <div className="grid gap-2 md:grid-cols-2">
+              {standaloneHbs.map((h) => {
+                const age = ageSeconds(h.last_run);
+                const dot = statusDot(h.last_run);
+                return (
+                  <div key={h.session_id} className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[10px] font-mono truncate max-w-[200px]">{h.session_id}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-block h-2 w-2 rounded-full ${dot}`} />
+                        <span className={`text-[11px] font-semibold ${h.busy ? "text-sky-400" : age < 300 ? "text-emerald-400" : "text-rose-400"}`}>{h.busy ? "running" : age < 300 ? "idle" : "stale"}</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                      <span className="text-slate-500">Last Run</span>
+                      <span className="text-right font-mono text-[10px]">{h.last_run ? formatDateTimeTz(h.last_run) : "--"}</span>
+                      <span className="text-slate-500">Age</span>
+                      <span className={`text-right font-mono text-[10px] ${age < 120 ? "text-emerald-300" : age < 300 ? "text-amber-300" : "text-rose-300"}`}>{ageLabel(h.last_run)}</span>
+                      <span className="text-slate-500">Busy</span>
+                      <span className="text-right font-mono text-[10px]">{h.busy ? "yes" : "no"}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {error && <div className="text-xs text-amber-500 p-2 bg-amber-500/10 border border-amber-500/20 rounded">{error}</div>}
+      </div>
     </div>
   );
 }
