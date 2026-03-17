@@ -465,7 +465,6 @@ Tests:
 - `tests/unit/test_telegram_formatter.py`
 
 Related operational docs:
-- `docs/03_Operations/46_Running_The_Agent.md`
 - `docs/03_Operations/44_Telegram_Functionality_Implementation_Plan_2026-02-18.md`
 - `docs/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
 - `docs/03_Operations/24_VPS_Service_Recovery_System_Runbook_2026-02-12.md`
