@@ -115,6 +115,7 @@ const EMPTY_SUMMARY: SummaryResponse = {
 const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
 const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
 const MISSION_MAX_AGE_MS = 36 * 60 * 60 * 1000; // 36 hours — auto-hide old missions
+const CLEARED_MISSIONS_LS_KEY = "ua.cleared_missions_before";
 const VP_STATUS_COLORS: Record<string, { dot: string; text: string; bg: string }> = {
   idle: { dot: "bg-emerald-400", text: "text-emerald-300", bg: "border-emerald-900/40" },
   active: { dot: "bg-sky-400 animate-pulse", text: "text-sky-300", bg: "border-sky-900/40" },
@@ -688,19 +689,37 @@ export default function DashboardPage() {
   }, [vpMissions, vpSessions]);
 
 
+  // "Clear All" support for Recent Missions panel
+  const [clearedMissionsBefore, setClearedMissionsBefore] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(CLEARED_MISSIONS_LS_KEY);
+      if (stored) setClearedMissionsBefore(stored);
+    } catch { /* localStorage unavailable */ }
+  }, []);
+  const handleClearMissions = useCallback(() => {
+    const now = new Date().toISOString();
+    try { localStorage.setItem(CLEARED_MISSIONS_LS_KEY, now); } catch { /* ignore */ }
+    setClearedMissionsBefore(now);
+  }, []);
+
   const filteredVpMissions = useMemo(
-    () =>
-      vpMissions.filter((mission) => {
+    () => {
+      const clearedTs = clearedMissionsBefore ? new Date(clearedMissionsBefore).getTime() : null;
+      return vpMissions.filter((mission) => {
         if (selectedVpId !== "all" && mission.vp_id !== selectedVpId) return false;
         // Auto-clear missions older than 36 hours
         const ts = mission.updated_at || mission.created_at;
         if (ts) {
           const age = Date.now() - new Date(ts).getTime();
           if (Number.isFinite(age) && age > MISSION_MAX_AGE_MS) return false;
+          // Hide missions cleared by user
+          if (clearedTs && new Date(ts).getTime() <= clearedTs) return false;
         }
         return true;
-      }),
-    [selectedVpId, vpMissions],
+      });
+    },
+    [selectedVpId, vpMissions, clearedMissionsBefore],
   );
 
   const filteredVpSessions = useMemo(
@@ -1157,7 +1176,18 @@ export default function DashboardPage() {
         </div>
 
         <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs">
-          <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Recent Missions</p>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Recent Missions</p>
+            {filteredVpMissions.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearMissions}
+                className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-slate-300 transition"
+              >
+                Clear All
+              </button>
+            )}
+          </div>
           <div className="mt-2 space-y-2">
             {filteredVpMissions.slice(0, 10).map((mission) => {
               const missionStatus = String(mission.status || "unknown").toLowerCase();

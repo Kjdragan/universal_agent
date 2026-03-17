@@ -273,9 +273,22 @@ export default function ToDoListDashboardPage() {
   const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
   const [taskHistoryLoadingId, setTaskHistoryLoadingId] = useState("");
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
-  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("ua.deleted_completed_tasks.v1");
+      if (stored) return new Set(JSON.parse(stored) as string[]);
+    } catch { /* ignore */ }
+    return new Set();
+  });
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
+
+  // Persist deletedTaskIds to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem("ua.deleted_completed_tasks.v1", JSON.stringify([...deletedTaskIds]));
+    } catch { /* ignore */ }
+  }, [deletedTaskIds]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -444,8 +457,10 @@ export default function ToDoListDashboardPage() {
       // noop
     } finally {
       setDeleteAllPending(false);
+      // Reload so the backend-hidden tasks are also gone from server-side data
+      await load(true);
     }
-  }, [completedTasks]);
+  }, [completedTasks, load]);
 
   // ── Derived data ────────────────────────────────────────────────────────────
 

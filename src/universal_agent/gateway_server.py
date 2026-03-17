@@ -14541,6 +14541,37 @@ async def dashboard_todolist_completed(limit: int = 60):
     return {"status": "ok", "items": enriched}
 
 
+@app.delete("/api/v1/dashboard/todolist/completed/{task_id}")
+async def dashboard_todolist_delete_completed(task_id: str):
+    """Hide a completed task from the dashboard by parking it."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            row = conn.execute(
+                "SELECT status FROM task_hub_items WHERE task_id = ? LIMIT 1",
+                (tid,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Task not found")
+            current_status = str(row["status"] or "").strip().lower()
+            if current_status != task_hub.TASK_STATUS_COMPLETED:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Task is not completed (status={current_status})",
+                )
+            conn.execute(
+                "UPDATE task_hub_items SET status=?, stale_state=?, updated_at=? WHERE task_id=?",
+                (task_hub.TASK_STATUS_PARKED, "dashboard_hidden", _utc_now_iso(), tid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_PARKED}
+
+
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/history")
 async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
     with _activity_store_lock:
