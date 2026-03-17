@@ -446,8 +446,14 @@ export default function ToDoListDashboardPage() {
   const handleDeleteAllCompleted = useCallback(async () => {
     setDeleteAllPending(true);
     const ids = (completedTasks?.items || []).map((i) => i.task_id);
-    setDeletedTaskIds(new Set(ids));
+    // Merge into existing set so previously-deleted IDs aren't lost
+    setDeletedTaskIds((prev) => {
+      const merged = new Set(prev);
+      for (const id of ids) merged.add(id);
+      return merged;
+    });
     try {
+      // Await all DELETEs before reloading to avoid race condition
       await Promise.allSettled(
         ids.map((id) =>
           fetch(`${API_BASE}/api/v1/dashboard/todolist/completed/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -456,9 +462,9 @@ export default function ToDoListDashboardPage() {
     } catch {
       // noop
     } finally {
-      setDeleteAllPending(false);
       // Reload so the backend-hidden tasks are also gone from server-side data
       await load(true);
+      setDeleteAllPending(false);
     }
   }, [completedTasks, load]);
 
