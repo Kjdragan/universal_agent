@@ -126,6 +126,18 @@ jobs:
             echo '--> Syncing dependencies with uv...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango\"
 
+            echo '---> Ensuring venv Python binary has execute permission...'
+            VENV_PY_TARGET="\$(run_as_ua \"readlink -f \\\"\$STAGING_DIR/.venv/bin/python3\\\" 2>/dev/null\" || true)"
+            if [ -n \"\$VENV_PY_TARGET\" ] && [ ! -x \"\$VENV_PY_TARGET\" ]; then
+              echo \"---> FIXING: \$VENV_PY_TARGET lacks execute bit; adding...\"
+              if command -v sudo >/dev/null 2>&1; then
+                sudo chmod +x \"\$VENV_PY_TARGET\"
+              else
+                chmod +x \"\$VENV_PY_TARGET\"
+              fi
+            fi
+            run_as_ua \"\\\"\$STAGING_DIR/.venv/bin/python3\\\" --version\"
+
             echo '--> Validating staging runtime bootstrap...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment staging --expect-runtime-stage staging --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-staging --require UA_OPS_TOKEN --json\"
 
