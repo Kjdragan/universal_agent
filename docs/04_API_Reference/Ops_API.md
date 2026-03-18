@@ -11,9 +11,9 @@ The gateway server provides:
 - **Session Management**: Create, resume, and manage agent sessions
 - **Real-time Streaming**: WebSocket endpoints for live event streaming
 - **Ops Administration**: Factory registration, VP mission control, cron jobs, hooks
-- **Dashboard APIs**: CSI digests, notifications, events, approvals
+- **Dashboard APIs**: CSI digests, notifications, events, approvals, activity, tutorials
 - **Health & Readiness**: Liveness probes for orchestration
-- **Integration Endpoints**: YouTube ingest, signals ingest, Telegram ops
+- **Integration Endpoints**: YouTube ingest, signals ingest, Telegram ops, AgentMail
 
 ```mermaid
 graph LR
@@ -159,6 +159,18 @@ GET /api/v1/sessions/{id}
 | `/api/v1/factory/registrations` | GET | List active registrations |
 | `/api/v1/factory/registrations/{factory_id}` | DELETE | Deregister a factory |
 
+### Factory Control
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/factory/update` | POST | Push factory configuration updates |
+| `/api/v1/ops/factory/control` | POST | Control factory operations (start/stop/restart) |
+| `/api/v1/ops/factory/local-service-control` | POST | Control local service instances |
+
+### Delegation History
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/delegation/history` | GET | View delegation event history |
+
 ### VP Mission Control
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -215,11 +227,41 @@ GET /api/v1/sessions/{id}
 | `/api/v1/dashboard/approvals` | GET | List pending approvals |
 | `/api/v1/dashboard/approvals/{id}` | PUT | Update approval status |
 
+### Activity
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/activity` | GET | List activity log entries |
+| `/api/v1/dashboard/activity/{activity_id}` | GET | Get specific activity entry |
+| `/api/v1/dashboard/activity/{activity_id}/send-to-simone` | POST | Send activity to Simone |
+| `/api/v1/dashboard/activity/{activity_id}/action` | POST | Execute activity action |
+| `/api/v1/dashboard/activity/{activity_id}` | DELETE | Delete activity entry |
+
 ### Task Hub
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/dashboard/todolist/dispatch-queue` | GET | Get dispatch queue state |
 | `/api/v1/dashboard/todolist/dispatch-queue/rebuild` | POST | Rebuild dispatch queue |
+
+### Tutorials
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/tutorials/runs` | GET | List tutorial runs |
+| `/api/v1/dashboard/tutorials/active-runs` | GET | List active tutorial runs |
+| `/api/v1/dashboard/tutorials/runs/{run_id}` | DELETE | Cancel tutorial run |
+| `/api/v1/dashboard/tutorials/notifications` | GET | Get tutorial notifications |
+| `/api/v1/dashboard/tutorials/review-jobs` | GET | List tutorial review jobs |
+| `/api/v1/dashboard/tutorials/review` | POST | Submit tutorial review |
+| `/api/v1/dashboard/tutorials/bootstrap-repo` | POST | Bootstrap tutorial repo |
+
+### System Resources
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/system-resources` | GET | Get system resource usage (CPU, memory, disk) |
+
+### System Commands
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/system-commands` | POST | Execute system maintenance commands |
 
 ## 8. Integration Endpoints
 
