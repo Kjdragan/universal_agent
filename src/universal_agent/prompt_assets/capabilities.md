@@ -23,7 +23,7 @@ When the user requests reports, PDFs, or email delivery of documents:
 - **Report generation**: Use `mcp__internal__run_report_generation(task_name='<task>')` to delegate to the Report Writer sub-agent which handles outline → draft → cleanup → compile → PDF automatically.
 - **HTML → PDF conversion**: Use `mcp__internal__html_to_pdf(html_path='<path>', output_path='<path>.pdf')`. Do NOT use Bash with chrome/wkhtmltopdf/weasyprint — the MCP tool handles fallback automatically.
 - **Multiple reports**: Call `run_report_generation` once per topic, or write HTML via Write tool then convert each with `html_to_pdf`.
-- **Email with attachments**: Use gws Gmail send tool with local file path as attachment (no upload step needed). For non-Gmail delivery, use `mcp__internal__upload_to_composio` first.
+- **Email delivery**: Simone's own emails → use `agentmail` skill. Kevin's Gmail → use `mcp__gws__*` tools with local file path as attachment (no upload step needed).
 
 ### 🏭 External VP Control Plane
 - For user requests that explicitly mention General/Coder VP delegation, route directly through internal `vp_*` tools.
@@ -130,29 +130,7 @@ They represent the collective knowledge of the system. **Think about your capabi
 2. **Read**: If a skill seems useful, use `view_file` to read the full Markdown content (SOP).
 3. **Execute**: Follow the procedure step-by-step.
 
-### 1password
-Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop app integration, signing in (single or multi-account), or reading/injecting/running secrets via op.
-Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/1password/SKILL.md`
-```yaml
-name: 1password
-description: Set up and use 1Password CLI (op). Use when installing the CLI, enabling
-  desktop app integration, signing in (single or multi-account), or reading/injecting/running
-  secrets via op.
-homepage: https://developer.1password.com/docs/cli/get-started/
-metadata:
-  clawdbot:
-    emoji: "\U0001F510"
-    requires:
-      bins:
-      - op
-    install:
-    - id: brew
-      kind: brew
-      formula: 1password-cli
-      bins:
-      - op
-      label: Install 1Password CLI (brew)
-```
+
 
 ### agent-browser
 Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages.

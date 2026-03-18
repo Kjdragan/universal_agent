@@ -1543,8 +1543,10 @@ class UniversalAgent:
             "- **Filesystem**: `CURRENT_SESSION_WORKSPACE` is your scratchpad. `UA_ARTIFACTS_DIR` is for permanent output.\n"
             "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
             "## 📧 EMAIL & COMMUNICATION\n"
-            "- When sending emails, use `mcp__internal__upload_to_composio` to handle attachments.\n"
-            "- Keep email bodies concise. Delegate drafting to the `scribe` or `writer` if needed.\n\n"
+            "- **Simone's own email**: Use the `agentmail` Skill (Skill invocation, NOT curl/ops-API). This is Simone's default for sending reports, descriptions, replies.\n"
+            "- **Kevin's Gmail**: Use `mcp__gws__*` tools ONLY when explicitly acting as Kevin.\n"
+            "- **Deprecated**: Composio Gmail tools (`GMAIL_SEND_EMAIL`), `mcp__internal__upload_to_composio` for email. Do NOT use.\n"
+            "- Keep email bodies concise.\n\n"
             f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
         

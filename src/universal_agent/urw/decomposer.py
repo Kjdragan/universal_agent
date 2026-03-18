@@ -532,7 +532,7 @@ Create `macro_tasks.json` with phases and tasks for this request.
 
 **Available Sub-Agents:** research-specialist, report-writer, image-expert, video-creation-expert, video-remotion-expert, mermaid-expert, claude-bowser-agent, playwright-bowser-agent, bowser-qa-agent, browserbase, slack-expert, youtube-expert (legacy alias: youtube-explainer-expert), system-configuration-agent, data-analyst, action-coordinator, code-writer.
 
-**Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, airtable, hubspot, linear, browserbase, filetool, sqltool.
+**Available Composio Toolkits:** composio_search, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, airtable, hubspot, linear, browserbase, filetool, sqltool. (Note: Gmail is NOT a Composio toolkit — use GWS CLI or AgentMail skill instead.)
 
 **Browser lane policy (mandatory):**
 - Use Bowser lanes first for browser execution:
