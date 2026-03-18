@@ -134,6 +134,75 @@ function sourceIcon(source: string): string {
   }
 }
 
+/* ─── Action button config per source ──────────────────────── */
+interface ActionDef {
+  action: string;
+  icon: string;
+  label: string;
+  color: string;
+  /** Only show when event.status matches one of these (empty = always) */
+  showWhen?: string[];
+  /** Hide when status matches */
+  hideWhen?: string[];
+}
+
+const CRON_ACTIONS: ActionDef[] = [
+  { action: "run_now", icon: "▶", label: "Run", color: "text-emerald-300 hover:bg-emerald-500/20", hideWhen: ["disabled"] },
+  { action: "pause", icon: "⏸", label: "Pause", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["disabled"] },
+  { action: "resume", icon: "▶", label: "Resume", color: "text-emerald-300 hover:bg-emerald-500/20", showWhen: ["disabled"] },
+  { action: "disable", icon: "⏻", label: "Disable", color: "text-slate-400 hover:bg-slate-500/20", hideWhen: ["disabled"] },
+  { action: "open_logs", icon: "📋", label: "Logs", color: "text-blue-300 hover:bg-blue-500/20" },
+  { action: "open_session", icon: "💬", label: "Session", color: "text-cyan-300 hover:bg-cyan-500/20" },
+];
+
+const HEARTBEAT_ACTIONS: ActionDef[] = [
+  { action: "open_logs", icon: "📋", label: "Logs", color: "text-blue-300 hover:bg-blue-500/20" },
+  { action: "open_session", icon: "💬", label: "Session", color: "text-cyan-300 hover:bg-cyan-500/20" },
+  { action: "delete", icon: "✕", label: "Remove", color: "text-rose-300 hover:bg-rose-500/20" },
+];
+
+const TASK_ACTIONS: ActionDef[] = [
+  { action: "complete", icon: "✓", label: "Complete", color: "text-emerald-300 hover:bg-emerald-500/20", hideWhen: ["completed"] },
+  { action: "reschedule", icon: "↻", label: "Reschedule", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["completed"] },
+  { action: "dismiss", icon: "✕", label: "Dismiss", color: "text-slate-400 hover:bg-slate-500/20", hideWhen: ["completed"] },
+  { action: "reopen", icon: "↺", label: "Reopen", color: "text-yellow-300 hover:bg-yellow-500/20", showWhen: ["completed"] },
+];
+
+function getActionsForEvent(event: CalendarEvent): ActionDef[] {
+  let defs: ActionDef[];
+  switch (event.source) {
+    case "cron": defs = CRON_ACTIONS; break;
+    case "heartbeat": defs = HEARTBEAT_ACTIONS; break;
+    case "task": defs = TASK_ACTIONS; break;
+    default: defs = []; break;
+  }
+  return defs.filter((d) => {
+    if (d.showWhen && d.showWhen.length > 0 && !d.showWhen.includes(event.status)) return false;
+    if (d.hideWhen && d.hideWhen.includes(event.status)) return false;
+    return true;
+  });
+}
+
+/* ─── Toast notification ───────────────────────────────────── */
+function Toast({ message, type, onClose }: { message: string; type: "success" | "error" | "info"; onClose: () => void }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3500);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const colors = {
+    success: "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
+    error: "bg-rose-500/20 border-rose-500/40 text-rose-200",
+    info: "bg-blue-500/20 border-blue-500/40 text-blue-200",
+  };
+
+  return (
+    <div className={`fixed top-4 right-4 z-50 rounded-lg border px-4 py-2.5 text-xs font-medium shadow-lg backdrop-blur-md animate-in slide-in-from-top-2 duration-200 ${colors[type]}`}>
+      {message}
+    </div>
+  );
+}
+
 /* ─── Stat Card ────────────────────────────────────────────── */
 function StatCard({
   label,
@@ -170,6 +239,7 @@ function EventCard({
   compact?: boolean;
 }) {
   const badge = sourceBadgeClasses(event.source, event.status);
+  const actions = getActionsForEvent(event);
 
   return (
     <div className={`rounded-lg border ${badge} p-3 transition-all hover:brightness-110 ${compact ? "p-2" : ""}`}>
@@ -181,9 +251,6 @@ function EventCard({
           </div>
           <div className="flex items-center gap-2 text-[10px] opacity-80 mt-0.5">
             <span>{formatTime(event.scheduled_at_local)}</span>
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-black/20 text-[9px] font-medium uppercase tracking-wider">
-              {event.source}
-            </span>
             <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider ${
               event.status === "overdue" ? "bg-red-500/30 text-red-200" :
               event.status === "success" ? "bg-emerald-500/30 text-emerald-200" :
@@ -193,24 +260,21 @@ function EventCard({
             }`}>
               {event.status}
             </span>
-            {event.owner && <span className="opacity-70">by {event.owner}</span>}
           </div>
-          {event.cron_expression && (
-            <div className="text-[9px] mt-1 font-mono opacity-60">{event.cron_expression}</div>
-          )}
-          {/* Action buttons */}
-          {(event.actions?.length ?? 0) > 0 && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {event.actions!.map((action) => (
+          {/* Streamlined action buttons */}
+          {actions.length > 0 && (
+            <div className="flex items-center gap-0.5 mt-1.5">
+              {actions.map((def) => (
                 <button
-                  key={`${event.event_id}-${action}`}
+                  key={`${event.event_id}-${def.action}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onAction(event, action);
+                    onAction(event, def.action);
                   }}
-                  className="px-2 py-0.5 rounded border border-white/10 bg-white/5 hover:bg-white/15 text-[9px] font-medium uppercase tracking-wider transition-colors"
+                  title={def.label}
+                  className={`px-1.5 py-0.5 rounded text-[10px] transition-colors border border-transparent ${def.color}`}
                 >
-                  {action.replace(/_/g, " ")}
+                  {compact ? def.icon : `${def.icon} ${def.label}`}
                 </button>
               ))}
             </div>
@@ -291,6 +355,7 @@ export default function CalendarPage() {
   const [stasisQueue, setStasisQueue] = useState<CalendarFeedResponse["stasis_queue"]>([]);
   const [tz, setTz] = useState("America/Chicago");
   const [showCommandBar, setShowCommandBar] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
 
   /* ─── Computed date range ────────────────── */
   const range = useMemo(() => {
@@ -344,24 +409,70 @@ export default function CalendarPage() {
     return () => clearInterval(timer);
   }, [fetchCalendar]);
 
-  /* ─── Action handler ─────────────────────── */
+  /* ─── Action handler (smart: handles navigation, prompts, toasts) ── */
   const performAction = useCallback(async (event: CalendarEvent, action: string) => {
     try {
+      // Pre-action: handle actions that need user input
+      const payload: Record<string, unknown> = { action };
+      if (action === "reschedule") {
+        const requested = prompt("Reschedule for when? (e.g. 'in 30m', 'tomorrow 9am', or ISO timestamp)");
+        if (!requested || !requested.trim()) return;
+        payload.run_at = requested.trim();
+      }
+
       const r = await fetch(
         `${API_BASE}/api/v1/ops/calendar/events/${encodeURIComponent(event.event_id)}/action`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", ...buildHeaders() },
-          body: JSON.stringify({ action }),
+          body: JSON.stringify(payload),
         }
       );
       if (!r.ok) {
         const txt = await r.text();
-        alert(`Action failed: ${txt || r.statusText}`);
+        setToast({ message: `Action failed: ${txt || r.statusText}`, type: "error" });
+        return;
       }
+      const data = await r.json();
+
+      // Post-action: handle response-dependent navigation
+      if (action === "open_logs" && data.path) {
+        const href = String(data.path);
+        const full = href.startsWith("http") ? href : `${API_BASE}${href.startsWith("/") ? "" : "/"}${href}`;
+        window.open(full, "_blank", "noopener,noreferrer");
+        setToast({ message: "Opening logs…", type: "info" });
+        return;
+      }
+      if (action === "open_session") {
+        const sid = String(data.session_id || "");
+        if (sid) {
+          // Navigate to the sessions page with the session ID
+          window.open(`/dashboard/sessions?sid=${encodeURIComponent(sid)}`, "_blank");
+          setToast({ message: `Opening session ${sid.slice(0, 12)}…`, type: "info" });
+        } else {
+          setToast({ message: "No session found for this event", type: "error" });
+        }
+        return;
+      }
+
+      // Success toast for mutating actions
+      const labels: Record<string, string> = {
+        run_now: "Job triggered",
+        pause: "Job paused",
+        resume: "Job resumed",
+        disable: "Job disabled",
+        delete: "Entry removed",
+        delete_missed: "Missed event dismissed",
+        approve_backfill_run: "Backfill approved & running",
+        reschedule: "Rescheduled successfully",
+        complete: "Task completed",
+        dismiss: "Task dismissed",
+        reopen: "Task reopened",
+      };
+      setToast({ message: labels[action] || `Action '${action}' completed`, type: "success" });
       await fetchCalendar();
     } catch (e) {
-      alert(`Action error: ${(e as Error).message}`);
+      setToast({ message: `Error: ${(e as Error).message}`, type: "error" });
     }
   }, [fetchCalendar]);
 
@@ -406,6 +517,8 @@ export default function CalendarPage() {
 
   /* ═══ RENDER ═══════════════════════════════ */
   return (
+    <>
+    {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     <div className="flex h-full flex-col space-y-4 p-1">
       {/* ─── HEADER ──────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -718,5 +831,6 @@ export default function CalendarPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }
