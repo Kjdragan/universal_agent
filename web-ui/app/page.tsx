@@ -1182,6 +1182,7 @@ function ChatInterface() {
   };
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const ALLOWED_EXTENSIONS = ".py,.ts,.tsx,.js,.jsx,.md,.txt,.json,.yaml,.yml,.csv,.log,.toml,.cfg,.ini,.html,.css,.xml,.sql,.sh,.bash,.rs,.go,.java,.c,.cpp,.h,.hpp,.rb,.php,.env,.gitignore,.dockerignore,.conf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg";
@@ -1189,6 +1190,7 @@ function ChatInterface() {
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || !files.length || !effectiveSessionId) return;
     setIsUploading(true);
+    setUploadError(null);
     try {
       for (const file of Array.from(files)) {
         const formData = new FormData();
@@ -1199,8 +1201,11 @@ function ChatInterface() {
         );
         if (!res.ok) {
           const err = await res.json().catch(() => ({ detail: res.statusText }));
-          console.warn("Upload failed:", err.detail || res.statusText);
-          useAgentStore.getState().setLastError(`Upload failed: ${err.detail || res.statusText}`);
+          const msg = err.detail || res.statusText || `HTTP ${res.status}`;
+          console.warn("Upload failed:", msg);
+          setUploadError(`Upload failed: ${msg}`);
+          useAgentStore.getState().setLastError(`Upload failed: ${msg}`);
+          setTimeout(() => setUploadError(null), 5000);
           continue;
         }
         const result = await res.json();
@@ -1215,6 +1220,11 @@ function ChatInterface() {
           },
         ]);
       }
+    } catch (networkErr: unknown) {
+      const msg = networkErr instanceof Error ? networkErr.message : "Network error";
+      console.error("Upload network error:", networkErr);
+      setUploadError(`Upload failed: ${msg}`);
+      setTimeout(() => setUploadError(null), 5000);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1808,6 +1818,9 @@ function ChatInterface() {
               </span>
             ))}
           </div>
+        )}
+        {uploadError && (
+          <div className="mb-2 text-xs text-red-400/90 bg-red-500/10 border border-red-500/20 rounded px-3 py-1.5">⚠️ {uploadError}</div>
         )}
         {isUploading && (
           <div className="mb-2 text-xs text-cyan-400/70 animate-pulse">📤 Uploading file…</div>

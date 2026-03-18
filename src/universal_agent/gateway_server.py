@@ -11915,8 +11915,8 @@ async def upload_session_file(
     """
     safe_id = _sanitize_session_id_or_400(session_id)
     session_root = WORKSPACES_DIR / safe_id
-    if not session_root.is_dir():
-        raise HTTPException(status_code=404, detail="Session workspace not found")
+    # Auto-create workspace if it doesn't exist yet (user may upload before agent runs)
+    session_root.mkdir(parents=True, exist_ok=True)
 
     filename = (file.filename or "upload").strip()
     if not filename:
