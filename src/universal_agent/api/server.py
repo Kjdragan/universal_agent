@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 import httpx
 import websockets
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -1567,6 +1567,45 @@ async def delete_vps_files(payload: VpsStorageDeleteRequest):
     result["root_source"] = root_source_clean
     result["root"] = str(root)
     return result
+
+
+@app.post("/api/v1/sessions/{session_id}/upload")
+async def upload_session_file_proxy(
+    session_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """Proxy file upload to the gateway server.
+
+    nginx routes /api/v1/* to this API server, but the actual upload handler
+    lives on the gateway (port 8002).  Forward the multipart upload there.
+    """
+    auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
+    auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
+    await _enforce_session_owner(session_id, owner_id, auth_required)
+
+    gateway_url = _gateway_url()
+    if not gateway_url:
+        raise HTTPException(status_code=503, detail="Gateway URL not configured")
+
+    file_content = await file.read()
+    upload_url = f"{gateway_url}/api/v1/sessions/{session_id}/upload"
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        from universal_agent.api.gateway_bridge import GatewayBridge
+        bridge = GatewayBridge(gateway_url)
+        headers = bridge._gateway_headers()
+        resp = await client.post(
+            upload_url,
+            files={"file": (file.filename, file_content, file.content_type)},
+            headers=headers,
+        )
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+
+    return resp.json()
 
 
 @app.post("/api/approvals")
