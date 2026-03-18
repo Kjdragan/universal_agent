@@ -618,8 +618,8 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                     <span className="truncate">{skill.name}</span>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled && skill.available
-                        ? "bg-emerald-500/10 text-emerald-500"
-                        : "bg-amber-500/10 text-amber-500"
+                        ? "bg-primary/10 text-primary"
+                        : "bg-accent/10 text-accent"
                         }`}
                     >
                       {skill.enabled && skill.available ? "enabled" : "disabled"}
@@ -643,8 +643,8 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                       <span className="font-mono">{channel.id}</span>
                       <span
                         className={`text-[10px] px-1.5 py-0.5 rounded ${channel.enabled
-                          ? "bg-emerald-500/10 text-emerald-500"
-                          : "bg-amber-500/10 text-amber-500"
+                          ? "bg-primary/10 text-primary"
+                          : "bg-accent/10 text-accent"
                           }`}
                       >
                         {channel.enabled ? "enabled" : "disabled"}
@@ -696,14 +696,14 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                       <div className="flex gap-2 mt-2">
                         <button
                           type="button"
-                          className="text-[10px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500"
+                          className="text-[10px] px-2 py-1 rounded border bg-primary/10 text-primary"
                           onClick={() => updateApproval(approval.approval_id, "approved")}
                         >
                           Approve
                         </button>
                         <button
                           type="button"
-                          className="text-[10px] px-2 py-1 rounded border bg-amber-500/10 text-amber-500"
+                          className="text-[10px] px-2 py-1 rounded border bg-accent/10 text-accent"
                           onClick={() => updateApproval(approval.approval_id, "rejected")}
                         >
                           Reject
@@ -730,7 +730,7 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                 {presenceList.map((node) => (
                   <div key={node.node_id} className="flex items-center justify-between">
                     <span className="truncate font-mono">{node.node_id}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
                       {node.status}
                     </span>
                   </div>
@@ -805,7 +805,7 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                   })()}
                   <div className="text-muted-foreground">Last summary</div>
                   {heartbeatState.skip_marker && (
-                    <div className="text-[10px] text-amber-400">
+                    <div className="text-[10px] text-accent">
                       {heartbeatState.skip_marker}
                     </div>
                   )}
@@ -836,7 +836,7 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                     );
                   })()}
                   {heartbeatState.error && (
-                    <div className="text-[10px] text-amber-500">{heartbeatState.error}</div>
+                    <div className="text-[10px] text-accent">{heartbeatState.error}</div>
                   )}
                 </div>
               )}
@@ -854,13 +854,13 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                 <div className="flex gap-2">
                   <button
                     onClick={() => compactLogs(selected)}
-                    className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+                    className="px-2 py-1 rounded border bg-primary/10 text-primary hover:bg-primary/20"
                   >
                     Compact Logs
                   </button>
                   <button
                     onClick={() => resetSession(selected)}
-                    className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
+                    className="px-2 py-1 rounded border bg-accent/10 text-accent hover:bg-accent/20"
                   >
                     Reset Session
                   </button>

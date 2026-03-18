@@ -363,9 +363,9 @@ function FileViewer() {
   if (!viewingFile) return null;
 
   return (
-    <div className={`flex flex-col bg-slate-950 animate-in fade-in transition-all duration-300 ${isMaximized ? "fixed inset-0 z-[60] h-screen w-screen" : "h-full w-full relative"
+    <div className={`flex flex-col bg-background animate-in fade-in transition-all duration-300 ${isMaximized ? "fixed inset-0 z-[60] h-screen w-screen" : "h-full w-full relative"
       }`}>
-      <div className="h-10 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/60 shrink-0">
+      <div className="h-10 border-b border-border flex items-center justify-between px-4 bg-background/60 shrink-0">
         <div className="flex items-center gap-2 truncate pr-4">
           <span className="text-lg shrink-0">{ICONS.file}</span>
           <span className="font-semibold text-sm truncate">{viewingFile.name}</span>
@@ -374,7 +374,7 @@ function FileViewer() {
         <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => setIsMaximized(!isMaximized)}
-            className="p-1 px-2 hover:bg-cyan-500/20 rounded text-cyan-400 border border-transparent hover:border-cyan-500/30 transition-all text-sm"
+            className="p-1 px-2 hover:bg-primary/20 rounded text-primary border border-transparent hover:border-primary/30 transition-all text-sm"
             title={isMaximized ? "Restore" : "Full Screen"}
           >
             {isMaximized ? ICONS.minimize : ICONS.maximize}
@@ -398,7 +398,7 @@ function FileViewer() {
           </button>
         </div>
       </div>
-      <div className={`flex-1 overflow-hidden relative ${isImage ? "bg-slate-950/40" : "bg-white"}`}>
+      <div className={`flex-1 overflow-hidden relative ${isImage ? "bg-background/40" : "bg-white"}`}>
         {isImage ? (
           <div className="w-full h-full flex items-center justify-center p-4">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -610,9 +610,9 @@ function FileExplorer() {
   };
 
   return (
-    <div className={`flex flex-col border-b border-slate-800 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+    <div className={`flex flex-col border-b border-border transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 border-b border-slate-800 bg-slate-900/40 flex items-center justify-between cursor-pointer hover:bg-slate-800/60"
+        className="p-3 border-b border-border bg-background/40 flex items-center justify-between cursor-pointer hover:bg-card/60"
         onClick={(e) => {
           // Prevent collapse when clicking the 'Up' button
           if ((e.target as HTMLElement).tagName === 'BUTTON') return;
@@ -620,9 +620,9 @@ function FileExplorer() {
         }}
       >
         <div className="flex items-center gap-2 overflow-hidden">
-          <span className={`text-[9px] text-cyan-500/60 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
-          <h2 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest truncate" title={currentSession?.session_id}>
-            <span className="text-cyan-500/60 mr-1">{ICONS.folder}</span>
+          <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
+          <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest truncate" title={currentSession?.session_id}>
+            <span className="text-primary/60 mr-1">{ICONS.folder}</span>
             {mode === "artifacts"
               ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts")
               : mode === "vps_workspaces"
@@ -671,7 +671,7 @@ function FileExplorer() {
             <button
               type="button"
               onClick={openLocalFolder}
-              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "local" ? "bg-amber-500/20 text-amber-300 border-amber-500/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
+              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "local" ? "bg-accent/20 text-accent border-accent/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
               title="Browse local desktop files"
             >
               📂 LOCAL
@@ -681,7 +681,7 @@ function FileExplorer() {
                 type="button"
                 onClick={handleSyncVps}
                 disabled={syncingVps}
-                className="text-[9px] px-2 py-1 rounded border font-medium transition-all bg-emerald-600/15 text-emerald-300 border-emerald-700/40 hover:bg-emerald-600/25 disabled:opacity-50"
+                className="text-[9px] px-2 py-1 rounded border font-medium transition-all bg-primary/15 text-primary border-primary/30/40 hover:bg-primary/25 disabled:opacity-50"
                 title="Sync VPS mirror now"
               >
                 {syncingVps ? "SYNC..." : "SYNC VPS"}
@@ -691,7 +691,7 @@ function FileExplorer() {
               <button
                 type="button"
                 onClick={openLocalFolder}
-                className="text-[9px] px-2 py-1 rounded border font-medium transition-all bg-amber-600/15 text-amber-300 border-amber-700/40 hover:bg-amber-600/25"
+                className="text-[9px] px-2 py-1 rounded border font-medium transition-all bg-amber-600/15 text-accent border-amber-700/40 hover:bg-amber-600/25"
                 title="Switch to a different local folder"
               >
                 CHANGE
@@ -718,7 +718,7 @@ function FileExplorer() {
               {files.map((file, i) => (
                 <div
                   key={i}
-                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all ${file.is_dir ? "hover:bg-cyan-500/10 text-cyan-400/80" : "hover:bg-slate-800/60 text-slate-300/70"
+                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all ${file.is_dir ? "hover:bg-primary/10 text-primary/80" : "hover:bg-card/60 text-foreground/80/70"
                     }`}
                   onClick={() => {
                     if (mode === "local" && !file.is_dir) {
@@ -731,7 +731,7 @@ function FileExplorer() {
                   <span className="opacity-60">{file.is_dir ? ICONS.folder : ICONS.file}</span>
                   <span className="truncate flex-1 font-mono">{file.name}</span>
                   {mode === "local" && !file.is_dir && (
-                    <span className="text-[8px] font-bold uppercase text-amber-400/60 tracking-wider" title="Click to attach to chat">ATTACH</span>
+                    <span className="text-[8px] font-bold uppercase text-accent/60 tracking-wider" title="Click to attach to chat">ATTACH</span>
                   )}
                   {file.size && <span className="text-[9px] opacity-40 font-mono">{formatFileSize(file.size)}</span>}
                 </div>
@@ -756,10 +756,10 @@ function ConnectionIndicator() {
       glow: "shadow-red-500/50"
     },
     connecting: {
-      color: "bg-yellow-500",
+      color: "bg-accent",
       label: "CONNECTING",
       pulse: true,
-      textColor: "text-yellow-400",
+      textColor: "text-accent",
       glow: "shadow-yellow-500/50"
     },
     connected: {
@@ -789,7 +789,7 @@ function ConnectionIndicator() {
 
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-10 items-center gap-2 px-3 rounded-lg bg-slate-900/60 border border-slate-700/80">
+      <div className="flex h-10 items-center gap-2 px-3 rounded-lg bg-background/60 border border-border/80">
         <div
           className={`w-2 h-2 rounded-full ${config.color} ${config.pulse ? "status-pulse" : ""
             }`}
@@ -824,29 +824,29 @@ function HeaderMetrics() {
   const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'NO SESSION';
 
   return (
-    <div className="hidden md:flex h-10 items-center gap-3 mr-2 px-3 rounded-lg bg-slate-900/60 border border-slate-700/80 tactical-panel min-w-fit">
+    <div className="hidden md:flex h-10 items-center gap-3 mr-2 px-3 rounded-lg bg-background/60 border border-border/80 tactical-panel min-w-fit">
       <div className="flex items-center gap-2 text-[11px] tracking-[0.1em]">
-        <span className="font-mono text-cyan-300 whitespace-nowrap" title={sessionId}>{sessionId}</span>
+        <span className="font-mono text-primary whitespace-nowrap" title={sessionId}>{sessionId}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="w-px h-4 bg-card/40" />
       <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
-        <span className="text-slate-400 font-semibold">TOKENS</span>
-        <span className="font-mono text-slate-200">{tokenUsage.total.toLocaleString()}</span>
+        <span className="text-muted-foreground font-semibold">TOKENS</span>
+        <span className="font-mono text-foreground">{tokenUsage.total.toLocaleString()}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="w-px h-4 bg-card/40" />
       <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
-        <span className="text-slate-400 font-semibold">TOOLS</span>
-        <span className="font-mono text-slate-200">{toolCallCount}</span>
+        <span className="text-muted-foreground font-semibold">TOOLS</span>
+        <span className="font-mono text-foreground">{toolCallCount}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="w-px h-4 bg-card/40" />
       <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
-        <span className="text-slate-400 font-semibold">TIME</span>
-        <span className="font-mono text-slate-200">{formatDuration(startTime ? duration : 0)}</span>
+        <span className="text-muted-foreground font-semibold">TIME</span>
+        <span className="font-mono text-foreground">{formatDuration(startTime ? duration : 0)}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="w-px h-4 bg-card/40" />
       <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
-        <span className="text-slate-400 font-semibold">ITERS</span>
-        <span className="font-mono text-slate-200">{iterationCount}</span>
+        <span className="text-muted-foreground font-semibold">ITERS</span>
+        <span className="font-mono text-foreground">{iterationCount}</span>
       </div>
     </div>
   );
@@ -856,9 +856,9 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
   const [expanded, setExpanded] = useState(false);
 
   const statusColors = {
-    pending: "text-yellow-500",
+    pending: "text-accent",
     running: "text-primary",
-    complete: "text-green-500",
+    complete: "text-primary",
     error: "text-red-500",
   };
 
@@ -930,7 +930,7 @@ const markdownComponents: any = {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-cyan-400 hover:underline font-medium"
+      className="text-primary hover:underline font-medium"
       onClick={(e) => e.stopPropagation()}
     >
       {children}
@@ -965,7 +965,7 @@ const markdownComponents: any = {
             href={normalizeUrl(rawCode)}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-cyan-400 hover:underline font-medium break-all"
+            className="text-primary hover:underline font-medium break-all"
             onClick={(e) => e.stopPropagation()}
           >
             {rawCode}
@@ -978,7 +978,7 @@ const markdownComponents: any = {
     }
     return (
       <code
-        className={`${isInline ? "bg-black/20 text-cyan-400 px-1 rounded font-mono text-xs" : "block bg-black/30 p-2 rounded font-mono text-xs overflow-x-auto"}`}
+        className={`${isInline ? "bg-black/20 text-primary px-1 rounded font-mono text-xs" : "block bg-black/30 p-2 rounded font-mono text-xs overflow-x-auto"}`}
         {...props}
       >
         {isInline ? children : <LinkifiedText text={String(children)} />}
@@ -995,9 +995,9 @@ const ThinkingBubble = ({ content }: { content: string }) => {
 
   return (
     <div className="flex justify-start mb-4 group ml-10 max-w-[85%]">
-      <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-0 overflow-hidden w-full transition-colors hover:bg-cyan-500/10">
+      <div className="bg-primary/5 border border-primary/15 rounded-xl p-0 overflow-hidden w-full transition-colors hover:bg-primary/10">
         <div
-          className="flex items-center gap-2 cursor-pointer bg-cyan-500/10 px-3 py-2 text-cyan-400 hover:text-cyan-300 transition-colors"
+          className="flex items-center gap-2 cursor-pointer bg-primary/10 px-3 py-2 text-primary hover:text-primary transition-colors"
           onClick={() => setIsExpanded(!isExpanded)}
         >
           <span className="text-sm">🧠</span>
@@ -1005,8 +1005,8 @@ const ThinkingBubble = ({ content }: { content: string }) => {
           <span className="ml-auto text-[10px] opacity-60 hover:opacity-100">{isExpanded ? "Collapse" : "Expand"}</span>
         </div>
         {isExpanded && (
-          <div className="p-3 bg-cyan-500/5">
-            <div className="whitespace-pre-wrap text-cyan-200/70 font-mono text-xs leading-relaxed border-l-2 border-cyan-500/30 pl-3">
+          <div className="p-3 bg-primary/5">
+            <div className="whitespace-pre-wrap text-primary/80/70 font-mono text-xs leading-relaxed border-l-2 border-primary/30 pl-3">
               {content}
             </div>
           </div>
@@ -1022,25 +1022,25 @@ const ThinkingBubble = ({ content }: { content: string }) => {
 function getAgentStyle(author: string) {
   const a = author.toLowerCase();
   if (a.includes("research")) {
-    return { icon: "🔍", labelColor: "text-purple-400", iconBg: "bg-purple-500/10", iconBorder: "border-purple-500/20", borderAccent: "border-l-purple-500/40" };
+    return { icon: "🔍", labelColor: "text-secondary", iconBg: "bg-secondary/10", iconBorder: "border-secondary/15", borderAccent: "border-l-purple-500/40" };
   }
   if (a.includes("report") || a.includes("writer")) {
-    return { icon: "📝", labelColor: "text-orange-400", iconBg: "bg-orange-500/10", iconBorder: "border-orange-500/20", borderAccent: "border-l-orange-500/40" };
+    return { icon: "📝", labelColor: "text-accent", iconBg: "bg-accent/10", iconBorder: "border-accent/15", borderAccent: "border-l-orange-500/40" };
   }
   if (a.includes("plan") || a.includes("orchestra")) {
-    return { icon: "🗺️", labelColor: "text-cyan-400", iconBg: "bg-cyan-500/10", iconBorder: "border-cyan-500/20", borderAccent: "border-l-cyan-500/40" };
+    return { icon: "🗺️", labelColor: "text-primary", iconBg: "bg-primary/10", iconBorder: "border-primary/15", borderAccent: "border-l-cyan-500/40" };
   }
   if (a.includes("verify") || a.includes("test")) {
-    return { icon: "✅", labelColor: "text-green-400", iconBg: "bg-green-500/10", iconBorder: "border-green-500/20", borderAccent: "border-l-green-500/40" };
+    return { icon: "✅", labelColor: "text-primary", iconBg: "bg-primary/10", iconBorder: "border-primary/15", borderAccent: "border-l-green-500/40" };
   }
   if (a.includes("image") || a.includes("video")) {
-    return { icon: "🎨", labelColor: "text-pink-400", iconBg: "bg-pink-500/10", iconBorder: "border-pink-500/20", borderAccent: "border-l-pink-500/40" };
+    return { icon: "🎨", labelColor: "text-secondary", iconBg: "bg-secondary/10", iconBorder: "border-secondary/15", borderAccent: "border-l-pink-500/40" };
   }
   if (a.includes("subagent")) {
-    return { icon: "⚙️", labelColor: "text-emerald-400", iconBg: "bg-emerald-500/10", iconBorder: "border-emerald-500/20", borderAccent: "border-l-emerald-500/40" };
+    return { icon: "⚙️", labelColor: "text-primary", iconBg: "bg-primary/10", iconBorder: "border-primary/15", borderAccent: "border-l-emerald-500/40" };
   }
   // Simone (default lane)
-  return { icon: "🤖", labelColor: "text-blue-400", iconBg: "bg-blue-500/10", iconBorder: "border-blue-500/20", borderAccent: "border-l-blue-500/40" };
+  return { icon: "🤖", labelColor: "text-primary", iconBg: "bg-primary/10", iconBorder: "border-primary/20", borderAccent: "border-l-blue-500/40" };
 }
 
 function displayAuthorName(author: string): string {
@@ -1071,7 +1071,7 @@ function ChatMessage({ message }: { message: any }) {
               <span>{ICONS.chat}</span>
             </div>
           </div>
-          <div className="bg-cyan-500/10 border border-cyan-500/20 text-slate-100 rounded-xl p-4 shadow-sm text-sm">
+          <div className="bg-primary/10 border border-primary/15 text-foreground rounded-xl p-4 shadow-sm text-sm">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
@@ -1087,9 +1087,9 @@ function ChatMessage({ message }: { message: any }) {
 
   if (isSystem) {
     return (
-      <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+      <div className="mb-5 rounded-xl border border-accent/30 bg-accent/10 p-3">
         <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider">
-          <span className="font-semibold text-amber-300">System Notice</span>
+          <span className="font-semibold text-accent">System Notice</span>
           <span className="text-amber-200/70">{formattedDelta}</span>
         </div>
         <div className="mt-1 text-sm text-amber-100 leading-relaxed">
@@ -1129,7 +1129,7 @@ function ChatMessage({ message }: { message: any }) {
                 {formattedDelta}
               </div>
             </div>
-            <div className={`bg-slate-900/80 border border-slate-800 border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
+            <div className={`bg-background/80 border border-border border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
@@ -1623,12 +1623,12 @@ function ChatInterface() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4">
         {historyHydrationNotice && (
-          <div className="mb-3 rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
+          <div className="mb-3 rounded border border-primary/25 bg-primary/10 px-3 py-2 text-[10px] uppercase tracking-wider text-primary">
             {historyHydrationNotice}
           </div>
         )}
         {hydrationError && (
-          <div className="mb-3 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-rose-300 flex items-center justify-between">
+          <div className="mb-3 rounded border border-red-400/25 bg-red-400/10 px-3 py-2 text-[10px] uppercase tracking-wider text-secondary flex items-center justify-between">
             <span>{hydrationError}</span>
             <button
               type="button"
@@ -1637,31 +1637,31 @@ function ChatInterface() {
                 setHistoryHydrationNotice(null);
                 hydratedSessionIdsRef.current.clear();
               }}
-              className="ml-2 shrink-0 rounded border border-rose-500/40 px-2 py-0.5 text-[9px] text-rose-200 hover:bg-rose-500/20"
+              className="ml-2 shrink-0 rounded border border-red-400/25 px-2 py-0.5 text-[9px] text-red-400/80 hover:bg-red-400/20"
             >
               Retry
             </button>
           </div>
         )}
         {chatRole === "viewer" && (
-          <div className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
+          <div className="mb-3 rounded border border-accent/40 bg-accent/10 px-3 py-2 text-[10px] uppercase tracking-wider text-accent">
             {isVpObserverSession
               ? "VP Observer Mode: This lane is controlled by Simone. You can monitor only."
               : "Viewer mode: read-only attachment. Open as writer to send messages."}
           </div>
         )}
         {isVpObserverSession && (
-          <div className="mb-3 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-rose-300">
+          <div className="mb-3 rounded border border-red-400/25 bg-red-400/10 px-3 py-2 text-[10px] uppercase tracking-wider text-secondary">
             Commands are disabled in this session. Use the primary Simone chat to direct CODIE.
           </div>
         )}
         {sessionAttachMode === "tail" && effectiveSessionId && (
-          <div className="mb-3 flex items-center justify-between rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
+          <div className="mb-3 flex items-center justify-between rounded border border-primary/25 bg-primary/10 px-3 py-2 text-[10px] uppercase tracking-wider text-primary">
             <span>Attached Session (Tail): <span className="font-mono">{effectiveSessionId}</span></span>
             <button
               type="button"
               onClick={() => setSessionAttachMode("default")}
-              className="rounded border border-emerald-500/40 px-2 py-0.5 text-[9px] text-emerald-200 hover:bg-emerald-500/20"
+              className="rounded border border-primary/25 px-2 py-0.5 text-[9px] text-primary/80 hover:bg-primary/20"
             >
               Hide Tag
             </button>
@@ -1727,7 +1727,7 @@ function ChatInterface() {
             })()}
             {connectionStatus === "processing" && !currentStreamingMessage && (
               <div className="flex justify-start mb-4">
-                <div className="flex items-center gap-3 text-slate-200 bg-slate-900/60 border border-slate-800 px-4 py-2.5 rounded-lg text-xs processing-bar">
+                <div className="flex items-center gap-3 text-foreground bg-background/60 border border-border px-4 py-2.5 rounded-lg text-xs processing-bar">
                   {(() => {
                     // Check for running tools
                     const runningTool = toolCalls.find((tc: any) => tc.status === 'running');
@@ -1778,10 +1778,10 @@ function ChatInterface() {
 
       {/* Input - Floating Bar Style */}
       <div
-        className={`relative p-4 bg-slate-900/60 border backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300 ${
+        className={`relative p-4 bg-background/60 border backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300 ${
           isDragging
-            ? "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_24px_rgba(34,211,238,0.15)]"
-            : "border-slate-800"
+            ? "border-primary/30 bg-primary/10 shadow-[0_0_24px_rgba(34,211,238,0.15)]"
+            : "border-border"
         }`}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
@@ -1790,8 +1790,8 @@ function ChatInterface() {
       >
         {/* Drag-and-drop overlay */}
         {isDragging && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-cyan-500/10 border-2 border-dashed border-cyan-400/50 pointer-events-none">
-            <span className="text-cyan-300 text-sm font-semibold tracking-wide animate-pulse">
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-primary/10 border-2 border-dashed border-primary/25 pointer-events-none">
+            <span className="text-primary text-sm font-semibold tracking-wide animate-pulse">
               📁 Drop files here
             </span>
           </div>
@@ -1804,8 +1804,8 @@ function ChatInterface() {
                 key={`${f.filename}-${idx}`}
                 className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
                   f.type === "image"
-                    ? "bg-purple-500/15 border-purple-500/30 text-purple-300"
-                    : "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                    ? "bg-secondary/15 border-secondary/30 text-secondary"
+                    : "bg-primary/15 border-primary/20 text-primary"
                 }`}
               >
                 <span>{f.type === "image" ? "🖼️" : "📄"}</span>
@@ -1828,7 +1828,7 @@ function ChatInterface() {
           <div className="mb-2 text-xs text-red-400/90 bg-red-500/10 border border-red-500/20 rounded px-3 py-1.5">⚠️ {uploadError}</div>
         )}
         {isUploading && (
-          <div className="mb-2 text-xs text-cyan-400/70 animate-pulse">📤 Uploading file…</div>
+          <div className="mb-2 text-xs text-primary/70 animate-pulse">📤 Uploading file…</div>
         )}
         <div className="flex gap-3">
           {/* Hidden file input */}
@@ -1845,7 +1845,7 @@ function ChatInterface() {
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={!effectiveSessionId || isUploading}
-              className="bg-slate-800/60 hover:bg-slate-700/60 disabled:opacity-30 border border-slate-700 text-slate-400 hover:text-cyan-400 px-3 py-2 rounded-lg transition-all flex items-center"
+              className="bg-card/60 hover:bg-card/50/60 disabled:opacity-30 border border-border text-muted-foreground hover:text-primary px-3 py-2 rounded-lg transition-all flex items-center"
               title="Attach a file"
             >
               📎
@@ -1880,7 +1880,7 @@ function ChatInterface() {
                     : "Enter your neural query..."
             }
             disabled={chatRole === "viewer" || isVpObserverSession}
-            className="flex-1 bg-slate-950/50 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500/50 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
+            className="flex-1 bg-background/50 border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary/50 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
           />
           {connectionStatus === "processing" && chatRole !== "viewer" && !isVpObserverSession ? (
             <button
@@ -1894,7 +1894,7 @@ function ChatInterface() {
             <button
               onClick={() => handleSend()}
               disabled={chatRole === "viewer" || isVpObserverSession || isSending || (!input.trim() && attachedFiles.length === 0)}
-              className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/20 disabled:text-cyan-400/40 text-white px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
+              className="bg-primary hover:bg-primary/80 disabled:bg-primary/20 disabled:text-primary/40 text-white px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
               <span>Send</span>
               <span>{ICONS.send}</span>
@@ -1971,11 +1971,11 @@ function WorkProductViewer() {
   return (
     <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 border-b border-slate-800 flex items-center justify-between cursor-pointer hover:bg-slate-800/40"
+        className="p-3 border-b border-border flex items-center justify-between cursor-pointer hover:bg-card/40"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <h3 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest flex items-center gap-2">
-          <span className="text-cyan-500/60">{ICONS.file}</span>
+        <h3 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+          <span className="text-primary/60">{ICONS.file}</span>
           Work Products
           <span className="text-[9px] text-muted-foreground/60 font-normal font-mono">({keyFiles.length})</span>
         </h3>
@@ -1993,7 +1993,7 @@ function WorkProductViewer() {
               <button
                 key={i}
                 onClick={() => setViewingFile({ name: file.name, path: file.path, type: 'file' })}
-                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-slate-800/40 transition-all flex items-center gap-2 border border-transparent hover:border-slate-800/40 text-slate-300"
+                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-card/40 transition-all flex items-center gap-2 border border-transparent hover:border-border/40 text-foreground/80"
               >
                 <span className="text-base opacity-60">{file.name.endsWith('pdf') ? '📕' : file.name.endsWith('html') ? '🌐' : '📄'}</span>
                 <div className="flex-1 min-w-0">
@@ -2193,8 +2193,8 @@ export default function HomePage() {
 
   if (loadingAuth) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-200">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-6 py-5 text-sm text-slate-300">
+      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-foreground">
+        <div className="rounded-xl border border-border bg-background/70 px-6 py-5 text-sm text-foreground/80">
           Verifying access...
         </div>
       </div>
@@ -2203,26 +2203,26 @@ export default function HomePage() {
 
   if (authSession?.auth_required && !authSession.authenticated) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 p-4">
-        <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/80 p-5">
+      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-foreground p-4">
+        <div className="w-full max-w-md rounded-xl border border-border bg-background/80 p-5">
           <h1 className="text-lg font-semibold">Dashboard Access Required</h1>
-          <p className="mt-1 text-sm text-slate-400">Sign in from the dashboard shell to use chat and session controls.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Sign in from the dashboard shell to use chat and session controls.</p>
           {authError && (
-            <div className="mt-3 rounded-md border border-rose-800/70 bg-rose-900/20 px-3 py-2 text-xs text-rose-200">
+            <div className="mt-3 rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-xs text-red-400/80">
               {authError}
             </div>
           )}
           <div className="mt-4 flex items-center gap-2">
             <a
               href="/dashboard"
-              className="rounded-md border border-cyan-700 bg-cyan-600/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-600/30"
+              className="rounded-md border border-primary/30 bg-primary/20 px-3 py-2 text-sm text-primary/90 hover:bg-primary/30"
             >
               Go to Login
             </a>
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
+              className="rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground hover:bg-card/70"
             >
               Retry
             </button>
@@ -2234,9 +2234,9 @@ export default function HomePage() {
 
   return (
     <OpsProvider>
-      <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 relative z-10">
+      <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-foreground relative z-10">
         {/* Header */}
-        <header className="h-14 border-b border-slate-800/80 bg-slate-900/85 backdrop-blur-md flex items-center px-3 shrink-0 z-20 relative gap-2">
+        <header className="h-14 border-b border-border/80 bg-background/85 backdrop-blur-md flex items-center px-3 shrink-0 z-20 relative gap-2">
 
           {/* Left: Logo & Brand */}
           <div className="relative z-40 flex items-center gap-2 shrink-0 h-full pointer-events-auto">
@@ -2252,7 +2252,7 @@ export default function HomePage() {
             </div>
             <a
               href="/storage?tab=explorer"
-              className="relative z-40 inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-slate-300 transition-colors hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
+              className="relative z-40 inline-flex h-10 w-11 items-center justify-center rounded-lg border border-border/80 bg-background/60 text-foreground/80 transition-colors hover:border-primary/30 hover:bg-card/60 hover:text-primary/80"
               title="Open File Browser"
               aria-label="Open File Browser"
             >
@@ -2262,7 +2262,7 @@ export default function HomePage() {
             </a>
             <a
               href="/dashboard"
-              className="relative z-40 hidden md:inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-xl text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
+              className="relative z-40 hidden md:inline-flex h-10 w-11 items-center justify-center rounded-lg border border-border/80 bg-background/60 text-xl text-foreground/80 transition hover:border-primary/30 hover:bg-card/60 hover:text-primary/80"
               title="Dashboard Home"
               aria-label="Dashboard Home"
             >
@@ -2289,8 +2289,8 @@ export default function HomePage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className={item.iconOnly
-                  ? "inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-xl text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
-                  : "flex h-10 items-center gap-1.5 px-2.5 rounded-lg border border-slate-700/80 bg-slate-900/60 text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"}
+                  ? "inline-flex h-10 w-11 items-center justify-center rounded-lg border border-border/80 bg-background/60 text-xl text-foreground/80 transition hover:border-primary/30 hover:bg-card/60 hover:text-primary/80"
+                  : "flex h-10 items-center gap-1.5 px-2.5 rounded-lg border border-border/80 bg-background/60 text-[12px] font-semibold uppercase tracking-[0.12em] text-foreground/80 transition hover:border-primary/30 hover:bg-card/60 hover:text-primary/80"}
                 title={`Open ${item.label} in a new tab`}
                 aria-label={`Open ${item.label} in a new tab`}
               >
@@ -2300,7 +2300,7 @@ export default function HomePage() {
                   <>
                     <span className="text-[12px]">{item.icon}</span>
                     <span>{item.label}</span>
-                    <span className="text-[9px] text-slate-500">↗</span>
+                    <span className="text-[9px] text-muted-foreground">↗</span>
                   </>
                 )}
               </a>
@@ -2312,7 +2312,7 @@ export default function HomePage() {
             <button
               type="button"
               onClick={handleStartNewSession}
-              className="hidden md:inline-flex h-10 items-center rounded-lg border border-emerald-700/60 bg-emerald-600/15 px-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-emerald-200 hover:border-emerald-400/60 hover:bg-emerald-600/25"
+              className="hidden md:inline-flex h-10 items-center rounded-lg border border-primary/30/60 bg-primary/15 px-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-primary/80 hover:border-primary/30 hover:bg-primary/25"
               title="Start a fresh chat session"
             >
               New Session
@@ -2338,7 +2338,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setChatCollapsed(false)}
-                className="hidden md:flex h-full w-10 items-center justify-center hover:bg-card/30 transition-colors border-r border-slate-700/50 bg-slate-900/40"
+                className="hidden md:flex h-full w-10 items-center justify-center hover:bg-card/30 transition-colors border-r border-border/50 bg-background/40"
                 title="Expand Chat Panel"
               >
                 <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.chat} Chat ▶</span>
@@ -2348,7 +2348,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setChatCollapsed(true)}
-                  className="hidden md:inline-flex absolute top-2 right-14 z-20 h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200"
+                  className="hidden md:inline-flex absolute top-2 right-14 z-20 h-7 w-7 items-center justify-center rounded border border-border bg-background/70 text-foreground/80 hover:border-primary/30 hover:text-primary/80"
                   title="Collapse Chat Panel"
                 >
                   ◀
@@ -2369,7 +2369,7 @@ export default function HomePage() {
           {/* PANEL 2: ACTIVITY LOG */}
           <div
             className={`
-              bg-slate-900/20 relative transition-all duration-300 flex-col border-r border-border/40
+              bg-background/20 relative transition-all duration-300 flex-col border-r border-border/40
               ${activeMobileTab === 'activity' ? 'flex w-full' : 'hidden md:flex'}
               ${activityCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
             `}
@@ -2378,7 +2378,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setActivityCollapsed(false)}
-                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-slate-700/50 bg-slate-900/40"
+                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-border/50 bg-background/40"
                 title="Expand Activity Log"
               >
                 <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.activity} Activity ▶</span>
@@ -2393,7 +2393,7 @@ export default function HomePage() {
           {/* PANEL 3: FILE EXPLORER */}
           <div
             className={`
-              bg-slate-900/30 relative transition-all duration-300 flex-col
+              bg-background/30 relative transition-all duration-300 flex-col
               ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden md:flex'}
               ${filesCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
             `}
@@ -2402,22 +2402,22 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setFilesCollapsed(false)}
-                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-slate-700/50 bg-slate-900/40"
+                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-border/50 bg-background/40"
                 title="Expand File Explorer"
               >
                 <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.folder} Files ▶</span>
               </button>
             ) : (
               <div className="h-full flex flex-col overflow-hidden">
-                <div className="h-10 border-b border-slate-800 flex items-center justify-between px-3 bg-slate-900/60 shrink-0">
+                <div className="h-10 border-b border-border flex items-center justify-between px-3 bg-background/60 shrink-0">
                   <div className="flex items-center gap-2">
                     <span className="text-lg">{ICONS.folder}</span>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Session Explorer</span>
+                    <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">Session Explorer</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setFilesCollapsed(true)}
-                    className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200"
+                    className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-background/70 text-foreground/80 hover:border-primary/30 hover:text-primary/80"
                     title="Collapse File Explorer"
                   >
                     ▶
@@ -2433,7 +2433,7 @@ export default function HomePage() {
 
         {/* MOBILE DASHBOARD MENU (Visible only on Mobile AND tab=='dashboard') */}
         {activeMobileTab === 'dashboard' && (
-          <div className="flex-1 flex flex-col overflow-hidden bg-slate-950/95 pb-20 md:hidden">
+          <div className="flex-1 flex flex-col overflow-hidden bg-background/95 pb-20 md:hidden">
             <div className="p-4 space-y-2 overflow-y-auto">
               <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground border-b border-border/40 pb-2 mb-2">Dashboard Menu</h2>
 
@@ -2471,31 +2471,31 @@ export default function HomePage() {
         )}
 
         {/* Mobile Bottom Tab Bar */}
-        <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
+        <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-background/95 border-t border-border backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
           <button
             onClick={() => setActiveMobileTab('chat')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-primary' : 'text-muted-foreground'}`}
           >
             <span className="text-xl">{ICONS.chat}</span>
             <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
           </button>
           <button
             onClick={() => setActiveMobileTab('activity')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-accent' : 'text-muted-foreground'}`}
           >
             <span className="text-xl">{ICONS.activity}</span>
             <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
           </button>
           <button
             onClick={() => setActiveMobileTab('files')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-emerald-400' : 'text-slate-500'}`}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-primary' : 'text-muted-foreground'}`}
           >
             <span className="text-xl">{ICONS.folder}</span>
             <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
           </button>
           <button
             onClick={() => setActiveMobileTab('dashboard')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-emerald-400' : 'text-slate-500'}`}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-primary' : 'text-muted-foreground'}`}
           >
             <span className="text-xl">☰</span>
             <span className="text-[9px] uppercase tracking-widest font-bold">Menu</span>

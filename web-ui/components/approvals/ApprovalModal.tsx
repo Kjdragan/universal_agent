@@ -61,7 +61,7 @@ function TaskList({ tasks }: { tasks: TaskInfo[] }) {
               )}
             </div>
             {task.status === "completed" && (
-              <span className="text-green-500">✓</span>
+              <span className="text-primary">✓</span>
             )}
             {task.status === "in_progress" && (
               <span className="text-primary animate-pulse">●</span>

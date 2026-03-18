@@ -10,7 +10,7 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        mono: ["'Droid Sans Mono'", "monospace", "monospace"],
+        mono: ["'JetBrains Mono'", "monospace"],
         display: ["var(--font-display)", "sans-serif"],
       },
       colors: {
@@ -84,9 +84,9 @@ const config: Config = {
         xs: "2px",
       },
       boxShadow: {
-        "glow-sm": "0 0 10px hsl(var(--primary) / 0.3)",
-        "glow-md": "0 0 20px hsl(var(--primary) / 0.4)",
-        "glow-lg": "0 0 30px hsl(var(--primary) / 0.5)",
+        "glow-sm": "0 0 8px hsl(var(--primary) / 0.15)",
+        "glow-md": "0 0 14px hsl(var(--primary) / 0.2)",
+        "glow-lg": "0 0 20px hsl(var(--primary) / 0.25)",
       },
     },
   },

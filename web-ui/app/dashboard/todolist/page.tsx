@@ -212,10 +212,10 @@ function priorityText(priority?: number): string {
 
 function priorityColor(priority?: number): string {
   const p = Number(priority || 1);
-  if (p >= 4) return "text-rose-300";
-  if (p === 3) return "text-amber-300";
+  if (p >= 4) return "text-secondary";
+  if (p === 3) return "text-accent";
   if (p === 2) return "text-sky-300";
-  return "text-slate-400";
+  return "text-muted-foreground";
 }
 
 function sourceKindPill(kind?: string) {
@@ -224,9 +224,9 @@ function sourceKindPill(kind?: string) {
     todoist: "border-teal-700/60 bg-teal-900/25 text-teal-200",
     internal: "border-sky-700/60 bg-sky-900/25 text-sky-200",
     approval: "border-amber-700/60 bg-amber-900/25 text-amber-200",
-    csi: "border-slate-700/60 bg-slate-800/40 text-slate-400",
+    csi: "border-border/60 bg-card/40 text-muted-foreground",
   };
-  const style = styles[k] ?? "border-slate-700/60 bg-slate-800/40 text-slate-400";
+  const style = styles[k] ?? "border-border/60 bg-card/40 text-muted-foreground";
   return (
     <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${style}`}>
       {k}
@@ -546,8 +546,8 @@ export default function ToDoListDashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-slate-400">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-muted-foreground">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-sky-400" />
         <span className="text-sm">Loading Task Command Center…</span>
       </div>
     );
@@ -560,24 +560,24 @@ export default function ToDoListDashboardPage() {
     return (
       <article
         key={item.task_id}
-        className={`rounded-lg border bg-slate-950/60 p-3 transition-colors hover:border-slate-700/80 ${
+        className={`rounded-lg border bg-background/60 p-3 transition-colors hover:border-border/80 ${
           item.must_complete
             ? "border-l-2 border-l-rose-500/70 border-t-slate-800/80 border-r-slate-800/80 border-b-slate-800/80"
-            : "border-slate-800/70"
+            : "border-border/70"
         }`}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5 mb-1">
-              <span className="text-[10px] font-bold text-slate-600 tabular-nums">#{idx + 1}</span>
+              <span className="text-[10px] font-bold text-muted tabular-nums">#{idx + 1}</span>
               {sourceKindPill(item.source_kind)}
               {item.must_complete ? (
-                <span className="rounded border border-rose-700/60 bg-rose-900/25 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-200">
+                <span className="rounded border border-red-400/30 bg-red-400/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-400/80">
                   Must Complete
                 </span>
               ) : null}
             </div>
-            <h3 className="font-semibold text-slate-200 text-sm leading-snug">
+            <h3 className="font-semibold text-foreground text-sm leading-snug">
               {(() => {
                 const href = taskSourceUrl(item.task_id, item.source_kind, item.url);
                 if (href) {
@@ -597,27 +597,27 @@ export default function ToDoListDashboardPage() {
               })()}
             </h3>
             {item.description ? (
-              <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p>
+              <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{item.description}</p>
             ) : null}
           </div>
           <div className="text-right text-[10px] shrink-0">
             <div className={`font-semibold ${priorityColor(item.priority)}`}>{priorityText(item.priority)}</div>
             {item.score !== undefined ? (
-              <div className="text-slate-500 mt-0.5">score {item.score} · Q {item.score_confidence ?? 0}</div>
+              <div className="text-muted-foreground mt-0.5">score {item.score} · Q {item.score_confidence ?? 0}</div>
             ) : null}
           </div>
         </div>
 
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-          {item.project_key ? <span className="text-slate-400">{item.project_key}</span> : null}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+          {item.project_key ? <span className="text-muted-foreground">{item.project_key}</span> : null}
           {item.due_at ? (
-            <><span>•</span><span className="text-amber-300">Due {item.due_at}</span></>
+            <><span>•</span><span className="text-accent">Due {item.due_at}</span></>
           ) : null}
           {item.updated_at ? (
             <><span>•</span><span>Updated {formatTs(item.updated_at)}</span></>
           ) : null}
           {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
-            <><span>•</span><span className="text-amber-400">below threshold {dispatchThreshold}</span></>
+            <><span>•</span><span className="text-accent">below threshold {dispatchThreshold}</span></>
           ) : null}
         </div>
 
@@ -633,24 +633,24 @@ export default function ToDoListDashboardPage() {
             <button
               onClick={() => void handleWakeHeartbeat(item.task_id)}
               disabled={wakePending}
-              className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+              className="rounded border border-primary/30/60 bg-primary/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary/80 hover:bg-primary/20 disabled:opacity-50"
             >
               {wakePending ? "Queueing…" : "Dispatch Now"}
             </button>
             <div className="relative">
               <button
                 onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
-                className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+                className="rounded border border-border bg-card/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-foreground/80 hover:bg-card/50"
               >
                 ▾
               </button>
               {openActionMenuId === item.task_id && (
-                <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-slate-700 bg-slate-900 p-1 shadow-xl">
+                <div className="absolute right-0 top-full z-10 mt-1 flex w-32 flex-col gap-1 rounded border border-border bg-background p-1 shadow-xl">
                   {item.status === "open" && (
                     <button
                       onClick={() => void handleTaskAction(item.task_id, "seize")}
                       disabled={isPending}
-                      className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                      className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-primary/80 hover:bg-primary/20 disabled:opacity-50"
                     >
                       Seize
                     </button>
@@ -658,7 +658,7 @@ export default function ToDoListDashboardPage() {
                   <button
                     onClick={() => void handleTaskAction(item.task_id, "review")}
                     disabled={isPending}
-                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-foreground/80 hover:bg-card disabled:opacity-50"
                   >
                     Mark Review
                   </button>
@@ -672,7 +672,7 @@ export default function ToDoListDashboardPage() {
                   <button
                     onClick={() => void handleTaskAction(item.task_id, "park")}
                     disabled={isPending}
-                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                    className="w-full rounded px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-red-400/80 hover:bg-red-400/20 disabled:opacity-50"
                   >
                     Park
                   </button>
@@ -688,13 +688,13 @@ export default function ToDoListDashboardPage() {
   const renderCompletedCard = (item: CompletedTaskItem) => (
     <article
       key={`completed-${item.task_id}`}
-      className="group relative rounded-lg border border-slate-800/70 bg-slate-950/60 p-3 transition-colors hover:border-slate-700/80"
+      className="group relative rounded-lg border border-border/70 bg-background/60 p-3 transition-colors hover:border-border/80"
       onMouseEnter={() => setHoveredDeleteId(item.task_id)}
       onMouseLeave={() => setHoveredDeleteId(null)}
     >
       <button
         onClick={() => void handleDeleteCompletedTask(item.task_id)}
-        className={`absolute right-2 top-2 rounded p-1 text-slate-600 transition-opacity hover:bg-rose-950/50 hover:text-rose-300 ${
+        className={`absolute right-2 top-2 rounded p-1 text-muted transition-opacity hover:bg-red-400/15 hover:text-secondary ${
           hoveredDeleteId === item.task_id ? "opacity-100" : "opacity-0"
         }`}
         title="Delete"
@@ -706,7 +706,7 @@ export default function ToDoListDashboardPage() {
           <div className="flex flex-wrap items-center gap-1.5 mb-1">
             {sourceKindPill(item.source_kind)}
           </div>
-          <h3 className="truncate font-semibold text-slate-200 text-sm">
+          <h3 className="truncate font-semibold text-foreground text-sm">
             {(() => {
               // Prefer session link, then Todoist/source URL
               const sessionHref = item.links?.session_href;
@@ -728,18 +728,18 @@ export default function ToDoListDashboardPage() {
               return item.title;
             })()}
           </h3>
-          {item.description ? <p className="mt-1 text-xs text-slate-400 line-clamp-2">{item.description}</p> : null}
+          {item.description ? <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{item.description}</p> : null}
         </div>
         <div className={`text-right text-[10px] shrink-0 font-semibold ${priorityColor(item.priority)}`}>
           {priorityText(item.priority)}
         </div>
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-        {item.project_key ? <span className="text-slate-400">{item.project_key}</span> : null}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+        {item.project_key ? <span className="text-muted-foreground">{item.project_key}</span> : null}
         <span>•</span>
         <span>Done {formatTs(item.completed_at || item.updated_at)}</span>
         {item.last_assignment?.agent_id ? (
-          <><span>•</span><span className="text-slate-300">{item.last_assignment.agent_id}</span></>
+          <><span>•</span><span className="text-foreground/80">{item.last_assignment.agent_id}</span></>
         ) : null}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -767,7 +767,7 @@ export default function ToDoListDashboardPage() {
         {item.links?.run_log_href ? (
           <a
             href={String(item.links.run_log_href)}
-            className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35"
+            className="rounded border border-primary/30/60 bg-primary/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary/80 hover:bg-primary/20"
           >
             Run Log
           </a>
@@ -782,28 +782,28 @@ export default function ToDoListDashboardPage() {
     if (!selectedTaskDetails) return null;
     return (
       <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-        <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/50 p-4">
+        <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl">
+          <div className="flex items-center justify-between border-b border-border bg-background/50 p-4">
             <div>
-              <h2 className="text-lg font-semibold text-slate-100">Task Details</h2>
-              <p className="text-xs text-slate-400">{selectedTaskDetails.task_id}</p>
+              <h2 className="text-lg font-semibold text-foreground">Task Details</h2>
+              <p className="text-xs text-muted-foreground">{selectedTaskDetails.task_id}</p>
             </div>
             <button
               onClick={() => setSelectedTaskDetails(null)}
-              className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
             >
               ✕
             </button>
           </div>
-          <div className="overflow-y-auto p-4 text-sm text-slate-300">
-            <pre className="break-all rounded border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] text-emerald-300 whitespace-pre-wrap">
+          <div className="overflow-y-auto p-4 text-sm text-foreground/80">
+            <pre className="break-all rounded border border-border bg-background p-4 font-mono text-[11px] text-primary whitespace-pre-wrap">
               {JSON.stringify(selectedTaskDetails, null, 2)}
             </pre>
           </div>
-          <div className="flex-none flex justify-end border-t border-slate-800 bg-slate-950/50 p-4">
+          <div className="flex-none flex justify-end border-t border-border bg-background/50 p-4">
             <button
               onClick={() => setSelectedTaskDetails(null)}
-              className="rounded border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-700"
+              className="rounded border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-card/50"
             >
               Close
             </button>
@@ -816,43 +816,43 @@ export default function ToDoListDashboardPage() {
   // ── Task history panel ────────────────────────────────────────────────────────
 
   const renderTaskHistoryPanel = () => (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <section className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">Task History</h2>
-          <p className="text-xs text-slate-400">Assignment/evaluation trail and links to session artifacts.</p>
+          <p className="text-xs text-muted-foreground">Assignment/evaluation trail and links to session artifacts.</p>
         </div>
         {taskHistory ? (
           <button
             onClick={() => setTaskHistory(null)}
-            className="rounded border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-300 hover:bg-slate-700"
+            className="rounded border border-border bg-card/80 px-2 py-1 text-[10px] uppercase tracking-wide text-foreground/80 hover:bg-card/50"
           >
             Clear
           </button>
         ) : null}
       </div>
       {!taskHistory ? (
-        <p className="text-xs text-slate-500 italic">Select "Review" on any task to load run history.</p>
+        <p className="text-xs text-muted-foreground italic">Select "Review" on any task to load run history.</p>
       ) : (
         <div className="space-y-3 text-xs">
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
-            <div className="font-semibold text-slate-100">{taskHistory.task?.title || taskHistory.task?.task_id || "Task"}</div>
-            <div className="mt-1 text-slate-400">{taskHistory.task?.task_id}</div>
+          <div className="rounded border border-border/70 bg-background/50 p-2">
+            <div className="font-semibold text-foreground">{taskHistory.task?.title || taskHistory.task?.task_id || "Task"}</div>
+            <div className="mt-1 text-muted-foreground">{taskHistory.task?.task_id}</div>
           </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
-            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+          <div className="rounded border border-border/70 bg-background/50 p-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
               Assignments ({taskHistory.assignments?.length || 0})
             </div>
             {(taskHistory.assignments || []).length === 0 ? (
-              <p className="text-slate-500">No assignment history.</p>
+              <p className="text-muted-foreground">No assignment history.</p>
             ) : (
               <div className="space-y-1.5">
                 {(taskHistory.assignments || []).slice(0, 10).map((row) => (
-                  <div key={row.assignment_id} className="rounded border border-slate-800 bg-slate-900/50 px-2 py-1.5">
-                    <div className="text-slate-200">
+                  <div key={row.assignment_id} className="rounded border border-border bg-background/50 px-2 py-1.5">
+                    <div className="text-foreground">
                       <span className="font-semibold">{row.agent_id || "unknown-agent"}</span> · {row.state}
                     </div>
-                    <div className="text-[10px] text-slate-500">
+                    <div className="text-[10px] text-muted-foreground">
                       started {formatTs(row.started_at)} · ended {formatTs(row.ended_at)}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -867,7 +867,7 @@ export default function ToDoListDashboardPage() {
                       {row.links?.run_log_href ? (
                         <a
                           href={String(row.links.run_log_href)}
-                          className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/35"
+                          className="rounded border border-primary/30/60 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-primary/80 hover:bg-primary/20"
                         >
                           Run Log
                         </a>
@@ -878,20 +878,20 @@ export default function ToDoListDashboardPage() {
               </div>
             )}
           </div>
-          <div className="rounded border border-slate-800/70 bg-slate-950/50 p-2">
-            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+          <div className="rounded border border-border/70 bg-background/50 p-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
               Evaluations ({taskHistory.evaluations?.length || 0})
             </div>
             {(taskHistory.evaluations || []).length === 0 ? (
-              <p className="text-slate-500">No evaluation records.</p>
+              <p className="text-muted-foreground">No evaluation records.</p>
             ) : (
               <div className="space-y-1.5">
                 {(taskHistory.evaluations || []).slice(0, 12).map((row) => (
-                  <div key={row.id} className="rounded border border-slate-800 bg-slate-900/50 px-2 py-1.5">
-                    <div className="text-slate-200">
+                  <div key={row.id} className="rounded border border-border bg-background/50 px-2 py-1.5">
+                    <div className="text-foreground">
                       <span className="font-semibold">{row.decision || "n/a"}</span> · {row.reason || "n/a"}
                     </div>
-                    <div className="text-[10px] text-slate-500">
+                    <div className="text-[10px] text-muted-foreground">
                       score {row.score ?? 0} ({row.score_confidence ?? 0}) · {formatTs(row.evaluated_at)}
                     </div>
                   </div>
@@ -917,17 +917,17 @@ export default function ToDoListDashboardPage() {
   };
 
   const KanbanCol = ({ label, emoji, count, accentClass, headerClass, emptyText, children }: KanbanColProps) => (
-    <div className={`flex flex-col rounded-xl border bg-slate-900/60 ${accentClass}`}>
-      <div className="flex items-center justify-between border-b border-slate-800/80 px-4 py-3">
+    <div className={`flex flex-col rounded-xl border bg-background/60 ${accentClass}`}>
+      <div className="flex items-center justify-between border-b border-border/80 px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="text-base">{emoji}</span>
           <h2 className={`text-sm font-semibold uppercase tracking-[0.14em] ${headerClass}`}>{label}</h2>
         </div>
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${headerClass} bg-slate-800/60`}>{count}</span>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${headerClass} bg-card/60`}>{count}</span>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-3 max-h-[60vh]">
         {count === 0 ? (
-          <p className="text-xs text-slate-600 italic pt-2">{emptyText}</p>
+          <p className="text-xs text-muted italic pt-2">{emptyText}</p>
         ) : children}
       </div>
     </div>
@@ -943,22 +943,22 @@ export default function ToDoListDashboardPage() {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Task Command Center</h1>
-          <p className="text-sm text-slate-400">Mission allocation across past · current · future work</p>
+          <p className="text-sm text-muted-foreground">Mission allocation across past · current · future work</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] text-slate-500 tabular-nums">
+          <span className="text-[11px] text-muted-foreground tabular-nums">
             {refreshing ? "Refreshing…" : `Auto-refresh in ${countdown}s`}
           </span>
           <button
             onClick={() => { setCountdown(AUTO_REFRESH_SECONDS); void load(true); }}
-            className="rounded border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+            className="rounded border border-border bg-card/80 px-3 py-1.5 text-xs text-foreground/80 hover:bg-card/50"
           >
             Refresh
           </button>
           <button
             onClick={() => void handleWakeHeartbeat()}
             disabled={wakePending}
-            className="rounded border border-emerald-700/60 bg-emerald-900/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+            className="rounded border border-primary/30/60 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary/80 hover:bg-primary/20 disabled:opacity-50"
           >
             {wakePending ? "Queueing…" : "Run Heartbeat"}
           </button>
@@ -977,68 +977,68 @@ export default function ToDoListDashboardPage() {
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-rose-800/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-200">{error}</div>
+        <div className="rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-400/80">{error}</div>
       ) : null}
 
       {/* ── Summary Cards ── */}
       <section className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+        <article className="rounded-lg border border-border bg-background/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             Dispatch Eligible{dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}
           </p>
-          <p className="mt-1 text-2xl font-semibold text-slate-100">{overview?.queue_health?.dispatch_eligible || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">{overview?.queue_health?.dispatch_queue_size || 0} in queue</p>
+          <p className="mt-1 text-2xl font-semibold text-foreground">{overview?.queue_health?.dispatch_eligible || 0}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{overview?.queue_health?.dispatch_queue_size || 0} in queue</p>
         </article>
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Active Agents</p>
-          <p className="mt-1 text-2xl font-semibold text-cyan-200">{agentActivity?.active_agents || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">{(agentActivity?.active_assignments || []).length} assignment{(agentActivity?.active_assignments || []).length !== 1 ? "s" : ""}</p>
+        <article className="rounded-lg border border-border bg-background/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Active Agents</p>
+          <p className="mt-1 text-2xl font-semibold text-primary/80">{agentActivity?.active_agents || 0}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{(agentActivity?.active_assignments || []).length} assignment{(agentActivity?.active_assignments || []).length !== 1 ? "s" : ""}</p>
         </article>
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Backlog Open</p>
-          <p className="mt-1 text-2xl font-semibold text-slate-100">{agentActivity?.backlog_open || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">total queued</p>
+        <article className="rounded-lg border border-border bg-background/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Backlog Open</p>
+          <p className="mt-1 text-2xl font-semibold text-foreground">{agentActivity?.backlog_open || 0}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">total queued</p>
         </article>
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Approvals Pending</p>
+        <article className="rounded-lg border border-border bg-background/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Approvals Pending</p>
           <p className="mt-1 text-2xl font-semibold text-amber-200">{approvalsHighlight?.pending_count || 0}</p>
-          <p className="mt-1 text-[11px] text-slate-500">awaiting decision</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">awaiting decision</p>
         </article>
-        <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Completion Rate</p>
-          <p className={`mt-1 text-2xl font-semibold ${completionRate24h !== null ? (completionRate24h >= 70 ? "text-emerald-200" : completionRate24h >= 40 ? "text-amber-200" : "text-rose-300") : "text-slate-500"}`}>
+        <article className="rounded-lg border border-border bg-background/60 p-3">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Completion Rate</p>
+          <p className={`mt-1 text-2xl font-semibold ${completionRate24h !== null ? (completionRate24h >= 70 ? "text-primary/80" : completionRate24h >= 40 ? "text-amber-200" : "text-secondary") : "text-muted-foreground"}`}>
             {completionRate24h !== null ? `${completionRate24h}%` : "—"}
           </p>
-          <p className="mt-1 text-[11px] text-slate-500">24h completed / rejected</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">24h completed / rejected</p>
         </article>
       </section>
 
       {/* ── NOW: Current Assignments ── */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <section className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-3 flex items-center gap-2">
           <span className="text-base">⚡</span>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-300">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-primary">
             Now — Active Assignments ({(agentActivity?.active_assignments || []).length})
           </h2>
         </div>
         {(agentActivity?.active_assignments || []).length === 0 ? (
-          <p className="text-sm text-slate-600 italic">No agents currently working. Queue a heartbeat to dispatch work.</p>
+          <p className="text-sm text-muted italic">No agents currently working. Queue a heartbeat to dispatch work.</p>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {(agentActivity?.active_assignments || []).map((a) => (
               <div
                 key={a.assignment_id}
-                className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 p-3"
+                className="rounded-lg border border-primary/25 bg-primary/10 p-3"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">{a.agent_id}</div>
-                    <div className="mt-1 text-sm font-medium text-slate-200 leading-snug">{a.title}</div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-primary">{a.agent_id}</div>
+                    <div className="mt-1 text-sm font-medium text-foreground leading-snug">{a.title}</div>
                   </div>
                   <span className={`text-[10px] shrink-0 font-semibold ${priorityColor(a.priority)}`}>{priorityText(a.priority)}</span>
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-                  {a.project_key ? <span className="text-slate-400">{a.project_key}</span> : null}
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                  {a.project_key ? <span className="text-muted-foreground">{a.project_key}</span> : null}
                   <span>•</span>
                   <span>Started {formatTs(a.started_at)}</span>
                 </div>
@@ -1049,12 +1049,12 @@ export default function ToDoListDashboardPage() {
       </section>
 
       {/* ── Agent Efficiency Strip ── */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+      <section className="rounded-xl border border-border bg-background/70 p-3">
         <div className="flex flex-wrap items-center gap-4 text-xs">
-          <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500 shrink-0">Agent Efficiency</span>
+          <span className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground shrink-0">Agent Efficiency</span>
           <div className="flex flex-wrap gap-4">
-            <span className="text-slate-400">1h: <strong className="text-slate-200">{agentMetrics1h?.seized || 0}</strong> seized · <strong className="text-emerald-300">{agentMetrics1h?.completed || 0}</strong> done · <strong className="text-rose-300">{agentMetrics1h?.rejected || 0}</strong> rejected</span>
-            <span className="text-slate-400">24h: <strong className="text-slate-200">{agentMetrics24h?.seized || 0}</strong> seized · <strong className="text-emerald-300">{agentMetrics24h?.completed || 0}</strong> done · <strong className="text-rose-300">{agentMetrics24h?.rejected || 0}</strong> rejected</span>
+            <span className="text-muted-foreground">1h: <strong className="text-foreground">{agentMetrics1h?.seized || 0}</strong> seized · <strong className="text-primary">{agentMetrics1h?.completed || 0}</strong> done · <strong className="text-secondary">{agentMetrics1h?.rejected || 0}</strong> rejected</span>
+            <span className="text-muted-foreground">24h: <strong className="text-foreground">{agentMetrics24h?.seized || 0}</strong> seized · <strong className="text-primary">{agentMetrics24h?.completed || 0}</strong> done · <strong className="text-secondary">{agentMetrics24h?.rejected || 0}</strong> rejected</span>
           </div>
         </div>
       </section>
@@ -1066,7 +1066,7 @@ export default function ToDoListDashboardPage() {
           label="Future"
           emoji="📅"
           count={futureItems.length}
-          accentClass="border-slate-800"
+          accentClass="border-border"
           headerClass="text-sky-300"
           emptyText="No queued tasks."
         >
@@ -1078,8 +1078,8 @@ export default function ToDoListDashboardPage() {
           label="In Progress"
           emoji="⚡"
           count={nowItems.length}
-          accentClass="border-emerald-900/40"
-          headerClass="text-emerald-300"
+          accentClass="border-primary/25"
+          headerClass="text-primary"
           emptyText="Nothing actively in progress."
         >
           {nowItems.map((item, idx) => renderTaskCard(item, idx, true))}
@@ -1090,8 +1090,8 @@ export default function ToDoListDashboardPage() {
           label="Past"
           emoji="✅"
           count={visibleCompletedRows.length}
-          accentClass="border-slate-800"
-          headerClass="text-slate-300"
+          accentClass="border-border"
+          headerClass="text-foreground/80"
           emptyText="No completed tasks yet."
         >
           <>
@@ -1100,7 +1100,7 @@ export default function ToDoListDashboardPage() {
                 <button
                   onClick={() => void handleDeleteAllCompleted()}
                   disabled={deleteAllPending}
-                  className="mb-1 rounded border border-rose-800/60 bg-rose-950/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-300 hover:bg-rose-950/40 disabled:opacity-50"
+                  className="mb-1 rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-secondary hover:bg-red-400/15 disabled:opacity-50"
                 >
                   {deleteAllPending ? "Clearing…" : "🗑 Clear All"}
                 </button>
@@ -1113,43 +1113,43 @@ export default function ToDoListDashboardPage() {
 
       {/* ── Allocation Breakdown ── */}
       {allQueueItems.length > 0 ? (
-        <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
+        <section className="rounded-xl border border-border bg-background/70 p-4">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">
             Work Allocation
           </h2>
           <div className="grid gap-6 sm:grid-cols-2">
             <div>
-              <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">By Source</h3>
+              <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">By Source</h3>
               <div className="space-y-2">
                 {allocationBySource.map(([kind, count]) => {
                   const pct = Math.round((count / allQueueItems.length) * 100);
                   return (
                     <div key={kind} className="grid items-center gap-3 text-xs" style={{ gridTemplateColumns: "8rem 1fr 4rem" }}>
                       <div className="overflow-hidden">{sourceKindPill(kind)}</div>
-                      <div className="rounded-full bg-slate-800/60 h-1.5 min-w-0">
+                      <div className="rounded-full bg-card/60 h-1.5 min-w-0">
                         <div className="h-1.5 rounded-full bg-sky-600/60 transition-all" style={{ width: `${pct}%` }} />
                       </div>
-                      <span className="text-right text-slate-400 tabular-nums whitespace-nowrap">{count} ({pct}%)</span>
+                      <span className="text-right text-muted-foreground tabular-nums whitespace-nowrap">{count} ({pct}%)</span>
                     </div>
                   );
                 })}
               </div>
             </div>
             <div>
-              <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">By Project</h3>
+              <h3 className="mb-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">By Project</h3>
               <div className="space-y-1.5">
                 {allocationByProject.map(([proj, count]) => {
                   const pct = Math.round((count / allQueueItems.length) * 100);
                   return (
                     <div key={proj} className="flex items-center gap-2 text-xs">
-                      <span className="w-28 shrink-0 truncate text-slate-300">{proj}</span>
-                      <div className="flex-1 rounded-full bg-slate-800/60 h-1.5">
+                      <span className="w-28 shrink-0 truncate text-foreground/80">{proj}</span>
+                      <div className="flex-1 rounded-full bg-card/60 h-1.5">
                         <div
-                          className="h-1.5 rounded-full bg-violet-600/60"
+                          className="h-1.5 rounded-full bg-secondary/20"
                           style={{ width: `${pct}%` }}
                         />
                       </div>
-                      <span className="w-14 text-right text-slate-400 tabular-nums">{count} ({pct}%)</span>
+                      <span className="w-14 text-right text-muted-foreground tabular-nums">{count} ({pct}%)</span>
                     </div>
                   );
                 })}
@@ -1166,13 +1166,13 @@ export default function ToDoListDashboardPage() {
       {heartbeatAlerts.length > 0 ? (
         <section className="rounded-xl border border-amber-800/40 bg-amber-950/20 p-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-[10px] uppercase tracking-[0.16em] text-amber-400 shrink-0">Heartbeat</span>
+            <span className="text-[10px] uppercase tracking-[0.16em] text-accent shrink-0">Heartbeat</span>
             {heartbeatAlerts.map((alert) => (
               <span key={alert} className="rounded border border-amber-700/50 bg-amber-900/20 px-2 py-0.5 text-[11px] text-amber-200">
                 {alert}
               </span>
             ))}
-            <span className="text-[10px] text-slate-500">
+            <span className="text-[10px] text-muted-foreground">
               next {formatEpochTs(overview?.heartbeat?.nearest_next_run_epoch)} · interval {formatEvery(overview?.heartbeat?.heartbeat_effective_interval_seconds ?? overview?.heartbeat?.effective_default_every_seconds)}
             </span>
           </div>

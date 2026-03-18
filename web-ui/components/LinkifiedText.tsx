@@ -140,7 +140,7 @@ export function PathLink({ path, className }: { path: string; className?: string
       }}
       className={
         className ||
-        "text-cyan-400 hover:underline cursor-pointer break-all font-mono bg-cyan-500/10 px-1 rounded mx-0.5 text-left"
+        "text-primary hover:underline cursor-pointer break-all font-mono bg-primary/10 px-1 rounded mx-0.5 text-left"
       }
       title="Open file preview"
     >
@@ -166,7 +166,7 @@ export function LinkifiedText({ text }: { text: string }) {
                 href={normalizeUrl(token)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-cyan-400 hover:underline font-medium break-all"
+                className="text-primary hover:underline font-medium break-all"
                 onClick={(e) => e.stopPropagation()}
               >
                 {token}

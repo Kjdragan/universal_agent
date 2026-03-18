@@ -117,12 +117,12 @@ const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
 const MISSION_MAX_AGE_MS = 36 * 60 * 60 * 1000; // 36 hours — auto-hide old missions
 const CLEARED_MISSIONS_LS_KEY = "ua.cleared_missions_before";
 const VP_STATUS_COLORS: Record<string, { dot: string; text: string; bg: string }> = {
-  idle: { dot: "bg-emerald-400", text: "text-emerald-300", bg: "border-emerald-900/40" },
+  idle: { dot: "bg-primary", text: "text-primary", bg: "border-primary/25" },
   active: { dot: "bg-sky-400 animate-pulse", text: "text-sky-300", bg: "border-sky-900/40" },
   running: { dot: "bg-sky-400 animate-pulse", text: "text-sky-300", bg: "border-sky-900/40" },
-  degraded: { dot: "bg-rose-400", text: "text-rose-300", bg: "border-rose-900/40" },
-  stale: { dot: "bg-amber-400", text: "text-amber-300", bg: "border-amber-900/40" },
-  unknown: { dot: "bg-slate-500", text: "text-slate-400", bg: "border-slate-800" },
+  degraded: { dot: "bg-red-400", text: "text-secondary", bg: "border-red-400/20" },
+  stale: { dot: "bg-amber-400", text: "text-accent", bg: "border-amber-900/40" },
+  unknown: { dot: "bg-muted-foreground", text: "text-muted-foreground", bg: "border-border" },
 };
 
 function formatElapsed(ms: number): string {
@@ -297,15 +297,15 @@ function RefLine({
   if (!text) return null;
   const explorerHref = workspaceExplorerHref(storagePath || "");
   return (
-    <p className="mt-1 flex flex-wrap items-start gap-2 text-[10px] text-slate-400">
-      <span className="text-slate-500">{label}:</span>
+    <p className="mt-1 flex flex-wrap items-start gap-2 text-[10px] text-muted-foreground">
+      <span className="text-muted-foreground">{label}:</span>
       <span className="min-w-[180px] flex-1 break-all">
         <LinkifiedText text={text} />
       </span>
       {explorerHref && (
         <Link
           href={explorerHref}
-          className="rounded border border-blue-500/20 bg-blue-500/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-blue-300 hover:bg-blue-500/10"
+          className="rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-primary hover:bg-primary/10"
         >
           Open in Storage
         </Link>
@@ -984,7 +984,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-muted-foreground">
             Profile: {summary?.deployment_profile?.profile ?? "local_workstation"}
           </p>
         </div>
@@ -998,14 +998,14 @@ export default function DashboardPage() {
                 focusInput: true,
               })
             }
-            className="rounded-lg border border-emerald-700/60 bg-emerald-600/15 px-3 py-1.5 text-sm text-emerald-200 hover:bg-emerald-600/25"
+            className="rounded-lg border border-primary/30/60 bg-primary/15 px-3 py-1.5 text-sm text-primary/80 hover:bg-primary/25"
           >
             New Session
           </button>
           <button
             type="button"
             onClick={load}
-            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+            className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card"
           >
             Refresh
           </button>
@@ -1016,25 +1016,25 @@ export default function DashboardPage() {
         {cards.map((card) => (
           <article
             key={card.label}
-            className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 cursor-pointer transition hover:border-blue-500/30 hover:bg-white/[0.04]"
+            className="rounded-xl border border-border/40 bg-card/10 p-4 cursor-pointer transition hover:border-primary/30 hover:bg-card/20"
             onClick={() => handleCardClick(card.label)}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleCardClick(card.label); }}
           >
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">{card.label}</p>
-            <p className="mt-2 text-3xl font-semibold text-slate-100">{card.value}</p>
+            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">{card.label}</p>
+            <p className="mt-2 text-3xl font-semibold text-foreground">{card.value}</p>
           </article>
         ))}
       </section>
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <section className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">
               External Primary Agent Operations
             </h2>
-            <p className="text-[11px] text-slate-500">
+            <p className="text-[11px] text-muted-foreground">
               Simone dispatches missions. External workers execute autonomously and report mission events.
             </p>
           </div>
@@ -1042,7 +1042,7 @@ export default function DashboardPage() {
             <select
               value={selectedVpId}
               onChange={(event) => setSelectedVpId(event.target.value)}
-              className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200"
+              className="rounded border border-border bg-background/70 px-2 py-1 text-xs text-foreground"
             >
               <option value="all">all agents</option>
               {vpIds.map((vpId) => (
@@ -1054,7 +1054,7 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={load}
-              className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60"
+              className="rounded border border-border bg-background/50 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/60"
             >
               Refresh VP
             </button>
@@ -1062,39 +1062,39 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Active Workers</p>
-            <p className="mt-1 text-xl font-semibold text-slate-100">{activeWorkerCount}</p>
+          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Active Workers</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{activeWorkerCount}</p>
           </div>
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Queued</p>
-            <p className="mt-1 text-xl font-semibold text-slate-100">{missionCountByStatus.queued}</p>
+          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Queued</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{missionCountByStatus.queued}</p>
           </div>
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Running</p>
-            <p className="mt-1 text-xl font-semibold text-emerald-200">{missionCountByStatus.running}</p>
+          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Running</p>
+            <p className="mt-1 text-xl font-semibold text-primary/80">{missionCountByStatus.running}</p>
           </div>
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Completed</p>
-            <p className="mt-1 text-xl font-semibold text-slate-100">{missionCountByStatus.completed}</p>
+          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Completed</p>
+            <p className="mt-1 text-xl font-semibold text-foreground">{missionCountByStatus.completed}</p>
           </div>
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Failed</p>
-            <p className="mt-1 text-xl font-semibold text-rose-200">{missionCountByStatus.failed}</p>
+          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Failed</p>
+            <p className="mt-1 text-xl font-semibold text-red-400/80">{missionCountByStatus.failed}</p>
           </div>
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Stalled</p>
+          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Stalled</p>
             <p className="mt-1 text-xl font-semibold text-amber-200">{missionCountByStatus.stalled}</p>
           </div>
         </div>
 
-        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-          <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Dispatch Mission</p>
+        <div className="mt-3 rounded-lg border border-border/80 bg-background/50 p-3">
+          <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Dispatch Mission</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <select
               value={dispatchVpId}
               onChange={(event) => setDispatchVpId(event.target.value)}
-              className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200"
+              className="rounded border border-border bg-background/70 px-2 py-1 text-xs text-foreground"
             >
               {vpIds.map((vpId) => (
                 <option key={vpId} value={vpId}>
@@ -1112,19 +1112,19 @@ export default function DashboardPage() {
                 }
               }}
               placeholder="Objective for external primary agent..."
-              className="min-w-[240px] flex-1 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500/50"
+              className="min-w-[240px] flex-1 rounded-lg border border-border/40 bg-card/15 px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
             />
             <button
               type="button"
               onClick={dispatchMission}
               disabled={dispatchPending || !dispatchObjective.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40"
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary disabled:opacity-40"
             >
               {dispatchPending ? "Dispatching..." : "Dispatch"}
             </button>
           </div>
           {(dispatchStatus || vpError) && (
-            <p className="mt-2 text-xs text-amber-300">{dispatchStatus || vpError}</p>
+            <p className="mt-2 text-xs text-accent">{dispatchStatus || vpError}</p>
           )}
         </div>
 
@@ -1139,33 +1139,33 @@ export default function DashboardPage() {
             const leaseExpires = vpSession?.lease_expires_at ? new Date(vpSession.lease_expires_at).getTime() : NaN;
             const leaseSecondsLeft = Number.isFinite(leaseExpires) ? Math.max(0, Math.floor((leaseExpires - Date.now()) / 1000)) : NaN;
             return (
-              <div key={vpId} className={`rounded-lg border bg-slate-950/50 p-3 text-xs text-slate-300 ${statusColors.bg}`}>
+              <div key={vpId} className={`rounded-lg border bg-background/50 p-3 text-xs text-foreground/80 ${statusColors.bg}`}>
                 <div className="flex items-center justify-between">
-                  <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{vpId}</p>
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{vpId}</p>
                   <div className="flex items-center gap-1.5">
                     <span className={`inline-block h-2 w-2 rounded-full ${statusColors.dot}`} />
                     <span className={`text-[11px] font-semibold uppercase ${statusColors.text}`}>{workerStatus}</span>
                   </div>
                 </div>
                 {lastError && workerStatus === "degraded" && (
-                  <div className="mt-2 rounded border border-rose-900/50 bg-rose-950/40 px-2 py-1.5">
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-rose-400">Last Error</p>
-                    <p className="mt-0.5 text-[11px] text-rose-200 break-all">{lastError}</p>
+                  <div className="mt-2 rounded border border-red-400/25 bg-red-400/10 px-2 py-1.5">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-secondary">Last Error</p>
+                    <p className="mt-0.5 text-[11px] text-red-400/80 break-all">{lastError}</p>
                   </div>
                 )}
                 <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
-                  <p className="text-slate-500">session</p>
+                  <p className="text-muted-foreground">session</p>
                   <p className="text-right font-mono text-[10px]">{vpSession?.session_id || metrics?.session?.session_id || "--"}</p>
-                  <p className="text-slate-500">queue / running</p>
+                  <p className="text-muted-foreground">queue / running</p>
                   <p className="text-right">{metrics?.mission_counts?.queued ?? 0} / {metrics?.mission_counts?.running ?? 0}</p>
-                  <p className="text-slate-500">p95 latency</p>
+                  <p className="text-muted-foreground">p95 latency</p>
                   <p className="text-right">{typeof p95Latency === "number" ? `${p95Latency.toFixed(1)}s` : "--"}</p>
                   {Number.isFinite(leaseSecondsLeft) && (
-                    <><p className="text-slate-500">lease TTL</p>
-                    <p className={`text-right ${leaseSecondsLeft < 30 ? "text-rose-300" : leaseSecondsLeft < 60 ? "text-amber-300" : "text-emerald-300"}`}>{formatElapsed(leaseSecondsLeft * 1000)}</p></>
+                    <><p className="text-muted-foreground">lease TTL</p>
+                    <p className={`text-right ${leaseSecondsLeft < 30 ? "text-secondary" : leaseSecondsLeft < 60 ? "text-accent" : "text-primary"}`}>{formatElapsed(leaseSecondsLeft * 1000)}</p></>
                   )}
                 </div>
-                <p className="mt-2 text-[10px] text-slate-600">
+                <p className="mt-2 text-[10px] text-muted">
                   heartbeat: {formatLocalDateTime(vpSession?.last_heartbeat_at || vpSession?.updated_at)}
                 </p>
               </div>
@@ -1173,14 +1173,14 @@ export default function DashboardPage() {
           })}
         </div>
 
-        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs">
+        <div className="mt-3 rounded-lg border border-border/80 bg-background/50 p-3 text-xs">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Recent Missions</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Recent Missions</p>
             {filteredVpMissions.length > 0 && (
               <button
                 type="button"
                 onClick={handleClearMissions}
-                className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-slate-300 transition"
+                className="rounded border border-border bg-card px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-card/50 hover:text-foreground/80 transition"
               >
                 Clear All
               </button>
@@ -1214,17 +1214,17 @@ export default function DashboardPage() {
               // Claim lease remaining
               const claimSecsLeft = Number.isFinite(claimTs) ? Math.max(0, Math.floor((claimTs - Date.now()) / 1000)) : NaN;
               // Status styling
-              const statusStyle = effectiveStatus === "completed" ? "text-emerald-300"
+              const statusStyle = effectiveStatus === "completed" ? "text-primary"
                 : effectiveStatus === "running" ? "text-sky-300"
-                : effectiveStatus === "failed" ? "text-rose-300"
-                : effectiveStatus === "stalled" ? "text-amber-300"
-                : effectiveStatus === "cancelled" ? "text-slate-500"
-                : "text-slate-400";
+                : effectiveStatus === "failed" ? "text-secondary"
+                : effectiveStatus === "stalled" ? "text-accent"
+                : effectiveStatus === "cancelled" ? "text-muted-foreground"
+                : "text-muted-foreground";
               return (
-                <div key={mission.mission_id} className="rounded border border-slate-800 bg-slate-900/40 px-2 py-1.5">
+                <div key={mission.mission_id} className="rounded border border-border bg-background/40 px-2 py-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <p className="font-mono text-[11px] text-slate-300">
+                      <p className="font-mono text-[11px] text-foreground/80">
                         {mission.mission_id} · {mission.vp_id}
                       </p>
                       <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${statusStyle} bg-white/5`}>{effectiveStatus}</span>
@@ -1232,35 +1232,35 @@ export default function DashboardPage() {
                         <span className="rounded bg-sky-900/30 px-1.5 py-0.5 text-[10px] font-mono text-sky-200" title={`Started ${formatLocalDateTime(mission.started_at)}`}>⏱ {formatElapsed(elapsedMs)}</span>
                       )}
                       {restartCount > 1 && (
-                        <span className="rounded bg-rose-900/30 px-1.5 py-0.5 text-[10px] font-semibold text-rose-200" title={`${restartCount} vp.mission.started events detected — indicates restart loop`}>⟳ {restartCount} restarts</span>
+                        <span className="rounded bg-red-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-400/80" title={`${restartCount} vp.mission.started events detected — indicates restart loop`}>⟳ {restartCount} restarts</span>
                       )}
                     </div>
                     {cancellable && (
                       <button
                         type="button"
                         onClick={() => cancelMission(mission.mission_id)}
-                        className="rounded border border-rose-700 bg-rose-900/20 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-900/35"
+                        className="rounded border border-red-400/30 bg-red-400/10 px-2 py-0.5 text-[10px] text-red-400/80 hover:bg-red-400/20"
                       >
                         Cancel
                       </button>
                     )}
                   </div>
-                  <p className="mt-1 text-slate-200">{mission.objective || "(no objective)"}</p>
+                  <p className="mt-1 text-foreground">{mission.objective || "(no objective)"}</p>
                   {missionStatus === "running" && Number.isFinite(claimSecsLeft) && (
                     <div className="mt-1.5">
                       <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-slate-500">claim lease</span>
-                        <span className={claimSecsLeft < 30 ? "text-rose-300" : claimSecsLeft < 60 ? "text-amber-300" : "text-emerald-300"}>{formatElapsed(claimSecsLeft * 1000)} remaining</span>
+                        <span className="text-muted-foreground">claim lease</span>
+                        <span className={claimSecsLeft < 30 ? "text-secondary" : claimSecsLeft < 60 ? "text-accent" : "text-primary"}>{formatElapsed(claimSecsLeft * 1000)} remaining</span>
                       </div>
-                      <div className="mt-0.5 h-1 w-full rounded-full bg-slate-800">
+                      <div className="mt-0.5 h-1 w-full rounded-full bg-card">
                         <div
-                          className={`h-1 rounded-full transition-all ${claimSecsLeft < 30 ? "bg-rose-500" : claimSecsLeft < 60 ? "bg-amber-500" : "bg-emerald-500"}`}
+                          className={`h-1 rounded-full transition-all ${claimSecsLeft < 30 ? "bg-red-400" : claimSecsLeft < 60 ? "bg-amber-500" : "bg-primary"}`}
                           style={{ width: `${Math.min(100, (claimSecsLeft / 120) * 100)}%` }}
                         />
                       </div>
                     </div>
                   )}
-                  <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-slate-500">
+                  <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-muted-foreground">
                     {mission.started_at && <span>started: {formatLocalDateTime(mission.started_at)}</span>}
                     <span>updated: {formatLocalDateTime(mission.updated_at)}</span>
                     {mission.completed_at && <span>completed: {formatLocalDateTime(mission.completed_at)}</span>}
@@ -1289,13 +1289,13 @@ export default function DashboardPage() {
                               return next;
                             });
                           }}
-                          className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition"
+                          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground/80 transition"
                         >
                           <span className="select-none">{isExpanded ? "▾" : "▸"}</span>
                           <span>{missionEvents.length} event{missionEvents.length !== 1 ? "s" : ""}</span>
                         </button>
                         {isExpanded && (
-                          <div className="mt-1 ml-2 space-y-1 border-l border-slate-800 pl-2">
+                          <div className="mt-1 ml-2 space-y-1 border-l border-border pl-2">
                             {missionEvents.map((evt, ei) => {
                               const ep = asRecord(evt.payload);
                               const evtResultRef = asText(vpMissionById.get(mission.mission_id)?.result_ref);
@@ -1305,9 +1305,9 @@ export default function DashboardPage() {
                               const rcptRel = asText(ep.mission_receipt_relpath);
                               const rcptPath = missionArtifactPath(evtResultRef, rcptRel);
                               return (
-                                <div key={`${evt.event_id || evt.created_at || "e"}-${ei}`} className="text-[10px] text-slate-400">
-                                  <span className="text-slate-500">{formatLocalDateTime(evt.created_at)}</span>{" "}
-                                  <span className="text-slate-300">{evt.event_type || "event"}</span>
+                                <div key={`${evt.event_id || evt.created_at || "e"}-${ei}`} className="text-[10px] text-muted-foreground">
+                                  <span className="text-muted-foreground">{formatLocalDateTime(evt.created_at)}</span>{" "}
+                                  <span className="text-foreground/80">{evt.event_type || "event"}</span>
                                   <RefLine label="work_products" value={wpPath} storagePath={wpPath} />
                                   <RefLine label="run_log" value={rlPath} storagePath={rlPath} />
                                   <RefLine label="receipt" value={rcptPath} storagePath={rcptPath} />
@@ -1323,7 +1323,7 @@ export default function DashboardPage() {
               );
             })}
             {filteredVpMissions.length === 0 && (
-              <p className="text-slate-500">No VP missions recorded for the current filter.</p>
+              <p className="text-muted-foreground">No VP missions recorded for the current filter.</p>
             )}
           </div>
         </div>
@@ -1331,19 +1331,19 @@ export default function DashboardPage() {
 
       </section>
 
-      <section ref={sessionSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
+      <section ref={sessionSectionRef} className="rounded-xl border border-border bg-background/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Session Directory</h2>
-            <div className="flex rounded-full border border-slate-700 overflow-hidden">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">Session Directory</h2>
+            <div className="flex rounded-full border border-border overflow-hidden">
               <button
                 type="button"
                 onClick={() => setSessionFilter("active")}
                 className={[
                   "px-2.5 py-0.5 text-[10px] font-medium transition",
                   sessionFilter === "active"
-                    ? "bg-emerald-600/20 text-emerald-200 border-r border-slate-700"
-                    : "bg-slate-800/40 text-slate-400 hover:text-slate-200 border-r border-slate-700",
+                    ? "bg-primary/15 text-primary/80 border-r border-border"
+                    : "bg-card/40 text-muted-foreground hover:text-foreground border-r border-border",
                 ].join(" ")}
               >
                 Active
@@ -1354,15 +1354,15 @@ export default function DashboardPage() {
                 className={[
                   "px-2.5 py-0.5 text-[10px] font-medium transition",
                   sessionFilter === "all"
-                    ? "bg-blue-600/20 text-blue-200"
-                    : "bg-slate-800/40 text-slate-400 hover:text-slate-200",
+                    ? "bg-primary/20 text-primary/80"
+                    : "bg-card/40 text-muted-foreground hover:text-foreground",
                 ].join(" ")}
               >
                 All
               </button>
             </div>
           </div>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-muted-foreground">
             {filteredSessions.length} session{filteredSessions.length !== 1 ? "s" : ""}
           </span>
         </div>
@@ -1377,8 +1377,8 @@ export default function DashboardPage() {
               className={[
                 "rounded-full px-2.5 py-1 text-[11px] capitalize transition border",
                 sourceFilter === src
-                  ? "border-blue-500/30 bg-blue-500/10 text-blue-200"
-                  : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200",
+                  ? "border-primary/30 bg-primary/10 text-primary/80"
+                  : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
               ].join(" ")}
             >
               {src}
@@ -1388,20 +1388,20 @@ export default function DashboardPage() {
 
         {/* Bulk action bar */}
         {selectedSessions.size > 0 && (
-          <div className="mb-3 flex items-center gap-3 rounded-lg border border-rose-800/50 bg-rose-950/20 px-3 py-2">
-            <span className="text-xs text-rose-200">{selectedSessions.size} selected</span>
+          <div className="mb-3 flex items-center gap-3 rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2">
+            <span className="text-xs text-red-400/80">{selectedSessions.size} selected</span>
             <button
               type="button"
               onClick={bulkDeleteSelected}
               disabled={deletingIds.size > 0}
-              className="rounded border border-rose-700 bg-rose-900/25 px-3 py-1 text-[11px] text-rose-200 hover:bg-rose-900/40 disabled:opacity-50 transition"
+              className="rounded border border-red-400/30 bg-red-400/10 px-3 py-1 text-[11px] text-red-400/80 hover:bg-red-400/15 disabled:opacity-50 transition"
             >
               Delete Selected
             </button>
             <button
               type="button"
               onClick={() => setSelectedSessions(new Set())}
-              className="text-[11px] text-slate-400 hover:text-slate-200"
+              className="text-[11px] text-muted-foreground hover:text-foreground"
             >
               Clear
             </button>
@@ -1416,9 +1416,9 @@ export default function DashboardPage() {
                 type="checkbox"
                 checked={filteredSessions.length > 0 && filteredSessions.every((s) => selectedSessions.has(s.session_id))}
                 onChange={toggleAllVisible}
-                className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 accent-blue-500"
+                className="h-3.5 w-3.5 rounded border-border bg-background accent-blue-500"
               />
-              <span className="text-[11px] text-slate-400">Select all visible</span>
+              <span className="text-[11px] text-muted-foreground">Select all visible</span>
             </div>
 
             <button
@@ -1444,25 +1444,25 @@ export default function DashboardPage() {
 
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {filteredSessions.map((session) => (
-            <article key={session.session_id} className={`rounded-lg border p-3 transition ${selectedSessions.has(session.session_id) ? "border-blue-500/30 bg-blue-500/5" : "border-slate-800/80 bg-slate-950/50"} ${deletingIds.has(session.session_id) ? "opacity-40" : ""}`}>
+            <article key={session.session_id} className={`rounded-lg border p-3 transition ${selectedSessions.has(session.session_id) ? "border-primary/30 bg-primary/5" : "border-border/80 bg-background/50"} ${deletingIds.has(session.session_id) ? "opacity-40" : ""}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <input
                     type="checkbox"
                     checked={selectedSessions.has(session.session_id)}
                     onChange={() => toggleSession(session.session_id)}
-                    className="h-3.5 w-3.5 shrink-0 rounded border-slate-600 bg-slate-900 accent-blue-500"
+                    className="h-3.5 w-3.5 shrink-0 rounded border-border bg-background accent-blue-500"
                   />
-                  <p className="truncate font-mono text-xs text-slate-200">{session.session_id}</p>
+                  <p className="truncate font-mono text-xs text-foreground">{session.session_id}</p>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-[11px] text-slate-500">{session.status}</span>
+                  <span className="text-[11px] text-muted-foreground">{session.status}</span>
                   <button
                     type="button"
                     onClick={() => deleteSession(session.session_id)}
                     disabled={deletingIds.has(session.session_id)}
                     title="Delete session"
-                    className="rounded p-0.5 text-rose-400/60 hover:text-rose-300 hover:bg-rose-900/25 transition disabled:opacity-30"
+                    className="rounded p-0.5 text-secondary/60 hover:text-secondary hover:bg-red-400/10 transition disabled:opacity-30"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-3.5 w-3.5">
                       <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
@@ -1470,33 +1470,33 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
-              <p className="mt-1 text-[11px] text-slate-400">
+              <p className="mt-1 text-[11px] text-muted-foreground">
                 {inferSourceCategory(session)} · {session.owner}
                 {session.last_run_source === "heartbeat" && (
-                  <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full border border-pink-800/50 bg-pink-900/20 px-1.5 py-0 text-[9px] text-pink-300">♥ heartbeat</span>
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full border border-secondary/25 bg-secondary/10 px-1.5 py-0 text-[9px] text-secondary">♥ heartbeat</span>
                 )}
               </p>
               {session.description ? (
                 <p
-                  className="mt-1 text-[11px] text-slate-300/90 truncate"
+                  className="mt-1 text-[11px] text-foreground/80/90 truncate"
                   title={session.description}
                 >
                   {session.description}
                 </p>
               ) : (
-                <p className="mt-1 text-[11px] text-slate-600 italic truncate">no description yet</p>
+                <p className="mt-1 text-[11px] text-muted italic truncate">no description yet</p>
               )}
-              <p className="mt-1 text-[11px] text-slate-500">
+              <p className="mt-1 text-[11px] text-muted-foreground">
                 memory: {session.memory_mode}
               </p>
-              <p className="mt-1 text-[11px] text-slate-500">
+              <p className="mt-1 text-[11px] text-muted-foreground">
                 last activity: {formatLocalDateTime(session.last_activity)}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {!session.session_id.startsWith("vp_") && (
                   <button
                     type="button"
-                    className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
+                    className="rounded-lg border border-border/40 bg-card/15 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/30"
                     onClick={() =>
                       openOrFocusChatWindow({
                         sessionId: session.session_id,
@@ -1525,18 +1525,18 @@ export default function DashboardPage() {
             </article>
           ))}
           {filteredSessions.length === 0 && (
-            <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-sm text-slate-400">
+            <div className="rounded-lg border border-border/80 bg-background/50 p-3 text-sm text-muted-foreground">
               {sessionDirectory.length === 0 ? "No sessions discovered yet." : "No sessions match the current filter."}
             </div>
           )}
         </div>
       </section >
 
-      <section ref={notificationSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
+      <section ref={notificationSectionRef} className="rounded-xl border border-border bg-background/70 p-4 scroll-mt-4">
         {/* ── Header row ── */}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Notification Center</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">Notification Center</h2>
             {/* Unread chip */}
             <button
               type="button"
@@ -1545,7 +1545,7 @@ export default function DashboardPage() {
                 "rounded-full px-2 py-0.5 text-[10px] font-medium border transition",
                 notificationFilter === "unread"
                   ? "border-amber-600/50 bg-amber-500/15 text-amber-200"
-                  : "border-slate-700 bg-slate-800/40 text-slate-500 hover:text-slate-300",
+                  : "border-border bg-card/40 text-muted-foreground hover:text-foreground/80",
               ].join(" ")}
             >
               Unread only
@@ -1554,7 +1554,7 @@ export default function DashboardPage() {
             <select
               value={notifSeverityFilter}
               onChange={(e) => setNotifSeverityFilter(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[11px] text-slate-300"
+              className="rounded border border-border bg-background/70 px-2 py-0.5 text-[11px] text-foreground/80"
             >
               {SEVERITY_OPTIONS.map((sev) => (
                 <option key={sev} value={sev}>
@@ -1569,7 +1569,7 @@ export default function DashboardPage() {
                 type="button"
                 onClick={deleteAllVisibleNotifications}
                 disabled={bulkUpdating}
-                className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                className="rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-red-400/80 hover:bg-red-400/20 disabled:opacity-50"
               >
                 Delete All ({visibleNotifications.length})
               </button>
@@ -1580,7 +1580,7 @@ export default function DashboardPage() {
                   type="button"
                   onClick={() => bulkUpdateContinuityAlerts("acknowledged", "acknowledged in dashboard bulk action")}
                   disabled={bulkUpdating}
-                  className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                  className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20 disabled:opacity-50"
                 >
                   Ack All Continuity ({openContinuityAlerts.length})
                 </button>
@@ -1596,13 +1596,13 @@ export default function DashboardPage() {
                   type="button"
                   onClick={() => bulkUpdateContinuityAlerts("dismissed", "dismissed in dashboard bulk action")}
                   disabled={bulkUpdating}
-                  className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                  className="rounded border border-border bg-background/50 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/60 disabled:opacity-50"
                 >
                   Dismiss All
                 </button>
               </>
             )}
-            {loading && <span className="text-xs text-slate-500">Refreshing…</span>}
+            {loading && <span className="text-xs text-muted-foreground">Refreshing…</span>}
           </div>
         </div>
 
@@ -1624,9 +1624,9 @@ export default function DashboardPage() {
                   "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium border transition",
                   isActive
                     ? catKey === "important"
-                      ? "border-amber-500/40 bg-amber-500/15 text-amber-200"
-                      : "border-blue-500/30 bg-blue-500/10 text-blue-200"
-                    : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:border-slate-600",
+                      ? "border-accent/40 bg-amber-500/15 text-amber-200"
+                      : "border-primary/30 bg-primary/10 text-primary/80"
+                    : "border-border bg-card/40 text-muted-foreground hover:text-foreground hover:border-border",
                 ].join(" ")}
               >
                 <span className="text-[10px]">{icon}</span>
@@ -1635,9 +1635,9 @@ export default function DashboardPage() {
                   "ml-0.5 rounded-full px-1.5 py-0 text-[9px] font-semibold tabular-nums",
                   isActive
                     ? catKey === "important"
-                      ? "bg-amber-500/25 text-amber-300"
-                      : "bg-blue-500/20 text-blue-300"
-                    : "bg-slate-700/60 text-slate-500",
+                      ? "bg-amber-500/25 text-accent"
+                      : "bg-primary/20 text-primary"
+                    : "bg-card/50/60 text-muted-foreground",
                 ].join(" ")}>
                   {count}
                 </span>
@@ -1647,7 +1647,7 @@ export default function DashboardPage() {
         </div>
         <div className="space-y-2">
           {notifications.length === 0 && (
-            <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-sm text-slate-400">
+            <div className="rounded-lg border border-border/80 bg-background/50 p-3 text-sm text-muted-foreground">
               No notifications yet.
             </div>
           )}
@@ -1687,15 +1687,15 @@ export default function DashboardPage() {
               || relatedChatHref,
             );
             return (
-              <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
+              <div key={item.id} className="rounded-lg border border-border/80 bg-background/60 p-3">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold">{item.title}</p>
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{item.status}</span>
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">{item.status}</span>
                 </div>
-                <p className="mt-1 text-sm text-slate-300">
+                <p className="mt-1 text-sm text-foreground/80">
                   <LinkifiedText text={item.message} />
                 </p>
-                <p className="mt-2 text-[11px] text-slate-500">
+                <p className="mt-2 text-[11px] text-muted-foreground">
                   {item.kind} · {item.session_id || "global"} · {formatLocalDateTime(item.created_at)}
                 </p>
                 {relatedProgress && relatedProgress.notificationId !== item.id && (
@@ -1708,7 +1708,7 @@ export default function DashboardPage() {
                     {hasSessionAction && (
                       <button
                         type="button"
-                        className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                        className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
                         onClick={() =>
                           openOrFocusChatWindow({
                             sessionId: effectiveSessionId,
@@ -1723,7 +1723,7 @@ export default function DashboardPage() {
                     {tutorialHref && (
                       <Link
                         href={tutorialHref}
-                        className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
+                        className="rounded-lg border border-border/40 bg-card/15 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/30"
                       >
                         View Tutorial Files
                       </Link>
@@ -1731,7 +1731,7 @@ export default function DashboardPage() {
                     {reviewHref && (
                       <Link
                         href={reviewHref}
-                        className="rounded border border-violet-800/70 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-900/35"
+                        className="rounded border border-secondary/30 bg-secondary/10 px-2 py-1 text-[11px] text-secondary/80 hover:bg-secondary/20"
                       >
                         View Simone Review
                       </Link>
@@ -1741,7 +1741,7 @@ export default function DashboardPage() {
                         href={chatHref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                        className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
                       >
                         Open Session
                       </a>
@@ -1751,7 +1751,7 @@ export default function DashboardPage() {
                         href={relatedChatHref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                        className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
                       >
                         Open Related Session
                       </a>
@@ -1759,7 +1759,7 @@ export default function DashboardPage() {
                     {sessionRunLogHref && (
                       <Link
                         href={sessionRunLogHref}
-                        className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                        className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
                       >
                         View Run Log
                       </Link>
@@ -1767,7 +1767,7 @@ export default function DashboardPage() {
                     {canDispatchTutorial && (
                       <button
                         type="button"
-                        className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                        className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20 disabled:opacity-50"
                         onClick={() => dispatchTutorialToSimone(item.id, tutorialRunPath)}
                         disabled={tutorialDispatchingId === item.id}
                       >
@@ -1780,7 +1780,7 @@ export default function DashboardPage() {
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                      className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20 disabled:opacity-50"
                       onClick={() => updateNotificationStatus(item.id, "acknowledged", "acknowledged in dashboard")}
                       disabled={updatingId === item.id}
                     >
@@ -1796,7 +1796,7 @@ export default function DashboardPage() {
                     </button>
                     <button
                       type="button"
-                      className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                      className="rounded border border-border bg-background/50 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/60 disabled:opacity-50"
                       onClick={() => updateNotificationStatus(item.id, "dismissed", "dismissed in dashboard")}
                       disabled={updatingId === item.id}
                     >
@@ -1808,7 +1808,7 @@ export default function DashboardPage() {
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                      className="rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-red-400/80 hover:bg-red-400/20 disabled:opacity-50"
                       onClick={() => updateNotificationStatus(item.id, "dismissed", "deleted in dashboard")}
                       disabled={updatingId === item.id}
                     >

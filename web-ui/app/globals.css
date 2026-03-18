@@ -1,73 +1,74 @@
-/* Import Droid Sans Mono (and Syncopate for headers) */
-@import url('https://fonts.googleapis.com/css2?family=Droid+Sans+Mono&family=Syncopate:wght@400;700&display=swap');
+/* Import JetBrains Mono (mono) and Inter (display/UI) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ========================================
-   GRUVBOX OPERATIONS CENTER - DESIGN SYSTEM
-   Aesthetic: Retro-Future Industrial (Gruvbox)
+   GRUVBOX FOREST — DESIGN SYSTEM
+   Aesthetic: Forest-Industrial (Gruvbox Forest)
+   Palette: Carbon Black · Hunter Green · Muted Teal · Celadon
    ======================================== */
 
 @layer base {
   :root {
-    /* GRUVBOX LIGHT (Fallback / Light Mode) */
-    --background: 42 54% 81%; /* #fbf1c7 (Light 0) */
-    --foreground: 0 0% 16%;   /* #282828 (Dark 0) */
-    --card: 42 54% 81%;
-    --card-foreground: 0 0% 16%;
-    --primary: 123 21% 51%;   /* #689d6a (Aqua) */
-    --primary-foreground: 42 54% 81%;
-    --secondary: 329 46% 68%; /* #d3869b (Purple) */
-    --secondary-foreground: 42 54% 81%;
-    --muted: 35 15% 59%;      /* #a89984 (Light 4) */
-    --muted-foreground: 0 0% 16%;
-    --accent: 24 87% 45%;     /* #d65d0e (Orange) */
-    --accent-foreground: 42 54% 81%;
-    --border: 0 0% 16%;
-    --input: 35 15% 59%;
-    --ring: 123 21% 51%;
+    /* GRUVBOX FOREST LIGHT (Fallback / Light Mode) */
+    --background: 130 22% 92%;   /* Light sage */
+    --foreground: 130 26% 9%;    /* Carbon Black */
+    --card: 130 22% 88%;
+    --card-foreground: 130 26% 9%;
+    --primary: 128 24% 71%;      /* #A0CCA5 Celadon */
+    --primary-foreground: 130 26% 9%;
+    --secondary: 33 28% 64%;     /* #B8A98F Warm tan */
+    --secondary-foreground: 130 26% 9%;
+    --muted: 100 8% 55%;         /* #8B9986 Muted Teal light */
+    --muted-foreground: 130 26% 9%;
+    --accent: 36 56% 58%;        /* #D4A056 Warm amber */
+    --accent-foreground: 130 26% 9%;
+    --border: 130 26% 9%;
+    --input: 100 8% 55%;
+    --ring: 128 24% 71%;
     --radius: 0.5rem;
   }
 
   .dark {
-    /* GRUVBOX DARK (Primary Theme) */
-    
-    /* Hard background for sidebar/panels? Let's use Dark 0 (#282828) as main BG */
-    --background: 0 0% 16%;      /* #282828 (Dark 0) */
-    --foreground: 42 54% 81%;    /* #ebdbb2 (Light 1) */
-    
-    /* Cards/Elevated surfaces: Dark 1 (#3c3836) */
-    --card: 20 5% 23%;           /* #3c3836 (Dark 1) */
-    --card-foreground: 42 54% 81%;
+    /* GRUVBOX FOREST DARK (Primary Theme) */
 
-    /* Primary: Aqua (#689d6a) for that retro-terminal feel */
-    --primary: 123 21% 51%;      /* #689d6a */
-    --primary-foreground: 0 0% 10%;
+    /* Carbon Black #111D13 as main background */
+    --background: 136 28% 9%;       /* #111D13 Carbon Black */
+    --foreground: 38 28% 80%;       /* #D4C9A8 Warm cream */
 
-    /* Secondary: Purple (#b16286) */
-    --secondary: 329 33% 54%;    /* #b16286 */
-    --secondary-foreground: 42 54% 81%;
+    /* Hunter Green #4B5D43 for cards/surfaces */
+    --card: 108 16% 31%;            /* #4B5D43 Hunter Green */
+    --card-foreground: 38 28% 80%;  /* #D4C9A8 Warm cream */
 
-    /* Muted: Gray/Brown (#928374) */
-    --muted: 30 11% 51%;         /* #928374 */
-    --muted-foreground: 35 15% 59%; /* #a89984 (Light 4) */
+    /* Celadon #A0CCA5 as primary accent */
+    --primary: 128 24% 71%;         /* #A0CCA5 Celadon */
+    --primary-foreground: 136 28% 9%; /* Carbon Black */
 
-    /* Accent: Orange (#d65d0e) */
-    --accent: 24 61% 45%;        /* #d65d0e */
-    --accent-foreground: 42 54% 81%;
+    /* Warm tan #B8A98F for secondary */
+    --secondary: 33 22% 64%;        /* #B8A98F Warm tan */
+    --secondary-foreground: 38 28% 80%;
 
-    /* Borders: Dark 2 (#504945) */
-    --border: 23 7% 30%;         /* #504945 */
-    --input: 23 7% 30%;
-    --ring: 123 21% 51%;         /* Match Primary */
+    /* Muted Teal for muted/inactive text */
+    --muted: 120 12% 50%;           /* #709275 Muted Teal */
+    --muted-foreground: 100 8% 55%; /* #8B9986 Muted Teal (light) */
 
-    /* Status colors (Gruvbox specific) */
-    --status-connected: 121 21% 51%;  /* #689d6a (Aqua) */
-    --status-processing: 45 42% 47%;  /* #d79921 (Yellow) */
-    --status-error: 1 65% 47%;        /* #cc241d (Red) */
-    --status-warning: 24 61% 45%;     /* #d65d0e (Orange) */
+    /* Warm amber #D4A056 for accent */
+    --accent: 36 56% 58%;           /* #D4A056 Warm amber */
+    --accent-foreground: 38 28% 80%;
+
+    /* Borders: blend between Hunter Green and Carbon Black */
+    --border: 110 14% 22%;          /* Between Carbon Black and Hunter Green */
+    --input: 110 14% 22%;
+    --ring: 128 24% 71%;            /* Match Primary (Celadon) */
+
+    /* Status colors (forest-appropriate) */
+    --status-connected: 128 24% 71%;  /* #A0CCA5 Celadon */
+    --status-processing: 36 56% 58%;  /* #D4A056 Warm amber */
+    --status-error: 0 33% 60%;        /* #CC6666 Muted red */
+    --status-warning: 36 56% 58%;     /* #D4A056 Warm amber */
 
     --radius: 0.4rem;
   }
@@ -81,10 +82,10 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
-    font-family: 'Droid Sans Mono', monospace;
+    font-family: 'JetBrains Mono', monospace;
   }
 
-  /* Cinematic background with subtle grid (Gruvbox style - subtle lines) */
+  /* Subtle grid overlay (forest style — very faint) */
   body::before {
     content: '';
     position: fixed;
@@ -93,8 +94,8 @@
     right: 0;
     bottom: 0;
     background-image:
-      linear-gradient(hsla(var(--primary), 0.05) 1px, transparent 1px),
-      linear-gradient(90deg, hsla(var(--primary), 0.05) 1px, transparent 1px);
+      linear-gradient(hsla(var(--primary), 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, hsla(var(--primary), 0.03) 1px, transparent 1px);
     background-size: 50px 50px;
     pointer-events: none;
     z-index: 0;
@@ -109,7 +110,7 @@
     right: 0;
     bottom: 0;
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-    opacity: 0.04; /* Slightly higher for that retro grain */
+    opacity: 0.025;
     pointer-events: none;
     z-index: 1;
   }
@@ -145,7 +146,7 @@
     height: 1px;
     background: linear-gradient(90deg,
       transparent,
-      hsl(var(--primary) / 0.3),
+      hsl(var(--primary) / 0.2),
       transparent
     );
   }
@@ -165,7 +166,7 @@
     height: 2px;
     background: linear-gradient(90deg,
       transparent,
-      hsl(var(--primary)),
+      hsl(var(--primary) / 0.6),
       transparent
     );
     animation: scan 3s linear infinite;
@@ -177,12 +178,12 @@
   }
 
   /* ========================================
-     SCROLLBAR STYLING - Technical/Industrial
+     SCROLLBAR STYLING
      ======================================== */
 
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--primary) / 0.4) transparent;
+    scrollbar-color: hsl(var(--primary) / 0.3) transparent;
   }
 
   .scrollbar-thin::-webkit-scrollbar {
@@ -196,64 +197,59 @@
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background: linear-gradient(180deg,
-      hsl(var(--primary)),
-      hsl(158, 100%, 45%)
+      hsl(var(--primary) / 0.5),
+      hsl(var(--muted) / 0.4)
     );
     border-radius: 2px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--primary));
+    background: hsl(var(--primary) / 0.6);
   }
 
   /* ========================================
      TYPOGRAPHY & TEXT EFFECTS
      ======================================== */
 
-  /* Display font for headers - Syncopate (futuristic) */
+  /* Display font for headers — Inter (clean, modern) */
   .font-display {
-    font-family: 'Syncopate', sans-serif;
-    letter-spacing: 0.05em;
+    font-family: 'Inter', sans-serif;
+    letter-spacing: 0.02em;
   }
 
-  /* Electric text glow */
+  /* Subtle text glow — much softer than before */
   .text-glow {
-    text-shadow:
-      0 0 10px hsl(var(--primary) / 0.5),
-      0 0 20px hsl(var(--primary) / 0.3),
-      0 0 40px hsl(var(--primary) / 0.2);
+    text-shadow: 0 0 8px hsl(var(--primary) / 0.2);
   }
 
   .text-glow-subtle {
-    text-shadow:
-      0 0 8px hsl(var(--primary) / 0.4),
-      0 0 16px hsl(var(--primary) / 0.2);
+    text-shadow: 0 0 6px hsl(var(--primary) / 0.12);
   }
 
-  /* Multi-color gradient for emphasis */
+  /* Forest gradient for emphasis text */
   .gradient-text {
     @apply bg-clip-text text-transparent;
     background-image: linear-gradient(135deg,
-      hsl(178, 100%, 60%),
-      hsl(158, 100%, 50%),
-      hsl(178, 100%, 60%)
+      hsl(var(--primary)),
+      hsl(var(--muted)),
+      hsl(var(--primary))
     );
   }
 
-  /* Status-specific text colors */
+  /* Status-specific text colors — no harsh glow */
   .text-status-connected {
     color: hsl(var(--status-connected));
-    text-shadow: 0 0 10px hsl(var(--status-connected) / 0.5);
+    text-shadow: 0 0 6px hsl(var(--status-connected) / 0.2);
   }
 
   .text-status-processing {
     color: hsl(var(--status-processing));
-    text-shadow: 0 0 10px hsl(var(--status-processing) / 0.5);
+    text-shadow: 0 0 6px hsl(var(--status-processing) / 0.2);
   }
 
   .text-status-error {
     color: hsl(var(--status-error));
-    text-shadow: 0 0 10px hsl(var(--status-error) / 0.5);
+    text-shadow: 0 0 6px hsl(var(--status-error) / 0.2);
   }
 
   /* ========================================
@@ -271,7 +267,7 @@
     position: absolute;
     width: 8px;
     height: 8px;
-    border-color: hsl(var(--primary) / 0.5);
+    border-color: hsl(var(--primary) / 0.3);
     border-style: solid;
   }
 
@@ -299,29 +295,29 @@
     left: 4px;
     right: 4px;
     bottom: 4px;
-    border: 1px solid hsl(var(--primary) / 0.15);
+    border: 1px solid hsl(var(--primary) / 0.1);
     pointer-events: none;
   }
 
   /* Dashed technical border */
   .tech-border {
     border-style: dashed;
-    border-color: hsl(var(--primary) / 0.3);
+    border-color: hsl(var(--primary) / 0.2);
   }
 
   /* ========================================
      ANIMATIONS & MOTION
      ======================================== */
 
-  /* Pulse with glow */
+  /* Pulse with subtle glow */
   @keyframes pulse-glow {
     0%, 100% {
       opacity: 1;
-      box-shadow: 0 0 10px hsl(var(--primary) / 0.5);
+      box-shadow: 0 0 6px hsl(var(--primary) / 0.25);
     }
     50% {
-      opacity: 0.7;
-      box-shadow: 0 0 20px hsl(var(--primary) / 0.8);
+      opacity: 0.8;
+      box-shadow: 0 0 12px hsl(var(--primary) / 0.4);
     }
   }
 
@@ -350,7 +346,7 @@
   /* Status indicator pulse */
   @keyframes status-pulse {
     0%, 100% {
-      box-shadow: 0 0 0 0 hsl(var(--status-connected) / 0.7);
+      box-shadow: 0 0 0 0 hsl(var(--status-connected) / 0.5);
     }
     50% {
       box-shadow: 0 0 0 6px hsl(var(--status-connected) / 0);
@@ -381,18 +377,16 @@
     height: 50%;
     background: linear-gradient(180deg,
       transparent,
-      hsl(var(--status-processing) / 0.2),
+      hsl(var(--status-processing) / 0.15),
       transparent
     );
     animation: processing-scan 1.5s ease-in-out infinite;
   }
 
-  /* Chat streaming feedback:
-     - A one-shot scanline that replays per chunk (element remount via React key).
-     - A blink cursor while streaming (no latency added; purely visual). */
+  /* Chat streaming feedback */
   @keyframes ua-scanline-pulse {
     0% { left: -140%; opacity: 0; }
-    15% { opacity: 0.85; }
+    15% { opacity: 0.6; }
     100% { left: 140%; opacity: 0; }
   }
 
@@ -414,7 +408,7 @@
     height: 24px;
     background: linear-gradient(90deg,
       transparent,
-      hsl(var(--primary) / 0.55),
+      hsl(var(--primary) / 0.35),
       transparent
     );
     filter: blur(0.4px);
@@ -442,14 +436,14 @@
      BUTTON & INTERACTIVE STATES
      ======================================== */
 
-  /* Primary button with glow effect */
+  /* Primary button with subtle glow */
   .btn-primary {
     @apply bg-primary text-primary-foreground px-4 py-2 rounded transition-all duration-200;
-    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+    box-shadow: 0 0 12px hsl(var(--primary) / 0.15);
   }
 
   .btn-primary:hover {
-    box-shadow: 0 0 30px hsl(var(--primary) / 0.5);
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.25);
     transform: translateY(-1px);
   }
 
@@ -473,7 +467,7 @@
     height: 100%;
     background: linear-gradient(90deg,
       transparent,
-      hsl(var(--primary) / 0.1),
+      hsl(var(--primary) / 0.08),
       transparent
     );
     transition: left 0.5s;
@@ -484,8 +478,8 @@
   }
 
   .btn-tech:hover {
-    @apply border-primary/50;
-    box-shadow: 0 0 15px hsl(var(--primary) / 0.2);
+    @apply border-primary/40;
+    box-shadow: 0 0 10px hsl(var(--primary) / 0.1);
   }
 
   /* ========================================
@@ -504,15 +498,15 @@
   /* Grid background for specific areas */
   .grid-bg {
     background-image:
-      linear-gradient(rgba(0, 255, 200, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 255, 200, 0.03) 1px, transparent 1px);
+      linear-gradient(hsl(var(--primary) / 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--primary) / 0.03) 1px, transparent 1px);
     background-size: 20px 20px;
   }
 
   /* Radial gradient spotlight */
   .spotlight {
     background: radial-gradient(ellipse at center,
-      hsl(var(--primary) / 0.05) 0%,
+      hsl(var(--primary) / 0.04) 0%,
       transparent 70%
     );
   }

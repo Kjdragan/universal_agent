@@ -107,22 +107,22 @@ function sourceBadgeClasses(source: string, status: string): string {
   if (source === "task" && status === "overdue")
     return "border-red-500/60 bg-red-500/15 text-red-300";
   if (source === "task" && status === "active")
-    return "border-orange-500/60 bg-orange-500/15 text-orange-300";
+    return "border-accent/30 bg-accent/15 text-accent";
   if (source === "task" && status === "completed")
-    return "border-emerald-500/60 bg-emerald-500/15 text-emerald-300";
+    return "border-primary/30 bg-primary/15 text-primary";
   if (source === "task")
-    return "border-yellow-500/50 bg-yellow-500/10 text-yellow-200";
+    return "border-accent/30 bg-accent/10 text-accent/80";
   if (source === "heartbeat")
     return "border-sky-400/40 bg-sky-500/15 text-sky-200";
   if (status === "missed")
     return "border-amber-500/50 bg-amber-500/15 text-amber-300";
   if (status === "failed")
-    return "border-rose-500/50 bg-rose-500/15 text-rose-300";
+    return "border-red-400/30 bg-red-400/15 text-red-400";
   if (status === "success")
-    return "border-emerald-500/50 bg-emerald-500/15 text-emerald-300";
+    return "border-primary/30 bg-primary/15 text-primary";
   if (status === "disabled")
-    return "border-slate-500/50 bg-slate-500/15 text-slate-300";
-  return "border-blue-500/50 bg-blue-500/15 text-blue-200";
+    return "border-muted-foreground/50 bg-muted-foreground/15 text-foreground/80";
+  return "border-primary/50 bg-primary/15 text-primary/80";
 }
 
 function sourceIcon(source: string): string {
@@ -147,26 +147,26 @@ interface ActionDef {
 }
 
 const CRON_ACTIONS: ActionDef[] = [
-  { action: "run_now", icon: "▶", label: "Run", color: "text-emerald-300 hover:bg-emerald-500/20", hideWhen: ["disabled"] },
+  { action: "run_now", icon: "▶", label: "Run", color: "text-primary hover:bg-primary/20", hideWhen: ["disabled"] },
   { action: "pause", icon: "⏸", label: "Pause", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["disabled"] },
-  { action: "resume", icon: "▶", label: "Resume", color: "text-emerald-300 hover:bg-emerald-500/20", showWhen: ["disabled"] },
-  { action: "disable", icon: "⏻", label: "Disable", color: "text-slate-400 hover:bg-slate-500/20", hideWhen: ["disabled"] },
-  { action: "open_logs", icon: "📋", label: "Logs", color: "text-blue-300 hover:bg-blue-500/20" },
-  { action: "open_session", icon: "💬", label: "Session", color: "text-cyan-300 hover:bg-cyan-500/20" },
+  { action: "resume", icon: "▶", label: "Resume", color: "text-primary hover:bg-primary/20", showWhen: ["disabled"] },
+  { action: "disable", icon: "⏻", label: "Disable", color: "text-muted-foreground hover:bg-muted-foreground/20", hideWhen: ["disabled"] },
+  { action: "open_logs", icon: "📋", label: "Logs", color: "text-primary hover:bg-primary/20" },
+  { action: "open_session", icon: "💬", label: "Session", color: "text-primary hover:bg-primary/20" },
 ];
 
 const HEARTBEAT_ACTIONS: ActionDef[] = [
-  { action: "open_logs", icon: "📋", label: "Logs", color: "text-blue-300 hover:bg-blue-500/20" },
-  { action: "open_session", icon: "💬", label: "Session", color: "text-cyan-300 hover:bg-cyan-500/20" },
-  { action: "delete", icon: "✕", label: "Remove", color: "text-rose-300 hover:bg-rose-500/20" },
+  { action: "open_logs", icon: "📋", label: "Logs", color: "text-primary hover:bg-primary/20" },
+  { action: "open_session", icon: "💬", label: "Session", color: "text-primary hover:bg-primary/20" },
+  { action: "delete", icon: "✕", label: "Remove", color: "text-red-400 hover:bg-red-400/20" },
 ];
 
 const TASK_ACTIONS: ActionDef[] = [
-  { action: "complete", icon: "✓", label: "Complete", color: "text-emerald-300 hover:bg-emerald-500/20", hideWhen: ["completed"] },
-  { action: "prod_agent", icon: "⚡", label: "Nudge", color: "text-orange-300 hover:bg-orange-500/20", showWhen: ["overdue", "active"] },
+  { action: "complete", icon: "✓", label: "Complete", color: "text-primary hover:bg-primary/20", hideWhen: ["completed"] },
+  { action: "prod_agent", icon: "⚡", label: "Nudge", color: "text-accent hover:bg-accent/20", showWhen: ["overdue", "active"] },
   { action: "reschedule", icon: "↻", label: "Reschedule", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["completed"] },
-  { action: "dismiss", icon: "✕", label: "Dismiss", color: "text-slate-400 hover:bg-slate-500/20", hideWhen: ["completed"] },
-  { action: "reopen", icon: "↺", label: "Reopen", color: "text-yellow-300 hover:bg-yellow-500/20", showWhen: ["completed"] },
+  { action: "dismiss", icon: "✕", label: "Dismiss", color: "text-muted-foreground hover:bg-muted-foreground/20", hideWhen: ["completed"] },
+  { action: "reopen", icon: "↺", label: "Reopen", color: "text-accent hover:bg-accent/20", showWhen: ["completed"] },
 ];
 
 function getActionsForEvent(event: CalendarEvent): ActionDef[] {
@@ -192,9 +192,9 @@ function Toast({ message, type, onClose }: { message: string; type: "success" | 
   }, [onClose]);
 
   const colors = {
-    success: "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
-    error: "bg-rose-500/20 border-rose-500/40 text-rose-200",
-    info: "bg-blue-500/20 border-blue-500/40 text-blue-200",
+    success: "bg-primary/20 border-primary/25 text-primary/80",
+    error: "bg-red-400/20 border-red-400/25 text-red-400/80",
+    info: "bg-primary/20 border-primary/40 text-primary/80",
   };
 
   return (
@@ -223,7 +223,7 @@ function StatCard({
       <div className={`text-2xl ${pulse ? "animate-pulse" : ""}`}>{icon}</div>
       <div className="min-w-0">
         <div className={`text-2xl font-bold tabular-nums ${accent}`}>{value}</div>
-        <div className="text-[11px] text-slate-400 uppercase tracking-wider font-medium truncate">{label}</div>
+        <div className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium truncate">{label}</div>
       </div>
     </div>
   );
@@ -254,8 +254,8 @@ function EventCard({
             <span>{formatTime(event.scheduled_at_local)}</span>
             <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider ${
               event.status === "overdue" ? "bg-red-500/30 text-red-200" :
-              event.status === "success" ? "bg-emerald-500/30 text-emerald-200" :
-              event.status === "failed" ? "bg-rose-500/30 text-rose-200" :
+              event.status === "success" ? "bg-primary/30 text-primary/80" :
+              event.status === "failed" ? "bg-red-400/30 text-red-400/80" :
               event.status === "missed" ? "bg-amber-500/30 text-amber-200" :
               "bg-white/10"
             }`}>
@@ -306,15 +306,15 @@ function OverdueCard({
           <div className="font-semibold text-sm text-red-200 truncate">{event.title}</div>
           <div className="text-[10px] text-red-300/80 mt-0.5">
             Due: {formatTime(event.scheduled_at_local)} •{" "}
-            <span className={`font-bold ${ageDays >= 3 ? "text-red-400" : ageDays >= 1 ? "text-orange-300" : "text-yellow-300"}`}>
+            <span className={`font-bold ${ageDays >= 3 ? "text-red-400" : ageDays >= 1 ? "text-accent" : "text-accent"}`}>
               {ageLabel}
             </span>
           </div>
         </div>
         <span className={`shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
           ageDays >= 3 ? "bg-red-500/40 text-red-100" :
-          ageDays >= 1 ? "bg-orange-500/30 text-orange-200" :
-          "bg-yellow-500/25 text-yellow-200"
+          ageDays >= 1 ? "bg-accent/15 text-accent/80" :
+          "bg-accent/25 text-accent/80"
         }`}>
           {ageLabel}
         </span>
@@ -533,10 +533,10 @@ export default function CalendarPage() {
   };
 
   const filters: { value: SourceFilter; label: string; color: string }[] = [
-    { value: "all", label: "All Sources", color: "text-slate-300 border-slate-500/40" },
-    { value: "cron", label: "Cron Jobs", color: "text-blue-300 border-blue-500/40" },
+    { value: "all", label: "All Sources", color: "text-foreground/80 border-muted-foreground/40" },
+    { value: "cron", label: "Cron Jobs", color: "text-primary border-primary/40" },
     { value: "heartbeat", label: "Heartbeats", color: "text-sky-300 border-sky-500/40" },
-    { value: "task", label: "Tasks", color: "text-yellow-300 border-yellow-500/40" },
+    { value: "task", label: "Tasks", color: "text-accent border-accent/25" },
     { value: "overdue", label: `Overdue${stats.overdue_tasks > 0 ? ` (${stats.overdue_tasks})` : ""}`, color: "text-red-300 border-red-500/40" },
   ];
 
@@ -552,10 +552,10 @@ export default function CalendarPage() {
       {/* ─── HEADER ──────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-100">
+          <h1 className="text-xl font-bold tracking-tight text-foreground">
             <span className="text-primary">⬡</span> Calendar
           </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-xs text-muted-foreground mt-0.5">
             Unified scheduling — Cron · Heartbeat · Tasks · Overdue
           </p>
         </div>
@@ -564,7 +564,7 @@ export default function CalendarPage() {
           <div className="flex items-center gap-1 tactical-panel rounded-lg px-1 py-0.5">
             <button
               onClick={() => shiftWindow(view === "day" ? -1 : -7)}
-              className="px-2.5 py-1 rounded hover:bg-white/10 text-slate-300 transition-colors"
+              className="px-2.5 py-1 rounded hover:bg-white/10 text-foreground/80 transition-colors"
               title="Previous"
             >
               ◀
@@ -577,7 +577,7 @@ export default function CalendarPage() {
             </button>
             <button
               onClick={() => shiftWindow(view === "day" ? 1 : 7)}
-              className="px-2.5 py-1 rounded hover:bg-white/10 text-slate-300 transition-colors"
+              className="px-2.5 py-1 rounded hover:bg-white/10 text-foreground/80 transition-colors"
               title="Next"
             >
               ▶
@@ -593,7 +593,7 @@ export default function CalendarPage() {
                 className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
                   view === v
                     ? "bg-primary/20 text-primary"
-                    : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+                    : "text-muted-foreground hover:text-foreground hover:bg-white/5"
                 }`}
               >
                 {v}
@@ -605,7 +605,7 @@ export default function CalendarPage() {
           <button
             onClick={fetchCalendar}
             disabled={loading}
-            className="tactical-panel rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-primary transition-colors disabled:opacity-50"
+            className="tactical-panel rounded-lg px-3 py-1.5 text-xs font-semibold text-foreground/80 hover:text-primary transition-colors disabled:opacity-50"
           >
             {loading ? "⟳" : "↻"} Refresh
           </button>
@@ -616,7 +616,7 @@ export default function CalendarPage() {
             className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all ${
               showCommandBar
                 ? "bg-primary/25 text-primary border border-primary/40"
-                : "tactical-panel text-slate-300 hover:text-primary"
+                : "tactical-panel text-foreground/80 hover:text-primary"
             }`}
           >
             + Schedule
@@ -627,7 +627,7 @@ export default function CalendarPage() {
       {/* ─── COMMAND BAR (collapsible) ────────── */}
       {showCommandBar && (
         <div className="tactical-panel rounded-lg p-3 animate-in slide-in-from-top-2 duration-200">
-          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold mb-2">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold mb-2">
             Schedule a new task, cron job, or reminder
           </div>
           <SystemCommandBar sourcePage="calendar" onSuccess={fetchCalendar} />
@@ -635,8 +635,8 @@ export default function CalendarPage() {
       )}
 
       {/* ─── DATE RANGE + TIMEZONE ────────────── */}
-      <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-        <span className="font-semibold text-slate-200">{rangeLabel}</span>
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="font-semibold text-foreground">{rangeLabel}</span>
         <span className="font-mono text-[10px]">{tz}</span>
       </div>
 
@@ -645,25 +645,25 @@ export default function CalendarPage() {
         <StatCard
           label="Scheduled Today"
           value={stats.scheduled_today}
-          accent="text-blue-300"
+          accent="text-primary"
           icon="📅"
         />
         <StatCard
           label="Active Cron"
           value={stats.active_cron}
-          accent="text-cyan-300"
+          accent="text-primary"
           icon="⏰"
         />
         <StatCard
           label="Pending Tasks"
           value={stats.pending_tasks}
-          accent="text-yellow-300"
+          accent="text-accent"
           icon="📋"
         />
         <StatCard
           label="Overdue"
           value={stats.overdue_tasks}
-          accent={stats.overdue_tasks > 0 ? "text-red-400" : "text-emerald-400"}
+          accent={stats.overdue_tasks > 0 ? "text-red-400" : "text-primary"}
           icon={stats.overdue_tasks > 0 ? "🔴" : "✅"}
           pulse={stats.overdue_tasks > 0}
         />
@@ -684,19 +684,19 @@ export default function CalendarPage() {
             className={`px-3 py-1 rounded-full border text-[11px] font-semibold transition-all ${
               sourceFilter === f.value
                 ? `${f.color} bg-white/10 ring-1 ring-white/10`
-                : "border-transparent text-slate-500 hover:text-slate-300 hover:bg-white/5"
+                : "border-transparent text-muted-foreground hover:text-foreground/80 hover:bg-white/5"
             }`}
           >
             {f.label}
           </button>
         ))}
         {/* Legend dots */}
-        <div className="ml-auto flex items-center gap-3 text-[10px] text-slate-500">
+        <div className="ml-auto flex items-center gap-3 text-[10px] text-muted-foreground">
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400" />heartbeat</span>
-          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />cron</span>
-          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400" />task</span>
-          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />success</span>
-          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" />failed</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-primary" />cron</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent" />task</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-primary" />success</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400" />failed</span>
         </div>
       </div>
 
@@ -723,14 +723,14 @@ export default function CalendarPage() {
                   <div className={`px-3 py-2 border-b ${
                     today ? "border-primary/30 bg-primary/10" : "border-border/20"
                   }`}>
-                    <div className={`text-xs font-bold ${today ? "text-primary" : "text-slate-300"}`}>
+                    <div className={`text-xs font-bold ${today ? "text-primary" : "text-foreground/80"}`}>
                       {day.toLocaleDateString(undefined, { weekday: "short" })}
                     </div>
-                    <div className={`text-lg font-bold tabular-nums ${today ? "text-primary" : "text-slate-100"}`}>
+                    <div className={`text-lg font-bold tabular-nums ${today ? "text-primary" : "text-foreground"}`}>
                       {day.getDate()}
                     </div>
                     {bucket.length > 0 && (
-                      <div className="text-[9px] text-slate-500 mt-0.5">
+                      <div className="text-[9px] text-muted-foreground mt-0.5">
                         {bucket.length} event{bucket.length !== 1 ? "s" : ""}
                       </div>
                     )}
@@ -739,7 +739,7 @@ export default function CalendarPage() {
                   {/* Event list */}
                   <div className="p-2 space-y-1.5">
                     {bucket.length === 0 && (
-                      <div className="text-[10px] text-slate-600 text-center py-4">No events</div>
+                      <div className="text-[10px] text-muted text-center py-4">No events</div>
                     )}
                     {bucket.map((event) => (
                       <EventCard
@@ -771,7 +771,7 @@ export default function CalendarPage() {
                 <button
                   onClick={nudgeAllOverdue}
                   disabled={nudging}
-                  className="px-2 py-1 rounded-md border border-orange-500/40 bg-orange-500/10 hover:bg-orange-500/25 text-[10px] font-bold uppercase tracking-wider text-orange-200 transition-all disabled:opacity-50"
+                  className="px-2 py-1 rounded-md border border-accent/25 bg-accent/10 hover:bg-accent/25 text-[10px] font-bold uppercase tracking-wider text-accent/80 transition-all disabled:opacity-50"
                   title="Prod all overdue agent-ready tasks via heartbeat"
                 >
                   {nudging ? "⟳ Nudging…" : "⚡ Nudge All"}
@@ -791,7 +791,7 @@ export default function CalendarPage() {
               💓 Always Running
             </div>
             {alwaysRunning.length === 0 && (
-              <div className="text-[10px] text-slate-500">No always-running entries</div>
+              <div className="text-[10px] text-muted-foreground">No always-running entries</div>
             )}
             <div className="space-y-1">
               {alwaysRunning.map((item) => (
@@ -861,7 +861,7 @@ export default function CalendarPage() {
           {/* Next Event */}
           {stats.next_event && (
             <div className="tactical-panel rounded-lg p-3">
-              <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold mb-1">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">
                 Next Event
               </div>
               <div className="text-sm text-primary font-semibold">{stats.next_event}</div>

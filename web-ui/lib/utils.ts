@@ -106,15 +106,15 @@ export function syntaxHighlight(json: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (match) => {
-      let cls = "text-orange-400"; // number
+      let cls = "text-accent"; // number
       if (/^"/.test(match)) {
         if (/:$/.test(match)) {
-          cls = "text-purple-400"; // key
+          cls = "text-secondary"; // key
         } else {
-          cls = "text-green-400"; // string
+          cls = "text-primary"; // string
         }
       } else if (/true|false/.test(match)) {
-        cls = "text-blue-400"; // boolean
+        cls = "text-primary"; // boolean
       } else if (/null/.test(match)) {
         cls = "text-gray-400"; // null
       }

@@ -41,11 +41,11 @@ function sourceLabel(source: string): string {
 
 function sourceColor(source: string): string {
     const s = source.toLowerCase();
-    if (s.includes("rss") || s.includes("youtube")) return "text-rose-300 bg-rose-500/15 border-rose-500/30";
-    if (s.includes("reddit")) return "text-orange-300 bg-orange-500/15 border-orange-500/30";
-    if (s.includes("threads")) return "text-purple-300 bg-purple-500/15 border-purple-500/30";
-    if (s.includes("global") || s.includes("brief")) return "text-cyan-300 bg-cyan-500/15 border-cyan-500/30";
-    return "text-slate-300 bg-slate-500/15 border-slate-500/30";
+    if (s.includes("rss") || s.includes("youtube")) return "text-secondary bg-red-400/15 border-red-400/30";
+    if (s.includes("reddit")) return "text-accent bg-accent/15 border-accent/30";
+    if (s.includes("threads")) return "text-secondary bg-secondary/15 border-secondary/30";
+    if (s.includes("global") || s.includes("brief")) return "text-primary bg-primary/15 border-primary/30";
+    return "text-foreground/80 bg-muted-foreground/15 border-muted-foreground/30";
 }
 
 function eventTypeIcon(eventType: string): string {
@@ -220,10 +220,10 @@ export default function CSIDashboard() {
             {/* ─── Header ──────────────────────────────────────────── */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-100">
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
                         Creator Signal Intelligence
                     </h1>
-                    <p className="text-sm text-slate-400">
+                    <p className="text-sm text-muted-foreground">
                         Trend reports and digests from your watchlists
                     </p>
                 </div>
@@ -231,13 +231,13 @@ export default function CSIDashboard() {
                     <button
                         onClick={purgeData}
                         disabled={purgeBusy}
-                        className="rounded-md bg-amber-600/20 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-600/30 transition-colors border border-amber-500/30 disabled:opacity-60"
+                        className="rounded-md bg-amber-600/20 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-600/30 transition-colors border border-accent/30 disabled:opacity-60"
                     >
                         {purgeBusy ? "Purging…" : "Purge Stale Data"}
                     </button>
                     <button
                         onClick={() => void loadData()}
-                        className="rounded-md bg-cyan-600/20 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30"
+                        className="rounded-md bg-primary/20 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/30 transition-colors border border-primary/30"
                     >
                         Refresh
                     </button>
@@ -245,42 +245,42 @@ export default function CSIDashboard() {
             </div>
 
             {purgeStatus && (
-                <div className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                <div className="rounded-md border border-border bg-background/60 px-3 py-2 text-xs text-foreground/80">
                     {purgeStatus}
                 </div>
             )}
 
             {/* ─── Summary Cards ───────────────────────────────────── */}
             <div className="grid gap-4 md:grid-cols-3">
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">Total Digests</div>
+                <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-muted-foreground">Total Digests</div>
                     <div className="mt-2">
-                        <span className="text-3xl font-bold text-slate-100">{loading ? "…" : totalDigests}</span>
+                        <span className="text-3xl font-bold text-foreground">{loading ? "…" : totalDigests}</span>
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">
+                    <div className="mt-1 text-xs text-muted-foreground">
                         {filteredDigests.length !== digests.length
                             ? `${filteredDigests.length} shown (filtered)`
                             : "Persisted"}
                     </div>
                 </div>
 
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">Latest Report</div>
+                <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-muted-foreground">Latest Report</div>
                     <div className="mt-2">
-                        <span className="text-lg font-bold text-slate-100">{loading ? "…" : latestTime}</span>
+                        <span className="text-lg font-bold text-foreground">{loading ? "…" : latestTime}</span>
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">
+                    <div className="mt-1 text-xs text-muted-foreground">
                         {digests.length > 0 ? timeAgo(digests[0].created_at) : "No reports yet"}
                     </div>
                 </div>
 
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">Source Mix</div>
+                <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-muted-foreground">Source Mix</div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                         {loading ? (
-                            <span className="text-lg font-bold text-slate-100">…</span>
+                            <span className="text-lg font-bold text-foreground">…</span>
                         ) : Object.keys(sourceMix).length === 0 ? (
-                            <span className="text-sm text-slate-500">No data</span>
+                            <span className="text-sm text-muted-foreground">No data</span>
                         ) : (
                             Object.entries(sourceMix)
                                 .sort((a, b) => b[1] - a[1])
@@ -303,8 +303,8 @@ export default function CSIDashboard() {
                     onClick={() => setSourceFilter("all")}
                     className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
                         sourceFilter === "all"
-                            ? "border-cyan-500/60 bg-cyan-600/20 text-cyan-200"
-                            : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
+                            ? "border-primary/40 bg-primary/20 text-primary/80"
+                            : "border-border bg-background/50 text-muted-foreground hover:bg-card/60"
                     }`}
                 >
                     All ({digests.length})
@@ -315,8 +315,8 @@ export default function CSIDashboard() {
                         onClick={() => setSourceFilter(src)}
                         className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
                             sourceFilter === src
-                                ? "border-cyan-500/60 bg-cyan-600/20 text-cyan-200"
-                                : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
+                                ? "border-primary/40 bg-primary/20 text-primary/80"
+                                : "border-border bg-background/50 text-muted-foreground hover:bg-card/60"
                         }`}
                     >
                         {sourceLabel(src)} ({sourceMix[src] || 0})
@@ -326,15 +326,15 @@ export default function CSIDashboard() {
 
             {/* ─── Error State ─────────────────────────────────────── */}
             {error && (
-                <div className="rounded-xl border border-rose-700/40 bg-rose-900/20 p-4 text-sm text-rose-200">
+                <div className="rounded-xl border border-red-400/25 bg-red-400/10 p-4 text-sm text-red-400/80">
                     <span className="font-semibold">Error:</span> {error}
                 </div>
             )}
 
             {/* ─── Loading State ───────────────────────────────────── */}
             {loading && (
-                <div className="flex items-center justify-center py-20 text-slate-400">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-600 border-t-cyan-400" />
+                <div className="flex items-center justify-center py-20 text-muted-foreground">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-cyan-400" />
                     <span className="ml-3 text-sm">Loading digests…</span>
                 </div>
             )}
@@ -343,8 +343,8 @@ export default function CSIDashboard() {
             {!loading && !error && filteredDigests.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
                     <div className="text-4xl mb-3">📡</div>
-                    <h3 className="text-lg font-semibold text-slate-300">No Digests Yet</h3>
-                    <p className="text-sm text-slate-500 mt-1 max-w-sm">
+                    <h3 className="text-lg font-semibold text-foreground/80">No Digests Yet</h3>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-sm">
                         CSI trend reports will appear here as they are generated by your hourly analysis pipeline.
                     </p>
                 </div>
@@ -354,11 +354,11 @@ export default function CSIDashboard() {
             {!loading && !error && filteredDigests.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 flex-1 min-h-0">
                     {/* Digest List */}
-                    <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
-                        <div className="sticky top-0 z-10 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-2.5">
-                            <h2 className="text-sm font-semibold text-slate-300 tracking-wide">
+                    <div className="lg:col-span-2 rounded-xl border border-border bg-background/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
+                        <div className="sticky top-0 z-10 bg-background/90 backdrop-blur border-b border-border px-4 py-2.5">
+                            <h2 className="text-sm font-semibold text-foreground/80 tracking-wide">
                                 Recent Reports
-                                <span className="ml-2 text-xs text-slate-500 font-normal">
+                                <span className="ml-2 text-xs text-muted-foreground font-normal">
                                     {filteredDigests.length}
                                 </span>
                             </h2>
@@ -372,9 +372,9 @@ export default function CSIDashboard() {
                                         setSendStatus(null);
                                         setSendComment("");
                                     }}
-                                    className={`w-full text-left px-4 py-3 transition-colors hover:bg-slate-800/40 ${
+                                    className={`w-full text-left px-4 py-3 transition-colors hover:bg-card/40 ${
                                         selectedDigest?.id === digest.id
-                                            ? "bg-cyan-900/20 border-l-2 border-l-cyan-400"
+                                            ? "bg-primary/10 border-l-2 border-l-cyan-400"
                                             : "border-l-2 border-l-transparent"
                                     }`}
                                 >
@@ -382,16 +382,16 @@ export default function CSIDashboard() {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-1.5 mb-1">
                                                 <span className="text-sm">{eventTypeIcon(digest.event_type)}</span>
-                                                <span className="text-sm font-medium text-slate-200 truncate">
+                                                <span className="text-sm font-medium text-foreground truncate">
                                                     {extractHeadline(digest)}
                                                 </span>
                                             </div>
-                                            <p className="text-xs text-slate-400 line-clamp-2">
+                                            <p className="text-xs text-muted-foreground line-clamp-2">
                                                 {digest.summary || "No summary"}
                                             </p>
                                         </div>
                                         <div className="flex flex-col items-end gap-1 shrink-0">
-                                            <span className="text-[10px] text-slate-500 whitespace-nowrap">
+                                            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                                                 {timeAgo(digest.created_at)}
                                             </span>
                                             <span
@@ -407,21 +407,21 @@ export default function CSIDashboard() {
                     </div>
 
                     {/* Detail Pane */}
-                    <div className="lg:col-span-3 rounded-xl border border-slate-800 bg-slate-900/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
+                    <div className="lg:col-span-3 rounded-xl border border-border bg-background/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
                         {!selectedDigest ? (
                             <div className="flex flex-col items-center justify-center h-full py-20 text-center">
                                 <div className="text-3xl mb-3 opacity-40">←</div>
-                                <p className="text-sm text-slate-500">
+                                <p className="text-sm text-muted-foreground">
                                     Select a report to read
                                 </p>
                             </div>
                         ) : (
                             <div className="flex flex-col h-full">
                                 {/* Detail Header */}
-                                <div className="sticky top-0 z-10 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-5 py-3">
+                                <div className="sticky top-0 z-10 bg-background/90 backdrop-blur border-b border-border px-5 py-3">
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
-                                            <h2 className="text-lg font-bold text-slate-100 leading-tight">
+                                            <h2 className="text-lg font-bold text-foreground leading-tight">
                                                 {eventTypeIcon(selectedDigest.event_type)}{" "}
                                                 {extractHeadline(selectedDigest)}
                                             </h2>
@@ -431,18 +431,18 @@ export default function CSIDashboard() {
                                                 >
                                                     {sourceLabel(selectedDigest.source)}
                                                 </span>
-                                                <span className="text-xs text-slate-500">
+                                                <span className="text-xs text-muted-foreground">
                                                     {formatDateTimeTz(selectedDigest.created_at, { placeholder: "--" })}
                                                 </span>
-                                                <span className="text-xs text-slate-600">•</span>
-                                                <span className="text-xs text-slate-500">
+                                                <span className="text-xs text-muted">•</span>
+                                                <span className="text-xs text-muted-foreground">
                                                     {selectedDigest.event_type}
                                                 </span>
                                             </div>
                                         </div>
                                         <button
                                             onClick={() => setSelectedDigest(null)}
-                                            className="shrink-0 rounded p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800/60 transition-colors"
+                                            className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground/80 hover:bg-card/60 transition-colors"
                                             title="Close"
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -455,42 +455,42 @@ export default function CSIDashboard() {
                                 {/* Report Content */}
                                 <div className="flex-1 px-5 py-4 overflow-auto">
                                     {selectedDigest.full_report_md ? (
-                                        <div className="prose prose-invert prose-sm max-w-none prose-headings:text-slate-200 prose-p:text-slate-300 prose-li:text-slate-300 prose-strong:text-slate-200 prose-a:text-cyan-400 prose-code:text-cyan-300 prose-pre:bg-slate-950/60 prose-pre:border prose-pre:border-slate-800">
+                                        <div className="prose prose-invert prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/80 prose-li:text-foreground/80 prose-strong:text-foreground prose-a:text-primary prose-code:text-primary prose-pre:bg-background/60 prose-pre:border prose-pre:border-border">
                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                 {selectedDigest.full_report_md}
                                             </ReactMarkdown>
                                         </div>
                                     ) : selectedDigest.summary ? (
-                                        <div className="prose prose-invert prose-sm max-w-none prose-p:text-slate-300">
+                                        <div className="prose prose-invert prose-sm max-w-none prose-p:text-foreground/80">
                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                 {selectedDigest.summary}
                                             </ReactMarkdown>
                                         </div>
                                     ) : (
-                                        <p className="text-sm text-slate-500 italic">No report content available.</p>
+                                        <p className="text-sm text-muted-foreground italic">No report content available.</p>
                                     )}
                                 </div>
 
                                 {/* Send to Simone Bar */}
-                                <div className="sticky bottom-0 border-t border-slate-800 bg-slate-900/95 backdrop-blur px-5 py-3">
+                                <div className="sticky bottom-0 border-t border-border bg-background/95 backdrop-blur px-5 py-3">
                                     <div className="flex items-center gap-2">
                                         <input
                                             type="text"
                                             value={sendComment}
                                             onChange={(e) => setSendComment(e.target.value)}
                                             placeholder="Add a note for Simone (optional)…"
-                                            className="flex-1 rounded-md border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20"
+                                            className="flex-1 rounded-md border border-border bg-card/60 px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
                                         />
                                         <button
                                             onClick={() => void sendToSimone(selectedDigest)}
                                             disabled={sendBusy}
-                                            className="rounded-md bg-cyan-600/20 px-4 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30 disabled:opacity-60 whitespace-nowrap"
+                                            className="rounded-md bg-primary/20 px-4 py-1.5 text-sm font-medium text-primary hover:bg-primary/30 transition-colors border border-primary/30 disabled:opacity-60 whitespace-nowrap"
                                         >
                                             {sendBusy ? "Sending…" : "📨 Send to Simone"}
                                         </button>
                                     </div>
                                     {sendStatus && (
-                                        <div className={`mt-2 text-xs ${sendStatus.startsWith("✓") ? "text-emerald-300" : "text-rose-300"}`}>
+                                        <div className={`mt-2 text-xs ${sendStatus.startsWith("✓") ? "text-primary" : "text-secondary"}`}>
                                             {sendStatus}
                                         </div>
                                     )}

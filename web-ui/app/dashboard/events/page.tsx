@@ -106,18 +106,18 @@ type ActivityOpsMetrics = {
 };
 
 const SOURCE_STYLES: Record<string, string> = {
-  csi: "bg-cyan-500/10 text-cyan-300 border-cyan-500/30",
-  tutorial: "bg-violet-500/10 text-violet-300 border-violet-500/30",
-  cron: "bg-amber-500/10 text-amber-300 border-amber-500/30",
-  continuity: "bg-orange-500/10 text-orange-300 border-orange-500/30",
-  heartbeat: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
-  system: "bg-slate-500/10 text-slate-300 border-slate-500/30",
+  csi: "bg-primary/10 text-primary border-primary/30",
+  tutorial: "bg-secondary/10 text-secondary border-secondary/20",
+  cron: "bg-accent/10 text-accent border-accent/30",
+  continuity: "bg-accent/10 text-accent border-accent/30",
+  heartbeat: "bg-primary/10 text-primary border-primary/20",
+  system: "bg-muted-foreground/10 text-foreground/80 border-muted-foreground/30",
 };
 
 const SEVERITY_STYLES: Record<string, string> = {
-  success: "text-emerald-300",
-  error: "text-rose-300",
-  warning: "text-amber-300",
+  success: "text-primary",
+  error: "text-secondary",
+  warning: "text-accent",
   info: "text-sky-300",
 };
 
@@ -207,9 +207,9 @@ function parseDeliveryHealthPanelState(item: ActivityEvent | null): DeliveryHeal
 
 function canaryStatusClasses(status: string): string {
   const normalized = String(status || "").trim().toLowerCase();
-  if (normalized === "failing") return "border-rose-700/60 bg-rose-950/30 text-rose-200";
+  if (normalized === "failing") return "border-red-400/30 bg-red-400/10 text-red-400/80";
   if (normalized === "degraded") return "border-amber-700/60 bg-amber-950/30 text-amber-200";
-  return "border-emerald-700/60 bg-emerald-950/30 text-emerald-200";
+  return "border-primary/30/60 bg-primary/10 text-primary/80";
 }
 
 function heartbeatMediationBadges(item: ActivityEvent | null): Array<{ label: string; classes: string }> {
@@ -220,17 +220,17 @@ function heartbeatMediationBadges(item: ActivityEvent | null): Array<{ label: st
   if (status === "dispatched") {
     badges.push({
       label: "Auto-triage dispatched",
-      classes: "border-cyan-700/60 bg-cyan-950/30 text-cyan-200",
+      classes: "border-primary/30 bg-primary/10 text-primary/80",
     });
   } else if (status === "investigation_completed") {
     badges.push({
       label: "Investigation completed",
-      classes: "border-emerald-700/60 bg-emerald-950/30 text-emerald-200",
+      classes: "border-primary/30/60 bg-primary/10 text-primary/80",
     });
   } else if (status === "dispatch_failed") {
     badges.push({
       label: "Auto-triage failed",
-      classes: "border-rose-700/60 bg-rose-950/30 text-rose-200",
+      classes: "border-red-400/30 bg-red-400/10 text-red-400/80",
     });
   } else if (status === "cooldown_active") {
     badges.push({
@@ -995,19 +995,19 @@ export default function DashboardEventsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Notifications & Events</h1>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-muted-foreground">
             Unified feed across CSI, tutorials, cron, continuity, and system activity.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300">
+          <span className="rounded border border-border bg-background/60 px-2 py-1 text-[11px] text-foreground/80">
             Stream: {sseStateText}
           </span>
           <button
             type="button"
             onClick={() => void copyEventsToClipboard()}
             disabled={copyBusy || filteredItems.length === 0}
-            className="rounded border border-cyan-800/60 bg-cyan-950/25 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary/80 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
             title="Copy all visible events as structured text for IDE AI coder"
           >
             {copyBusy ? "Copying..." : `Copy Events (${filteredItems.length})`}
@@ -1018,7 +1018,7 @@ export default function DashboardEventsPage() {
               void deleteAllNotifications();
             }}
             disabled={bulkDeleteBusy || filteredItems.length === 0}
-            className="rounded border border-rose-800/60 bg-rose-950/25 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs text-red-400/80 hover:bg-red-400/20 disabled:cursor-not-allowed disabled:opacity-50"
             title="Delete all currently visible notifications/events"
           >
             {bulkDeleteBusy ? "Deleting..." : `Delete All (${filteredItems.length})`}
@@ -1035,19 +1035,19 @@ export default function DashboardEventsPage() {
                 setSseStateText("connecting");
               }
             }}
-            className="rounded border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800/70"
+            className="rounded border border-border bg-background/60 px-3 py-1.5 text-xs text-foreground hover:bg-card/70"
           >
             {loading ? "Refreshing..." : "Refresh"}
           </button>
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+      <div className="rounded-xl border border-border bg-background/70 p-3">
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={selectedPresetId}
             onChange={(event) => void applyPresetSelection(event.target.value)}
-            className="rounded border border-cyan-800/60 bg-cyan-950/20 px-2 py-1 text-[12px]"
+            className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[12px]"
           >
             <option value="">No preset</option>
             {presets.map((preset) => (
@@ -1056,10 +1056,10 @@ export default function DashboardEventsPage() {
               </option>
             ))}
           </select>
-          <button type="button" onClick={() => void savePreset()} className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] hover:bg-slate-800/70">Save preset</button>
-          <button type="button" onClick={() => void updatePreset()} disabled={!selectedPresetId} className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] hover:bg-slate-800/70 disabled:opacity-50">Update preset</button>
-          <button type="button" onClick={() => void setPresetDefault()} disabled={!selectedPresetId} className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] hover:bg-slate-800/70 disabled:opacity-50">Set default</button>
-          <button type="button" onClick={() => void deletePreset()} disabled={!selectedPresetId} className="rounded border border-rose-800/60 bg-rose-950/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50">Delete preset</button>
+          <button type="button" onClick={() => void savePreset()} className="rounded border border-border bg-background/60 px-2 py-1 text-[11px] hover:bg-card/70">Save preset</button>
+          <button type="button" onClick={() => void updatePreset()} disabled={!selectedPresetId} className="rounded border border-border bg-background/60 px-2 py-1 text-[11px] hover:bg-card/70 disabled:opacity-50">Update preset</button>
+          <button type="button" onClick={() => void setPresetDefault()} disabled={!selectedPresetId} className="rounded border border-border bg-background/60 px-2 py-1 text-[11px] hover:bg-card/70 disabled:opacity-50">Set default</button>
+          <button type="button" onClick={() => void deletePreset()} disabled={!selectedPresetId} className="rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-red-400/80 hover:bg-red-400/20 disabled:opacity-50">Delete preset</button>
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1160,7 +1160,7 @@ export default function DashboardEventsPage() {
                 key={`src-chip-${source}`}
                 type="button"
                 onClick={() => setSourceFilter((prev) => (prev === source ? "" : source))}
-                className={`rounded border px-2 py-1 text-[11px] transition-colors ${SOURCE_STYLES[source] || SOURCE_STYLES.system} ${selected ? "ring-1 ring-cyan-400/70" : "opacity-80 hover:opacity-100"}`}
+                className={`rounded border px-2 py-1 text-[11px] transition-colors ${SOURCE_STYLES[source] || SOURCE_STYLES.system} ${selected ? "ring-1 ring-primary/40" : "opacity-80 hover:opacity-100"}`}
                 title={`unread: ${bucket.unread} | actionable: ${bucket.actionable} | total: ${bucket.total}`}
                 aria-pressed={selected}
               >
@@ -1171,7 +1171,7 @@ export default function DashboardEventsPage() {
           <button
             type="button"
             onClick={() => setSourceFilter("")}
-            className={`rounded border px-2 py-1 text-[11px] transition-colors ${sourceFilter === "" ? "border-cyan-500/60 bg-cyan-500/10 text-cyan-200 ring-1 ring-cyan-400/70" : "border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800/70"}`}
+            className={`rounded border px-2 py-1 text-[11px] transition-colors ${sourceFilter === "" ? "border-primary/40 bg-primary/10 text-primary/80 ring-1 ring-primary/40" : "border-border bg-background/60 text-foreground/80 hover:bg-card/70"}`}
             title={`Show all sources • unread: ${counters.totals.unread} | actionable: ${counters.totals.actionable} | total: ${counters.totals.total}`}
             aria-pressed={sourceFilter === ""}
           >
@@ -1179,32 +1179,32 @@ export default function DashboardEventsPage() {
           </button>
         </div>
 
-        <div className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">Activity Diagnostics</div>
+        <div className="mt-2 rounded border border-border bg-background/50 p-2">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Activity Diagnostics</div>
           {activityMetricsError ? (
-            <div className="mt-1 text-[11px] text-rose-300">{activityMetricsError}</div>
+            <div className="mt-1 text-[11px] text-secondary">{activityMetricsError}</div>
           ) : (
-            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-300">
-              <span className="rounded border border-slate-700 px-2 py-0.5">sse_connects {Number(activityMetrics?.counters?.events_sse_connects || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">sse_disconnects {Number(activityMetrics?.counters?.events_sse_disconnects || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">sse_payloads {Number(activityMetrics?.counters?.events_sse_payloads || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">sse_heartbeats {Number(activityMetrics?.counters?.events_sse_heartbeats || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">sse_errors {Number(activityMetrics?.counters?.events_sse_errors || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">digest_compacted {Number(activityMetrics?.counters?.digest_compacted_total || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">digest_bypass {Number(activityMetrics?.counters?.digest_immediate_bypass_total || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">digest_buckets_open {Number(activityMetrics?.counters?.digest_buckets_open || 0)}</span>
-              <span className="rounded border border-slate-700 px-2 py-0.5">uptime_s {Number(activityMetrics?.uptime_seconds || 0)}</span>
+            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-foreground/80">
+              <span className="rounded border border-border px-2 py-0.5">sse_connects {Number(activityMetrics?.counters?.events_sse_connects || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">sse_disconnects {Number(activityMetrics?.counters?.events_sse_disconnects || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">sse_payloads {Number(activityMetrics?.counters?.events_sse_payloads || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">sse_heartbeats {Number(activityMetrics?.counters?.events_sse_heartbeats || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">sse_errors {Number(activityMetrics?.counters?.events_sse_errors || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">digest_compacted {Number(activityMetrics?.counters?.digest_compacted_total || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">digest_bypass {Number(activityMetrics?.counters?.digest_immediate_bypass_total || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">digest_buckets_open {Number(activityMetrics?.counters?.digest_buckets_open || 0)}</span>
+              <span className="rounded border border-border px-2 py-0.5">uptime_s {Number(activityMetrics?.uptime_seconds || 0)}</span>
             </div>
           )}
         </div>
 
-        {error && <div className="mt-2 text-sm text-rose-300">{error}</div>}
+        {error && <div className="mt-2 text-sm text-secondary">{error}</div>}
       </div>
 
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-1 overflow-y-auto pr-1 scrollbar-thin">
           {filteredItems.length === 0 && (
-            <div className="rounded border border-slate-800 bg-slate-950/40 px-3 py-4 text-sm text-slate-400">
+            <div className="rounded border border-border bg-background/40 px-3 py-4 text-sm text-muted-foreground">
               {hideTransient && items.length > 0 ? `${items.length} event(s) hidden by transient filter.` : "No notifications/events found."}
             </div>
           )}
@@ -1221,8 +1221,8 @@ export default function DashboardEventsPage() {
                   className={[
                     "w-full rounded border px-3 py-2 text-left transition-colors",
                     active
-                      ? "border-cyan-500/60 bg-cyan-500/10"
-                      : "border-slate-800 bg-slate-950/40 hover:bg-slate-900/60",
+                      ? "border-primary/40 bg-primary/10"
+                      : "border-border bg-background/40 hover:bg-background/60",
                   ].join(" ")}
                 >
                   <div className="mb-1 flex items-center gap-2">
@@ -1231,7 +1231,7 @@ export default function DashboardEventsPage() {
                     </span>
                     <span className={`text-[10px] uppercase ${severityStyle}`}>{item.severity}</span>
                     {(item.kind === "csi_delivery_health_regression" || item.kind === "csi_delivery_health_recovered") && (
-                      <span className="text-[10px] uppercase text-amber-300">canary</span>
+                      <span className="text-[10px] uppercase text-accent">canary</span>
                     )}
                     {mediationBadges.map((badge) => (
                       <span key={`${item.id}-${badge.label}`} className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${badge.classes}`}>
@@ -1239,19 +1239,19 @@ export default function DashboardEventsPage() {
                       </span>
                     ))}
                     {Boolean(item.metadata?.pinned) && (
-                      <span className="text-[10px] uppercase text-amber-300">pinned</span>
+                      <span className="text-[10px] uppercase text-accent">pinned</span>
                     )}
-                    <span className="ml-auto pr-6 text-[10px] text-slate-500" title={formatDateTimeTz(item.created_at_utc, { timeZone: "UTC", placeholder: "--" })}>
+                    <span className="ml-auto pr-6 text-[10px] text-muted-foreground" title={formatDateTimeTz(item.created_at_utc, { timeZone: "UTC", placeholder: "--" })}>
                       {timeAgo(item.created_at_utc)}
                     </span>
                   </div>
-                  <div className="text-sm font-medium text-slate-200">{item.title}</div>
-                  <div className="mt-1 text-xs text-slate-400 line-clamp-2">{item.summary || item.full_message}</div>
+                  <div className="text-sm font-medium text-foreground">{item.title}</div>
+                  <div className="mt-1 text-xs text-muted-foreground line-clamp-2">{item.summary || item.full_message}</div>
                 </button>
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); void deleteNotification(item.id); }}
-                  className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40"
+                  className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1 text-muted-foreground hover:text-secondary hover:bg-red-400/15"
                   title="Delete notification"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1269,24 +1269,24 @@ export default function DashboardEventsPage() {
               type="button"
               onClick={() => void loadOlder()}
               disabled={loadingMore}
-              className="mt-2 w-full rounded border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800/80 disabled:opacity-60"
+              className="mt-2 w-full rounded border border-border bg-background/70 px-3 py-2 text-xs text-foreground hover:bg-card/80 disabled:opacity-60"
             >
               {loadingMore ? "Loading older..." : "Load older"}
             </button>
           )}
           {!hasMore && filteredItems.length > 0 && (
-            <div className="mt-2 rounded border border-slate-800 bg-slate-950/40 px-3 py-2 text-center text-[11px] text-slate-500">
+            <div className="mt-2 rounded border border-border bg-background/40 px-3 py-2 text-center text-[11px] text-muted-foreground">
               End of retained history
             </div>
           )}
         </div>
 
-        <div className="min-h-[240px] overflow-hidden rounded border border-slate-800 bg-slate-950/50">
+        <div className="min-h-[240px] overflow-hidden rounded border border-border bg-background/50">
           {!selected ? (
-            <div className="p-4 text-sm text-slate-500">Select a notification/event to view full details.</div>
+            <div className="p-4 text-sm text-muted-foreground">Select a notification/event to view full details.</div>
           ) : (
             <div className="flex h-full flex-col">
-              <div className="border-b border-slate-800 bg-slate-900/70 px-4 py-3">
+              <div className="border-b border-border bg-background/70 px-4 py-3">
                 <div className="mb-1 flex flex-wrap items-center gap-2">
                   <span
                     className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
@@ -1304,7 +1304,7 @@ export default function DashboardEventsPage() {
                     </span>
                   ))}
                   <span
-                    className="text-[10px] text-slate-500"
+                    className="text-[10px] text-muted-foreground"
                     title={`UTC: ${formatDateTimeTz(selected.created_at_utc, { timeZone: "UTC", placeholder: "--" })}`}
                   >
                     Local: {formatDateTimeTz(selected.created_at_utc, { placeholder: "--" })}
@@ -1312,7 +1312,7 @@ export default function DashboardEventsPage() {
                   <button
                     type="button"
                     onClick={() => void deleteNotification(selected.id)}
-                    className="ml-auto flex items-center gap-1 rounded border border-rose-700/60 bg-rose-950/20 px-2 py-1 text-[11px] text-rose-300 hover:bg-rose-900/40 hover:text-rose-200 transition-colors"
+                    className="ml-auto flex items-center gap-1 rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-secondary hover:bg-red-400/15 hover:text-red-400/80 transition-colors"
                     title="Delete this notification"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1324,23 +1324,23 @@ export default function DashboardEventsPage() {
                     Delete
                   </button>
                 </div>
-                <div className="text-sm font-semibold text-slate-100">{selected.title}</div>
-                <div className="mt-1 text-[10px] font-mono text-slate-500">
+                <div className="text-sm font-semibold text-foreground">{selected.title}</div>
+                <div className="mt-1 text-[10px] font-mono text-muted-foreground">
                   id: {selected.id} | kind: {selected.kind} | status: {selected.status}
                 </div>
                 {selected.source_domain === "heartbeat" && (
-                  <div className="mt-2 text-[11px] text-slate-300">
+                  <div className="mt-2 text-[11px] text-foreground/80">
                     Non-OK heartbeat findings are auto-routed to Simone for investigation. Manual handoff remains available.
                   </div>
                 )}
-                {handoffResult && <div className="mt-2 text-xs text-cyan-300">{handoffResult}</div>}
+                {handoffResult && <div className="mt-2 text-xs text-primary">{handoffResult}</div>}
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto p-4 scrollbar-thin">
                 {selectedCanary && (
-                  <div className="space-y-2 rounded border border-cyan-900/60 bg-cyan-950/20 p-3">
+                  <div className="space-y-2 rounded border border-primary/30 bg-primary/10 p-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-[11px] uppercase tracking-wide text-cyan-200">Delivery Health Canary</div>
+                      <div className="text-[11px] uppercase tracking-wide text-primary/80">Delivery Health Canary</div>
                       <span className={`rounded border px-2 py-0.5 text-[10px] uppercase ${canaryStatusClasses(selectedCanary.status)}`}>
                         {selectedCanary.status || "unknown"}
                       </span>
@@ -1351,7 +1351,7 @@ export default function DashboardEventsPage() {
                         {selectedCanary.failingSources.map((source) => (
                           <span
                             key={`failing-${source}`}
-                            className="rounded border border-rose-700/60 bg-rose-950/30 px-2 py-0.5 text-rose-200"
+                            className="rounded border border-red-400/30 bg-red-400/10 px-2 py-0.5 text-red-400/80"
                           >
                             failing: {source}
                           </span>
@@ -1372,7 +1372,7 @@ export default function DashboardEventsPage() {
                         <button
                           type="button"
                           onClick={() => void copyCommand(selectedCanary.primaryRunbookCommand)}
-                          className="rounded border border-cyan-700/50 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-500/20"
+                          className="rounded border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
                         >
                           Copy Primary Runbook
                         </button>
@@ -1380,7 +1380,7 @@ export default function DashboardEventsPage() {
                       <button
                         type="button"
                         onClick={() => { window.location.href = "/dashboard/csi"; }}
-                        className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800/80"
+                        className="rounded border border-border bg-background/70 px-2 py-1 text-[11px] text-foreground hover:bg-card/80"
                       >
                         View in CSI
                       </button>
@@ -1388,34 +1388,34 @@ export default function DashboardEventsPage() {
 
                     {selectedCanary.steps.length > 0 && (
                       <div className="space-y-1">
-                        <div className="text-[11px] uppercase tracking-wide text-slate-300">Guided Remediation</div>
+                        <div className="text-[11px] uppercase tracking-wide text-foreground/80">Guided Remediation</div>
                         <div className="space-y-2">
                           {selectedCanary.steps.map((step, index) => {
                             const stepCommand = String(step.runbook_command || "").trim();
                             const stepSource = String(step.source || "").trim();
                             const stepSeverity = String(step.severity || "warning").trim().toLowerCase();
                             return (
-                              <div key={`step-${index}`} className="rounded border border-slate-800 bg-slate-900/50 p-2">
+                              <div key={`step-${index}`} className="rounded border border-border bg-background/50 p-2">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <span className="text-[11px] text-slate-100">{step.title || step.code || "Remediation Step"}</span>
+                                  <span className="text-[11px] text-foreground">{step.title || step.code || "Remediation Step"}</span>
                                   <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${canaryStatusClasses(stepSeverity)}`}>
                                     {stepSeverity}
                                   </span>
-                                  {stepSource && <span className="text-[10px] text-slate-400">{stepSource}</span>}
+                                  {stepSource && <span className="text-[10px] text-muted-foreground">{stepSource}</span>}
                                   {stepCommand && (
                                     <button
                                       type="button"
                                       onClick={() => void copyCommand(stepCommand)}
-                                      className="ml-auto rounded border border-cyan-700/50 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-500/20"
+                                      className="ml-auto rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] text-primary/80 hover:bg-primary/20"
                                     >
                                       Copy Command
                                     </button>
                                   )}
                                 </div>
-                                {step.action && <div className="mt-1 text-[11px] text-slate-300">{step.action}</div>}
-                                {step.detail && <div className="mt-1 text-[11px] text-slate-400">{step.detail}</div>}
+                                {step.action && <div className="mt-1 text-[11px] text-foreground/80">{step.action}</div>}
+                                {step.detail && <div className="mt-1 text-[11px] text-muted-foreground">{step.detail}</div>}
                                 {stepCommand && (
-                                  <pre className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2 text-[10px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                                  <pre className="mt-2 rounded border border-border bg-background/50 p-2 text-[10px] text-foreground/80 overflow-x-auto whitespace-pre-wrap">
                                     {stepCommand}
                                   </pre>
                                 )}
@@ -1429,22 +1429,22 @@ export default function DashboardEventsPage() {
                 )}
 
                 <div className="space-y-1">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">Message</div>
-                  <div className="rounded border border-slate-800 bg-slate-900/50 p-3 text-xs whitespace-pre-wrap text-slate-300">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Message</div>
+                  <div className="rounded border border-border bg-background/50 p-3 text-xs whitespace-pre-wrap text-foreground/80">
                     {selected.full_message || selected.summary}
                   </div>
                 </div>
 
                 {Array.isArray(selected.actions) && selected.actions.length > 0 && (
                   <div className="space-y-1">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">Actions</div>
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Actions</div>
                     <div className="flex flex-wrap gap-2">
                       {selected.actions.map((action, idx) => (
                         <button
                           key={`${selected.id}-action-${idx}`}
                           type="button"
                           onClick={() => openAction(action)}
-                          className="rounded border border-cyan-700/50 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-500/20"
+                          className="rounded border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
                         >
                           {action.label || action.id || "Action"}
                         </button>
@@ -1455,8 +1455,8 @@ export default function DashboardEventsPage() {
 
                 {selected.entity_ref && Object.keys(selected.entity_ref).length > 0 && (
                   <div className="space-y-1">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">Entity Ref</div>
-                    <pre className="rounded border border-slate-800 bg-slate-900/50 p-3 text-[10px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Entity Ref</div>
+                    <pre className="rounded border border-border bg-background/50 p-3 text-[10px] text-foreground/80 overflow-x-auto whitespace-pre-wrap">
                       {JSON.stringify(selected.entity_ref, null, 2)}
                     </pre>
                   </div>
@@ -1464,32 +1464,32 @@ export default function DashboardEventsPage() {
 
                 {selected.metadata && Object.keys(selected.metadata).length > 0 && (
                   <div className="space-y-1">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">Metadata</div>
-                    <pre className="rounded border border-slate-800 bg-slate-900/50 p-3 text-[10px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Metadata</div>
+                    <pre className="rounded border border-border bg-background/50 p-3 text-[10px] text-foreground/80 overflow-x-auto whitespace-pre-wrap">
                       {JSON.stringify(selected.metadata, null, 2)}
                     </pre>
                   </div>
                 )}
 
                 <div className="space-y-1">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">Activity Audit</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Activity Audit</div>
                   {auditLoading ? (
-                    <div className="rounded border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">Loading audit...</div>
+                    <div className="rounded border border-border bg-background/40 p-3 text-xs text-muted-foreground">Loading audit...</div>
                   ) : auditError ? (
-                    <div className="rounded border border-rose-800/60 bg-rose-950/20 p-3 text-xs text-rose-300">{auditError}</div>
+                    <div className="rounded border border-red-400/30 bg-red-400/10 p-3 text-xs text-secondary">{auditError}</div>
                   ) : auditRows.length === 0 ? (
-                    <div className="rounded border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-500">No actions recorded yet.</div>
+                    <div className="rounded border border-border bg-background/40 p-3 text-xs text-muted-foreground">No actions recorded yet.</div>
                   ) : (
                     <div className="space-y-1">
                       {auditRows.map((row) => (
-                        <div key={`${selected.id}-audit-${row.id}`} className="rounded border border-slate-800 bg-slate-900/40 p-2">
-                          <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                            <span className="uppercase text-cyan-300">{row.action}</span>
+                        <div key={`${selected.id}-audit-${row.id}`} className="rounded border border-border bg-background/40 p-2">
+                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                            <span className="uppercase text-primary">{row.action}</span>
                             <span className="uppercase">{row.outcome}</span>
                             <span>{row.actor}</span>
                             <span className="ml-auto">{formatDateTimeTz(row.created_at_utc, { placeholder: "--" })}</span>
                           </div>
-                          {row.note && <div className="mt-1 text-[11px] text-slate-300 whitespace-pre-wrap">{row.note}</div>}
+                          {row.note && <div className="mt-1 text-[11px] text-foreground/80 whitespace-pre-wrap">{row.note}</div>}
                         </div>
                       ))}
                     </div>
@@ -1502,24 +1502,24 @@ export default function DashboardEventsPage() {
       </div>
 
       {handoffOpen && selected && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
-          <div className="w-full max-w-xl rounded-lg border border-slate-700 bg-slate-900 p-4">
-            <h2 className="text-sm font-semibold text-slate-100">Send to Simone</h2>
-            <p className="mt-1 text-xs text-slate-400">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4">
+          <div className="w-full max-w-xl rounded-lg border border-border bg-background p-4">
+            <h2 className="text-sm font-semibold text-foreground">Send to Simone</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
               Add context for why this item should be investigated. This message is attached to the forwarded event.
             </p>
             <textarea
               value={handoffInstruction}
               onChange={(event) => setHandoffInstruction(event.target.value)}
               rows={7}
-              className="mt-3 w-full rounded border border-slate-700 bg-slate-950/70 p-2 text-xs text-slate-100 outline-none focus:border-cyan-500"
+              className="mt-3 w-full rounded border border-border bg-background/70 p-2 text-xs text-foreground outline-none focus:border-primary"
               placeholder="Explain what Simone should do with this report/event."
             />
             <div className="mt-3 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setHandoffOpen(false)}
-                className="rounded border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-xs text-slate-200"
+                className="rounded border border-border bg-card/70 px-3 py-1.5 text-xs text-foreground"
               >
                 Cancel
               </button>
@@ -1527,7 +1527,7 @@ export default function DashboardEventsPage() {
                 type="button"
                 onClick={() => void submitHandoff()}
                 disabled={handoffBusy}
-                className="rounded border border-cyan-700/60 bg-cyan-600/20 px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-60"
+                className="rounded border border-primary/30 bg-primary/20 px-3 py-1.5 text-xs text-primary/90 disabled:opacity-60"
               >
                 {handoffBusy ? "Sending..." : "Send to Simone"}
               </button>

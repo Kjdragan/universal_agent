@@ -57,17 +57,17 @@ export function CombinedActivityLog({ onCollapse }: { onCollapse?: () => void } 
     }, [items.length]);
 
     return (
-        <div className="flex flex-col h-full bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
-            <div className="p-3 border-b border-slate-800 bg-slate-900/60 flex justify-between items-center">
-                <h3 className="font-semibold text-sm flex items-center gap-2 text-slate-200">
-                    <Terminal className="w-4 h-4 text-cyan-500/70" />
+        <div className="flex flex-col h-full bg-background border border-border rounded-lg overflow-hidden">
+            <div className="p-3 border-b border-border bg-background/60 flex justify-between items-center">
+                <h3 className="font-semibold text-sm flex items-center gap-2 text-foreground">
+                    <Terminal className="w-4 h-4 text-primary/70" />
                     Activity & Logs
                 </h3>
                 <div className="flex items-center gap-2">
                     {onCollapse && (
                         <button
                             type="button"
-                            className="text-[10px] px-2 py-1 rounded border border-slate-700 bg-slate-800/60 hover:bg-slate-800 transition-colors text-slate-300"
+                            className="text-[10px] px-2 py-1 rounded border border-border bg-card/60 hover:bg-card transition-colors text-foreground/80"
                             title="Collapse activity panel"
                             onClick={onCollapse}
                         >
@@ -76,7 +76,7 @@ export function CombinedActivityLog({ onCollapse }: { onCollapse?: () => void } 
                     )}
                     <button
                         type="button"
-                        className="text-[10px] px-2 py-1 rounded border border-slate-700 bg-slate-800/60 hover:bg-slate-800 transition-colors text-slate-300"
+                        className="text-[10px] px-2 py-1 rounded border border-border bg-card/60 hover:bg-card transition-colors text-foreground/80"
                         title="Toggle activity panel expansion"
                         onClick={() => {
                             setExpandMode((prev) => {
@@ -133,27 +133,27 @@ const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: 
     }, [jsonString]);
 
     return (
-        <div className="border border-slate-800 rounded bg-slate-900/30 overflow-hidden">
+        <div className="border border-border rounded bg-background/30 overflow-hidden">
             <div
-                className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-slate-800/50 transition-colors text-xs"
+                className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-card/50 transition-colors text-xs"
                 onClick={() => {
                     if (expandMode === 'expanded') return;
                     setExpanded(!effectiveExpanded);
                 }}
             >
-                <span className="text-slate-500">
+                <span className="text-muted-foreground">
                     {effectiveExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                 </span>
-                <span className="font-semibold text-slate-400">{label}</span>
-                <span className="text-[10px] text-slate-500/60 font-mono">({size})</span>
-                {!effectiveExpanded && <span className="ml-auto text-slate-500/50 font-mono truncate max-w-[200px]">{preview}</span>}
+                <span className="font-semibold text-muted-foreground">{label}</span>
+                <span className="text-[10px] text-muted-foreground/60 font-mono">({size})</span>
+                {!effectiveExpanded && <span className="ml-auto text-muted-foreground/50 font-mono truncate max-w-[200px]">{preview}</span>}
             </div>
 
             {effectiveExpanded && (
-                <div className="border-t border-slate-800 bg-slate-950 p-0">
+                <div className="border-t border-border bg-background p-0">
                     <pre className={cn(
                         "p-2 text-xs font-mono whitespace-pre-wrap break-words",
-                        isError ? "text-red-400" : "text-slate-300"
+                        isError ? "text-red-400" : "text-foreground/80"
                     )}>
                         <LinkifiedText text={String(data?.content_preview ?? jsonString)} />
                     </pre>
@@ -168,12 +168,12 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
     const effectiveOpen = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : isOpen;
 
     return (
-        <div className="border border-slate-800 rounded-md bg-slate-900/40 text-sm overflow-hidden">
+        <div className="border border-border rounded-md bg-background/40 text-sm overflow-hidden">
             <div
                 className={cn(
-                    "flex items-center gap-2 p-2 cursor-pointer hover:bg-slate-800/60 transition-colors",
-                    tool.status === 'running' && "bg-blue-500/10 border-l-2 border-l-blue-500",
-                    tool.status === 'complete' && "bg-green-500/10 border-l-2 border-l-green-500",
+                    "flex items-center gap-2 p-2 cursor-pointer hover:bg-card/60 transition-colors",
+                    tool.status === 'running' && "bg-primary/10 border-l-2 border-l-blue-500",
+                    tool.status === 'complete' && "bg-primary/10 border-l-2 border-l-green-500",
                     tool.status === 'error' && "bg-red-500/10 border-l-2 border-l-red-500"
                 )}
                 onClick={() => {
@@ -186,15 +186,15 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
                 </div>
 
                 <div className="flex items-center justify-center w-6 h-6 rounded-full bg-background border shrink-0">
-                    {tool.status === 'running' && <Play className="w-3 h-3 text-blue-500 animate-pulse" />}
-                    {tool.status === 'complete' && <CheckCircle2 className="w-3 h-3 text-green-500" />}
+                    {tool.status === 'running' && <Play className="w-3 h-3 text-primary animate-pulse" />}
+                    {tool.status === 'complete' && <CheckCircle2 className="w-3 h-3 text-primary" />}
                     {tool.status === 'error' && <XCircle className="w-3 h-3 text-red-500" />}
                     {tool.status === 'pending' && <div className="w-2 h-2 rounded-full bg-muted-foreground" />}
                 </div>
 
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                        <span className="font-mono font-medium text-cyan-400 truncate">{tool.name}</span>
+                        <span className="font-mono font-medium text-primary truncate">{tool.name}</span>
                         <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap">
                             {format(tool.timestamp, 'HH:mm:ss.SSS')}
                         </span>
@@ -252,12 +252,12 @@ function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) 
                 </span>
                 <span className={cn(
                     "font-bold px-1.5 rounded text-[10px]",
-                    isError ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                    isError ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
                 )}>
                     {log.level}
                 </span>
                 <div className="flex-1 whitespace-pre-wrap break-words">
-                    {log.prefix && <span className="text-blue-500 mr-1">{log.prefix}</span>}
+                    {log.prefix && <span className="text-primary mr-1">{log.prefix}</span>}
                     <LinkifiedText text={headerPreview} />
                     {hasMore && !effectiveOpen && <span className="text-muted-foreground ml-1">...</span>}
                 </div>
@@ -284,18 +284,18 @@ function CompactBoundaryRow({ log, expandMode }: { log: LogEntry; expandMode: Ex
     const effectiveOpen = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : isOpen;
 
     return (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/8 overflow-hidden">
+        <div className="rounded-md border border-accent/30 bg-amber-500/8 overflow-hidden">
             <div
-                className="flex items-start gap-2 p-2 text-xs cursor-pointer hover:bg-amber-500/10 transition-colors"
+                className="flex items-start gap-2 p-2 text-xs cursor-pointer hover:bg-accent/10 transition-colors"
                 onClick={() => {
                     if (!hasPayload || expandMode === 'expanded') return;
                     setIsOpen(!effectiveOpen);
                 }}
             >
-                <AlertCircle className="w-4 h-4 text-amber-400 mt-[1px] shrink-0" />
+                <AlertCircle className="w-4 h-4 text-accent mt-[1px] shrink-0" />
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                        <span className="font-semibold uppercase tracking-[0.12em] text-[10px] text-amber-300">
+                        <span className="font-semibold uppercase tracking-[0.12em] text-[10px] text-accent">
                             Context Compaction
                         </span>
                         <span className="text-[10px] text-amber-200/70 font-mono">{format(log.timestamp, 'HH:mm:ss.SSS')}</span>
@@ -311,13 +311,13 @@ function CompactBoundaryRow({ log, expandMode }: { log: LogEntry; expandMode: Ex
                     </div>
                 </div>
                 {hasPayload && (
-                    <span className="text-amber-300/80">
+                    <span className="text-accent/80">
                         {effectiveOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     </span>
                 )}
             </div>
             {effectiveOpen && hasPayload && (
-                <div className="border-t border-amber-500/20 bg-slate-950/60 p-2">
+                <div className="border-t border-accent/20 bg-background/60 p-2">
                     <pre className="text-xs font-mono whitespace-pre-wrap break-words text-amber-100">
                         <LinkifiedText text={JSON.stringify(payload, null, 2)} />
                     </pre>

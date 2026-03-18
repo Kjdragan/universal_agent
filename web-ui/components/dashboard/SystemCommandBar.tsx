@@ -263,19 +263,19 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
   const historyRows = history.slice(0, 5);
 
   return (
-    <section className="mb-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+    <section className="mb-4 rounded-xl border border-border bg-background/70 p-3">
       <form onSubmit={handleSubmit} className="flex flex-col">
         {/* Header Row */}
         <div className="flex flex-row items-center justify-between mb-2">
           <div className="flex flex-row items-center gap-3">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">System Command</h2>
-            <div className="flex flex-row items-center gap-2 text-[11px] text-slate-500 font-mono">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground/80">System Command</h2>
+            <div className="flex flex-row items-center gap-2 text-[11px] text-muted-foreground font-mono">
               <span>Natural language · non-chat lane</span>
-              <span className="text-slate-600">|</span>
+              <span className="text-muted">|</span>
               <span>route: {sourcePage}</span>
               {Object.keys(sourceContext.selection || {}).length > 0 && (
                 <>
-                  <span className="text-slate-600">|</span>
+                  <span className="text-muted">|</span>
                   <span>keys: {Object.keys(sourceContext.selection || {}).join(", ")}</span>
                 </>
               )}
@@ -284,7 +284,7 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
           <button
             type="submit"
             disabled={submitting || uploadingImage || (!asText(text))}
-            className="rounded-md border border-cyan-700/70 bg-cyan-900/30 px-3 py-1.5 text-[11px] font-medium text-cyan-100 hover:bg-cyan-900/45 disabled:opacity-50 transition-colors shrink-0"
+            className="rounded-md border border-primary/30/70 bg-primary/15 px-3 py-1.5 text-[11px] font-medium text-primary/90 hover:bg-primary/20 disabled:opacity-50 transition-colors shrink-0"
           >
             {submitting ? "Submitting..." : uploadingImage ? "Analyzing Image..." : "Run Command"}
           </button>
@@ -296,17 +296,17 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
           onPaste={handlePaste}
           placeholder={placeholder}
           rows={2}
-          className="w-full resize-y rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500 mb-0 block"
+          className="w-full resize-y rounded-md border border-border bg-background/70 px-3 py-2 text-sm text-foreground outline-none focus:border-primary mb-0 block"
         />
 
       </form>
       {error && (
-        <div className="mt-2 rounded border border-rose-700/70 bg-rose-900/20 px-2 py-1 text-xs text-rose-200">
+        <div className="mt-2 rounded border border-red-400/30/70 bg-red-400/10 px-2 py-1 text-xs text-red-400/80">
           {error}
         </div>
       )}
       {result && !error && (
-        <div className="mt-2 rounded border border-emerald-700/40 bg-emerald-900/15 px-2 py-1 text-xs text-emerald-100">
+        <div className="mt-2 rounded border border-primary/30/40 bg-primary/10 px-2 py-1 text-xs text-primary/90">
           <div>
             lane={lane || "system"} · intent={intent || "unknown"}
           </div>
@@ -317,37 +317,37 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
           {cronJobId && <div>cron_job_id={cronJobId}</div>}
         </div>
       )}
-      <div className="mt-1 rounded border border-slate-800 bg-slate-950/30 p-2">
+      <div className="mt-1 rounded border border-border bg-background/30 p-2">
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Recent Commands</span>
+          <span className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Recent Commands</span>
           <button
             type="button"
             onClick={() => persistHistory([])}
-            className="text-[11px] text-slate-500 hover:text-slate-300"
+            className="text-[11px] text-muted-foreground hover:text-foreground/80"
           >
             Clear
           </button>
         </div>
         {historyRows.length === 0 && (
-          <div className="text-xs text-slate-500">No command history yet on this browser.</div>
+          <div className="text-xs text-muted-foreground">No command history yet on this browser.</div>
         )}
         <div className="space-y-1">
           {historyRows.map((row) => (
-            <div key={row.id} className="rounded border border-slate-800/80 bg-slate-900/50 px-2 py-1 text-xs text-slate-300">
+            <div key={row.id} className="rounded border border-border/50 bg-background/50 px-2 py-1 text-xs text-foreground/80">
               <div className="flex items-center justify-between gap-2">
-                <span className={row.ok ? "text-emerald-300" : "text-rose-300"}>
+                <span className={row.ok ? "text-primary" : "text-red-400"}>
                   {row.ok ? "ok" : "error"} · {row.intent || "system_command"}
                 </span>
                 <button
                   type="button"
                   onClick={() => setText(row.text)}
-                  className="text-[11px] text-cyan-300 hover:text-cyan-100"
+                  className="text-[11px] text-primary hover:text-primary/90"
                 >
                   Reuse
                 </button>
               </div>
-              <div className="truncate text-slate-200">{row.text}</div>
-              {!row.ok && row.error && <div className="truncate text-rose-300">{row.error}</div>}
+              <div className="truncate text-foreground">{row.text}</div>
+              {!row.ok && row.error && <div className="truncate text-red-400">{row.error}</div>}
             </div>
           ))}
         </div>

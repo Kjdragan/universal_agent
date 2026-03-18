@@ -103,26 +103,26 @@ function secondsSince(value: string): number | null {
 
 function statusPill(status: string): string {
   const normalized = asText(status).toLowerCase();
-  if (normalized === "online") return "border-emerald-600/40 bg-emerald-900/20 text-emerald-200";
-  if (normalized === "offline") return "border-rose-600/40 bg-rose-900/20 text-rose-200";
+  if (normalized === "online") return "border-primary/30 bg-primary/10 text-primary/80";
+  if (normalized === "offline") return "border-red-400/25 bg-red-400/10 text-red-400/80";
   if (normalized === "paused") return "border-sky-600/40 bg-sky-900/20 text-sky-200";
   return "border-amber-600/40 bg-amber-900/20 text-amber-200";
 }
 
 function freshnessColor(ageSeconds: number | null): string {
-  if (ageSeconds === null) return "text-slate-500";
-  if (ageSeconds < 120) return "text-emerald-400";
-  if (ageSeconds < 300) return "text-emerald-300/70";
-  if (ageSeconds < 900) return "text-amber-400";
-  return "text-rose-400";
+  if (ageSeconds === null) return "text-muted-foreground";
+  if (ageSeconds < 120) return "text-primary";
+  if (ageSeconds < 300) return "text-primary/70";
+  if (ageSeconds < 900) return "text-accent";
+  return "text-secondary";
 }
 
 function latencyColor(ms: number | null | undefined): string {
-  if (ms == null) return "text-slate-500";
-  if (ms < 100) return "text-emerald-400";
-  if (ms < 300) return "text-emerald-300/70";
-  if (ms < 1000) return "text-amber-400";
-  return "text-rose-400";
+  if (ms == null) return "text-muted-foreground";
+  if (ms < 100) return "text-primary";
+  if (ms < 300) return "text-primary/70";
+  if (ms < 1000) return "text-accent";
+  return "text-secondary";
 }
 
 function freshnessLabel(ageSeconds: number | null): string {
@@ -135,10 +135,10 @@ function freshnessLabel(ageSeconds: number | null): string {
 
 function missionStatusPill(status: string): string {
   const s = asText(status).toLowerCase();
-  if (s === "completed") return "border-emerald-600/40 bg-emerald-900/20 text-emerald-200";
-  if (s === "failed" || s === "error") return "border-rose-600/40 bg-rose-900/20 text-rose-200";
+  if (s === "completed") return "border-primary/30 bg-primary/10 text-primary/80";
+  if (s === "failed" || s === "error") return "border-red-400/25 bg-red-400/10 text-red-400/80";
   if (s === "running" || s === "claimed") return "border-sky-600/40 bg-sky-900/20 text-sky-200";
-  if (s === "queued") return "border-slate-600/40 bg-slate-800/20 text-slate-300";
+  if (s === "queued") return "border-border/40 bg-card/20 text-foreground/80";
   return "border-amber-600/40 bg-amber-900/20 text-amber-200";
 }
 
@@ -362,8 +362,8 @@ export default function DashboardCorporationPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-100">Corporation View</h1>
-          <p className="text-sm text-slate-400">
+          <h1 className="text-2xl font-semibold text-foreground">Corporation View</h1>
+          <p className="text-sm text-muted-foreground">
             Fleet visibility for Headquarters: registrations, role posture, and delegation bus status.
           </p>
         </div>
@@ -371,18 +371,18 @@ export default function DashboardCorporationPage() {
           <button
             type="button"
             onClick={() => void load(false)}
-            className="rounded-md border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
+            className="rounded-md border border-border bg-background/70 px-3 py-2 text-sm text-foreground hover:bg-card/70"
           >
             Refresh
           </button>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-muted-foreground">
             {refreshing ? "Refreshing..." : `Updated ${formatDateTimeTz(lastUpdatedAt || undefined, { placeholder: "--" })}`}
           </span>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-sm text-rose-200">
+        <div className="rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-400/80">
           {error}
         </div>
       )}
@@ -394,46 +394,46 @@ export default function DashboardCorporationPage() {
       )}
 
       {loading && !capabilities ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-4 text-sm text-slate-300">
+        <div className="rounded-lg border border-border bg-background/50 px-4 py-4 text-sm text-foreground/80">
           Loading fleet state...
         </div>
       ) : null}
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Factory Role</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{asText(capabilities?.factory_role) || "--"}</div>
-          <div className="mt-1 text-xs text-slate-400">Gateway mode: {asText(capabilities?.gateway_mode) || "--"}</div>
+        <div className="rounded-xl border border-border bg-background/50 p-4">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Factory Role</div>
+          <div className="mt-2 text-lg font-semibold text-foreground">{asText(capabilities?.factory_role) || "--"}</div>
+          <div className="mt-1 text-xs text-muted-foreground">Gateway mode: {asText(capabilities?.gateway_mode) || "--"}</div>
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Fleet Size</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{registrations.length}</div>
+        <div className="rounded-xl border border-border bg-background/50 p-4">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Fleet Size</div>
+          <div className="mt-2 text-lg font-semibold text-foreground">{registrations.length}</div>
           <div className="mt-1 flex gap-3 text-xs">
-            <span className="text-emerald-400">{onlineCount} online</span>
+            <span className="text-primary">{onlineCount} online</span>
             {pausedCount > 0 && <span className="text-sky-400">{pausedCount} paused</span>}
-            {staleCount > 0 && <span className="text-amber-400">{staleCount} stale</span>}
-            {offlineCount > 0 && <span className="text-rose-400">{offlineCount} offline</span>}
+            {staleCount > 0 && <span className="text-accent">{staleCount} stale</span>}
+            {offlineCount > 0 && <span className="text-secondary">{offlineCount} offline</span>}
           </div>
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Delegation Bus</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">
+        <div className="rounded-xl border border-border bg-background/50 p-4">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Delegation Bus</div>
+          <div className="mt-2 text-lg font-semibold text-foreground">
             {delegation?.connected ? (
-              <span className="text-emerald-400">Connected</span>
+              <span className="text-primary">Connected</span>
             ) : delegation?.redis_enabled ? (
-              <span className="text-rose-400">Disconnected</span>
+              <span className="text-secondary">Disconnected</span>
             ) : (
-              <span className="text-slate-400">Disabled</span>
+              <span className="text-muted-foreground">Disabled</span>
             )}
           </div>
-          <div className="mt-1 text-xs text-slate-400">
+          <div className="mt-1 text-xs text-muted-foreground">
             Published: {Number.isFinite(delegation?.published_total) ? String(delegation?.published_total) : "0"}
           </div>
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Delegation Activity</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{delegationHistory.length}</div>
-          <div className="mt-1 text-xs text-slate-400">
+        <div className="rounded-xl border border-border bg-background/50 p-4">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Delegation Activity</div>
+          <div className="mt-2 text-lg font-semibold text-foreground">{delegationHistory.length}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
             Recent missions (last 24h)
           </div>
         </div>
@@ -445,14 +445,14 @@ export default function DashboardCorporationPage() {
         </section>
       ) : (
         <>
-          <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+          <section className="rounded-xl border border-border bg-background/50 p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold text-slate-100">Registered Factories</h2>
-              <div className="text-xs text-slate-400">HQ: {headquartersFactoryId || "--"}</div>
+              <h2 className="text-lg font-semibold text-foreground">Registered Factories</h2>
+              <div className="text-xs text-muted-foreground">HQ: {headquartersFactoryId || "--"}</div>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-sm">
-                <thead className="text-xs uppercase tracking-wide text-slate-400">
+                <thead className="text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
                     <th className="px-2 py-2">Factory</th>
                     <th className="px-2 py-2">Role</th>
@@ -467,7 +467,7 @@ export default function DashboardCorporationPage() {
                 <tbody>
                   {registrations.length === 0 ? (
                     <tr>
-                      <td className="px-2 py-4 text-slate-400" colSpan={8}>
+                      <td className="px-2 py-4 text-muted-foreground" colSpan={8}>
                         No registrations available.
                       </td>
                     </tr>
@@ -482,19 +482,19 @@ export default function DashboardCorporationPage() {
                       return (
                         <tr
                           key={`${row.factory_id}-${row.last_seen_at || ""}`}
-                          className="border-t border-slate-800/80 align-top cursor-pointer hover:bg-slate-800/30 transition-colors"
+                          className="border-t border-border/80 align-top cursor-pointer hover:bg-card/30 transition-colors"
                           onClick={() => setExpandedFactory(isExpanded ? null : row.factory_id)}
                         >
                           <td className="px-2 py-2">
-                            <div className="text-slate-200 font-medium">{asText(row.factory_id) || "--"}</div>
-                            <div className="text-xs text-slate-500">{asText(row.deployment_profile) || "--"}</div>
+                            <div className="text-foreground font-medium">{asText(row.factory_id) || "--"}</div>
+                            <div className="text-xs text-muted-foreground">{asText(row.deployment_profile) || "--"}</div>
                             {isExpanded && (
-                              <div className="mt-2 space-y-1 text-xs text-slate-400">
+                              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                                 <div>Source: {asText(row.source) || "--"}</div>
                                 <div>First seen: {formatDateTimeTz(asText(row.first_seen_at) || undefined, { placeholder: "--" })}</div>
                                 {policy && (
-                                  <div className="mt-2 rounded border border-slate-800 bg-slate-900/60 p-2">
-                                    <div className="mb-1 text-slate-500">Operational posture</div>
+                                  <div className="mt-2 rounded border border-border bg-background/60 p-2">
+                                    <div className="mb-1 text-muted-foreground">Operational posture</div>
                                     <div>Gateway: {asText(policy.gateway_mode) || "--"}</div>
                                     <div>Delegation: {asText(policy.delegation_mode) || "--"}</div>
                                     <div>Heartbeat scope: {asText(policy.heartbeat_scope) || "--"}</div>
@@ -511,8 +511,8 @@ export default function DashboardCorporationPage() {
                                 )}
                                 {Object.keys(meta).length > 0 && (
                                   <div className="mt-1">
-                                    <div className="text-slate-500 mb-1">Metadata:</div>
-                                    <pre className="rounded bg-slate-900 p-2 text-[10px] text-slate-400 overflow-x-auto max-w-xs">
+                                    <div className="text-muted-foreground mb-1">Metadata:</div>
+                                    <pre className="rounded bg-background p-2 text-[10px] text-muted-foreground overflow-x-auto max-w-xs">
                                       {JSON.stringify(meta, null, 2).slice(0, 500)}
                                     </pre>
                                   </div>
@@ -520,7 +520,7 @@ export default function DashboardCorporationPage() {
                               </div>
                             )}
                           </td>
-                          <td className="px-2 py-2 text-slate-300">{asText(row.factory_role) || "--"}</td>
+                          <td className="px-2 py-2 text-foreground/80">{asText(row.factory_role) || "--"}</td>
                           <td className="px-2 py-2">
                             <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusPill(asText(row.registration_status))}`}>
                               {asText(row.registration_status) || "--"}
@@ -534,33 +534,33 @@ export default function DashboardCorporationPage() {
                           <td className="px-2 py-2">
                             <div className="flex items-center gap-1.5">
                               <span className={`inline-block h-2 w-2 rounded-full ${
-                                ageSeconds === null ? "bg-slate-600" :
-                                ageSeconds < 120 ? "bg-emerald-500" :
-                                ageSeconds < 300 ? "bg-emerald-500/60" :
+                                ageSeconds === null ? "bg-muted" :
+                                ageSeconds < 120 ? "bg-primary" :
+                                ageSeconds < 300 ? "bg-primary/60" :
                                 ageSeconds < 900 ? "bg-amber-500" :
-                                "bg-rose-500"
+                                "bg-red-400"
                               }`} />
                               <span className={`text-xs ${freshnessColor(ageSeconds)}`}>
                                 {freshnessLabel(ageSeconds)}
                               </span>
                             </div>
                           </td>
-                          <td className="px-2 py-2 text-slate-400 text-xs">
+                          <td className="px-2 py-2 text-muted-foreground text-xs">
                             {formatDateTimeTz(asText(row.last_seen_at) || undefined, { placeholder: "--" })}
                           </td>
                           <td className="px-2 py-2">
                             <div className="flex max-w-xs flex-wrap gap-1">
                               {capabilityLabels.length === 0 ? (
-                                <span className="text-xs text-slate-500">--</span>
+                                <span className="text-xs text-muted-foreground">--</span>
                               ) : (
                                 capabilityLabels.slice(0, 8).map((label) => (
-                                  <span key={label} className="rounded border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 text-[10px] text-slate-300">
+                                  <span key={label} className="rounded border border-border bg-card/60 px-1.5 py-0.5 text-[10px] text-foreground/80">
                                     {label}
                                   </span>
                                 ))
                               )}
                               {capabilityLabels.length > 8 && (
-                                <span className="text-[10px] text-slate-500">+{capabilityLabels.length - 8}</span>
+                                <span className="text-[10px] text-muted-foreground">+{capabilityLabels.length - 8}</span>
                               )}
                             </div>
                           </td>
@@ -589,10 +589,10 @@ export default function DashboardCorporationPage() {
                                         }}
                                         className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
                                           isControlling
-                                            ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                            ? "border-border bg-card/50 text-muted-foreground cursor-wait"
                                             : isPaused
-                                              ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
-                                              : "border-amber-700/50 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
+                                              ? "border-primary/40 bg-primary/15 text-primary hover:bg-primary/25"
+                                              : "border-amber-700/50 bg-amber-900/30 text-accent hover:bg-amber-900/50"
                                         }`}
                                       >
                                         {isControlling ? "..." : isPaused ? "Resume Intake" : "Pause Intake"}
@@ -608,18 +608,18 @@ export default function DashboardCorporationPage() {
                                             }}
                                             className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
                                               isServiceControlling
-                                                ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                                ? "border-border bg-card/50 text-muted-foreground cursor-wait"
                                                 : localServiceActive
-                                                  ? "border-rose-700/50 bg-rose-900/30 text-rose-200 hover:bg-rose-900/50"
-                                                  : "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
+                                                  ? "border-red-400/30 bg-red-400/10 text-red-400/80 hover:bg-red-400/20"
+                                                  : "border-primary/40 bg-primary/15 text-primary hover:bg-primary/25"
                                             }`}
                                           >
                                             {isServiceControlling ? "..." : localServiceActive ? "Stop Local Factory" : "Start Local Factory"}
                                           </button>
-                                          <div className="text-[11px] text-slate-500">
+                                          <div className="text-[11px] text-muted-foreground">
                                             Service: {localServiceState || "unknown"}
                                           </div>
-                                          <div className="text-[11px] text-slate-500">
+                                          <div className="text-[11px] text-muted-foreground">
                                             Pause stops mission intake only. Stop turns off the local worker service to preserve desktop/API resources.
                                           </div>
                                         </>
@@ -635,13 +635,13 @@ export default function DashboardCorporationPage() {
                                         e.stopPropagation();
                                         void removeFactory(row.factory_id);
                                       }}
-                                      className="rounded-md border border-red-800/50 bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/40 disabled:cursor-wait disabled:opacity-50"
+                                      className="rounded-md border border-red-800/50 bg-red-900/20 px-2.5 py-1 text-xs font-medium text-red-400 transition-colors hover:bg-red-900/40 disabled:cursor-wait disabled:opacity-50"
                                     >
                                       {removingFactory === row.factory_id ? "Removing…" : "Remove"}
                                     </button>
                                   )}
                                   {isActiveHQ && (
-                                    <span className="text-[10px] text-slate-500 italic">Active HQ</span>
+                                    <span className="text-[10px] text-muted-foreground italic">Active HQ</span>
                                   )}
                                 </div>
                               );
@@ -657,11 +657,11 @@ export default function DashboardCorporationPage() {
           </section>
 
           {delegationHistory.length > 0 && (
-            <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-              <h2 className="mb-3 text-lg font-semibold text-slate-100">Delegation History</h2>
+            <section className="rounded-xl border border-border bg-background/50 p-4">
+              <h2 className="mb-3 text-lg font-semibold text-foreground">Delegation History</h2>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-left text-sm">
-                  <thead className="text-xs uppercase tracking-wide text-slate-400">
+                  <thead className="text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="px-2 py-2">Mission</th>
                       <th className="px-2 py-2">Type</th>
@@ -674,20 +674,20 @@ export default function DashboardCorporationPage() {
                   </thead>
                   <tbody>
                     {delegationHistory.map((m, idx) => (
-                      <tr key={m.mission_id || idx} className="border-t border-slate-800/80 align-top">
-                        <td className="px-2 py-2 text-slate-300 font-mono text-xs">{asText(m.mission_id).slice(0, 20) || "--"}</td>
-                        <td className="px-2 py-2 text-slate-300 text-xs">{asText(m.mission_type) || "--"}</td>
+                      <tr key={m.mission_id || idx} className="border-t border-border/80 align-top">
+                        <td className="px-2 py-2 text-foreground/80 font-mono text-xs">{asText(m.mission_id).slice(0, 20) || "--"}</td>
+                        <td className="px-2 py-2 text-foreground/80 text-xs">{asText(m.mission_type) || "--"}</td>
                         <td className="px-2 py-2">
                           <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${missionStatusPill(asText(m.status))}`}>
                             {asText(m.status) || "--"}
                           </span>
                         </td>
-                        <td className="px-2 py-2 text-slate-400 text-xs">{asText(m.vp_id) || "--"}</td>
-                        <td className="px-2 py-2 text-slate-400 text-xs">{asText(m.source) || "--"}</td>
-                        <td className="px-2 py-2 text-slate-400 text-xs">
+                        <td className="px-2 py-2 text-muted-foreground text-xs">{asText(m.vp_id) || "--"}</td>
+                        <td className="px-2 py-2 text-muted-foreground text-xs">{asText(m.source) || "--"}</td>
+                        <td className="px-2 py-2 text-muted-foreground text-xs">
                           {formatDateTimeTz(asText(m.created_at) || undefined, { placeholder: "--" })}
                         </td>
-                        <td className="px-2 py-2 text-slate-400 text-xs max-w-xs truncate">
+                        <td className="px-2 py-2 text-muted-foreground text-xs max-w-xs truncate">
                           {asText(m.objective).slice(0, 80) || "--"}
                         </td>
                       </tr>
@@ -699,11 +699,11 @@ export default function DashboardCorporationPage() {
           )}
 
           {systemTimers.length > 0 && (
-            <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-              <h2 className="mb-3 text-lg font-semibold text-slate-100">System Timers ({systemTimers.length})</h2>
+            <section className="rounded-xl border border-border bg-background/50 p-4">
+              <h2 className="mb-3 text-lg font-semibold text-foreground">System Timers ({systemTimers.length})</h2>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-left text-sm">
-                  <thead className="text-xs uppercase tracking-wide text-slate-400">
+                  <thead className="text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="px-2 py-2">Timer</th>
                       <th className="px-2 py-2">Next</th>
@@ -718,11 +718,11 @@ export default function DashboardCorporationPage() {
                       const last = asText(t.last || t.LAST || "");
                       const activates = asText(t.activates || t.ACTIVATES || "");
                       return (
-                        <tr key={unit || idx} className="border-t border-slate-800/80 align-top">
-                          <td className="px-2 py-2 text-slate-200 font-mono text-xs">{unit || "--"}</td>
-                          <td className="px-2 py-2 text-slate-400 text-xs">{next || "--"}</td>
-                          <td className="px-2 py-2 text-slate-400 text-xs">{last || "--"}</td>
-                          <td className="px-2 py-2 text-slate-400 text-xs">{activates || "--"}</td>
+                        <tr key={unit || idx} className="border-t border-border/80 align-top">
+                          <td className="px-2 py-2 text-foreground font-mono text-xs">{unit || "--"}</td>
+                          <td className="px-2 py-2 text-muted-foreground text-xs">{next || "--"}</td>
+                          <td className="px-2 py-2 text-muted-foreground text-xs">{last || "--"}</td>
+                          <td className="px-2 py-2 text-muted-foreground text-xs">{activates || "--"}</td>
                         </tr>
                       );
                     })}

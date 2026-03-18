@@ -944,17 +944,17 @@ export function SessionsSection({
             {showBackToHome && (
               <Link
                 href="/"
-                className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+                className="rounded-lg border border-primary/30 bg-primary/15 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-primary/90 hover:bg-primary/25"
               >
                 Back to Home
               </Link>
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
+            <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-accent/25 bg-accent/10 text-accent hover:bg-accent/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
             <button onClick={fetchSessions} className="text-[11px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻ Refresh"}</button>
             {selected && !isVpSelected && (
-              <button onClick={() => attachToChat(selected)} className="text-[11px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>
+              <button onClick={() => attachToChat(selected)} className="text-[11px] px-2 py-1 rounded border bg-primary/10 text-primary hover:bg-primary/20" disabled={attaching}>
                 {attaching ? "Attaching..." : "Open Chat"}
               </button>
             )}
@@ -972,7 +972,7 @@ export function SessionsSection({
         <div className="font-semibold mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span>{isFull ? "Session List" : "Sessions"}</span>
-            <span className="text-[10px] text-slate-500">tz: {DISPLAY_TIMEZONE}</span>
+            <span className="text-[10px] text-muted-foreground">tz: {DISPLAY_TIMEZONE}</span>
             {!isFull && (
               <>
                 <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
@@ -988,7 +988,7 @@ export function SessionsSection({
           </div>
           {!isFull && (
             <div className="flex items-center gap-1">
-              <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
+              <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-accent/25 bg-accent/10 text-accent hover:bg-accent/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
               <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
             </div>
           )}
@@ -1025,7 +1025,7 @@ export function SessionsSection({
             </div>
             <div className={`space-y-1 overflow-y-auto scrollbar-thin ${isFull ? "max-h-[62vh]" : "max-h-40"}`}>
               {sessionsError && (
-                <div className="text-[10px] text-amber-400 whitespace-pre-wrap">
+                <div className="text-[10px] text-accent whitespace-pre-wrap">
                   {sessionsError}
                 </div>
               )}
@@ -1060,26 +1060,26 @@ export function SessionsSection({
       {selected && (
         <>
           {isVpSelected && (
-            <div className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-2 text-[10px] uppercase tracking-wider text-rose-300">
+            <div className="rounded border border-red-400/25 bg-red-400/10 px-2 py-2 text-[10px] uppercase tracking-wider text-secondary">
               VP Observer Mode: This lane is controlled by Simone. Session actions are view-only.
             </div>
           )}
           <div className="border rounded bg-background/40 p-2">
             <div className="font-semibold mb-2">Session Actions</div>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={() => attachToChat(selected)} className="px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>{attaching ? "Attaching..." : isVpSelected ? "Open Observer Chat" : "Attach To Chat (Tail)"}</button>
+              <button onClick={() => attachToChat(selected)} className="px-2 py-1 rounded border bg-primary/10 text-primary hover:bg-primary/20" disabled={attaching}>{attaching ? "Attaching..." : isVpSelected ? "Open Observer Chat" : "Attach To Chat (Tail)"}</button>
               {!isVpSelected && (
                 <>
-                  <button onClick={() => cancelSession(selected)} className="px-2 py-1 rounded border bg-orange-500/10 text-orange-500 hover:bg-orange-500/20">Cancel Run</button>
+                  <button onClick={() => cancelSession(selected)} className="px-2 py-1 rounded border bg-accent/10 text-accent hover:bg-accent/20">Cancel Run</button>
                   <button onClick={() => archiveSession(selected)} className="px-2 py-1 rounded border bg-sky-500/10 text-sky-500 hover:bg-sky-500/20">Archive</button>
-                  <button onClick={() => compactLogs(selected)} className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">Compact Logs</button>
-                  <button onClick={() => resetSession(selected)} className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20">Reset</button>
+                  <button onClick={() => compactLogs(selected)} className="px-2 py-1 rounded border bg-primary/10 text-primary hover:bg-primary/20">Compact Logs</button>
+                  <button onClick={() => resetSession(selected)} className="px-2 py-1 rounded border bg-accent/10 text-accent hover:bg-accent/20">Reset</button>
                   <button onClick={() => deleteSession(selected)} className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20">Delete</button>
                 </>
               )}
             </div>
             {isVpSelected && (
-              <div className="mt-2 text-[10px] text-slate-400">
+              <div className="mt-2 text-[10px] text-muted-foreground">
                 Direct control actions are disabled for VP sessions. Use the primary Simone chat to request CODIE changes.
               </div>
             )}
@@ -1091,10 +1091,10 @@ export function SessionsSection({
             const reason = sel.rehydrate_reason || "";
             if (ready) {
               return (
-                <div className="rounded border border-emerald-700/40 bg-emerald-900/10 px-2 py-1.5 text-[10px] text-emerald-300 flex items-center gap-1.5">
+                <div className="rounded border border-primary/30/40 bg-primary/10 px-2 py-1.5 text-[10px] text-primary flex items-center gap-1.5">
                   <span>&#10003;</span> Session rehydrate ready ({reason.replace(/_/g, " ")})
                   {sel.has_checkpoint && sel.checkpoint_tasks_completed != null && (
-                    <span className="text-emerald-400/70 ml-1">
+                    <span className="text-primary/70 ml-1">
                       &middot; {sel.checkpoint_tasks_completed} tasks, {sel.checkpoint_artifacts_count ?? 0} artifacts
                     </span>
                   )}
@@ -1109,14 +1109,14 @@ export function SessionsSection({
             };
             const parts = reason.split("; ").filter(Boolean);
             return (
-              <div className="rounded border border-amber-700/40 bg-amber-900/10 px-2 py-2 text-[10px] text-amber-300 space-y-1">
+              <div className="rounded border border-amber-700/40 bg-amber-900/10 px-2 py-2 text-[10px] text-accent space-y-1">
                 <div className="font-semibold">Session cannot be rehydrated</div>
                 <ul className="list-disc list-inside text-amber-200/80 space-y-0.5">
                   {parts.map((p) => (
                     <li key={p}>{hints[p] || p.replace(/_/g, " ")}</li>
                   ))}
                 </ul>
-                <div className="text-amber-400/60 mt-1">
+                <div className="text-accent/60 mt-1">
                   Next action: Run the session once to generate a checkpoint, or create a MEMORY.md file in the workspace.
                 </div>
               </div>
@@ -1137,14 +1137,14 @@ export function SessionsSection({
           </div>
           <div className="border rounded bg-background/40 p-2 space-y-2">
             <div className="font-semibold">Delivery Workflow</div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-[10px] text-muted-foreground">
               Choose how to handle this CODIE output: promote, continue iteration, or archive as draft.
             </div>
             {deliveryLoading && (
-              <div className="text-[10px] text-slate-500">Loading thread state...</div>
+              <div className="text-[10px] text-muted-foreground">Loading thread state...</div>
             )}
             {selectedDecision && (
-              <div className="rounded border border-cyan-700/40 bg-cyan-900/10 px-2 py-1 text-[10px] text-cyan-200">
+              <div className="rounded border border-primary/30/40 bg-primary/10 px-2 py-1 text-[10px] text-primary/80">
                 Current: <span className="font-semibold uppercase">{selectedDecision.decision || "pending"}</span>
                 {" · "}
                 {selectedDecision.updated_at ? formatDateTimeTz(selectedDecision.updated_at) : "recent"}
@@ -1156,7 +1156,7 @@ export function SessionsSection({
                 type="button"
                 onClick={() => selected && recordDeliveryDecision(selected, "promote")}
                 disabled={!selected || isVpSelected || deliveryDecisionBusy}
-                className="px-2 py-1 rounded border bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+                className="px-2 py-1 rounded border bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50"
               >
                 Promote Now
               </button>
@@ -1164,7 +1164,7 @@ export function SessionsSection({
                 type="button"
                 onClick={() => selected && recordDeliveryDecision(selected, "iterate")}
                 disabled={!selected || deliveryDecisionBusy}
-                className="px-2 py-1 rounded border bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50"
+                className="px-2 py-1 rounded border bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50"
               >
                 Open Iteration
               </button>
@@ -1172,7 +1172,7 @@ export function SessionsSection({
                 type="button"
                 onClick={() => selected && recordDeliveryDecision(selected, "archive")}
                 disabled={!selected || isVpSelected || deliveryDecisionBusy}
-                className="px-2 py-1 rounded border bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50"
+                className="px-2 py-1 rounded border bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
               >
                 Archive Draft
               </button>
@@ -1184,12 +1184,12 @@ export function SessionsSection({
               className="w-full rounded border border-border/60 bg-card/40 px-2 py-1.5 text-[11px] min-h-16"
             />
             {isVpSelected && (
-              <div className="text-[10px] text-rose-300">
+              <div className="text-[10px] text-secondary">
                 VP lane is observer-only. Use Simone chat to execute promote/archive actions.
               </div>
             )}
             {deliveryStatus && (
-              <div className="text-[10px] text-emerald-300">{deliveryStatus}</div>
+              <div className="text-[10px] text-primary">{deliveryStatus}</div>
             )}
           </div>
         </>
@@ -1401,11 +1401,11 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
     // Heartbeat should read as low-stakes background activity (light blue),
     // not an error condition (red).
     if (event.source === "heartbeat") return "bg-sky-500/15 border-sky-400/40 text-sky-200";
-    if (event.status === "missed") return "bg-amber-500/20 border-amber-500/50 text-amber-300";
-    if (event.status === "failed") return "bg-rose-500/20 border-rose-500/50 text-rose-300";
-    if (event.status === "success") return "bg-emerald-500/20 border-emerald-500/50 text-emerald-300";
-    if (event.status === "disabled") return "bg-slate-500/20 border-slate-500/50 text-slate-300";
-    return "bg-blue-500/20 border-blue-500/50 text-blue-200";
+    if (event.status === "missed") return "bg-accent/20 border-accent/50 text-accent";
+    if (event.status === "failed") return "bg-red-400/20 border-red-400/30 text-secondary";
+    if (event.status === "success") return "bg-primary/20 border-primary/30 text-primary";
+    if (event.status === "disabled") return "bg-muted-foreground/20 border-muted-foreground/50 text-foreground/80";
+    return "bg-primary/20 border-primary/50 text-primary/80";
   };
 
   const shiftWindow = (days: number) => {
@@ -1442,13 +1442,13 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
           </span>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-sky-400/80" />heartbeat</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-500/80" />scheduled</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-emerald-500/80" />success</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-rose-500/80" />failed</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-primary/80" />scheduled</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-primary/80" />success</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-400/80" />failed</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-amber-500/80" />missed</span>
           </div>
         </div>
-        {error && <div className="text-[10px] text-rose-400">{error}</div>}
+        {error && <div className="text-[10px] text-secondary">{error}</div>}
       </div>
 
       <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
@@ -1476,7 +1476,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
             const ev = entry.event;
             if (!ev) return null;
             return (
-              <div key={entry.event_id || ev.event_id} className="rounded border border-amber-500/40 bg-amber-500/10 p-2">
+              <div key={entry.event_id || ev.event_id} className="rounded border border-accent/40 bg-accent/10 p-2">
                 <div className="font-semibold text-amber-200">{ev.title}</div>
                 <div className="text-[10px] text-amber-100/90">
                   missed at {formatDateTimeTz(ev.scheduled_at_local, { timeZone: tz })} • status: {entry.status || "pending"}
@@ -1680,13 +1680,13 @@ export function SkillsSection({ variant = "compact" }: { variant?: SectionVarian
                 key={s.name}
                 onClick={() => { setSelectedSkill(s); setShowList(false); }}
                 className={`w-full text-left p-2 rounded-lg border transition-all ${selectedSkill?.name === s.name
-                  ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200"
-                  : "border-transparent hover:bg-slate-800/40 text-slate-400"
+                  ? "border-primary/30 bg-primary/10 text-primary/80"
+                  : "border-transparent hover:bg-card/40 text-muted-foreground"
                   }`}
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium truncate">{s.name}</span>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${s.enabled && s.available ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" : "bg-amber-500/10 text-amber-500 border border-amber-500/20"}`}>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${s.enabled && s.available ? "bg-primary/10 text-primary border border-primary/15" : "bg-accent/10 text-accent border border-accent/20"}`}>
                     {s.enabled && s.available ? "active" : "disabled"}
                   </span>
                 </div>
@@ -1694,14 +1694,14 @@ export function SkillsSection({ variant = "compact" }: { variant?: SectionVarian
             ))}
           </div>
         )}
-        <div className="flex-1 overflow-y-auto p-4 bg-slate-950/30">
+        <div className="flex-1 overflow-y-auto p-4 bg-background/30">
           {loadingDoc ? (
-            <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Loading documentation...</div>
+            <div className="h-full flex items-center justify-center text-muted-foreground text-xs italic">Loading documentation...</div>
           ) : docContent ? (
             <article className="prose prose-invert prose-sm max-w-none">
-              <div className="mb-4 flex items-center justify-between border-b border-slate-800 pb-2">
-                <h3 className="text-lg font-bold text-slate-100 m-0">{selectedSkill?.name} Documentation</h3>
-                <span className="text-[10px] text-slate-500 font-mono">SKILL.md</span>
+              <div className="mb-4 flex items-center justify-between border-b border-border pb-2">
+                <h3 className="text-lg font-bold text-foreground m-0">{selectedSkill?.name} Documentation</h3>
+                <span className="text-[10px] text-muted-foreground font-mono">SKILL.md</span>
               </div>
               <div className="markdown-content">
                 {(() => {
@@ -1726,22 +1726,22 @@ export function SkillsSection({ variant = "compact" }: { variant?: SectionVarian
                           code: ({ node, className, children, ...props }: any) => {
                             const match = /language-(\w+)/.exec(className || '')
                             return match ? (
-                              <div className="bg-slate-900 rounded p-2 my-2 border border-slate-700 overflow-x-auto">
+                              <div className="bg-background rounded p-2 my-2 border border-border overflow-x-auto">
                                 <code className={className} {...props}>
                                   {children}
                                 </code>
                               </div>
                             ) : (
-                              <code className="bg-slate-800 px-1 py-0.5 rounded text-cyan-300 font-mono text-sm" {...props}>
+                              <code className="bg-card px-1 py-0.5 rounded text-primary font-mono text-sm" {...props}>
                                 {children}
                               </code>
                             )
                           },
                           pre: ({ node, ...props }: any) => <div {...props} />, // let code component handle styling
-                          table: ({ node, ...props }: any) => <table className="border-collapse border border-slate-700 w-full mb-4" {...props} />,
-                          th: ({ node, ...props }: any) => <th className="border border-slate-700 p-2 bg-slate-800 text-slate-200 text-left" {...props} />,
-                          td: ({ node, ...props }: any) => <td className="border border-slate-700 p-2 text-slate-300" {...props} />,
-                          a: ({ node, ...props }: any) => <a className="text-cyan-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />
+                          table: ({ node, ...props }: any) => <table className="border-collapse border border-border w-full mb-4" {...props} />,
+                          th: ({ node, ...props }: any) => <th className="border border-border p-2 bg-card text-foreground text-left" {...props} />,
+                          td: ({ node, ...props }: any) => <td className="border border-border p-2 text-foreground/80" {...props} />,
+                          a: ({ node, ...props }: any) => <a className="text-primary hover:underline" target="_blank" rel="noopener noreferrer" {...props} />
                         }}
                       >
                         {finalContent}
@@ -1754,7 +1754,7 @@ export function SkillsSection({ variant = "compact" }: { variant?: SectionVarian
               </div>
             </article>
           ) : (
-            <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Select a skill to view details.</div>
+            <div className="h-full flex items-center justify-center text-muted-foreground text-xs italic">Select a skill to view details.</div>
           )}
         </div>
       </div>
@@ -1778,7 +1778,7 @@ export function ChannelsSection({ variant = "compact" }: { variant?: SectionVari
             <div key={ch.id} className="border rounded px-2 py-1 bg-background/50">
               <div className="flex items-center justify-between">
                 <span className="font-mono">{ch.id}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${ch.enabled ? "bg-emerald-500/10 text-emerald-500" : "bg-amber-500/10 text-amber-500"}`}>{ch.enabled ? "enabled" : "disabled"}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${ch.enabled ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>{ch.enabled ? "enabled" : "disabled"}</span>
               </div>
               <div className="text-[10px] text-muted-foreground">{ch.note}</div>
               <div className="flex items-center justify-between mt-1">
@@ -1815,8 +1815,8 @@ export function ApprovalsSection({ variant = "compact" }: { variant?: SectionVar
               {a.summary && <div className="text-[10px] text-muted-foreground">{a.summary}</div>}
               {a.status === "pending" && (
                 <div className="flex gap-2 mt-2">
-                  <button type="button" className="text-[10px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500" onClick={() => updateApproval(a.approval_id, "approved")}>Approve</button>
-                  <button type="button" className="text-[10px] px-2 py-1 rounded border bg-amber-500/10 text-amber-500" onClick={() => updateApproval(a.approval_id, "rejected")}>Reject</button>
+                  <button type="button" className="text-[10px] px-2 py-1 rounded border bg-primary/10 text-primary" onClick={() => updateApproval(a.approval_id, "approved")}>Approve</button>
+                  <button type="button" className="text-[10px] px-2 py-1 rounded border bg-accent/10 text-accent" onClick={() => updateApproval(a.approval_id, "rejected")}>Reject</button>
                 </div>
               )}
             </div>
@@ -1865,7 +1865,7 @@ export function SystemEventsSection({ variant = "compact" }: { variant?: Section
                 key={ev.id}
                 type="button"
                 onClick={() => setSelectedEventId(ev.id)}
-                className={`w-full border rounded px-2 py-1 bg-background/50 text-left ${selectedEventId === ev.id ? "border-cyan-500/60" : "border-border/50"}`}
+                className={`w-full border rounded px-2 py-1 bg-background/50 text-left ${selectedEventId === ev.id ? "border-primary/40" : "border-border/50"}`}
               >
                 <div className="flex justify-between text-[10px] text-muted-foreground">
                   <span>{ev.event_type}</span>
@@ -1877,11 +1877,11 @@ export function SystemEventsSection({ variant = "compact" }: { variant?: Section
           </div>
           {isFull && (
             <div className="rounded border border-border/60 bg-background/50 p-2 min-h-[180px]">
-              <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-400">Payload</div>
+              <div className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground">Payload</div>
               {selectedEvent ? (
                 <pre className="text-[11px] whitespace-pre-wrap font-mono max-h-[55vh] overflow-auto">{JSON.stringify(selectedEvent.payload || {}, null, 2)}</pre>
               ) : (
-                <div className="text-slate-500 text-[11px]">Select an event to inspect payload.</div>
+                <div className="text-muted-foreground text-[11px]">Select an event to inspect payload.</div>
               )}
             </div>
           )}
@@ -1950,7 +1950,7 @@ export function OpsConfigSection({ variant = "compact" }: { variant?: SectionVar
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${remoteSyncEnabled ? "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"}`}
+              className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${remoteSyncEnabled ? "bg-primary/10 text-primary hover:bg-primary/20" : "bg-accent/10 text-accent hover:bg-accent/20"}`}
               onClick={() => setRemoteSync(!remoteSyncEnabled)}
               disabled={remoteSyncSaving}
             >
@@ -1968,14 +1968,14 @@ export function OpsConfigSection({ variant = "compact" }: { variant?: SectionVar
           {remoteSyncError && <div className="text-[10px] text-red-500 mt-2">{remoteSyncError}</div>}
 
           <div className="mt-4 pt-3 border-t border-border/40">
-            <div className="font-semibold text-rose-400 mb-1">Danger Zone</div>
+            <div className="font-semibold text-secondary mb-1">Danger Zone</div>
             <div className="text-[10px] text-muted-foreground mb-2">
               Permanently delete all session workspaces and artifacts on the remote server.
               This does not affect your local files.
             </div>
             <button
               type="button"
-              className="text-xs px-2 py-1 rounded border border-rose-500/50 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
+              className="text-xs px-2 py-1 rounded border border-red-400/30 bg-red-400/10 text-secondary hover:bg-red-400/20 transition-colors disabled:opacity-50"
               onClick={purgeRemoteData}
               disabled={remoteSyncSaving || purgeRemoteSaving}
             >
@@ -2032,7 +2032,7 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
   const runtimeStatus = metrics.runtime_status || "--";
 
   return (
-    <div className={isFull ? "rounded-xl border border-slate-800 bg-slate-900/70" : `flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
+    <div className={isFull ? "rounded-xl border border-border bg-background/70" : `flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
       <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => !isFull && setIsCollapsed(!isCollapsed)}>
         <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
           <span className="text-primary/60">📈</span> Continuity
@@ -2057,13 +2057,13 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Runtime status</span>
-            <span className={`font-mono text-[11px] ${runtimeStatus === "degraded" ? "text-rose-500" : "text-emerald-500"}`}>
+            <span className={`font-mono text-[11px] ${runtimeStatus === "degraded" ? "text-red-400" : "text-primary"}`}>
               {runtimeStatus}
             </span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Transport status</span>
-            <span className={`font-mono text-[11px] ${transportStatus === "degraded" ? "text-amber-500" : "text-emerald-500"}`}>
+            <span className={`font-mono text-[11px] ${transportStatus === "degraded" ? "text-accent" : "text-primary"}`}>
               {transportStatus}
             </span>
           </div>
@@ -2080,7 +2080,7 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
           <div className="flex justify-between"><span className="text-muted-foreground">Dupes prevented (lifetime)</span><span className="font-mono text-[11px]">{metrics.duplicate_turn_prevention_count ?? 0}</span></div>
           <div className="flex justify-between"><span className="text-muted-foreground">Sessions created (lifetime)</span><span className="font-mono text-[11px]">{metrics.sessions_created ?? 0}</span></div>
           {alerts.length > 0 && (
-            <div className="text-[10px] text-amber-500 space-y-1 pt-1">
+            <div className="text-[10px] text-accent space-y-1 pt-1">
               {alerts.slice(0, 4).map((alert, idx) => (
                 <div key={`${alert.code || "alert"}-${idx}`}>{alert.message || alert.code || "continuity alert"}{alert.scope ? ` (${alert.scope})` : ""}</div>
               ))}
@@ -2092,7 +2092,7 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
             </div>
           )}
           {continuityState.error && (
-            <div className="text-[10px] text-amber-500">{continuityState.error}</div>
+            <div className="text-[10px] text-accent">{continuityState.error}</div>
           )}
         </div>
       )}
@@ -2166,11 +2166,11 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
   const statusDot = (ts?: string | null, status?: string) => {
     if (status === "active" || status === "idle") {
       const age = ageSeconds(ts);
-      if (age < 120) return "bg-emerald-500";
+      if (age < 120) return "bg-primary";
       if (age < 300) return "bg-amber-500";
-      return "bg-rose-500";
+      return "bg-red-400";
     }
-    return "bg-slate-600";
+    return "bg-muted";
   };
 
   /* ── Deduplicate: VP sessions are the primary view, remove matching session HBs ── */
@@ -2179,7 +2179,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
   const totalSources = vpSessions.length + standaloneHbs.length;
   const healthyCount = vpSessions.filter((v) => ageSeconds(v.last_heartbeat_at) < 300).length + standaloneHbs.filter((h) => ageSeconds(h.last_run) < 300).length;
   const overallStatus = loading ? "loading" : totalSources === 0 ? "no sources" : healthyCount === totalSources ? "healthy" : healthyCount > 0 ? "degraded" : "offline";
-  const overallColor = overallStatus === "healthy" ? "text-emerald-400" : overallStatus === "degraded" ? "text-amber-400" : overallStatus === "offline" ? "text-rose-400" : "text-slate-400";
+  const overallColor = overallStatus === "healthy" ? "text-primary" : overallStatus === "degraded" ? "text-accent" : overallStatus === "offline" ? "text-secondary" : "text-muted-foreground";
 
   /* ── Render ────────────────────────────────────────────────────────── */
   if (!isFull) {
@@ -2209,7 +2209,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
                 <span className="text-[10px] text-muted-foreground">{ageLabel(h.last_run)}</span>
               </div>
             ))}
-            {error && <div className="text-[10px] text-amber-500">{error}</div>}
+            {error && <div className="text-[10px] text-accent">{error}</div>}
           </div>
         )}
       </div>
@@ -2234,17 +2234,17 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
 
         {/* Summary bar */}
         <div className="grid grid-cols-3 gap-3 text-center">
-          <div className="rounded-lg border bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500">Total Sources</p>
-            <p className="text-2xl font-bold text-slate-200">{totalSources}</p>
+          <div className="rounded-lg border bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total Sources</p>
+            <p className="text-2xl font-bold text-foreground">{totalSources}</p>
           </div>
-          <div className="rounded-lg border bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500">Healthy</p>
-            <p className={`text-2xl font-bold ${healthyCount === totalSources ? "text-emerald-400" : "text-amber-400"}`}>{healthyCount}</p>
+          <div className="rounded-lg border bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Healthy</p>
+            <p className={`text-2xl font-bold ${healthyCount === totalSources ? "text-primary" : "text-accent"}`}>{healthyCount}</p>
           </div>
-          <div className="rounded-lg border bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500">Stale / Offline</p>
-            <p className={`text-2xl font-bold ${totalSources - healthyCount > 0 ? "text-rose-400" : "text-slate-500"}`}>{totalSources - healthyCount}</p>
+          <div className="rounded-lg border bg-background/50 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Stale / Offline</p>
+            <p className={`text-2xl font-bold ${totalSources - healthyCount > 0 ? "text-secondary" : "text-muted-foreground"}`}>{totalSources - healthyCount}</p>
           </div>
         </div>
 
@@ -2255,7 +2255,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
         {/* VP Fleet Workers */}
         {vpSessions.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">VP Fleet Workers</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">VP Fleet Workers</h3>
             <div className="grid gap-2 md:grid-cols-2">
               {vpSessions.map((vp) => {
                 const age = ageSeconds(vp.last_heartbeat_at);
@@ -2265,27 +2265,27 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
                 return (
                   <div
                     key={vp.vp_id}
-                    className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300 cursor-pointer hover:border-cyan-500/50 transition-colors"
+                    className="rounded-lg border bg-background/50 p-4 text-xs text-foreground/80 cursor-pointer hover:border-primary/30 transition-colors"
                     onClick={() => vp.session_id && openOrFocusChatWindow({ sessionId: vp.session_id, attachMode: "tail" })}
                     title={vp.session_id ? `Open session ${vp.session_id}` : vp.vp_id}
                   >
                     <div className="flex items-center justify-between mb-3">
-                      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{vp.vp_id}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">{vp.vp_id}</span>
                       <div className="flex items-center gap-1.5">
                         <span className={`inline-block h-2 w-2 rounded-full ${dot}`} />
-                        <span className={`text-[11px] font-semibold uppercase ${age < 120 ? "text-emerald-400" : age < 300 ? "text-amber-400" : "text-rose-400"}`}>{workerStatus}</span>
+                        <span className={`text-[11px] font-semibold uppercase ${age < 120 ? "text-primary" : age < 300 ? "text-accent" : "text-secondary"}`}>{workerStatus}</span>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
-                      <span className="text-slate-500">Session</span>
+                      <span className="text-muted-foreground">Session</span>
                       <span className="text-right font-mono text-[10px] truncate">{vp.session_id || "--"}</span>
-                      <span className="text-slate-500">Last Heartbeat</span>
+                      <span className="text-muted-foreground">Last Heartbeat</span>
                       <span className="text-right font-mono text-[10px]">{vp.last_heartbeat_at ? formatDateTimeTz(vp.last_heartbeat_at) : "--"}</span>
-                      <span className="text-slate-500">Age</span>
-                      <span className={`text-right font-mono text-[10px] ${age < 120 ? "text-emerald-300" : age < 300 ? "text-amber-300" : "text-rose-300"}`}>{ageLabel(vp.last_heartbeat_at)}</span>
+                      <span className="text-muted-foreground">Age</span>
+                      <span className={`text-right font-mono text-[10px] ${age < 120 ? "text-primary" : age < 300 ? "text-accent" : "text-secondary"}`}>{ageLabel(vp.last_heartbeat_at)}</span>
                       {Number.isFinite(leaseSeconds) && (<>
-                        <span className="text-slate-500">Lease TTL</span>
-                        <span className={`text-right font-mono text-[10px] ${leaseSeconds < 30 ? "text-rose-300" : leaseSeconds < 60 ? "text-amber-300" : "text-emerald-300"}`}>{Math.round(leaseSeconds)}s</span>
+                        <span className="text-muted-foreground">Lease TTL</span>
+                        <span className={`text-right font-mono text-[10px] ${leaseSeconds < 30 ? "text-secondary" : leaseSeconds < 60 ? "text-accent" : "text-primary"}`}>{Math.round(leaseSeconds)}s</span>
                       </>)}
                     </div>
                   </div>
@@ -2298,7 +2298,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
         {/* Per-Session Heartbeats */}
         {standaloneHbs.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Session Heartbeats</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Session Heartbeats</h3>
             <div className="grid gap-2 md:grid-cols-2">
               {standaloneHbs.map((h) => {
                 const age = ageSeconds(h.last_run);
@@ -2306,7 +2306,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
                 return (
                   <div
                     key={h.session_id}
-                    className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300 cursor-pointer hover:border-cyan-500/50 transition-colors"
+                    className="rounded-lg border bg-background/50 p-4 text-xs text-foreground/80 cursor-pointer hover:border-primary/30 transition-colors"
                     onClick={() => openOrFocusChatWindow({ sessionId: h.session_id, attachMode: "tail" })}
                     title={`Open session ${h.session_id}`}
                   >
@@ -2314,15 +2314,15 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
                       <span className="text-[10px] font-mono truncate max-w-[200px]">{h.session_id}</span>
                       <div className="flex items-center gap-1.5">
                         <span className={`inline-block h-2 w-2 rounded-full ${dot}`} />
-                        <span className={`text-[11px] font-semibold ${h.busy ? "text-sky-400" : age < 300 ? "text-emerald-400" : "text-rose-400"}`}>{h.busy ? "running" : age < 300 ? "idle" : "stale"}</span>
+                        <span className={`text-[11px] font-semibold ${h.busy ? "text-sky-400" : age < 300 ? "text-primary" : "text-secondary"}`}>{h.busy ? "running" : age < 300 ? "idle" : "stale"}</span>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
-                      <span className="text-slate-500">Last Run</span>
+                      <span className="text-muted-foreground">Last Run</span>
                       <span className="text-right font-mono text-[10px]">{h.last_run ? formatDateTimeTz(h.last_run) : "--"}</span>
-                      <span className="text-slate-500">Age</span>
-                      <span className={`text-right font-mono text-[10px] ${age < 120 ? "text-emerald-300" : age < 300 ? "text-amber-300" : "text-rose-300"}`}>{ageLabel(h.last_run)}</span>
-                      <span className="text-slate-500">Busy</span>
+                      <span className="text-muted-foreground">Age</span>
+                      <span className={`text-right font-mono text-[10px] ${age < 120 ? "text-primary" : age < 300 ? "text-accent" : "text-secondary"}`}>{ageLabel(h.last_run)}</span>
+                      <span className="text-muted-foreground">Busy</span>
                       <span className="text-right font-mono text-[10px]">{h.busy ? "yes" : "no"}</span>
                     </div>
                   </div>
@@ -2332,7 +2332,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
           </div>
         )}
 
-        {error && <div className="text-xs text-amber-500 p-2 bg-amber-500/10 border border-amber-500/20 rounded">{error}</div>}
+        {error && <div className="text-xs text-accent p-2 bg-accent/10 border border-accent/20 rounded">{error}</div>}
       </div>
     </div>
   );

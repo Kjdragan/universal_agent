@@ -192,15 +192,15 @@ const KIND_EMOJI: Record<string, string> = {
 };
 
 const SEVERITY_STYLES: Record<string, string> = {
-  success: "border-emerald-600/50 bg-emerald-900/20 text-emerald-200",
-  error: "border-rose-600/50 bg-rose-900/20 text-rose-200",
+  success: "border-primary/30 bg-primary/10 text-primary/80",
+  error: "border-red-400/25 bg-red-400/10 text-red-400/80",
   warning: "border-amber-600/50 bg-amber-900/20 text-amber-200",
   info: "border-sky-600/50 bg-sky-900/20 text-sky-200",
 };
 
 const SEVERITY_DOTS: Record<string, string> = {
-  success: "bg-emerald-400",
-  error: "bg-rose-400",
+  success: "bg-primary",
+  error: "bg-red-400",
   warning: "bg-amber-400",
   info: "bg-sky-400",
 };
@@ -625,14 +625,14 @@ export default function DashboardTutorialsPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Tutorial Backlog</h1>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-muted-foreground">
             Review generated YouTube tutorial artifacts and optionally send them to Simone for fit analysis.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void load()}
-          className="rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs uppercase tracking-wider text-slate-200 hover:bg-slate-800/80"
+          className="rounded border border-border bg-background/60 px-3 py-2 text-xs uppercase tracking-wider text-foreground hover:bg-card/80"
         >
           {loading ? "Refreshing..." : "Refresh"}
         </button>
@@ -640,14 +640,14 @@ export default function DashboardTutorialsPage() {
 
       {/* ── Playlist Watcher Status ── */}
       {watcherStatus !== null && (
-        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+        <section className="rounded-xl border border-border bg-background/60 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-300">📺 Playlist Watcher</span>
+              <span className="text-sm font-semibold text-foreground/80">📺 Playlist Watcher</span>
               {watcherStatus.enabled ? (
-                <span className="rounded bg-emerald-900/60 border border-emerald-700/50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">Active</span>
+                <span className="rounded bg-primary/20 border border-primary/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">Active</span>
               ) : (
-                <span className="rounded bg-slate-800 border border-slate-700/50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-400">
+                <span className="rounded bg-card border border-border/50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
                   {watcherStatus.reason === "not_initialized" ? "Not Initialized" : "Disabled"}
                 </span>
               )}
@@ -657,7 +657,7 @@ export default function DashboardTutorialsPage() {
             </div>
             <div className="flex items-center gap-2">
               {pollResult && (
-                <span className={`text-[11px] ${pollResult.startsWith("Poll") ? "text-rose-300" : "text-emerald-300"}`}>
+                <span className={`text-[11px] ${pollResult.startsWith("Poll") ? "text-secondary" : "text-primary"}`}>
                   {pollResult}
                 </span>
               )}
@@ -673,16 +673,16 @@ export default function DashboardTutorialsPage() {
               )}
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
             {watcherStatus.playlist_id && (
-              <span>Playlist: <code className="text-slate-300">{watcherStatus.playlist_id}</code></span>
+              <span>Playlist: <code className="text-foreground/80">{watcherStatus.playlist_id}</code></span>
             )}
             {watcherStatus.poll_interval_seconds !== undefined && (
               <span>Interval: {watcherStatus.poll_interval_seconds}s</span>
             )}
             {watcherStatus.last_poll_at && (
               <span>
-                Last poll: <span className={watcherStatus.last_poll_ok === false ? "text-rose-300" : "text-slate-300"}>
+                Last poll: <span className={watcherStatus.last_poll_ok === false ? "text-secondary" : "text-foreground/80"}>
                   {timeAgo(watcherStatus.last_poll_at)}
                   {watcherStatus.last_poll_ok === false && " ✗"}
                 </span>
@@ -695,7 +695,7 @@ export default function DashboardTutorialsPage() {
               <span>Dispatched total: {watcherStatus.dispatched_total}</span>
             )}
             {watcherStatus.last_error && (
-              <span className="text-rose-300" title={watcherStatus.last_error}>Error: {watcherStatus.last_error.slice(0, 60)}</span>
+              <span className="text-secondary" title={watcherStatus.last_error}>Error: {watcherStatus.last_error.slice(0, 60)}</span>
             )}
           </div>
         </section>
@@ -703,10 +703,10 @@ export default function DashboardTutorialsPage() {
 
       {/* ── Pipeline Notifications ── */}
       {visibleNotifications.length > 0 && (
-        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+        <section className="rounded-xl border border-border bg-background/60 p-3">
           <div className="mb-2 flex items-center justify-between">
             <h2
-              className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400"
+              className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground"
               title="Shows the latest event per video — earlier events (Started, Processing) are collapsed when a final state (Ready, Failed) arrives"
             >
               Pipeline Notifications ({visibleNotifications.length})
@@ -716,14 +716,14 @@ export default function DashboardTutorialsPage() {
                 type="button"
                 onClick={() => void clearAllNotifications()}
                 disabled={clearingNotifications || visibleNotifications.length === 0}
-                className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                className="rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-red-400/80 hover:bg-red-400/20 disabled:opacity-50"
               >
                 {clearingNotifications ? "Deleting..." : "Delete All"}
               </button>
               <button
                 type="button"
                 onClick={() => setShowNotifications((v) => !v)}
-                className="text-[11px] text-slate-500 hover:text-slate-300"
+                className="text-[11px] text-muted-foreground hover:text-foreground/80"
               >
                 {showNotifications ? "Hide" : "Show"}
               </button>
@@ -761,19 +761,19 @@ export default function DashboardTutorialsPage() {
                         </p>
                       )}
                       {videoUrl && (
-                        <a href={videoUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 block text-[10px] text-cyan-300 underline underline-offset-2 opacity-80 hover:opacity-100">Watch video →</a>
+                        <a href={videoUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 block text-[10px] text-primary underline underline-offset-2 opacity-80 hover:opacity-100">Watch video →</a>
                       )}
                       {repoStorageHref && (
                         <Link
                           href={repoStorageHref}
-                          className="mt-0.5 block text-[10px] text-cyan-300 underline underline-offset-2 opacity-80 hover:opacity-100"
+                          className="mt-0.5 block text-[10px] text-primary underline underline-offset-2 opacity-80 hover:opacity-100"
                         >
                           Open VPS Repo →
                         </Link>
                       )}
                       {repoDir && !repoStorageHref && (
                         <p className="mt-0.5 truncate text-[10px] opacity-80">
-                          Repo: <span className="font-mono text-slate-100">{repoDir}</span>
+                          Repo: <span className="font-mono text-foreground">{repoDir}</span>
                         </p>
                       )}
                     </div>
@@ -783,7 +783,7 @@ export default function DashboardTutorialsPage() {
                       disabled={dismissingNotificationId === n.id || clearingNotifications}
                       title="Delete notification"
                       aria-label="Delete notification"
-                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded p-1 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded p-1 text-red-400/80 hover:bg-red-400/10 disabled:opacity-40"
                     >
                       <span aria-hidden="true">🗑</span>
                     </button>
@@ -796,33 +796,33 @@ export default function DashboardTutorialsPage() {
       )}
 
       {dispatchStatus && (
-        <div className="rounded border border-cyan-700/60 bg-cyan-900/20 px-3 py-2 text-sm text-cyan-100">
+        <div className="rounded border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary/90">
           {dispatchStatus}
         </div>
       )}
       {error && (
-        <div className="rounded border border-rose-700/60 bg-rose-900/20 px-3 py-2 text-sm text-rose-100">
+        <div className="rounded border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-400/80">
           {error}
         </div>
       )}
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <section className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">
             Processed Tutorial Runs ({runs.length})
           </h2>
           <button
             type="button"
             onClick={() => void deleteAllRuns()}
             disabled={deletingAllRuns || runs.length === 0}
-            className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+            className="rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-red-400/80 hover:bg-red-400/20 disabled:opacity-50"
           >
             {deletingAllRuns ? "Deleting..." : "Delete All"}
           </button>
         </div>
         <div className="space-y-3">
           {runs.length === 0 && (
-            <div className="rounded border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+            <div className="rounded border border-border bg-background/50 px-3 py-4 text-sm text-muted-foreground">
               No tutorial runs found yet.
             </div>
           )}
@@ -844,18 +844,18 @@ export default function DashboardTutorialsPage() {
             const hasCreateRepoScript = files.some((file) => asText(file.name).toLowerCase() === "create_new_repo.sh");
             const showCreateRepoAction = implRequired === true || (implRequired === undefined && hasCreateRepoScript);
             return (
-              <article key={runPath} className="group rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
+              <article key={runPath} className="group rounded-lg border border-border/80 bg-background/60 px-3 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <p className="text-sm font-semibold text-slate-100">
+                    <p className="text-sm font-semibold text-foreground">
                       {asText(run.title) || runPath}
                       {isNew && (
-                        <span className="ml-2 inline-block rounded bg-cyan-500/90 px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none text-slate-950">
+                        <span className="ml-2 inline-block rounded bg-primary/90 px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none text-primary-foreground">
                           NEW
                         </span>
                       )}
                     </p>
-                    <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                    <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                       <span>created={formatDate(run.created_at)}</span>
                       {implRequired !== undefined && (
                         <>
@@ -863,8 +863,8 @@ export default function DashboardTutorialsPage() {
                           <span
                             className={
                               implRequired
-                                ? "text-violet-300"
-                                : "text-slate-500"
+                                ? "text-secondary"
+                                : "text-muted-foreground"
                             }
                           >
                             {implRequired ? "🔧 Code Implementation" : "📝 Concept Only"}
@@ -877,7 +877,7 @@ export default function DashboardTutorialsPage() {
                         href={asText(run.video_url)}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="mt-1 inline-block text-xs text-cyan-300 underline underline-offset-2"
+                        className="mt-1 inline-block text-xs text-primary underline underline-offset-2"
                       >
                         Open Video
                       </a>
@@ -886,7 +886,7 @@ export default function DashboardTutorialsPage() {
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Link
                       href={viewHref}
-                      className="rounded border border-cyan-700/60 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/40"
+                      className="rounded border border-primary/30 bg-primary/12 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20"
                     >
                       View Results
                     </Link>
@@ -895,7 +895,7 @@ export default function DashboardTutorialsPage() {
                         href={sessionHref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="rounded border border-violet-700/60 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-100 hover:bg-violet-900/35"
+                        className="rounded border border-secondary/25 bg-secondary/10 px-2 py-1 text-[11px] text-secondary/80 hover:bg-secondary/20"
                       >
                         {latestJobStatus === "running" ? "Watch" : "Rehydrate"}
                       </a>
@@ -904,13 +904,13 @@ export default function DashboardTutorialsPage() {
                       type="button"
                       onClick={() => void dispatchToSimone(runPath)}
                       disabled={dispatchingRunPath === runPath || deletingRunPath === runPath || bootstrappingRunPath === runPath}
-                      className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-100 hover:bg-emerald-900/35 disabled:opacity-50"
+                      className="rounded border border-primary/30/60 bg-primary/10 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20 disabled:opacity-50"
                     >
                       {dispatchingRunPath === runPath ? "Queueing..." : "Send to Simone"}
                     </button>
                     {latestBootstrapStatus === "completed" || latestBootstrapStatus === "success" ? (
                       <div className="flex items-center gap-1.5">
-                        <span className="rounded border border-emerald-700/60 bg-emerald-900/40 px-2 py-1 text-[11px] text-emerald-100">
+                        <span className="rounded border border-primary/30/60 bg-primary/15 px-2 py-1 text-[11px] text-primary/90">
                           {latestBootstrapTarget === "local" ? "Repo Ready" : "Repo Ready on VPS"}
                         </span>
                         {latestBootstrapTarget === "local" && toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir)) && (
@@ -918,7 +918,7 @@ export default function DashboardTutorialsPage() {
                             href={toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir))}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="rounded border border-cyan-700/60 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/40"
+                            className="rounded border border-primary/30 bg-primary/12 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20"
                             title={asText(latestBootstrapJob?.repo_open_hint) || "Open local repository folder"}
                           >
                             Open Folder
@@ -927,7 +927,7 @@ export default function DashboardTutorialsPage() {
                         {latestBootstrapTarget !== "local" && asText(latestBootstrapJob?.repo_storage_href) && (
                           <Link
                             href={asText(latestBootstrapJob?.repo_storage_href)}
-                            className="rounded border border-cyan-700/60 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/40"
+                            className="rounded border border-primary/30 bg-primary/12 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20"
                             title={asText(latestBootstrapJob?.repo_storage_hint) || "Open repo in File Browser"}
                           >
                             Open in File Browser
@@ -936,7 +936,7 @@ export default function DashboardTutorialsPage() {
                         {asText(latestBootstrapJob?.repo_dir) && (
                           <div className="group relative flex items-center">
                             <span
-                              className="cursor-text select-all rounded bg-slate-800/80 border border-slate-700/50 px-1.5 py-0.5 text-[10px] font-mono text-slate-300"
+                              className="cursor-text select-all rounded bg-card/80 border border-border/50 px-1.5 py-0.5 text-[10px] font-mono text-foreground/80"
                               title="Copy this path to your terminal"
                             >
                               {asText(latestBootstrapJob!.repo_dir)}
@@ -955,7 +955,7 @@ export default function DashboardTutorialsPage() {
                           || bootstrapPending
                         }
                         className={`rounded border px-2 py-1 text-[11px] transition-colors disabled:opacity-50 ${bootstrapPending
-                            ? "border-amber-500 bg-amber-900/60 text-amber-200 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                            ? "border-accent bg-amber-900/60 text-amber-200 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.2)]"
                             : "border-amber-700/60 bg-amber-900/20 text-amber-100 hover:bg-amber-900/35"
                           }`}
                         title={
@@ -979,7 +979,7 @@ export default function DashboardTutorialsPage() {
                       disabled={deletingRunPath === runPath || dispatchingRunPath === runPath || bootstrappingRunPath === runPath || deletingAllRuns}
                       title="Delete this tutorial run"
                       aria-label="Delete this tutorial run"
-                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-40"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded border border-red-400/30 bg-red-400/10 px-2 py-1 text-[11px] text-red-400/80 hover:bg-red-400/20 disabled:opacity-40"
                     >
                       {deletingRunPath === runPath ? "Deleting..." : "🗑"}
                     </button>
@@ -1000,7 +1000,7 @@ export default function DashboardTutorialsPage() {
                           href={href}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="truncate rounded border border-slate-800 bg-slate-900/60 px-2 py-1 text-[11px] text-cyan-300 hover:bg-slate-800/70"
+                          className="truncate rounded border border-border bg-background/60 px-2 py-1 text-[11px] text-primary hover:bg-card/70"
                           title={relPath}
                         >
                           {label}
@@ -1010,13 +1010,13 @@ export default function DashboardTutorialsPage() {
                   </div>
                 )}
                 {latestJob && (
-                  <p className="mt-1.5 text-[11px] text-slate-400">
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
                     Latest Simone review job: {asText(latestJob.status) || "unknown"} ({formatDate(latestJob.queued_at)})
                   </p>
                 )}
                 {latestBootstrapJob && (
                   <p
-                    className={`mt-1 text-[11px] ${asText(latestBootstrapJob.error) ? "text-rose-300" : "text-slate-400"
+                    className={`mt-1 text-[11px] ${asText(latestBootstrapJob.error) ? "text-secondary" : "text-muted-foreground"
                       }`}
                     title={asText(latestBootstrapJob.error)}
                   >

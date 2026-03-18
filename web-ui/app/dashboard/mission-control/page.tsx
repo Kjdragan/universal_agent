@@ -87,23 +87,23 @@ function priorityText(priority?: number): string {
 function priorityColor(priority?: number): string {
   const p = Number(priority || 1);
   if (p >= 4) return "text-red-400 bg-red-500/10";
-  if (p === 3) return "text-orange-400 bg-orange-500/10";
-  if (p === 2) return "text-yellow-400 bg-yellow-500/10";
-  return "text-slate-400 bg-slate-500/10";
+  if (p === 3) return "text-accent bg-accent/10";
+  if (p === 2) return "text-accent bg-accent/10";
+  return "text-muted-foreground bg-muted-foreground/10";
 }
 
 function statusColor(status?: string): string {
   const s = (status || "").toLowerCase();
-  if (s === "completed" || s === "done") return "text-green-400 bg-green-500/10";
-  if (s === "in_progress" || s === "running") return "text-blue-400 bg-blue-500/10";
+  if (s === "completed" || s === "done") return "text-primary bg-primary/10";
+  if (s === "in_progress" || s === "running") return "text-primary bg-primary/10";
   if (s === "blocked" || s === "failed") return "text-red-400 bg-red-500/10";
-  if (s === "pending" || s === "queued") return "text-yellow-400 bg-yellow-500/10";
-  return "text-slate-400 bg-slate-500/10";
+  if (s === "pending" || s === "queued") return "text-accent bg-accent/10";
+  return "text-muted-foreground bg-muted-foreground/10";
 }
 
 // Loading skeleton component
 function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded bg-slate-700/50 ${className}`} />;
+  return <div className={`animate-pulse rounded bg-card/50/50 ${className}`} />;
 }
 
 // Coordinated refresh context -- single timer drives all panels
@@ -153,17 +153,17 @@ function ActiveTasksPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4 text-slate-400" />
-            <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-medium text-foreground/80">Active Tasks</h2>
           </div>
           <div className="flex items-center gap-2">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300"
+              className="rounded border border-border bg-card px-2 py-1 text-xs text-foreground/80"
             >
               <option value="all">All Status</option>
               <option value="pending">Pending</option>
@@ -171,7 +171,7 @@ function ActiveTasksPanel() {
               <option value="blocked">Blocked</option>
               <option value="completed">Completed</option>
             </select>
-            <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+            <span className="text-xs text-muted-foreground">{data?.pagination?.total || 0} total</span>
           </div>
         </div>
         <div className="space-y-3">
@@ -188,17 +188,17 @@ function ActiveTasksPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4 text-slate-400" />
-            <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-medium text-foreground/80">Active Tasks</h2>
           </div>
           <div className="flex items-center gap-2">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300"
+              className="rounded border border-border bg-card px-2 py-1 text-xs text-foreground/80"
             >
               <option value="all">All Status</option>
               <option value="pending">Pending</option>
@@ -206,15 +206,15 @@ function ActiveTasksPanel() {
               <option value="blocked">Blocked</option>
               <option value="completed">Completed</option>
             </select>
-            <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+            <span className="text-xs text-muted-foreground">{data?.pagination?.total || 0} total</span>
           </div>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-slate-500">{error}</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
           <button
             onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-600"
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -227,17 +227,17 @@ function ActiveTasksPanel() {
   const items = data?.items || [];
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">Active Tasks</h2>
+          <BarChart3 className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Active Tasks</h2>
         </div>
         <div className="flex items-center gap-2">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300"
+            className="rounded border border-border bg-card px-2 py-1 text-xs text-foreground/80"
           >
             <option value="all">All Status</option>
             <option value="pending">Pending</option>
@@ -245,13 +245,13 @@ function ActiveTasksPanel() {
             <option value="blocked">Blocked</option>
             <option value="completed">Completed</option>
           </select>
-          <span className="text-xs text-slate-500">{data?.pagination?.total || 0} total</span>
+          <span className="text-xs text-muted-foreground">{data?.pagination?.total || 0} total</span>
         </div>
       </div>
 
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-slate-500">No active tasks</p>
+          <p className="text-sm text-muted-foreground">No active tasks</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
@@ -259,13 +259,13 @@ function ActiveTasksPanel() {
             <Link
               key={item.task_id}
               href={`/dashboard/todolist?mode=agent&focus=${item.task_id}`}
-              className="block rounded-lg border border-slate-700/50 bg-slate-800/30 p-3 transition-colors hover:border-slate-600 hover:bg-slate-800/50"
+              className="block rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-200 leading-snug">{item.title}</p>
+                  <p className="text-sm font-medium text-foreground leading-snug">{item.title}</p>
                   {item.description && (
-                    <p className="mt-0.5 text-xs text-slate-500 leading-snug line-clamp-2">{item.description}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-2">{item.description}</p>
                   )}
                 </div>
               </div>
@@ -279,7 +279,7 @@ function ActiveTasksPanel() {
                   {priorityText(item.priority)}
                 </span>
                 {item.project_key && (
-                  <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400">
+                  <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
                     {item.project_key}
                   </span>
                 )}
@@ -322,13 +322,13 @@ function SystemStatusPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Activity className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">System Status</h2>
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
         </div>
         <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       </div>
     );
@@ -336,17 +336,17 @@ function SystemStatusPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Activity className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">System Status</h2>
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-slate-500">{error}</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
           <button
             onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-600"
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -359,31 +359,31 @@ function SystemStatusPanel() {
   const isHealthy = data?.status === "healthy";
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center gap-2">
-        <Activity className="h-4 w-4 text-slate-400" />
-        <h2 className="text-sm font-medium text-slate-300">System Status</h2>
+        <Activity className="h-4 w-4 text-muted-foreground" />
+        <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
       </div>
 
       <div className="space-y-4">
         {/* Gateway Status */}
-        <div className="flex items-center justify-between rounded-lg bg-slate-800/30 p-3">
+        <div className="flex items-center justify-between rounded-lg bg-card/30 p-3">
           <div className="flex items-center gap-3">
             {isHealthy ? (
-              <CheckCircle className="h-6 w-6 text-green-400" />
+              <CheckCircle className="h-6 w-6 text-primary" />
             ) : (
               <XCircle className="h-6 w-6 text-red-400" />
             )}
             <div>
-              <p className="text-sm font-medium text-slate-200">Gateway</p>
-              <p className="text-xs text-slate-500">
+              <p className="text-sm font-medium text-foreground">Gateway</p>
+              <p className="text-xs text-muted-foreground">
                 {isHealthy ? "All systems operational" : "System issues detected"}
               </p>
             </div>
           </div>
           <span
             className={`rounded px-2 py-1 text-xs font-medium ${
-              isHealthy ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
+              isHealthy ? "bg-primary/10 text-primary" : "bg-red-500/10 text-red-400"
             }`}
           >
             {data?.status || "unknown"}
@@ -392,16 +392,16 @@ function SystemStatusPanel() {
 
         {/* Database Status */}
         {data?.db_status && (
-          <div className="flex items-center justify-between rounded-lg bg-slate-800/30 p-3">
+          <div className="flex items-center justify-between rounded-lg bg-card/30 p-3">
             <div className="flex items-center gap-3">
               {data.db_status === "connected" ? (
-                <CheckCircle className="h-5 w-5 text-green-400" />
+                <CheckCircle className="h-5 w-5 text-primary" />
               ) : (
                 <XCircle className="h-5 w-5 text-red-400" />
               )}
               <div>
-                <p className="text-sm text-slate-200">Database</p>
-                <p className="text-xs text-slate-500">
+                <p className="text-sm text-foreground">Database</p>
+                <p className="text-xs text-muted-foreground">
                   {data.db_error || data.db_status}
                 </p>
               </div>
@@ -409,7 +409,7 @@ function SystemStatusPanel() {
             <span
               className={`rounded px-2 py-1 text-xs ${
                 data.db_status === "connected"
-                  ? "bg-green-500/10 text-green-400"
+                  ? "bg-primary/10 text-primary"
                   : "bg-red-500/10 text-red-400"
               }`}
             >
@@ -420,7 +420,7 @@ function SystemStatusPanel() {
 
         {/* Last Check */}
         {data?.timestamp && (
-          <div className="text-center text-xs text-slate-500">
+          <div className="text-center text-xs text-muted-foreground">
             Last checked: {formatTs(data.timestamp)}
           </div>
         )}
@@ -480,10 +480,10 @@ function RecentEventsPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Clock className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">Recent Events</h2>
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
         </div>
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -499,17 +499,17 @@ function RecentEventsPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Clock className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">Recent Events</h2>
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-slate-500">{error}</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
           <button
             onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-600"
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -535,18 +535,18 @@ function RecentEventsPanel() {
     : allItems;
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">Recent Events</h2>
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">{data?.eligible_total || 0} eligible</span>
+          <span className="text-xs text-muted-foreground">{data?.eligible_total || 0} eligible</span>
           {items.length > 0 && (
             <button
               onClick={handleClearAll}
-              className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-xs text-slate-400 hover:bg-slate-700 hover:text-slate-300"
+              className="rounded border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:bg-card/50 hover:text-foreground/80"
             >
               Clear All
             </button>
@@ -556,25 +556,25 @@ function RecentEventsPanel() {
 
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-slate-500">No recent events</p>
+          <p className="text-sm text-muted-foreground">No recent events</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
           {items.map((item) => (
             <div
               key={item.task_id}
-              className="rounded-lg border border-slate-700/50 bg-slate-800/30 p-3"
+              className="rounded-lg border border-border/50 bg-card/30 p-3"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-200 leading-snug">{item.title}</p>
+                  <p className="text-sm font-medium text-foreground leading-snug">{item.title}</p>
                 </div>
                 {item.eligible !== undefined && (
                   <span
                     className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${
                       item.eligible
-                        ? "bg-green-500/10 text-green-400"
-                        : "bg-yellow-500/10 text-yellow-400"
+                        ? "bg-primary/10 text-primary"
+                        : "bg-accent/10 text-accent"
                     }`}
                   >
                     {item.eligible ? "eligible" : "skipped"}
@@ -583,19 +583,19 @@ function RecentEventsPanel() {
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {item.rank !== undefined && (
-                  <span className="text-xs text-slate-500">Rank: {item.rank}</span>
+                  <span className="text-xs text-muted-foreground">Rank: {item.rank}</span>
                 )}
                 {item.source_kind && (
-                  <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400">
+                  <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
                     {item.source_kind}
                   </span>
                 )}
                 {item.updated_at && (
-                  <span className="text-xs text-slate-500">{formatTs(item.updated_at)}</span>
+                  <span className="text-xs text-muted-foreground">{formatTs(item.updated_at)}</span>
                 )}
               </div>
               {item.skip_reason && (
-                <p className="mt-1 text-xs text-yellow-400/80">Skip reason: {item.skip_reason}</p>
+                <p className="mt-1 text-xs text-accent/80">Skip reason: {item.skip_reason}</p>
               )}
             </div>
           ))}
@@ -656,13 +656,13 @@ function CSISignalsPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-purple-400" />
-          <h2 className="text-sm font-medium text-slate-300">CSI Signals</h2>
+          <TrendingUp className="h-4 w-4 text-secondary" />
+          <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
         </div>
         <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       </div>
     );
@@ -670,17 +670,17 @@ function CSISignalsPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-purple-400" />
-          <h2 className="text-sm font-medium text-slate-300">CSI Signals</h2>
+          <TrendingUp className="h-4 w-4 text-secondary" />
+          <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-slate-500">{error}</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
           <button
             onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-600"
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -693,42 +693,42 @@ function CSISignalsPanel() {
   const signals = items;
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-purple-400" />
-          <h2 className="text-sm font-medium text-slate-300">CSI Signals</h2>
+          <TrendingUp className="h-4 w-4 text-secondary" />
+          <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
         </div>
-        <span className="text-xs text-slate-500">{signals.length} signals</span>
+        <span className="text-xs text-muted-foreground">{signals.length} signals</span>
       </div>
 
       {signals.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-slate-500">No recent CSI signals</p>
+          <p className="text-sm text-muted-foreground">No recent CSI signals</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
           {signals.map((signal) => (
             <div
               key={signal.id}
-              className="rounded-lg border border-slate-700/50 bg-slate-800/30 p-3 transition-colors hover:border-slate-600"
+              className="rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border"
             >
               <div className="min-w-0">
-                <p className="text-sm font-medium text-slate-200 leading-snug">
+                <p className="text-sm font-medium text-foreground leading-snug">
                   {signal.title || signal.kind || "CSI Signal"}
                 </p>
                 {signal.body && (
-                  <p className="mt-1 text-xs text-slate-400 line-clamp-2">{signal.body}</p>
+                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{signal.body}</p>
                 )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-xs text-purple-400">
+                <span className="rounded bg-secondary/10 px-1.5 py-0.5 text-xs text-secondary">
                   {signal.kind}
                 </span>
                 {signal.status && (
-                  <span className="text-xs text-slate-500">{signal.status}</span>
+                  <span className="text-xs text-muted-foreground">{signal.status}</span>
                 )}
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-muted-foreground">
                   {formatTs(signal.updated_at || signal.created_at)}
                 </span>
               </div>
@@ -775,18 +775,18 @@ type SystemResourcesPayload = {
 
 function MetricBar({ label, value, percent, unit }: { label: string; value: number; percent: number; unit?: string }) {
   const color =
-    percent >= 85 ? "bg-red-500" : percent >= 70 ? "bg-yellow-500" : "bg-green-500";
+    percent >= 85 ? "bg-red-500" : percent >= 70 ? "bg-accent" : "bg-primary";
   const textColor =
-    percent >= 85 ? "text-red-400" : percent >= 70 ? "text-yellow-400" : "text-green-400";
+    percent >= 85 ? "text-red-400" : percent >= 70 ? "text-accent" : "text-primary";
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-400">{label}</span>
+        <span className="text-muted-foreground">{label}</span>
         <span className={textColor}>
           {value}{unit || ""} ({percent}%)
         </span>
       </div>
-      <div className="h-1.5 w-full rounded-full bg-slate-700">
+      <div className="h-1.5 w-full rounded-full bg-card/50">
         <div
           className={`h-1.5 rounded-full transition-all duration-500 ${color}`}
           style={{ width: `${Math.min(percent, 100)}%` }}
@@ -824,10 +824,10 @@ function SystemResourcesPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">System Resources</h2>
+          <Cpu className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
         </div>
         <div className="space-y-3">
           {[1, 2, 3, 4].map((i) => (
@@ -840,17 +840,17 @@ function SystemResourcesPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <div className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">System Resources</h2>
+          <Cpu className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-slate-500">{error}</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
           <button
             onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-600"
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -867,15 +867,15 @@ function SystemResourcesPanel() {
     data.overall_status === "critical"
       ? "bg-red-500/10 text-red-400 ring-red-500/20"
       : data.overall_status === "warn"
-      ? "bg-yellow-500/10 text-yellow-400 ring-yellow-500/20"
-      : "bg-green-500/10 text-green-400 ring-green-500/20";
+      ? "bg-accent/10 text-accent ring-yellow-500/20"
+      : "bg-primary/10 text-primary ring-green-500/20";
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-slate-400" />
-          <h2 className="text-sm font-medium text-slate-300">System Resources</h2>
+          <Cpu className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
         </div>
         <span className={`rounded px-2 py-0.5 text-xs font-medium ring-1 ${statusColor}`}>
           {data.overall_status}
@@ -886,15 +886,15 @@ function SystemResourcesPanel() {
         {/* CPU */}
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400">CPU Load</span>
-            <span className="text-slate-300">
+            <span className="text-muted-foreground">CPU Load</span>
+            <span className="text-foreground/80">
               {m.cpu_load_1m.toFixed(2)} / {m.cpu_cores} cores
             </span>
           </div>
-          <div className="h-1.5 w-full rounded-full bg-slate-700">
+          <div className="h-1.5 w-full rounded-full bg-card/50">
             <div
               className={`h-1.5 rounded-full transition-all duration-500 ${
-                m.load_per_core >= 1 ? "bg-red-500" : m.load_per_core >= 0.7 ? "bg-yellow-500" : "bg-green-500"
+                m.load_per_core >= 1 ? "bg-red-500" : m.load_per_core >= 0.7 ? "bg-accent" : "bg-primary"
               }`}
               style={{ width: `${Math.min(m.load_per_core * 100, 100)}%` }}
             />
@@ -911,20 +911,20 @@ function SystemResourcesPanel() {
         <MetricBar label="Disk" value={m.disk_used_gb} percent={m.disk_percent} unit=" GB" />
 
         {/* Session count */}
-        <div className="flex items-center justify-between rounded-lg bg-slate-800/30 px-3 py-2">
-          <span className="text-xs text-slate-400">Active Sessions</span>
+        <div className="flex items-center justify-between rounded-lg bg-card/30 px-3 py-2">
+          <span className="text-xs text-muted-foreground">Active Sessions</span>
           <span className={`text-sm font-medium ${
-            m.active_agent_sessions > 50 ? "text-red-400" : m.active_agent_sessions > 30 ? "text-yellow-400" : "text-green-400"
+            m.active_agent_sessions > 50 ? "text-red-400" : m.active_agent_sessions > 30 ? "text-accent" : "text-primary"
           }`}>
             {m.active_agent_sessions}
           </span>
         </div>
 
         {/* Error count */}
-        <div className="flex items-center justify-between rounded-lg bg-slate-800/30 px-3 py-2">
-          <span className="text-xs text-slate-400">Errors (30m)</span>
+        <div className="flex items-center justify-between rounded-lg bg-card/30 px-3 py-2">
+          <span className="text-xs text-muted-foreground">Errors (30m)</span>
           <span className={`text-sm font-medium ${
-            m.gateway_errors_30m > 50 ? "text-red-400" : m.gateway_errors_30m > 10 ? "text-yellow-400" : "text-green-400"
+            m.gateway_errors_30m > 50 ? "text-red-400" : m.gateway_errors_30m > 10 ? "text-accent" : "text-primary"
           }`}>
             {m.gateway_errors_30m}
           </span>
@@ -932,7 +932,7 @@ function SystemResourcesPanel() {
 
         {/* Updated timestamp */}
         {data.generated_at_utc && (
-          <div className="text-center text-xs text-slate-600">
+          <div className="text-center text-xs text-muted">
             Updated {formatTs(data.generated_at_utc)}
           </div>
         )}
@@ -970,13 +970,13 @@ function HeartbeatChip() {
     overallStatus === "critical"
       ? "bg-red-500"
       : overallStatus === "warn"
-      ? "bg-yellow-500"
-      : "bg-green-500";
+      ? "bg-accent"
+      : "bg-primary";
 
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700/50 bg-slate-800/50 px-2.5 py-1 text-xs text-slate-400">
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-2.5 py-1 text-xs text-muted-foreground">
       <span className={`inline-block h-2 w-2 rounded-full ${dotColor}`} />
-      <Activity className="h-3 w-3 text-slate-500" />
+      <Activity className="h-3 w-3 text-muted-foreground" />
       Last check: {formatTs(generatedAt)}
     </span>
   );
@@ -1041,18 +1041,18 @@ export default function MissionControlPage() {
         {/* Page Header */}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 ring-1 ring-blue-500/20">
-              <Activity className="h-5 w-5 text-blue-400" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">
+              <Activity className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-slate-100">Mission Control</h1>
-              <p className="text-sm text-slate-500">Centralized task monitoring and system overview</p>
+              <h1 className="text-lg font-semibold text-foreground">Mission Control</h1>
+              <p className="text-sm text-muted-foreground">Centralized task monitoring and system overview</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <HeartbeatChip />
             {lastRefresh && (
-              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Timer className="h-3.5 w-3.5" />
                 Updated {formatDistanceToNow(lastRefresh, { addSuffix: true })}
               </div>
@@ -1061,12 +1061,12 @@ export default function MissionControlPage() {
         </div>
 
         {/* Quick Actions Bar */}
-        <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+        <div className="rounded-xl border border-border bg-background/70 p-3">
           <div className="flex flex-wrap gap-2">
             <button
               onClick={triggerRefresh}
               disabled={isRefreshing}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50 disabled:opacity-60"
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
               Refresh All
@@ -1074,28 +1074,28 @@ export default function MissionControlPage() {
             <button
               onClick={triggerRefresh}
               disabled={isRefreshing}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50 disabled:opacity-60"
             >
               <Activity className={`h-4 w-4 ${isRefreshing ? "animate-pulse" : ""}`} />
               Run Health Check
             </button>
             <button
               onClick={() => router.push("/dashboard/notifications")}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"
             >
               <Bell className="h-4 w-4" />
               View Notifications
             </button>
             <button
               onClick={() => router.push("/dashboard/todolist")}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"
             >
               <Briefcase className="h-4 w-4" />
               Freelance Board
             </button>
             <button
               onClick={exportReport}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"
             >
               <Download className="h-4 w-4" />
               Export Report

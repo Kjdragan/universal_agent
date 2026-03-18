@@ -59,9 +59,9 @@ function asText(value: unknown): string {
 
 function severityClasses(value: string): string {
   const normalized = asText(value).toLowerCase();
-  if (normalized === "critical") return "border-rose-600/40 bg-rose-900/20 text-rose-200";
+  if (normalized === "critical") return "border-red-400/25 bg-red-400/10 text-red-400/80";
   if (normalized === "warning") return "border-amber-600/40 bg-amber-900/20 text-amber-200";
-  return "border-emerald-600/40 bg-emerald-900/20 text-emerald-200";
+  return "border-primary/30 bg-primary/10 text-primary/80";
 }
 
 function fmt(value: unknown): string {
@@ -220,14 +220,14 @@ export default function SupervisorAgentsPage() {
   const recommendations = Array.isArray(snapshot?.recommendations) ? snapshot?.recommendations : [];
 
   if (loading) {
-    return <div className="p-6 text-slate-400">Loading Supervisor Agents...</div>;
+    return <div className="p-6 text-muted-foreground">Loading Supervisor Agents...</div>;
   }
 
   if (!isHeadquarters) {
     return (
       <div className="p-6">
         <h1 className="text-xl font-semibold tracking-tight">Supervisor Agents</h1>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-muted-foreground">
           This tab is HQ-only. Current factory role does not expose corporation-level supervision views.
         </p>
       </div>
@@ -239,19 +239,19 @@ export default function SupervisorAgentsPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Supervisor Agents</h1>
-          <p className="text-sm text-slate-400">Switch between supervisor snapshots for fleet and CSI visibility.</p>
+          <p className="text-sm text-muted-foreground">Switch between supervisor snapshots for fleet and CSI visibility.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => void loadSelected(false)}
-            className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800"
+            className="rounded border border-border px-3 py-1.5 text-xs text-foreground hover:bg-card"
             disabled={refreshing || running}
           >
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button
             onClick={() => void handleRunNow()}
-            className="rounded border border-emerald-700 bg-emerald-900/30 px-3 py-1.5 text-xs text-emerald-100 hover:bg-emerald-900/50"
+            className="rounded border border-primary/30 bg-primary/15 px-3 py-1.5 text-xs text-primary/90 hover:bg-primary/25"
             disabled={running}
           >
             {running ? "Running..." : "Run now"}
@@ -270,7 +270,7 @@ export default function SupervisorAgentsPage() {
                 "rounded border px-3 py-1.5 text-xs",
                 active
                   ? "border-sky-600/60 bg-sky-900/30 text-sky-100"
-                  : "border-slate-700 bg-slate-900/20 text-slate-300 hover:bg-slate-800",
+                  : "border-border bg-background/20 text-foreground/80 hover:bg-card",
               ].join(" ")}
             >
               {item.label}
@@ -279,54 +279,54 @@ export default function SupervisorAgentsPage() {
         })}
       </div>
 
-      {error ? <div className="rounded border border-rose-600/40 bg-rose-900/20 px-3 py-2 text-sm text-rose-200">{error}</div> : null}
+      {error ? <div className="rounded border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm text-red-400/80">{error}</div> : null}
 
-      <div className="rounded border border-slate-800 bg-slate-950/30 p-4">
+      <div className="rounded border border-border bg-background/30 p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">Status Summary</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">Status Summary</h2>
           <span className={`rounded border px-2 py-0.5 text-xs ${severityClasses(asText(snapshot?.severity))}`}>
             {asText(snapshot?.severity) || "info"}
           </span>
-          <span className="text-xs text-slate-500">{asText(snapshot?.generated_at) || "--"}</span>
+          <span className="text-xs text-muted-foreground">{asText(snapshot?.generated_at) || "--"}</span>
         </div>
-        <p className="mt-2 text-sm text-slate-200">{asText(snapshot?.summary) || "No summary available."}</p>
+        <p className="mt-2 text-sm text-foreground">{asText(snapshot?.summary) || "No summary available."}</p>
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-950/30 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">KPI Cards</h2>
+      <div className="rounded border border-border bg-background/30 p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">KPI Cards</h2>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {kpiRows.length === 0 ? (
-            <div className="text-sm text-slate-500">No KPI data.</div>
+            <div className="text-sm text-muted-foreground">No KPI data.</div>
           ) : (
             kpiRows.map(([key, value]) => (
-              <div key={key} className="rounded border border-slate-800 bg-slate-900/30 px-3 py-2">
-                <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{key}</div>
-                <div className="mt-1 text-sm text-slate-100">{fmt(value)}</div>
+              <div key={key} className="rounded border border-border bg-background/30 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{key}</div>
+                <div className="mt-1 text-sm text-foreground">{fmt(value)}</div>
               </div>
             ))
           )}
         </div>
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-950/30 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">Flow Diagnostics</h2>
-        <pre className="mt-3 max-h-[360px] overflow-auto rounded border border-slate-800 bg-slate-950 p-3 text-xs text-slate-200">
+      <div className="rounded border border-border bg-background/30 p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">Flow Diagnostics</h2>
+        <pre className="mt-3 max-h-[360px] overflow-auto rounded border border-border bg-background p-3 text-xs text-foreground">
           {diagnosticsText}
         </pre>
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-950/30 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">Recommendations</h2>
+      <div className="rounded border border-border bg-background/30 p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">Recommendations</h2>
         {recommendations.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">No recommendations.</p>
+          <p className="mt-2 text-sm text-muted-foreground">No recommendations.</p>
         ) : (
           <div className="mt-3 space-y-2">
             {recommendations.map((rec, idx) => (
-              <div key={`${idx}-${rec.action || "recommendation"}`} className="rounded border border-slate-800 bg-slate-900/30 p-3">
-                <div className="text-sm text-slate-100">{rec.action || "Recommendation"}</div>
-                <div className="mt-1 text-xs text-slate-400">{rec.rationale || ""}</div>
-                <div className="mt-1 text-[11px] text-slate-500">{rec.endpoint_or_command || ""}</div>
-                <div className="mt-1 text-[11px] text-slate-500">
+              <div key={`${idx}-${rec.action || "recommendation"}`} className="rounded border border-border bg-background/30 p-3">
+                <div className="text-sm text-foreground">{rec.action || "Recommendation"}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{rec.rationale || ""}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{rec.endpoint_or_command || ""}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
                   Requires confirmation: {rec.requires_confirmation ? "yes" : "no"}
                 </div>
               </div>
@@ -335,15 +335,15 @@ export default function SupervisorAgentsPage() {
         )}
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-950/30 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">Latest Brief</h2>
+      <div className="rounded border border-border bg-background/30 p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">Latest Brief</h2>
         <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
           {asText(snapshot?.artifacts?.markdown_storage_href) ? (
             <a href={asText(snapshot?.artifacts?.markdown_storage_href)} className="text-sky-300 hover:text-sky-200" target="_blank" rel="noreferrer">
               Open Markdown Brief
             </a>
           ) : (
-            <span className="text-slate-500">No markdown brief yet.</span>
+            <span className="text-muted-foreground">No markdown brief yet.</span>
           )}
           {asText(snapshot?.artifacts?.json_storage_href) ? (
             <a href={asText(snapshot?.artifacts?.json_storage_href)} className="text-sky-300 hover:text-sky-200" target="_blank" rel="noreferrer">
@@ -352,10 +352,10 @@ export default function SupervisorAgentsPage() {
           ) : null}
         </div>
         {runs.length > 0 ? (
-          <div className="mt-3 space-y-1 text-xs text-slate-300">
+          <div className="mt-3 space-y-1 text-xs text-foreground/80">
             {runs.slice(0, 5).map((run, idx) => (
-              <div key={`${idx}-${run.generated_at || "run"}`} className="rounded border border-slate-800 bg-slate-900/20 px-2 py-1">
-                <span className="text-slate-400">{asText(run.generated_at) || "--"}</span>
+              <div key={`${idx}-${run.generated_at || "run"}`} className="rounded border border-border bg-background/20 px-2 py-1">
+                <span className="text-muted-foreground">{asText(run.generated_at) || "--"}</span>
                 <span className="mx-2">•</span>
                 <span>{asText(run.summary) || "Supervisor brief"}</span>
               </div>

@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { Syncopate } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const syncopate = Syncopate({
+const inter = Inter({
   subsets: ["latin"],
   variable: "--font-display",
-  weight: ["400", "700"],
+  weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
@@ -28,7 +28,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className={`${syncopate.variable} font-mono`}>
+      <body className={`${inter.variable} font-mono`}>
         {children}
       </body>
     </html>

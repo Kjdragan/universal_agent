@@ -25,16 +25,16 @@ type SessionsTableProps = {
 
 export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpenRunLog }: SessionsTableProps) {
   if (loading) {
-    return <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">Loading sessions...</div>;
+    return <div className="rounded-lg border border-border bg-background/50 p-4 text-sm text-muted-foreground">Loading sessions...</div>;
   }
   if (!sessions.length) {
-    return <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">No sessions found in {rootSource} storage root.</div>;
+    return <div className="rounded-lg border border-border bg-background/50 p-4 text-sm text-muted-foreground">No sessions found in {rootSource} storage root.</div>;
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/50">
+    <div className="overflow-x-auto rounded-lg border border-border bg-background/50">
       <table className="min-w-full text-left text-sm">
-        <thead className="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400">
+        <thead className="bg-background/80 text-xs uppercase tracking-wider text-muted-foreground">
           <tr>
             <th className="px-3 py-2">Session</th>
             <th className="px-3 py-2">Source</th>
@@ -46,18 +46,18 @@ export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpe
         </thead>
         <tbody>
           {sessions.map((item) => (
-            <tr key={item.session_id} className="border-t border-slate-800/80">
-              <td className="px-3 py-2 font-mono text-xs text-slate-200">{item.session_id}</td>
-              <td className="px-3 py-2 text-xs uppercase tracking-wide text-slate-300">{item.source_type}</td>
-              <td className="px-3 py-2 text-xs text-slate-300">{item.status || (item.ready ? "ready" : "unknown")}</td>
-              <td className="px-3 py-2 text-xs text-slate-300">{formatEpoch(item.completed_at_epoch || item.updated_at_epoch || item.modified_epoch)}</td>
-              <td className="px-3 py-2 text-xs text-slate-300">{formatBytes(item.size_bytes)}</td>
+            <tr key={item.session_id} className="border-t border-border/80">
+              <td className="px-3 py-2 font-mono text-xs text-foreground">{item.session_id}</td>
+              <td className="px-3 py-2 text-xs uppercase tracking-wide text-foreground/80">{item.source_type}</td>
+              <td className="px-3 py-2 text-xs text-foreground/80">{item.status || (item.ready ? "ready" : "unknown")}</td>
+              <td className="px-3 py-2 text-xs text-foreground/80">{formatEpoch(item.completed_at_epoch || item.updated_at_epoch || item.modified_epoch)}</td>
+              <td className="px-3 py-2 text-xs text-foreground/80">{formatBytes(item.size_bytes)}</td>
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => onOpenRoot(item.root_path)}
-                    className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] uppercase tracking-wider text-slate-200 hover:bg-slate-800"
+                    className="rounded border border-border bg-background px-2 py-1 text-[11px] uppercase tracking-wider text-foreground hover:bg-card"
                   >
                     Open Root
                   </button>
@@ -65,14 +65,14 @@ export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpe
                     type="button"
                     onClick={() => item.run_log_path && onOpenRunLog(item.run_log_path)}
                     disabled={!item.run_log_path}
-                    className="rounded border border-cyan-700/70 bg-cyan-600/15 px-2 py-1 text-[11px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25 disabled:opacity-40"
+                    className="rounded border border-primary/30/70 bg-primary/15 px-2 py-1 text-[11px] uppercase tracking-wider text-primary/90 hover:bg-primary/25 disabled:opacity-40"
                   >
                     Run Log
                   </button>
                   <button
                     type="button"
                     onClick={() => navigator.clipboard.writeText(item.root_path)}
-                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] uppercase tracking-wider text-slate-300 hover:bg-slate-800"
+                    className="rounded border border-border bg-background px-2 py-1 text-[11px] uppercase tracking-wider text-foreground/80 hover:bg-card"
                   >
                     Copy Path
                   </button>

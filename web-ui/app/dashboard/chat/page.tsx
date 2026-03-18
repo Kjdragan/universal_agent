@@ -76,7 +76,7 @@ export default function DashboardChatPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Chat Launcher</h1>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-muted-foreground">
             Open or focus the dedicated full-screen chat tab. Choose writer or viewer attach mode.
           </p>
         </div>
@@ -90,26 +90,26 @@ export default function DashboardChatPage() {
                 focusInput: true,
               })
             }
-            className="rounded-lg border border-emerald-700/60 bg-emerald-500/20 px-3 py-1.5 text-sm text-emerald-100 hover:bg-emerald-500/30"
+            className="rounded-lg border border-primary/30/60 bg-primary/20 px-3 py-1.5 text-sm text-primary/90 hover:bg-primary/30"
           >
             New Session
           </button>
           <button
             type="button"
             onClick={openSelected}
-            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+            className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card"
           >
             Open/Focus Full Chat
           </button>
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+      <div className="rounded-xl border border-border bg-background/60 p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={refreshSessions}
-            className="rounded-md border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+            className="rounded-md border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card"
             disabled={loading}
           >
             {loading ? "Refreshing..." : "Refresh Sessions"}
@@ -124,7 +124,7 @@ export default function DashboardChatPage() {
 
         <div className="space-y-2 max-h-[50vh] overflow-y-auto">
           {sortedSessions.length === 0 && (
-            <div className="text-sm text-slate-400">No sessions found.</div>
+            <div className="text-sm text-muted-foreground">No sessions found.</div>
           )}
           {sortedSessions.map((session) => {
             const active = selectedSession === session.session_id;
@@ -135,8 +135,8 @@ export default function DashboardChatPage() {
                 className={[
                   "w-full rounded-lg border px-3 py-2 text-left transition",
                   active
-                    ? "border-cyan-500/40 bg-cyan-500/10"
-                    : "border-slate-800 bg-slate-950/40 hover:bg-slate-900/70",
+                    ? "border-primary/25 bg-primary/10"
+                    : "border-border bg-background/40 hover:bg-background/70",
                 ].join(" ")}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -146,15 +146,15 @@ export default function DashboardChatPage() {
                     className="min-w-0 text-left"
                   >
                     <span className="block font-mono text-xs truncate">{session.session_id}</span>
-                    <span className="text-[11px] text-slate-400">
+                    <span className="text-[11px] text-muted-foreground">
                       {(session.source || "local")} · {session.status || "unknown"}
                     </span>
                     {session.description ? (
-                      <span className="mt-0.5 block text-[11px] text-slate-300/90 truncate" title={session.description}>
+                      <span className="mt-0.5 block text-[11px] text-foreground/80/90 truncate" title={session.description}>
                         {session.description}
                       </span>
                     ) : (
-                      <span className="mt-0.5 block text-[11px] text-slate-600 italic truncate">no description yet</span>
+                      <span className="mt-0.5 block text-[11px] text-muted italic truncate">no description yet</span>
                     )}
                   </button>
                   <button
@@ -166,10 +166,10 @@ export default function DashboardChatPage() {
                     {deleting ? "Deleting..." : "Delete"}
                   </button>
                 </div>
-                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                <div className="mt-1 text-[11px] text-muted-foreground truncate">
                   owner: {session.owner || "unknown"} · memory: {session.memory_mode || "direct_only"}
                 </div>
-                <div className="mt-1 text-[11px] text-slate-600 truncate">
+                <div className="mt-1 text-[11px] text-muted truncate">
                   {session.workspace_dir || "workspace: n/a"}
                 </div>
               </article>

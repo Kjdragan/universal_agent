@@ -112,10 +112,10 @@ function reviewerLabel(approval: Approval): { label: string; color: string } {
 
     // Explicit routing state from task_hub
     if (routing === "human_intervention_required") {
-        return { label: "Human Review", color: "bg-red-500/15 text-red-300 border border-red-500/30" };
+        return { label: "Human Review", color: "bg-red-500/15 text-red-400 border border-red-500/30" };
     }
     if (routing === "agent_actionable") {
-        return { label: "Agent Review", color: "bg-blue-500/15 text-blue-300 border border-blue-500/30" };
+        return { label: "Agent Review", color: "bg-primary/15 text-primary border border-primary/30" };
     }
 
     // Infer from title / reason
@@ -125,13 +125,13 @@ function reviewerLabel(approval: Approval): { label: string; color: string } {
         reason.toLowerCase().includes("persistent_failure") ||
         titleLc.includes("auto-remediation")
     ) {
-        return { label: "Human Review", color: "bg-red-500/15 text-red-300 border border-red-500/30" };
+        return { label: "Human Review", color: "bg-red-500/15 text-red-400 border border-red-500/30" };
     }
     if (titleLc.includes("brief") || titleLc.includes("slo")) {
-        return { label: "Agent Review", color: "bg-blue-500/15 text-blue-300 border border-blue-500/30" };
+        return { label: "Agent Review", color: "bg-primary/15 text-primary border border-primary/30" };
     }
 
-    return { label: "Needs Review", color: "bg-amber-500/15 text-amber-300 border border-amber-500/30" };
+    return { label: "Needs Review", color: "bg-amber-500/15 text-accent border border-accent/30" };
 }
 
 export default function ApprovalsPage() {
@@ -229,13 +229,13 @@ export default function ApprovalsPage() {
     const statusColor = (status: string) => {
         switch (status) {
             case "pending":
-                return "text-amber-300";
+                return "text-accent";
             case "approved":
-                return "text-emerald-300";
+                return "text-primary";
             case "rejected":
-                return "text-rose-300";
+                return "text-secondary";
             default:
-                return "text-slate-400";
+                return "text-muted-foreground";
         }
     };
 
@@ -246,18 +246,18 @@ export default function ApprovalsPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-xl font-semibold tracking-tight">Approvals</h1>
-                    <p className="text-sm text-slate-400">
+                    <p className="text-sm text-muted-foreground">
                         Review and manage execution approval requests.
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
                     <Link
                         href="/"
-                        className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+                        className="rounded-lg border border-primary/30 bg-primary/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-primary/90 hover:bg-primary/25"
                     >
                         Back to Home
                     </Link>
-                    <div className="flex rounded-lg border border-slate-700 bg-slate-800/60 text-xs">
+                    <div className="flex rounded-lg border border-border bg-card/60 text-xs">
                         {FILTER_OPTIONS.map((opt) => (
                             <button
                                 key={opt}
@@ -266,8 +266,8 @@ export default function ApprovalsPage() {
                                 className={[
                                     "px-2.5 py-1.5 capitalize transition",
                                     statusFilter === opt
-                                        ? "bg-cyan-500/15 text-cyan-200"
-                                        : "text-slate-400 hover:text-slate-200",
+                                        ? "bg-primary/15 text-primary/80"
+                                        : "text-muted-foreground hover:text-foreground",
                                 ].join(" ")}
                             >
                                 {opt}
@@ -278,14 +278,14 @@ export default function ApprovalsPage() {
                         type="button"
                         onClick={clearAll}
                         disabled={clearing || approvals.length === 0}
-                        className="rounded-lg border border-rose-800/60 bg-rose-900/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-900/35 disabled:opacity-40"
+                        className="rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs font-semibold text-red-400/80 hover:bg-red-400/20 disabled:opacity-40"
                     >
                         {clearing ? "Clearing…" : "Clear All"}
                     </button>
                     <button
                         type="button"
                         onClick={load}
-                        className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+                        className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card"
                     >
                         Refresh
                     </button>
@@ -293,20 +293,20 @@ export default function ApprovalsPage() {
             </div>
 
             {errorMsg && (
-                <div className="rounded-xl border border-rose-800/60 bg-rose-900/20 p-3 text-sm text-rose-200 flex items-center justify-between">
+                <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-400/80 flex items-center justify-between">
                     <span>⚠️ {errorMsg}</span>
-                    <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 text-xs ml-3">Dismiss</button>
+                    <button type="button" onClick={() => setErrorMsg(null)} className="text-secondary hover:text-red-400/80 text-xs ml-3">Dismiss</button>
                 </div>
             )}
 
             {loading && approvals.length === 0 && (
-                <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-6 text-center text-sm text-slate-400">
+                <div className="rounded-xl border border-border bg-background/70 p-6 text-center text-sm text-muted-foreground">
                     Loading approvals…
                 </div>
             )}
 
             {!loading && approvals.length === 0 && (
-                <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-6 text-center text-sm text-slate-400">
+                <div className="rounded-xl border border-border bg-background/70 p-6 text-center text-sm text-muted-foreground">
                     No approvals found{statusFilter !== "all" ? ` with status "${statusFilter}"` : ""}.
                 </div>
             )}
@@ -318,13 +318,13 @@ export default function ApprovalsPage() {
                     return (
                         <article
                             key={approval.approval_id}
-                            className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"
+                            className="rounded-xl border border-border bg-background/70 p-4"
                         >
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0 flex-1">
                                     {/* Title row with status + reviewer badge */}
                                     <div className="flex flex-wrap items-center gap-2 mb-1">
-                                        <p className="text-sm font-semibold text-slate-100 leading-snug">
+                                        <p className="text-sm font-semibold text-foreground leading-snug">
                                             {approval.title || approval.summary || approval.approval_id}
                                         </p>
                                         <span
@@ -340,15 +340,15 @@ export default function ApprovalsPage() {
                                     </div>
 
                                     {/* Plain-English summary */}
-                                    <p className="text-xs text-slate-300 leading-relaxed mb-2">{summary}</p>
+                                    <p className="text-xs text-foreground/80 leading-relaxed mb-2">{summary}</p>
 
                                     {/* Compact ID */}
-                                    <p className="font-mono text-[11px] text-slate-600 mb-1">
+                                    <p className="font-mono text-[11px] text-muted mb-1">
                                         {approval.approval_id}
                                     </p>
 
                                     {/* Metadata row */}
-                                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                                         {approval.requested_by && <span>Requested by: {approval.requested_by}</span>}
                                         {approval.approved_by && <span>Decided by: {approval.approved_by}</span>}
                                         {approval.created_at && <span>Created: {formatDate(approval.created_at)}</span>}
@@ -363,7 +363,7 @@ export default function ApprovalsPage() {
                                     {approval.focus_href && (
                                         <Link
                                             href={approval.focus_href}
-                                            className="rounded border border-cyan-800/70 bg-cyan-900/20 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/35"
+                                            className="rounded border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary/80 hover:bg-primary/20"
                                         >
                                             Open
                                         </Link>
@@ -374,7 +374,7 @@ export default function ApprovalsPage() {
                                             type="button"
                                             onClick={() => updateApproval(approval.approval_id, "approved")}
                                             disabled={updatingId === approval.approval_id}
-                                            className="rounded border border-emerald-800/70 bg-emerald-900/20 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                                            className="rounded border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary/80 hover:bg-primary/20 disabled:opacity-50"
                                         >
                                             Approve
                                         </button>
@@ -382,7 +382,7 @@ export default function ApprovalsPage() {
                                             type="button"
                                             onClick={() => updateApproval(approval.approval_id, "rejected")}
                                             disabled={updatingId === approval.approval_id}
-                                            className="rounded border border-rose-800/70 bg-rose-900/20 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                                            className="rounded border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs text-red-400/80 hover:bg-red-400/20 disabled:opacity-50"
                                         >
                                             Reject
                                         </button>

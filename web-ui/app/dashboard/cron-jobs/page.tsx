@@ -257,39 +257,39 @@ export default function DashboardCronJobsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Chron Jobs</h1>
-          <p className="text-sm text-slate-400">Schedule autonomous recurring tasks.</p>
+          <p className="text-sm text-muted-foreground">Schedule autonomous recurring tasks.</p>
         </div>
         <div className="flex items-center gap-2">
           <Link
             href="/dashboard"
-            className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+            className="rounded-lg border border-primary/30 bg-primary/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-primary/90 hover:bg-primary/25"
           >
             Back to Home
           </Link>
           <button
             type="button"
             onClick={load}
-            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+            className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card"
           >
             Refresh
           </button>
         </div>
       </div>
 
-      <form onSubmit={createJob} className="grid gap-2 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:grid-cols-[1fr,230px,130px,130px,auto]">
+      <form onSubmit={createJob} className="grid gap-2 rounded-xl border border-border bg-background/70 p-4 md:grid-cols-[1fr,230px,130px,130px,auto]">
         <input
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           placeholder="Command prompt for agent"
-          className="rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
+          className="rounded-md border border-border bg-background/70 px-3 py-2 text-sm outline-none focus:border-primary"
         />
         <input
           value={scheduleTime}
           onChange={(e) => setScheduleTime(e.target.value)}
           placeholder="Time (e.g. in 20 minutes, 4:30 pm)"
-          className="rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
+          className="rounded-md border border-border bg-background/70 px-3 py-2 text-sm outline-none focus:border-primary"
         />
-        <div className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm">
+        <div className="flex items-center gap-2 rounded-md border border-border bg-background/70 px-3 py-2 text-sm">
           <input
             id="repeat"
             type="checkbox"
@@ -297,7 +297,7 @@ export default function DashboardCronJobsPage() {
             onChange={(e) => setRepeat(e.target.checked)}
             className="h-4 w-4 accent-cyan-500"
           />
-          <label htmlFor="repeat" className="select-none text-slate-200">
+          <label htmlFor="repeat" className="select-none text-foreground">
             Repeat
           </label>
         </div>
@@ -306,17 +306,17 @@ export default function DashboardCronJobsPage() {
             value={timeoutSeconds}
             onChange={(e) => setTimeoutSeconds(e.target.value)}
             placeholder="Timeout (sec)"
-            className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
+            className="w-full rounded-md border border-border bg-background/70 px-3 py-2 text-sm outline-none focus:border-primary"
           />
         </div>
         <button
           type="submit"
-          className="rounded-md border border-cyan-700 bg-cyan-500/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/30"
+          className="rounded-md border border-primary/30 bg-primary/20 px-3 py-2 text-sm text-primary/90 hover:bg-primary/30"
         >
           Create
         </button>
       </form>
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-muted-foreground">
         Enter a natural time like <span className="font-mono">in 20 minutes</span> or <span className="font-mono">4:30 pm</span>. With{" "}
         <span className="font-mono">Repeat</span> on, interval phrases repeat (e.g. <span className="font-mono">in 30 minutes</span>) and
         clock times run daily (e.g. <span className="font-mono">4:30 pm</span>).
@@ -327,14 +327,14 @@ export default function DashboardCronJobsPage() {
       )}
 
       <section className="space-y-2">
-        {loading && <p className="text-sm text-slate-400">Loading…</p>}
+        {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
         {!loading && jobs.length === 0 && (
-          <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-400">
+          <div className="rounded-lg border border-border bg-background/60 p-3 text-sm text-muted-foreground">
             No chron jobs configured.
           </div>
         )}
         {jobs.map((job) => (
-          <article key={job.job_id} className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+          <article key={job.job_id} className="rounded-lg border border-border bg-background/70 p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex-1">
                 {editingId === job.job_id ? (
@@ -342,22 +342,22 @@ export default function DashboardCronJobsPage() {
                     <input
                       value={editForm.command}
                       onChange={(e) => setEditForm(prev => ({ ...prev, command: e.target.value }))}
-                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm font-mono text-slate-200 outline-none focus:border-cyan-500"
+                      className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-mono text-foreground outline-none focus:border-primary"
                       placeholder="Command"
                       autoFocus
                     />
                     <input
                       value={editForm.schedule}
                       onChange={(e) => setEditForm(prev => ({ ...prev, schedule: e.target.value }))}
-                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs font-mono text-slate-300 outline-none focus:border-cyan-500"
+                      className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs font-mono text-foreground/80 outline-none focus:border-primary"
                       placeholder="Schedule (e.g. every 30m)"
                       onKeyDown={(e) => { if (e.key === "Enter") saveEdit(job.job_id); }}
                     />
                   </div>
                 ) : (
                   <>
-                    <p className="font-mono text-sm text-slate-100">{job.command}</p>
-                    <p className="mt-1 text-xs text-slate-400">
+                    <p className="font-mono text-sm text-foreground">{job.command}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
                       {job.run_at
                         ? `one-shot at ${toLocalDateTime(job.run_at)}`
                         : job.cron_expr
@@ -367,8 +367,8 @@ export default function DashboardCronJobsPage() {
                       {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
                     </p>
                     {job.running && (
-                      <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-cyan-700/60 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200">
-                        <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
+                      <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
                         Running now... latest persisted run details are shown below.
                       </div>
                     )}
@@ -381,11 +381,11 @@ export default function DashboardCronJobsPage() {
                       const runLabel = job.running ? "latest recorded run" : "last run";
                       return (
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-                          <span className="text-slate-500">
-                            {runLabel}: <span className="font-mono text-slate-300">{status}</span> · {toLocalDateTime(run.started_at)}
+                          <span className="text-muted-foreground">
+                            {runLabel}: <span className="font-mono text-foreground/80">{status}</span> · {toLocalDateTime(run.started_at)}
                           </span>
                           {run.error && (
-                            <span className="text-rose-300/90">
+                            <span className="text-secondary/90">
                               error: <span className="font-mono">{String(run.error).slice(0, 140)}</span>
                             </span>
                           )}
@@ -412,7 +412,7 @@ export default function DashboardCronJobsPage() {
                       const sessionId = extractJobSessionId(job);
                       if (!sessionId) return null;
                       return (
-                        <p className="mt-1 text-[11px] text-slate-500">
+                        <p className="mt-1 text-[11px] text-muted-foreground">
                           session: <span className="font-mono">{sessionId}</span>
                         </p>
                       );
@@ -426,14 +426,14 @@ export default function DashboardCronJobsPage() {
                     <button
                       type="button"
                       onClick={() => saveEdit(job.job_id)}
-                      className="rounded-md border border-cyan-700 bg-cyan-900/30 px-2 py-1 text-xs text-cyan-200 hover:bg-cyan-900/50"
+                      className="rounded-md border border-primary/30 bg-primary/15 px-2 py-1 text-xs text-primary/80 hover:bg-primary/25"
                     >
                       Save
                     </button>
                     <button
                       type="button"
                       onClick={cancelEdit}
-                      className="rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                      className="rounded-md border border-border bg-card/60 px-2 py-1 text-xs text-foreground/80 hover:bg-card"
                     >
                       Cancel
                     </button>
@@ -444,7 +444,7 @@ export default function DashboardCronJobsPage() {
                       type="button"
                       onClick={() => runNow(job.job_id)}
                       disabled={Boolean(job.running)}
-                      className="rounded-md border border-emerald-700 bg-emerald-500/20 px-2 py-1 text-xs text-emerald-100 hover:bg-emerald-500/30"
+                      className="rounded-md border border-primary/30 bg-primary/20 px-2 py-1 text-xs text-primary/90 hover:bg-primary/30"
                     >
                       Run
                     </button>
@@ -458,7 +458,7 @@ export default function DashboardCronJobsPage() {
                     <button
                       type="button"
                       onClick={() => deleteJob(job.job_id)}
-                      className="rounded-md border border-amber-700 bg-amber-500/20 px-2 py-1 text-xs text-amber-100 hover:bg-amber-500/30"
+                      className="rounded-md border border-amber-700 bg-accent/20 px-2 py-1 text-xs text-amber-100 hover:bg-amber-500/30"
                     >
                       Del
                     </button>
@@ -479,7 +479,7 @@ export default function DashboardCronJobsPage() {
                           role: "writer",
                         })
                       }
-                      className="rounded-md border border-cyan-700 bg-cyan-500/20 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-500/30"
+                      className="rounded-md border border-primary/30 bg-primary/20 px-2 py-1 text-xs text-primary/90 hover:bg-primary/30"
                     >
                       Open
                     </button>

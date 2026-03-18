@@ -52,16 +52,16 @@ function isProtectedRuntimeDbPath(path: string): boolean {
 }
 
 function fileIcon(entry: FileEntry) {
-  if (entry.is_dir) return <Folder className="h-4 w-4 text-cyan-400" />;
+  if (entry.is_dir) return <Folder className="h-4 w-4 text-primary" />;
   const ft = detectFileType(entry.name);
   switch (ft) {
-    case "markdown": return <FileText className="h-4 w-4 text-blue-400" />;
-    case "json": return <FileJson2 className="h-4 w-4 text-yellow-400" />;
-    case "html": return <Globe className="h-4 w-4 text-orange-400" />;
-    case "code": return <FileCode className="h-4 w-4 text-emerald-400" />;
-    case "log": return <Terminal className="h-4 w-4 text-slate-400" />;
-    case "image": return <ImageIcon className="h-4 w-4 text-purple-400" />;
-    default: return <FileText className="h-4 w-4 text-slate-400" />;
+    case "markdown": return <FileText className="h-4 w-4 text-primary" />;
+    case "json": return <FileJson2 className="h-4 w-4 text-accent" />;
+    case "html": return <Globe className="h-4 w-4 text-accent" />;
+    case "code": return <FileCode className="h-4 w-4 text-primary" />;
+    case "log": return <Terminal className="h-4 w-4 text-muted-foreground" />;
+    case "image": return <ImageIcon className="h-4 w-4 text-secondary" />;
+    default: return <FileText className="h-4 w-4 text-muted-foreground" />;
   }
 }
 
@@ -216,11 +216,11 @@ export function ExplorerPanel({
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* LEFT PANEL — FILE TREE                                        */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="flex min-h-0 flex-col rounded-xl border border-slate-700/50 bg-slate-900/60 backdrop-blur-sm">
+      <section className="flex min-h-0 flex-col rounded-xl border border-border/50 bg-background/60 backdrop-blur-sm">
         {/* ── Header ── */}
-        <div className="flex items-center gap-2 border-b border-slate-700/40 px-4 py-3">
-          <Folder className="h-4 w-4 text-cyan-400" />
-          <h3 className="text-sm font-semibold text-slate-200">Explorer</h3>
+        <div className="flex items-center gap-2 border-b border-border/40 px-4 py-3">
+          <Folder className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-semibold text-foreground">Explorer</h3>
           <div className="ml-auto flex items-center gap-1.5">
             {(["workspaces", "artifacts", "vps"] as const).map((s) => (
               <button
@@ -228,8 +228,8 @@ export function ExplorerPanel({
                 type="button"
                 onClick={() => switchScope(s)}
                 className={`rounded-md px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${scope === s
-                  ? "bg-cyan-500/15 text-cyan-300 ring-1 ring-cyan-500/30"
-                  : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
+                  ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+                  : "text-muted-foreground hover:bg-card/50/40 hover:text-foreground"
                   }`}
               >
                 {s === "workspaces" ? "Sessions" : s === "artifacts" ? "Artifacts" : "VPS"}
@@ -238,7 +238,7 @@ export function ExplorerPanel({
             <button
               type="button"
               onClick={() => void loadEntries()}
-              className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-slate-200"
+              className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card/50/40 hover:text-foreground"
               title="Refresh"
             >
               <RefreshCw className="h-3.5 w-3.5" />
@@ -247,12 +247,12 @@ export function ExplorerPanel({
         </div>
 
         {/* ── Breadcrumbs ── */}
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-700/30 px-4 py-2 text-[12px]">
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-border/30 px-4 py-2 text-[12px]">
           {path && (
             <button
               type="button"
               onClick={() => setPath(parentPath(path))}
-              className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-slate-200"
+              className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card/50/40 hover:text-foreground"
               title="Go up"
             >
               <ArrowUp className="h-3.5 w-3.5" />
@@ -260,13 +260,13 @@ export function ExplorerPanel({
           )}
           {breadcrumbs.map((crumb, i) => (
             <span key={crumb.path + i} className="flex shrink-0 items-center gap-1">
-              {i > 0 && <ChevronRight className="h-3 w-3 text-slate-600" />}
+              {i > 0 && <ChevronRight className="h-3 w-3 text-muted" />}
               <button
                 type="button"
                 onClick={() => setPath(crumb.path)}
                 className={`rounded px-1 py-0.5 transition-colors ${i === breadcrumbs.length - 1
-                  ? "font-medium text-cyan-300"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "font-medium text-primary"
+                  : "text-muted-foreground hover:text-foreground"
                   }`}
               >
                 {crumb.label}
@@ -277,7 +277,7 @@ export function ExplorerPanel({
 
         {/* ── Error ── */}
         {error && (
-          <div className="mx-3 mt-2 rounded-md border border-red-700/50 bg-red-600/10 px-3 py-2 text-[12px] text-red-300">
+          <div className="mx-3 mt-2 rounded-md border border-red-700/50 bg-red-600/10 px-3 py-2 text-[12px] text-red-400">
             {error}
           </div>
         )}
@@ -286,13 +286,13 @@ export function ExplorerPanel({
         <div className="min-h-0 flex-1 overflow-auto">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="flex items-center gap-3 text-slate-400">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-500/30 border-t-cyan-500" />
+              <div className="flex items-center gap-3 text-muted-foreground">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-cyan-500" />
                 <span className="text-sm">Loading...</span>
               </div>
             </div>
           ) : !entries.length ? (
-            <div className="flex items-center justify-center py-12 text-sm text-slate-500">
+            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
               {path ? "Empty directory" : "No files found"}
             </div>
           ) : (
@@ -300,7 +300,7 @@ export function ExplorerPanel({
               {entries.map((entry) => (
                 <div
                   key={`${scope}:${entry.path}`}
-                  className="group flex items-center gap-2 px-4 py-2 transition-colors hover:bg-slate-800/50"
+                  className="group flex items-center gap-2 px-4 py-2 transition-colors hover:bg-card/50"
                 >
                   <button
                     type="button"
@@ -308,11 +308,11 @@ export function ExplorerPanel({
                     className="flex flex-1 items-center gap-2.5 text-left min-w-0"
                   >
                     {fileIcon(entry)}
-                    <span className="flex-1 truncate font-mono text-[13px] text-slate-200 group-hover:text-white">
+                    <span className="flex-1 truncate font-mono text-[13px] text-foreground group-hover:text-white">
                       {entry.name}
                     </span>
                     {!entry.is_dir && (
-                      <span className="shrink-0 text-[11px] text-slate-500">
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
                         {formatBytes(entry.size)}
                       </span>
                     )}
@@ -321,7 +321,7 @@ export function ExplorerPanel({
                     type="button"
                     onClick={() => void deleteItem(entry)}
                     disabled={deletingPaths.has(entry.path)}
-                    className="shrink-0 rounded-md p-1 text-slate-600 opacity-30 transition-all group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                    className="shrink-0 rounded-md p-1 text-muted opacity-30 transition-all group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
                     title={`Delete ${entry.name}`}
                   >
                     {deletingPaths.has(entry.path) ? (
@@ -337,8 +337,8 @@ export function ExplorerPanel({
         </div>
 
         {/* ── Footer ── */}
-        <div className="border-t border-slate-700/30 px-4 py-2">
-          <span className="text-[11px] text-slate-500">
+        <div className="border-t border-border/30 px-4 py-2">
+          <span className="text-[11px] text-muted-foreground">
             {entries.length} item{entries.length !== 1 ? "s" : ""}
           </span>
         </div>
@@ -347,7 +347,7 @@ export function ExplorerPanel({
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* RIGHT PANEL — PREVIEW                                         */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="flex min-h-0 flex-col rounded-xl border border-slate-700/50 bg-slate-900/60 p-4 backdrop-blur-sm">
+      <section className="flex min-h-0 flex-col rounded-xl border border-border/50 bg-background/60 p-4 backdrop-blur-sm">
         <FilePreview
           title={preview.title}
           content={preview.content}

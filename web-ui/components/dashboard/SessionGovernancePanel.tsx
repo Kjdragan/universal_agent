@@ -116,23 +116,23 @@ export function SessionGovernancePanel() {
   }, [selectedSession, pending, loadPolicy]);
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <section className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-300">Session Governance</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-foreground/80">Session Governance</h2>
         <button
           type="button"
           onClick={loadSessions}
-          className="rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1 text-xs hover:bg-slate-800"
+          className="rounded-md border border-border bg-card/60 px-2 py-1 text-xs hover:bg-card"
         >
           Refresh Sessions
         </button>
       </div>
 
       <div className="mb-4 grid gap-3 md:grid-cols-2">
-        <label className="text-xs text-slate-400">
+        <label className="text-xs text-muted-foreground">
           Session
           <select
-            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+            className="mt-1 w-full rounded-md border border-border bg-background/70 px-2 py-2 text-sm"
             value={selectedSession}
             onChange={(e) => setSelectedSession(e.target.value)}
           >
@@ -147,10 +147,10 @@ export function SessionGovernancePanel() {
 
       {policy && (
         <div className="grid gap-3 md:grid-cols-2">
-          <label className="text-xs text-slate-400">
+          <label className="text-xs text-muted-foreground">
             Autonomy Mode
             <select
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-background/70 px-2 py-2 text-sm"
               value={policy.autonomy_mode || "yolo"}
               onChange={(e) => savePatch({ autonomy_mode: e.target.value })}
             >
@@ -160,10 +160,10 @@ export function SessionGovernancePanel() {
             </select>
           </label>
 
-          <label className="text-xs text-slate-400">
+          <label className="text-xs text-muted-foreground">
             Identity Mode
             <select
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-background/70 px-2 py-2 text-sm"
               value={policy.identity_mode || "persona"}
               onChange={(e) => savePatch({ identity_mode: e.target.value })}
             >
@@ -172,10 +172,10 @@ export function SessionGovernancePanel() {
             </select>
           </label>
 
-          <label className="text-xs text-slate-400">
+          <label className="text-xs text-muted-foreground">
             Tool Profile
             <select
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-background/70 px-2 py-2 text-sm"
               value={policy.tool_profile || "full"}
               onChange={(e) => savePatch({ tool_profile: e.target.value })}
             >
@@ -184,10 +184,10 @@ export function SessionGovernancePanel() {
             </select>
           </label>
 
-          <label className="text-xs text-slate-400">
+          <label className="text-xs text-muted-foreground">
             Memory Scope
             <select
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-border bg-background/70 px-2 py-2 text-sm"
               value={policy.memory?.scope || "direct_only"}
               onChange={(e) => savePatch({ memory: { ...(policy.memory || {}), scope: e.target.value } })}
             >
@@ -196,7 +196,7 @@ export function SessionGovernancePanel() {
             </select>
           </label>
 
-          <label className="flex items-center gap-2 text-sm text-slate-300">
+          <label className="flex items-center gap-2 text-sm text-foreground/80">
             <input
               type="checkbox"
               checked={policy.memory?.sessionMemory !== false}
@@ -212,7 +212,7 @@ export function SessionGovernancePanel() {
             Session Memory Enabled
           </label>
 
-          <label className="flex items-center gap-2 text-sm text-slate-300">
+          <label className="flex items-center gap-2 text-sm text-foreground/80">
             <input
               type="checkbox"
               checked={policy.memory?.enabled !== false}
@@ -228,7 +228,7 @@ export function SessionGovernancePanel() {
             Memory Enabled
           </label>
 
-          <label className="flex items-center gap-2 text-sm text-slate-300">
+          <label className="flex items-center gap-2 text-sm text-foreground/80">
             <input
               type="checkbox"
               checked={Boolean(policy.approvals?.enabled)}
@@ -237,12 +237,12 @@ export function SessionGovernancePanel() {
             Approvals Enabled
           </label>
 
-          <label className="text-xs text-slate-400 md:col-span-2">
+          <label className="text-xs text-muted-foreground md:col-span-2">
             Memory Sources (comma-separated: memory,sessions)
             <div className="mt-1">
               <input
                 key={`memory-sources-${selectedSession}-${(policy.memory?.sources || []).join(",")}`}
-                className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+                className="w-full rounded-md border border-border bg-background/70 px-2 py-2 text-sm"
                 defaultValue={(policy.memory?.sources || []).join(", ")}
                 onBlur={(e) =>
                   savePatch({
@@ -269,14 +269,14 @@ export function SessionGovernancePanel() {
           <button
             type="button"
             onClick={resumePending}
-            className="mt-2 rounded-md border border-amber-600 bg-amber-500/20 px-2 py-1 text-xs hover:bg-amber-500/30"
+            className="mt-2 rounded-md border border-amber-600 bg-accent/20 px-2 py-1 text-xs hover:bg-amber-500/30"
           >
             Approve Gate
           </button>
         </div>
       )}
 
-      {status && <p className="mt-3 text-xs text-slate-400">{status}</p>}
+      {status && <p className="mt-3 text-xs text-muted-foreground">{status}</p>}
     </section>
   );
 }

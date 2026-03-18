@@ -49,13 +49,13 @@ function ageTier(isoDate: string | undefined | null): AgeTier {
 }
 
 const AGE_COLORS: Record<AgeTier, string> = {
-  fresh: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-  aging: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+  fresh: "bg-primary/20 text-primary border-primary/20",
+  aging: "bg-accent/20 text-accent border-accent/30",
   stale: "bg-red-500/20 text-red-400 border-red-500/30",
 };
 
 const AGE_DOTS: Record<AgeTier, string> = {
-  fresh: "bg-emerald-400",
+  fresh: "bg-primary",
   aging: "bg-amber-400",
   stale: "bg-red-400",
 };
@@ -117,7 +117,7 @@ export default function SessionsPage() {
   return (
     <OpsProvider>
       <div className="flex h-full flex-col">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background/70">
           <SessionsPageInner />
         </div>
       </div>
@@ -312,37 +312,37 @@ function SessionsPageInner() {
       {/* ── Top Bar ── */}
       <div className={`${hasSelectedSession ? "lg:col-span-2" : ""} flex flex-wrap items-center justify-between gap-3 pt-3`}>
         <div className="flex items-center gap-3">
-          <Link href="/" className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25 transition-colors">
+          <Link href="/" className="rounded-lg border border-primary/30 bg-primary/15 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-primary/90 hover:bg-primary/25 transition-colors">
             Back to Home
           </Link>
-          <h1 className="text-base font-semibold text-slate-100">Sessions</h1>
-          <span className="text-[10px] text-slate-500 font-mono">{DISPLAY_TIMEZONE}</span>
+          <h1 className="text-base font-semibold text-foreground">Sessions</h1>
+          <span className="text-[10px] text-muted-foreground font-mono">{DISPLAY_TIMEZONE}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Stats pills */}
           <div className="flex items-center gap-1.5">
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">{stats.active} active</span>
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/30">{stats.idle} idle</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/15 text-primary border border-primary/20">{stats.active} active</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted-foreground/15 text-muted-foreground border border-muted-foreground/30">{stats.idle} idle</span>
             {stats.stale > 0 && (
               <button
                 onClick={() => setStaleFilter(!staleFilter)}
                 className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all cursor-pointer ${
                   staleFilter
-                    ? "bg-red-500/30 text-red-300 border-red-400/60 ring-2 ring-red-500/40 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
+                    ? "bg-red-500/30 text-red-400 border-red-400/60 ring-2 ring-red-500/40 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
                     : "bg-red-500/15 text-red-400 border-red-500/30 animate-pulse hover:bg-red-500/25"
                 }`}
               >
                 ⚠ {stats.stale} stale
               </button>
             )}
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-700/40 text-slate-500 border border-slate-700/30">{stats.total} total</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-card/50/40 text-muted-foreground border border-border/30">{stats.total} total</span>
           </div>
 
-          <div className="w-px h-5 bg-slate-700" />
+          <div className="w-px h-5 bg-card/50" />
 
           <button
             onClick={cancelOutstandingRuns}
-            className="text-[11px] px-2.5 py-1 rounded-md border border-orange-500/40 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-all disabled:opacity-40"
+            className="text-[11px] px-2.5 py-1 rounded-md border border-accent/25 bg-accent/10 text-accent hover:bg-accent/20 transition-all disabled:opacity-40"
             disabled={runningCount === 0}
           >
             Kill Outstanding ({runningCount})
@@ -367,7 +367,7 @@ function SessionsPageInner() {
           )}
           <button
             onClick={fetchSessions}
-            className="text-[11px] px-2.5 py-1 rounded-md border border-slate-600/60 bg-slate-800/40 text-slate-300 hover:bg-slate-700/60 transition-all"
+            className="text-[11px] px-2.5 py-1 rounded-md border border-border/60 bg-card/40 text-foreground/80 hover:bg-card/50/60 transition-all"
             disabled={loading}
           >
             {loading ? "…" : "↻ Refresh"}
@@ -375,7 +375,7 @@ function SessionsPageInner() {
           {selected && !isVpSelected && (
             <button
               onClick={() => attachToChat(selected)}
-              className="text-[11px] px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all"
+              className="text-[11px] px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 transition-all"
               disabled={attaching}
             >
               {attaching ? "…" : "Open Chat"}
@@ -388,20 +388,20 @@ function SessionsPageInner() {
       <div className={`${hasSelectedSession ? "lg:row-span-5 lg:max-h-[82vh] lg:overflow-y-auto" : "lg:max-w-[900px]"} space-y-3 scrollbar-thin`}>
 
         {/* ── Active Sessions ── */}
-        <div className="border border-emerald-800/40 rounded-lg bg-emerald-950/20 overflow-hidden">
-          <div className="px-3 py-2 border-b border-emerald-800/30 flex items-center justify-between">
+        <div className="border border-primary/25 rounded-lg bg-primary/10 overflow-hidden">
+          <div className="px-3 py-2 border-b border-primary/20 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
               </span>
-              <span className="text-xs font-semibold text-emerald-300 uppercase tracking-wider">Active Sessions</span>
-              <span className="text-[10px] text-emerald-500/70">({activeSessions.length})</span>
+              <span className="text-xs font-semibold text-primary uppercase tracking-wider">Active Sessions</span>
+              <span className="text-[10px] text-primary/70">({activeSessions.length})</span>
             </div>
           </div>
           <div className="p-2 space-y-1.5">
             {activeSessions.length === 0 && (
-              <div className="text-[11px] text-emerald-600/60 text-center py-3 italic">No active sessions</div>
+              <div className="text-[11px] text-primary/60 text-center py-3 italic">No active sessions</div>
             )}
             {activeSessions.map((s) => (
               <SessionCard
@@ -418,39 +418,39 @@ function SessionsPageInner() {
         </div>
 
         {/* ── Historical Sessions ── */}
-        <div className="border border-slate-700/40 rounded-lg bg-slate-900/40 overflow-hidden">
+        <div className="border border-border/40 rounded-lg bg-background/40 overflow-hidden">
           <button
             onClick={() => setShowHistorical(!showHistorical)}
-            className="w-full px-3 py-2 border-b border-slate-700/30 flex items-center justify-between hover:bg-slate-800/30 transition-colors"
+            className="w-full px-3 py-2 border-b border-border/30 flex items-center justify-between hover:bg-card/30 transition-colors"
           >
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Historical Sessions</span>
-              <span className="text-[10px] text-slate-600">({historicalSessions.length})</span>
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Historical Sessions</span>
+              <span className="text-[10px] text-muted">({historicalSessions.length})</span>
               {noiseCount > 0 && (
-                <span className="text-[9px] text-slate-600 italic">+{noiseCount} hidden</span>
+                <span className="text-[9px] text-muted italic">+{noiseCount} hidden</span>
               )}
             </div>
             <div className="flex items-center gap-2">
               <label
-                className="flex items-center gap-1.5 text-[10px] text-slate-500 cursor-pointer"
+                className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer"
                 onClick={(e) => e.stopPropagation()}
               >
                 <input
                   type="checkbox"
                   checked={hideNoise}
                   onChange={(e) => setHideNoise(e.target.checked)}
-                  className="rounded border-slate-600 bg-slate-800 w-3 h-3 accent-cyan-500"
+                  className="rounded border-border bg-card w-3 h-3 accent-cyan-500"
                 />
                 Hide noise
               </label>
-              <span className="text-slate-600 text-xs">{showHistorical ? "▼" : "▶"}</span>
+              <span className="text-muted text-xs">{showHistorical ? "▼" : "▶"}</span>
             </div>
           </button>
 
           {showHistorical && (
             <div className="p-2 space-y-1.5 max-h-[50vh] overflow-y-auto scrollbar-thin">
               {historicalSessions.length === 0 && (
-                <div className="text-[11px] text-slate-600 text-center py-3 italic">
+                <div className="text-[11px] text-muted text-center py-3 italic">
                   {hideNoise ? "No interesting historical sessions (noise hidden)" : "No historical sessions"}
                 </div>
               )}
@@ -471,7 +471,7 @@ function SessionsPageInner() {
         </div>
 
         {sessionsError && (
-          <div className="rounded-md border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-400">
+          <div className="rounded-md border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-[11px] text-accent">
             {sessionsError}
           </div>
         )}
@@ -482,16 +482,16 @@ function SessionsPageInner() {
         <>
           {/* VP Observer Warning */}
           {isVpSelected && (
-            <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-rose-300">
+            <div className="rounded-md border border-red-400/25 bg-red-400/10 px-3 py-2 text-[10px] uppercase tracking-wider text-secondary">
               VP Observer Mode: view-only
             </div>
           )}
 
           {/* Session Actions */}
-          <div className="border border-slate-700/40 rounded-lg bg-slate-900/50 p-3 space-y-3">
+          <div className="border border-border/40 rounded-lg bg-background/50 p-3 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Session Detail</span>
-              <span className="text-[10px] text-slate-500 font-mono">{selected}</span>
+              <span className="text-xs font-semibold text-foreground/80 uppercase tracking-wider">Session Detail</span>
+              <span className="text-[10px] text-muted-foreground font-mono">{selected}</span>
             </div>
 
             {/* Quick info row */}
@@ -507,39 +507,39 @@ function SessionsPageInner() {
 
             {/* Age Row */}
             <div className="flex items-center gap-3 text-[10px]">
-              <span className="text-slate-500">Created:</span>
-              <span className="text-slate-400">{formatDateTimeTz(selectedSession.created_at, { placeholder: "—" })}</span>
+              <span className="text-muted-foreground">Created:</span>
+              <span className="text-muted-foreground">{formatDateTimeTz(selectedSession.created_at, { placeholder: "—" })}</span>
               <AgeBadge isoDate={selectedSession.created_at} label="age" />
-              <span className="text-slate-600">|</span>
-              <span className="text-slate-500">Last activity:</span>
-              <span className="text-slate-400">{relativeAge(selectedSession.last_activity)} ago</span>
+              <span className="text-muted">|</span>
+              <span className="text-muted-foreground">Last activity:</span>
+              <span className="text-muted-foreground">{relativeAge(selectedSession.last_activity)} ago</span>
             </div>
 
             {/* Description */}
             {selectedSession.description && (
-              <div className="rounded-md bg-slate-800/50 px-3 py-2 text-[11px] text-slate-300 italic border border-slate-700/30">
+              <div className="rounded-md bg-card/50 px-3 py-2 text-[11px] text-foreground/80 italic border border-border/30">
                 &ldquo;{selectedSession.description}&rdquo;
               </div>
             )}
 
             {/* Action buttons */}
             <div className="flex gap-2 flex-wrap">
-              <button onClick={() => attachToChat(selected)} className="px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-xs transition-all" disabled={attaching}>
+              <button onClick={() => attachToChat(selected)} className="px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 text-xs transition-all" disabled={attaching}>
                 {attaching ? "…" : isVpSelected ? "Observer Chat" : "Attach Chat (Tail)"}
               </button>
               {!isVpSelected && (
                 <>
-                  <button onClick={() => cancelSession(selected)} className="px-2.5 py-1 rounded-md border border-orange-500/40 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 text-xs transition-all">Cancel Run</button>
+                  <button onClick={() => cancelSession(selected)} className="px-2.5 py-1 rounded-md border border-accent/25 bg-accent/10 text-accent hover:bg-accent/20 text-xs transition-all">Cancel Run</button>
                   <button onClick={() => archiveSession(selected)} className="px-2.5 py-1 rounded-md border border-sky-500/40 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 text-xs transition-all">Archive</button>
-                  <button onClick={() => compactLogs(selected)} className="px-2.5 py-1 rounded-md border border-blue-500/40 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 text-xs transition-all">Compact Logs</button>
-                  <button onClick={() => resetSession(selected)} className="px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 text-xs transition-all">Reset</button>
+                  <button onClick={() => compactLogs(selected)} className="px-2.5 py-1 rounded-md border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 text-xs transition-all">Compact Logs</button>
+                  <button onClick={() => resetSession(selected)} className="px-2.5 py-1 rounded-md border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 text-xs transition-all">Reset</button>
                   <button onClick={() => deleteSession(selected)} className="px-2.5 py-1 rounded-md border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 text-xs transition-all">Delete</button>
                 </>
               )}
             </div>
 
             {isVpSelected && (
-              <div className="text-[10px] text-slate-500 italic">VP sessions are view-only. Use Simone chat for changes.</div>
+              <div className="text-[10px] text-muted-foreground italic">VP sessions are view-only. Use Simone chat for changes.</div>
             )}
           </div>
 
@@ -547,29 +547,29 @@ function SessionsPageInner() {
           <RehydrateStatus session={selectedSession} onRehydrate={rehydrateSession} rehydrating={rehydratingId === selected} />
 
           {/* Log Tail */}
-          <div className="border border-slate-700/40 rounded-lg bg-slate-900/50 p-3 space-y-2">
+          <div className="border border-border/40 rounded-lg bg-background/50 p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-300">run.log tail</span>
+              <span className="text-xs font-semibold text-foreground/80">run.log tail</span>
               <button
                 onClick={() => setExpandLogTail(!expandLogTail)}
-                className="text-[10px] px-1.5 py-0.5 rounded border border-slate-600/60 bg-slate-800/40 hover:bg-slate-700/60 transition-all text-slate-400"
+                className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/50/60 transition-all text-muted-foreground"
               >
                 {expandLogTail ? "Compact" : "Expand"}
               </button>
             </div>
-            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-black/30 p-2 rounded border border-slate-800/60 ${expandLogTail ? "max-h-[46vh]" : "max-h-40"}`}>
+            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-black/30 p-2 rounded border border-border/60 ${expandLogTail ? "max-h-[46vh]" : "max-h-40"}`}>
               {logTail || (isVpSelected ? "(empty VP lane log)" : "(empty)")}
             </pre>
           </div>
 
           {/* Delivery Workflow */}
-          <div className="border border-slate-700/40 rounded-lg bg-slate-900/50 p-3 space-y-2">
-            <div className="text-xs font-semibold text-slate-300">Delivery Workflow</div>
-            <div className="text-[10px] text-slate-500">Choose how to handle this output: promote, iterate, or archive.</div>
+          <div className="border border-border/40 rounded-lg bg-background/50 p-3 space-y-2">
+            <div className="text-xs font-semibold text-foreground/80">Delivery Workflow</div>
+            <div className="text-[10px] text-muted-foreground">Choose how to handle this output: promote, iterate, or archive.</div>
 
-            {deliveryLoading && <div className="text-[10px] text-slate-600">Loading thread…</div>}
+            {deliveryLoading && <div className="text-[10px] text-muted">Loading thread…</div>}
             {selectedThread && (
-              <div className="rounded-md border border-cyan-700/40 bg-cyan-900/10 px-2 py-1 text-[10px] text-cyan-200">
+              <div className="rounded-md border border-primary/30/40 bg-primary/10 px-2 py-1 text-[10px] text-primary/80">
                 Current: <span className="font-semibold uppercase">{selectedThread.decision || "pending"}</span>
                 {" · "}
                 {selectedThread.updated_at ? formatDateTimeTz(selectedThread.updated_at) : "recent"}
@@ -577,18 +577,18 @@ function SessionsPageInner() {
               </div>
             )}
             <div className="flex gap-2 flex-wrap">
-              <button onClick={() => selected && recordDeliveryDecision(selected, "promote")} disabled={!selected || isVpSelected || deliveryDecisionBusy} className="px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-xs disabled:opacity-40 transition-all">Promote Now</button>
-              <button onClick={() => selected && recordDeliveryDecision(selected, "iterate")} disabled={!selected || deliveryDecisionBusy} className="px-2.5 py-1 rounded-md border border-cyan-500/40 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-xs disabled:opacity-40 transition-all">Open Iteration</button>
-              <button onClick={() => selected && recordDeliveryDecision(selected, "archive")} disabled={!selected || isVpSelected || deliveryDecisionBusy} className="px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 text-xs disabled:opacity-40 transition-all">Archive Draft</button>
+              <button onClick={() => selected && recordDeliveryDecision(selected, "promote")} disabled={!selected || isVpSelected || deliveryDecisionBusy} className="px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 text-xs disabled:opacity-40 transition-all">Promote Now</button>
+              <button onClick={() => selected && recordDeliveryDecision(selected, "iterate")} disabled={!selected || deliveryDecisionBusy} className="px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 text-xs disabled:opacity-40 transition-all">Open Iteration</button>
+              <button onClick={() => selected && recordDeliveryDecision(selected, "archive")} disabled={!selected || isVpSelected || deliveryDecisionBusy} className="px-2.5 py-1 rounded-md border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 text-xs disabled:opacity-40 transition-all">Archive Draft</button>
             </div>
             <textarea
               value={deliveryNoteDraft}
               onChange={(e) => setDeliveryNoteDraft(e.target.value)}
               placeholder="Optional notes (acceptance criteria, follow-up asks, risk notes)"
-              className="w-full rounded-md border border-slate-700/60 bg-slate-800/40 px-2 py-1.5 text-[11px] min-h-16 text-slate-300 placeholder:text-slate-600 focus:border-cyan-600/40 focus:outline-none"
+              className="w-full rounded-md border border-border/60 bg-card/40 px-2 py-1.5 text-[11px] min-h-16 text-foreground/80 placeholder:text-muted focus:border-primary/25 focus:outline-none"
             />
             {deliveryStatus && (
-              <div className="text-[10px] text-emerald-400">{deliveryStatus}</div>
+              <div className="text-[10px] text-primary">{deliveryStatus}</div>
             )}
           </div>
         </>
@@ -596,7 +596,7 @@ function SessionsPageInner() {
 
       {/* No selection state */}
       {!selected && (
-        <div className="flex items-center justify-center py-16 text-slate-600 text-sm italic">
+        <div className="flex items-center justify-center py-16 text-muted text-sm italic">
           Select a session to view details
         </div>
       )}
@@ -648,39 +648,39 @@ function SessionCard({
       className={`
         w-full text-left px-3 py-2 rounded-lg border transition-all duration-150
         ${isSelected
-          ? "border-cyan-500/50 bg-cyan-950/30 shadow-glow-sm"
-          : "border-slate-700/40 bg-slate-800/20 hover:bg-slate-800/40 hover:border-slate-600/50"
+          ? "border-primary/30 bg-primary/10 shadow-glow-sm"
+          : "border-border/40 bg-card/20 hover:bg-card/40 hover:border-border/50"
         }
       `}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           {/* Session ID */}
-          <div className="font-mono text-[11px] text-slate-200 truncate">{shortSessionId(s.session_id)}</div>
+          <div className="font-mono text-[11px] text-foreground truncate">{shortSessionId(s.session_id)}</div>
 
           {/* Description */}
           {s.description && (
-            <div className="text-[10px] text-slate-400 truncate mt-0.5 italic">{s.description}</div>
+            <div className="text-[10px] text-muted-foreground truncate mt-0.5 italic">{s.description}</div>
           )}
 
           {/* Meta row */}
           <div className="flex items-center gap-2 mt-1 text-[10px]">
             {/* Status badge */}
             {isActive ? (
-              <span className="flex items-center gap-1 text-emerald-400">
+              <span className="flex items-center gap-1 text-primary">
                 <span className="relative flex h-1.5 w-1.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-primary" />
                 </span>
                 {s.status}
               </span>
             ) : (
-              <span className="text-slate-500">{s.status}</span>
+              <span className="text-muted-foreground">{s.status}</span>
             )}
-            <span className="text-slate-600">·</span>
-            <span className="text-slate-500">{s.source || s.channel || "local"}</span>
-            <span className="text-slate-600">·</span>
-            <span className="text-slate-500">{s.owner || "unknown"}</span>
+            <span className="text-muted">·</span>
+            <span className="text-muted-foreground">{s.source || s.channel || "local"}</span>
+            <span className="text-muted">·</span>
+            <span className="text-muted-foreground">{s.owner || "unknown"}</span>
           </div>
         </div>
 
@@ -688,7 +688,7 @@ function SessionCard({
         <div className="flex flex-col items-end gap-1 shrink-0">
           <AgeBadge isoDate={s.created_at || s.last_modified} />
 
-          <span className="text-[9px] text-slate-600">
+          <span className="text-[9px] text-muted">
             {relativeAge(s.last_activity)} ago
           </span>
 
@@ -696,7 +696,7 @@ function SessionCard({
           {!isActive && s.rehydrate_ready && (
             <button
               onClick={(e) => { e.stopPropagation(); onRehydrate(s.session_id); }}
-              className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-600/40 bg-cyan-600/10 text-cyan-400 hover:bg-cyan-600/20 transition-all"
+              className="text-[9px] px-1.5 py-0.5 rounded border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 transition-all"
               disabled={rehydrating}
             >
               {rehydrating ? "…" : "↻ Rehydrate"}
@@ -728,16 +728,16 @@ function AgeBadge({ isoDate, label }: { isoDate?: string | null; label?: string 
 
 function InfoPill({ label, value, color }: { label: string; value: string; color: string }) {
   const colorMap: Record<string, string> = {
-    emerald: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    emerald: "bg-primary/10 text-primary border-primary/15",
     red: "bg-red-500/10 text-red-400 border-red-500/20",
-    slate: "bg-slate-500/10 text-slate-400 border-slate-500/20",
-    cyan: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
-    violet: "bg-violet-500/10 text-violet-400 border-violet-500/20",
+    slate: "bg-muted-foreground/10 text-muted-foreground border-muted-foreground/20",
+    cyan: "bg-primary/10 text-primary border-primary/15",
+    violet: "bg-secondary/10 text-secondary border-secondary/15",
     sky: "bg-sky-500/10 text-sky-400 border-sky-500/20",
   };
   return (
     <div className={`rounded-md border px-2 py-1 ${colorMap[color] || colorMap.slate}`}>
-      <div className="text-[9px] text-slate-500 uppercase">{label}</div>
+      <div className="text-[9px] text-muted-foreground uppercase">{label}</div>
       <div className="text-[11px] font-medium truncate">{value}</div>
     </div>
   );
@@ -761,19 +761,19 @@ function RehydrateStatus({
 }) {
   if (session.rehydrate_ready) {
     return (
-      <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[11px] text-emerald-300">
-          <span className="text-emerald-400">✓</span>
+      <div className="rounded-lg border border-primary/30/40 bg-primary/10 px-3 py-2 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[11px] text-primary">
+          <span className="text-primary">✓</span>
           <span>Rehydrate ready ({(session.rehydrate_reason || "").replace(/_/g, " ")})</span>
           {session.has_checkpoint && session.checkpoint_tasks_completed != null && (
-            <span className="text-emerald-400/60">
+            <span className="text-primary/60">
               · {session.checkpoint_tasks_completed} tasks, {session.checkpoint_artifacts_count ?? 0} artifacts
             </span>
           )}
         </div>
         <button
           onClick={() => onRehydrate(session.session_id)}
-          className="text-[10px] px-2 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all"
+          className="text-[10px] px-2 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 transition-all"
           disabled={rehydrating}
         >
           {rehydrating ? "Rehydrating…" : "↻ Rehydrate Now"}
@@ -793,7 +793,7 @@ function RehydrateStatus({
 
   return (
     <div className="rounded-lg border border-amber-700/40 bg-amber-950/15 px-3 py-2 space-y-1">
-      <div className="text-[11px] font-semibold text-amber-300">Cannot rehydrate</div>
+      <div className="text-[11px] font-semibold text-accent">Cannot rehydrate</div>
       <ul className="list-disc list-inside text-[10px] text-amber-200/70 space-y-0.5">
         {parts.map((p) => <li key={p}>{hints[p] || p.replace(/_/g, " ")}</li>)}
       </ul>

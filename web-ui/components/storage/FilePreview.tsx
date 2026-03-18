@@ -100,7 +100,7 @@ function HighlightedCode({ code, language }: { code: string; language?: string }
     }, [code, language]);
 
     return (
-        <pre className="h-full overflow-auto rounded-lg border border-slate-700/50 bg-[#22272e] p-4 text-[13px] leading-6">
+        <pre className="h-full overflow-auto rounded-lg border border-border/50 bg-[#22272e] p-4 text-[13px] leading-6">
             <code ref={codeRef} className="font-mono">{code}</code>
         </pre>
     );
@@ -127,15 +127,15 @@ function LogViewer({ content }: { content: string }) {
     const lines = useMemo(() => content.split("\n"), [content]);
 
     return (
-        <div className="h-full overflow-auto rounded-lg border border-slate-700/50 bg-[#0d1117] p-4">
+        <div className="h-full overflow-auto rounded-lg border border-border/50 bg-[#0d1117] p-4">
             <table className="w-full border-collapse font-mono text-[12px] leading-5">
                 <tbody>
                     {lines.map((line, i) => (
-                        <tr key={i} className="hover:bg-slate-800/40">
-                            <td className="select-none pr-4 text-right text-slate-600 align-top w-[1%] whitespace-nowrap">
+                        <tr key={i} className="hover:bg-card/40">
+                            <td className="select-none pr-4 text-right text-muted align-top w-[1%] whitespace-nowrap">
                                 {i + 1}
                             </td>
-                            <td className="whitespace-pre-wrap break-all text-slate-300">
+                            <td className="whitespace-pre-wrap break-all text-foreground/80">
                                 {line}
                             </td>
                         </tr>
@@ -158,7 +158,7 @@ function HtmlPreview({ content }: { content: string }) {
     }, [content]);
 
     return (
-        <div className="h-full overflow-hidden rounded-lg border border-slate-700/50">
+        <div className="h-full overflow-hidden rounded-lg border border-border/50">
             <iframe
                 srcDoc={srcDoc}
                 sandbox="allow-same-origin"
@@ -207,7 +207,7 @@ export function FilePreview({
     // ── Empty state ──
     if (!title && !isLoading) {
         return (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500">
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
                 <FileText className="h-12 w-12 opacity-30" />
                 <p className="text-sm">Select a file to preview</p>
             </div>
@@ -218,25 +218,25 @@ export function FilePreview({
         <div className="flex h-full flex-col">
             {/* ── Header ── */}
             {title && (
-                <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-800/40 px-3 py-2">
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-border/50 bg-card/40 px-3 py-2">
                     <FileTypeIcon fileType={fileType} />
-                    <span className="flex-1 truncate font-mono text-sm text-slate-200" title={title}>
+                    <span className="flex-1 truncate font-mono text-sm text-foreground" title={title}>
                         {fileName}
                     </span>
-                    <span className="rounded-md border border-slate-600/40 bg-slate-700/30 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-400">
+                    <span className="rounded-md border border-border/40 bg-card/50/30 px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
                         {fileTypeLabel(fileType)}
                     </span>
                     {contentSize > 0 && (
-                        <span className="text-[11px] text-slate-500">{formatBytes(contentSize)}</span>
+                        <span className="text-[11px] text-muted-foreground">{formatBytes(contentSize)}</span>
                     )}
                     {content && fileType !== "image" && (
                         <button
                             type="button"
                             onClick={handleCopy}
-                            className="inline-flex items-center gap-1 rounded-md border border-slate-600/40 bg-slate-700/30 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:bg-slate-600/40 hover:text-slate-200"
+                            className="inline-flex items-center gap-1 rounded-md border border-border/40 bg-card/50/30 px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
                             title="Copy to clipboard"
                         >
-                            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                            {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
                             {copied ? "Copied" : "Copy"}
                         </button>
                     )}
@@ -247,19 +247,19 @@ export function FilePreview({
             <div className="min-h-0 flex-1">
                 {isLoading ? (
                     <div className="flex h-full items-center justify-center">
-                        <div className="flex items-center gap-3 text-slate-400">
-                            <div className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-500/30 border-t-cyan-500" />
+                        <div className="flex items-center gap-3 text-muted-foreground">
+                            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary/30 border-t-cyan-500" />
                             <span className="text-sm">Loading file...</span>
                         </div>
                     </div>
                 ) : error ? (
                     <div className="flex h-full items-center justify-center">
-                        <div className="rounded-lg border border-red-700/50 bg-red-600/10 px-4 py-3 text-sm text-red-300">
+                        <div className="rounded-lg border border-red-700/50 bg-red-600/10 px-4 py-3 text-sm text-red-400">
                             {error}
                         </div>
                     </div>
                 ) : imageUrl ? (
-                    <div className="flex h-full items-center justify-center overflow-auto rounded-lg border border-slate-700/50 bg-slate-950/80 p-4">
+                    <div className="flex h-full items-center justify-center overflow-auto rounded-lg border border-border/50 bg-background/80 p-4">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                             src={imageUrl}
@@ -268,10 +268,10 @@ export function FilePreview({
                         />
                     </div>
                 ) : fileType === "markdown" && content ? (
-                    <div className="h-full overflow-auto rounded-lg border border-slate-700/50 bg-slate-950/80 p-4 text-[13px] leading-7 text-slate-200">
+                    <div className="h-full overflow-auto rounded-lg border border-border/50 bg-background/80 p-4 text-[13px] leading-7 text-foreground">
                         <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
-                            className="prose prose-sm max-w-none prose-invert prose-headings:text-cyan-300 prose-a:text-cyan-400 prose-code:text-emerald-300 prose-pre:bg-[#22272e] prose-pre:border prose-pre:border-slate-700/50"
+                            className="prose prose-sm max-w-none prose-invert prose-headings:text-primary prose-a:text-primary prose-code:text-primary prose-pre:bg-[#22272e] prose-pre:border prose-pre:border-border/50"
                         >
                             {content}
                         </ReactMarkdown>
@@ -285,11 +285,11 @@ export function FilePreview({
                 ) : fileType === "log" && content ? (
                     <LogViewer content={content} />
                 ) : content ? (
-                    <pre className="h-full overflow-auto rounded-lg border border-slate-700/50 bg-slate-950/80 p-4 text-[13px] leading-6 text-slate-300 font-mono">
+                    <pre className="h-full overflow-auto rounded-lg border border-border/50 bg-background/80 p-4 text-[13px] leading-6 text-foreground/80 font-mono">
                         {content}
                     </pre>
                 ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                         File is empty
                     </div>
                 )}

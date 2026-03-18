@@ -215,9 +215,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   if (loadingAuth) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#0a0a0f] text-slate-200">
-        <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-6 py-5 text-sm text-slate-400 backdrop-blur">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-600 border-t-blue-400" />
+      <div className="flex h-screen items-center justify-center bg-background text-foreground">
+        <div className="flex items-center gap-3 rounded-2xl border border-border/40 bg-card/30 px-6 py-5 text-sm text-muted-foreground backdrop-blur">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
           Verifying session...
         </div>
       </div>
@@ -230,32 +230,32 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   if (!session?.authenticated) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#0a0a0f] text-slate-100 p-4">
+      <div className="flex h-screen items-center justify-center bg-background text-foreground p-4">
         <div className="w-full max-w-sm">
           <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/10 ring-1 ring-blue-500/20">
-              <LayoutDashboard className="h-6 w-6 text-blue-400" />
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/20">
+              <LayoutDashboard className="h-6 w-6 text-primary" />
             </div>
             <h1 className="text-xl font-semibold tracking-tight">Universal Agent</h1>
-            <p className="mt-1 text-sm text-slate-500">Sign in to operations dashboard</p>
+            <p className="mt-1 text-sm text-muted-foreground">Sign in to operations dashboard</p>
           </div>
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6 backdrop-blur">
+          <div className="rounded-2xl border border-border/40 bg-card/20 p-6 backdrop-blur">
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Owner ID</label>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Owner ID</label>
                 <input
                   value={ownerId}
                   onChange={(event) => setOwnerId(event.target.value)}
-                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20"
+                  className="w-full rounded-xl border border-border/40 bg-card/20 px-4 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Password</label>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Password</label>
                 <input
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
-                  className="w-full rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20"
+                  className="w-full rounded-xl border border-border/40 bg-card/20 px-4 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
                 />
               </div>
               {authError && (
@@ -265,7 +265,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               )}
               <button
                 type="submit"
-                className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-500 active:bg-blue-700"
+                className="w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 active:bg-primary/80"
               >
                 Sign In
               </button>
@@ -283,7 +283,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const isStaging = process.env.NEXT_PUBLIC_UA_RUNTIME_STAGE === "staging";
 
   return (
-    <div className="h-screen flex flex-col bg-[#0a0a0f] text-slate-100">
+    <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Staging environment banner */}
       {isStaging && (
         <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-400 px-4 py-1.5 text-xs font-semibold text-amber-950">
@@ -293,15 +293,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </div>
       )}
       {/* Top bar — desktop + mobile */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-white/[0.06] bg-white/[0.02] px-4 backdrop-blur">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border/40 bg-card/10 px-4 backdrop-blur">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200 md:hidden"
+            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-card/30 hover:text-foreground md:hidden"
           >
             {isMobileSidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
-          <span className="text-sm font-semibold tracking-tight text-slate-300">Operations</span>
+          <span className="text-sm font-semibold tracking-tight text-foreground/80">Operations</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -311,7 +311,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               const w = window.open(url, "ua-chat-window");
               if (w) w.focus();
             }}
-            className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.06] hover:text-white"
+            className="flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/20 px-3 py-1.5 text-xs font-medium text-foreground/80 transition hover:bg-card/30 hover:text-foreground"
           >
             <MessageSquare className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Chat</span>
@@ -320,7 +320,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={handleLogout}
-              className="flex items-center gap-1.5 rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.06] hover:text-slate-300"
+              className="flex items-center gap-1.5 rounded-lg p-1.5 text-muted-foreground transition hover:bg-card/30 hover:text-foreground"
               title="Sign Out"
             >
               <LogOut className="h-4 w-4" />
@@ -341,7 +341,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         {/* Sidebar */}
         <aside
           className={[
-            "fixed inset-y-12 left-0 z-50 flex w-64 flex-col border-r border-white/[0.06] bg-[#0a0a0f] transition-transform duration-200 md:relative md:inset-0 md:translate-x-0",
+            "fixed inset-y-12 left-0 z-50 flex w-64 flex-col border-r border-border/40 bg-background transition-transform duration-200 md:relative md:inset-0 md:translate-x-0",
             isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
           ].join(" ")}
         >
@@ -353,7 +353,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               if (visibleItems.length === 0) return null;
               return (
                 <div key={group.title} className="mb-5">
-                  <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+                  <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
                     {group.title}
                   </p>
                   <div className="space-y-0.5">
@@ -367,11 +367,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                             href={item.href}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition hover:bg-card/20 hover:text-foreground"
                           >
                             <Icon className="h-4 w-4 shrink-0 opacity-60" />
                             {item.label}
-                            <span className="ml-auto text-[10px] text-slate-600">&#x2197;</span>
+                            <span className="ml-auto text-[10px] text-muted">&#x2197;</span>
                           </a>
                         );
                       }
@@ -382,14 +382,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                           className={[
                             "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition",
                             active
-                              ? "bg-blue-500/10 text-blue-300 font-medium"
-                              : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200",
+                              ? "bg-primary/10 text-primary font-medium"
+                              : "text-muted-foreground hover:bg-card/20 hover:text-foreground",
                           ].join(" ")}
                         >
                           <Icon
                             className={[
                               "h-4 w-4 shrink-0",
-                              active ? "text-blue-400" : "opacity-50",
+                              active ? "text-primary" : "opacity-50",
                             ].join(" ")}
                           />
                           {item.label}
@@ -402,8 +402,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          <div className="border-t border-white/[0.06] px-4 py-3">
-            <p className="text-[11px] text-slate-600">{session.owner_id}</p>
+          <div className="border-t border-border/40 px-4 py-3">
+            <p className="text-[11px] text-muted">{session.owner_id}</p>
           </div>
         </aside>
 
@@ -433,7 +433,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   if (commandBarTimeoutRef.current) clearTimeout(commandBarTimeoutRef.current);
                 }}
               >
-                <div className="border-b border-white/[0.06] bg-[#0a0a0f]/95 backdrop-blur-lg p-3">
+                <div className="border-b border-border/40 bg-background/95 backdrop-blur-lg p-3">
                   <SystemCommandBar sourcePage={pathname || "/dashboard"} />
                 </div>
               </div>

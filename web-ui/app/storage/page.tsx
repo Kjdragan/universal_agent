@@ -3,8 +3,8 @@ import { StoragePageClient } from "@/components/storage/StoragePageClient";
 
 function StorageLoading() {
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6">
-      <div className="mx-auto w-full max-w-7xl rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-sm text-slate-300">
+    <main className="min-h-screen bg-background text-foreground p-4 md:p-6">
+      <div className="mx-auto w-full max-w-7xl rounded-xl border border-border bg-background/70 p-4 text-sm text-foreground/80">
         Loading storage...
       </div>
     </main>
