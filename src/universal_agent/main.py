@@ -7220,8 +7220,11 @@ def _is_tool_required_intent(query: str) -> bool:
     Note: heartbeat/cron queries are handled by _is_system_intent, not here.
     """
     lowered = query.lower()
+    # Attached files always need tools (image analysis, file processing, etc.)
+    if "[attached image:" in lowered or "[attached " in lowered or "--- attached:" in lowered:
+        return True
     # Explicit tool/action verbs
-    if any(kw in lowered for kw in ["search for", "send email", "run ", "execute ", "create a report"]):
+    if any(kw in lowered for kw in ["search for", "send email", "email it", "email me", "email this", "run ", "execute ", "create a report"]):
         return True
     # YouTube/media URL fetching always needs external tools
     if any(kw in lowered for kw in ["youtu.be", "youtube.com", "transcript", "get the transcript", "fetch transcript"]):

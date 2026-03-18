@@ -1394,7 +1394,12 @@ function ChatInterface() {
         const ext = f.filename.split(".").pop() || "txt";
         fileParts.push(`\n\n--- Attached: ${f.filename} ---\n\`\`\`${ext}\n${f.content}\n\`\`\``);
       } else if (f.type === "image") {
-        fileParts.push(`\n\n[Attached image: ${f.path}] — Use ZAI vision tools to analyze this image.`);
+        fileParts.push(
+          `\n\n[Attached image: ${f.path}]\n` +
+          `This image file has been uploaded to the session workspace at "${f.path}" (relative to your workspace root). ` +
+          `To analyze it, use the ZAI Vision MCP tool \`mcp__zai_vision__image_analysis\` with the full workspace path. ` +
+          `Then proceed with the user's request using the analysis results.`
+        );
       }
     }
     if (fileParts.length) {

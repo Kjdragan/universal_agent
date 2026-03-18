@@ -1066,14 +1066,16 @@ export default function MissionControlPage() {
             <button
               onClick={triggerRefresh}
               disabled={isRefreshing}
+              disabled={isRefreshing}
               className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-60"
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
               Refresh All
             </button>
             <button
-              onClick={() => triggerRefresh}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+              onClick={triggerRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-60"
             >
               <Activity className={`h-4 w-4 ${isRefreshing ? "animate-pulse" : ""}`} />
               Run Health Check
@@ -1102,11 +1104,13 @@ export default function MissionControlPage() {
           </div>
         </div>
 
-        {/* Main Content Grid - 3 cols desktop, 1 col mobile */}
+        {/* Main Content Grid - Top row: 3 cols, Bottom row: 2 cols */}
         <div className="grid flex-1 gap-4 md:grid-cols-3">
           <ActiveTasksPanel />
           <SystemStatusPanel />
           <SystemResourcesPanel />
+        </div>
+        <div className="grid flex-1 gap-4 md:grid-cols-2">
           <RecentEventsPanel />
           <CSISignalsPanel />
         </div>
