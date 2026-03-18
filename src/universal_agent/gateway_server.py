@@ -9466,6 +9466,214 @@ def _calendar_project_heartbeat_events(
     return events, always_running
 
 
+def _calendar_project_task_events(
+    *,
+    start_ts: float,
+    end_ts: float,
+    timezone_name: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Project TaskHub items with due_at into calendar events.
+
+    Returns (timed_events, anytime_events) — timed have due_at in
+    the calendar window, anytime are open tasks with no due_at that
+    are still relevant (agent-ready, recent).
+    """
+    events: list[dict[str, Any]] = []
+    overdue: list[dict[str, Any]] = []
+    now_ts = time.time()
+    try:
+        conn = _task_hub_open_conn()
+        try:
+            start_iso = datetime.fromtimestamp(start_ts, timezone.utc).isoformat()
+            end_iso = datetime.fromtimestamp(end_ts, timezone.utc).isoformat()
+            # Tasks with due_at in the calendar window OR overdue (due_at < now, not completed)
+            rows = conn.execute(
+                """
+                SELECT task_id, source_kind, source_ref, title, description,
+                       project_key, priority, due_at, labels_json, status,
+                       must_complete, agent_ready, score, seizure_state,
+                       mirror_status, metadata_json, created_at, updated_at
+                FROM task_hub_items
+                WHERE due_at IS NOT NULL
+                  AND due_at != ''
+                  AND status NOT IN ('parked', 'archived')
+                ORDER BY due_at ASC
+                LIMIT 200
+                """,
+            ).fetchall()
+            for row in rows:
+                row_dict = dict(row) if hasattr(row, "keys") else {}
+                if not row_dict:
+                    continue
+                task_id = str(row_dict.get("task_id") or "")
+                due_at_str = str(row_dict.get("due_at") or "").strip()
+                status = str(row_dict.get("status") or "open")
+                title = str(row_dict.get("title") or "Untitled task")
+                priority = int(row_dict.get("priority") or 1)
+                project_key = str(row_dict.get("project_key") or "immediate")
+                agent_ready = bool(row_dict.get("agent_ready"))
+                must_complete = bool(row_dict.get("must_complete"))
+                seizure_state = str(row_dict.get("seizure_state") or "unseized")
+                try:
+                    labels = json.loads(str(row_dict.get("labels_json") or "[]"))
+                except Exception:
+                    labels = []
+                try:
+                    metadata = json.loads(str(row_dict.get("metadata_json") or "{}"))
+                except Exception:
+                    metadata = {}
+                # Parse due_at to epoch
+                due_epoch: Optional[float] = None
+                try:
+                    dt = datetime.fromisoformat(due_at_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    due_epoch = dt.timestamp()
+                except Exception:
+                    continue  # Skip tasks with unparseable due_at
+
+                is_overdue = status not in ("completed", "parked", "archived") and due_epoch < now_ts
+                is_in_window = start_ts <= due_epoch <= end_ts
+
+                # Determine color_key based on status
+                if status == "completed":
+                    color_key = "task_completed"
+                elif is_overdue:
+                    color_key = "task_overdue"
+                elif status == "in_progress":
+                    color_key = "task_active"
+                else:
+                    color_key = "task"
+
+                # Build status label
+                status_labels = []
+                if is_overdue:
+                    overdue_mins = int((now_ts - due_epoch) / 60)
+                    if overdue_mins >= 1440:
+                        status_labels.append(f"overdue {overdue_mins // 1440}d")
+                    elif overdue_mins >= 60:
+                        status_labels.append(f"overdue {overdue_mins // 60}h")
+                    else:
+                        status_labels.append(f"overdue {overdue_mins}m")
+                status_labels.append(status)
+                if seizure_state == "seized":
+                    status_labels.append("claimed")
+
+                priority_labels = {1: "low", 2: "medium", 3: "high", 4: "urgent"}
+                description_parts = [
+                    f"Priority: {priority_labels.get(priority, 'medium')}",
+                    f"Project: {project_key}",
+                ]
+                schedule_text = str(metadata.get("schedule_text") or "").strip()
+                if schedule_text:
+                    description_parts.append(f"Schedule: {schedule_text}")
+
+                event = {
+                    "event_id": f"task:{task_id}:{int(due_epoch)}",
+                    "source": "task",
+                    "source_ref": task_id,
+                    "title": title,
+                    "description": " • ".join(description_parts),
+                    "category": "task",
+                    "color_key": color_key,
+                    "status": " · ".join(status_labels),
+                    "scheduled_at_epoch": due_epoch,
+                    "scheduled_at_utc": datetime.fromtimestamp(due_epoch, timezone.utc).isoformat(),
+                    "scheduled_at_local": _calendar_local_iso(due_epoch, timezone_name),
+                    "timezone_display": timezone_name,
+                    "always_running": False,
+                    "is_overdue": is_overdue,
+                    "task_meta": {
+                        "task_id": task_id,
+                        "project_key": project_key,
+                        "priority": priority,
+                        "agent_ready": agent_ready,
+                        "must_complete": must_complete,
+                        "seizure_state": seizure_state,
+                        "labels": labels,
+                        "mirror_status": str(row_dict.get("mirror_status") or "internal"),
+                    },
+                    "actions": _calendar_task_actions(status, agent_ready, is_overdue),
+                }
+                if is_in_window or is_overdue:
+                    events.append(event)
+                if is_overdue:
+                    overdue.append(event)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("Calendar task projection failed: %s", exc)
+
+    return events, overdue
+
+
+def _calendar_task_actions(status: str, agent_ready: bool, is_overdue: bool) -> list[str]:
+    """Return available quick-actions for a task event."""
+    actions: list[str] = []
+    if status in ("open", "review"):
+        if agent_ready:
+            actions.append("prod_agent")
+        actions.append("reschedule")
+        actions.append("complete")
+        actions.append("dismiss")
+    elif status == "in_progress":
+        actions.append("complete")
+    elif status == "completed":
+        actions.append("reopen")
+    return actions
+
+
+def _calendar_compute_stats(
+    events: list[dict[str, Any]],
+    always_running: list[dict[str, Any]],
+    overdue: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute summary stats for the calendar feed."""
+    now_ts = time.time()
+    # Today window: midnight to midnight in UTC (approximate)
+    today_start = now_ts - (now_ts % 86400)
+    today_end = today_start + 86400
+
+    scheduled_today = 0
+    active_cron = 0
+    active_heartbeats = len(always_running)
+    pending_tasks = 0
+    next_event_label = ""
+    next_event_epoch: Optional[float] = None
+
+    for ev in events:
+        epoch = float(ev.get("scheduled_at_epoch") or 0)
+        source = str(ev.get("source") or "")
+        if today_start <= epoch < today_end:
+            scheduled_today += 1
+        if source == "cron":
+            active_cron += 1
+        if source == "task" and str(ev.get("status") or "").split(" · ")[0] not in ("completed",):
+            pending_tasks += 1
+        # Find next upcoming event
+        if epoch > now_ts and (next_event_epoch is None or epoch < next_event_epoch):
+            next_event_epoch = epoch
+            mins_away = int((epoch - now_ts) / 60)
+            if mins_away >= 1440:
+                next_event_label = f"{ev.get('title', 'Event')[:40]} in {mins_away // 1440}d"
+            elif mins_away >= 60:
+                next_event_label = f"{ev.get('title', 'Event')[:40]} in {mins_away // 60}h"
+            elif mins_away > 0:
+                next_event_label = f"{ev.get('title', 'Event')[:40]} in {mins_away}m"
+            else:
+                next_event_label = f"{ev.get('title', 'Event')[:40]} now"
+
+    return {
+        "scheduled_today": scheduled_today,
+        "active_cron_jobs": active_cron,
+        "active_heartbeats": active_heartbeats,
+        "pending_tasks": pending_tasks,
+        "overdue_tasks": len(overdue),
+        "next_event_label": next_event_label,
+        "next_event_epoch": next_event_epoch,
+    }
+
+
 def _calendar_build_feed(
     *,
     start_ts: float,
@@ -9477,9 +9685,11 @@ def _calendar_build_feed(
     source_norm = (source_filter or "all").strip().lower()
     include_cron = source_norm in {"all", "cron"}
     include_heartbeat = source_norm in {"all", "heartbeat"}
+    include_tasks = source_norm in {"all", "task", "overdue"}
 
     events: list[dict[str, Any]] = []
     always_running: list[dict[str, Any]] = []
+    overdue: list[dict[str, Any]] = []
     if include_cron:
         events.extend(
             _calendar_project_cron_events(
@@ -9498,6 +9708,18 @@ def _calendar_build_feed(
         )
         events.extend(hb_events)
         always_running.extend(hb_always)
+    if include_tasks:
+        task_events, task_overdue = _calendar_project_task_events(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            timezone_name=timezone_name,
+        )
+        events.extend(task_events)
+        overdue.extend(task_overdue)
+
+    # If filtering only overdue, keep only overdue task events
+    if source_norm == "overdue":
+        events = [ev for ev in events if ev.get("is_overdue")]
 
     # Defensive dedupe for noisy projection/replay cycles.
     events_by_id = {str(item.get("event_id") or ""): item for item in events if str(item.get("event_id") or "").strip()}
@@ -9521,9 +9743,12 @@ def _calendar_build_feed(
 
     events.sort(key=lambda item: float(item.get("scheduled_at_epoch") or 0.0))
     always_running.sort(key=lambda item: float(item.get("scheduled_at_epoch") or 0.0))
+    stats = _calendar_compute_stats(events, always_running, overdue)
     return {
         "events": events,
         "always_running": always_running,
+        "overdue": overdue,
+        "stats": stats,
     }
 
 
@@ -19988,6 +20213,8 @@ async def ops_calendar_events(
         "end_local": _calendar_local_iso(end_ts, tz_name),
         "events": feed["events"],
         "always_running": feed["always_running"],
+        "overdue": feed.get("overdue", []),
+        "stats": feed.get("stats", {}),
         "stasis_queue": stasis_items,
         "legend": {
             "heartbeat": "sky",
@@ -19996,6 +20223,10 @@ async def ops_calendar_events(
             "success": "emerald",
             "failed": "rose",
             "disabled": "slate",
+            "task": "yellow",
+            "task_overdue": "rose",
+            "task_active": "orange",
+            "task_completed": "emerald",
         },
     }
 
