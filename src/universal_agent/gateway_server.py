@@ -9635,8 +9635,7 @@ def _calendar_compute_stats(
     today_end = today_start + 86400
 
     scheduled_today = 0
-    active_cron = 0
-    active_heartbeats = len(always_running)
+    cron_job_ids: set[str] = set()
     pending_tasks = 0
     next_event_label = ""
     next_event_epoch: Optional[float] = None
@@ -9647,7 +9646,7 @@ def _calendar_compute_stats(
         if today_start <= epoch < today_end:
             scheduled_today += 1
         if source == "cron":
-            active_cron += 1
+            cron_job_ids.add(str(ev.get("source_ref") or ev.get("title") or ""))
         if source == "task" and str(ev.get("status") or "").split(" · ")[0] not in ("completed",):
             pending_tasks += 1
         # Find next upcoming event
@@ -9665,12 +9664,10 @@ def _calendar_compute_stats(
 
     return {
         "scheduled_today": scheduled_today,
-        "active_cron_jobs": active_cron,
-        "active_heartbeats": active_heartbeats,
+        "active_cron": len(cron_job_ids),
         "pending_tasks": pending_tasks,
         "overdue_tasks": len(overdue),
-        "next_event_label": next_event_label,
-        "next_event_epoch": next_event_epoch,
+        "next_event": next_event_label or None,
     }
 
 
