@@ -160,6 +160,89 @@ rm /opt/universal-agent-staging/web-ui/node_modules/.package-json-mtime  # stagi
 rm /opt/universal_agent/web-ui/node_modules/.package-json-mtime           # production
 ```
 
+## Service Restart on Deploy
+
+Every deploy pulls code, syncs dependencies, rebuilds the web UI, and then **restarts all managed systemd services**. This is the mechanism that ensures the running gateway, API, web UI, and other services pick up new code.
+
+### Systemd Unit Names
+
+| Service | Staging Unit | Production Unit |
+|---------|-------------|------------------|
+| Gateway | `universal-agent-staging-gateway` | `universal-agent-gateway` |
+| API | `universal-agent-staging-api` | `universal-agent-api` |
+| Web UI | `universal-agent-staging-webui` | `universal-agent-webui` |
+| Telegram | — (not running in staging) | `universal-agent-telegram` |
+| VP Worker (coder) | — | `universal-agent-vp-worker@vp.coder.primary` |
+| VP Worker (general) | — | `universal-agent-vp-worker@vp.general.primary` |
+
+### Restart Order
+
+**Staging**: gateway + API restarted together, then webui.
+
+**Production**: gateway + API + webui + telegram restarted together, then each enabled VP worker is restarted individually.
+
+VP workers are only restarted if `systemctl is-enabled` reports them as active. This allows new VPS nodes to deploy without VP worker units installed.
+
+### Deployment-Window Flag
+
+Both workflows set `/tmp/ua-deployment-window` before restarting services and clear it after. This flag exists so the CSI canary can suppress SLO alerts during the brief service restart window. A background cleanup process removes the flag after 25 minutes as a safety net if the deploy exits abnormally.
+
+> [!IMPORTANT]
+> **Code changes only take effect after the service restarts.** If the deploy workflow completes but services are not restarted (e.g., `systemctl` is not available), the gateway will continue running the old code. The workflow logs a warning in this case.
+
+## Post-Deploy Health Verification
+
+After a deploy completes, verify the services are running correctly:
+
+### Quick Check (from any Tailscale-connected machine)
+
+```bash
+# Production gateway health
+curl -s http://100.106.113.93:8002/api/v1/health
+
+# Staging gateway health
+curl -s http://100.106.113.93:9002/api/v1/health
+```
+
+### On the VPS
+
+```bash
+# Check service status
+sudo systemctl status universal-agent-gateway universal-agent-api universal-agent-webui
+
+# Tail gateway logs for errors
+sudo journalctl -u universal-agent-gateway -n 50 --no-pager
+
+# For staging:
+sudo systemctl status universal-agent-staging-gateway universal-agent-staging-api
+sudo journalctl -u universal-agent-staging-gateway -n 50 --no-pager
+```
+
+### Verify Latest Code Is Running
+
+The gateway lifespan initialization can take 2–3 minutes. If the health endpoint is unavailable immediately after deploy, wait and retry.
+
+To confirm the gateway is running the expected code, check the process start time against the deploy timestamp:
+
+```bash
+ps -eo pid,lstart,cmd | grep gateway_server | grep -v grep
+```
+
+## Local Development Restart Caveat
+
+> [!WARNING]
+> The CI/CD pipeline only restarts **systemd-managed services on the VPS**. If you are running the gateway, API, or dev server **locally** as a direct Python process (e.g., `python -m universal_agent.gateway_server` or `npm run dev`), deploying to `develop` or `main` does **not** restart your local process. You must restart it manually to pick up new code.
+
+This is the expected behavior — local development processes are owned by the developer, not by the CI/CD pipeline.
+
+Common scenario where this matters:
+
+1. You push a backend fix to `develop` and it deploys to the VPS staging.
+2. Your local gateway (started manually) is still running the old code.
+3. The local dashboard shows stale behavior because it's hitting the local gateway, not the VPS.
+
+**Fix:** Kill and restart the local gateway process, or point your local web UI at the VPS gateway instead.
+
 ## Review and Promotion Rule
 
 - There is exactly one Codex review gate: the PR into `develop`.

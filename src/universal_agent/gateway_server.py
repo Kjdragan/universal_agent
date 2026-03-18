@@ -10016,6 +10016,119 @@ async def _calendar_apply_event_action(
         if action_norm == "open_session":
             return {"status": "ok", "action": action_norm, "session_id": session_id}
 
+    # ── Task source actions ───────────────────────────────────────────
+    if source == "task":
+        task_id = source_ref
+        if action_norm == "complete":
+            with _activity_store_lock:
+                conn = _task_hub_open_conn()
+                try:
+                    result_item = task_hub.perform_task_action(
+                        conn, task_id=task_id, action="complete",
+                        reason="calendar_action", agent_id="calendar_operator",
+                    )
+                finally:
+                    conn.close()
+            return {"status": "ok", "action": action_norm, "task": result_item}
+
+        if action_norm in {"dismiss", "park"}:
+            with _activity_store_lock:
+                conn = _task_hub_open_conn()
+                try:
+                    result_item = task_hub.perform_task_action(
+                        conn, task_id=task_id, action="park",
+                        reason="calendar_dismissed", agent_id="calendar_operator",
+                    )
+                finally:
+                    conn.close()
+            return {"status": "ok", "action": action_norm, "task": result_item}
+
+        if action_norm == "reschedule":
+            new_due_at: Optional[str] = None
+            if run_at:
+                parsed_ts = _calendar_parse_ts(run_at, timezone_name)
+                if parsed_ts is None:
+                    parsed_ts = parse_run_at(run_at, timezone_name=timezone_name)
+                if parsed_ts is not None:
+                    new_due_at = datetime.fromtimestamp(parsed_ts, timezone.utc).isoformat()
+            if not new_due_at:
+                # Default: reschedule to 1 hour from now
+                new_due_at = datetime.fromtimestamp(
+                    time.time() + 3600, timezone.utc
+                ).isoformat()
+            with _activity_store_lock:
+                conn = _task_hub_open_conn()
+                try:
+                    conn.execute(
+                        "UPDATE task_hub_items SET due_at=?, updated_at=? WHERE task_id=?",
+                        (new_due_at, _utc_now_iso(), task_id),
+                    )
+                    conn.commit()
+                    fresh = task_hub.get_item(conn, task_id)
+                finally:
+                    conn.close()
+            return {"status": "ok", "action": action_norm, "new_due_at": new_due_at, "task": fresh}
+
+        if action_norm == "prod_agent":
+            # Prod the heartbeat session to immediately pick up this task
+            if not _heartbeat_service:
+                raise HTTPException(status_code=503, detail="Heartbeat service not available")
+            # Check task metadata for a target session, or prod all active sessions
+            with _activity_store_lock:
+                conn = _task_hub_open_conn()
+                try:
+                    item = task_hub.get_item(conn, task_id)
+                finally:
+                    conn.close()
+            if not item:
+                raise HTTPException(status_code=404, detail="Task not found")
+            metadata = item.get("metadata") or {}
+            target_session = str(metadata.get("session_id") or metadata.get("target_session") or "").strip()
+            prodded_sessions: list[str] = []
+            if target_session:
+                _heartbeat_service.request_heartbeat_next(target_session, reason=f"calendar_prod:{task_id}")
+                prodded_sessions.append(target_session)
+            else:
+                # Prod all active heartbeat sessions
+                for sid in _heartbeat_service.list_active_session_ids():
+                    _heartbeat_service.request_heartbeat_next(sid, reason=f"calendar_prod:{task_id}")
+                    prodded_sessions.append(sid)
+            # Track escalation count
+            with _activity_store_lock:
+                conn2 = _task_hub_open_conn()
+                try:
+                    existing = task_hub.get_item(conn2, task_id)
+                    if existing:
+                        meta = dict(existing.get("metadata") or {})
+                        meta["escalation_count"] = int(meta.get("escalation_count") or 0) + 1
+                        meta["last_escalated_at"] = _utc_now_iso()
+                        conn2.execute(
+                            "UPDATE task_hub_items SET metadata_json=?, updated_at=? WHERE task_id=?",
+                            (json.dumps(meta), _utc_now_iso(), task_id),
+                        )
+                        conn2.commit()
+                finally:
+                    conn2.close()
+            return {
+                "status": "ok", "action": action_norm,
+                "prodded_sessions": prodded_sessions,
+                "task_id": task_id,
+            }
+
+        if action_norm == "reopen":
+            with _activity_store_lock:
+                conn = _task_hub_open_conn()
+                try:
+                    conn.execute(
+                        "UPDATE task_hub_items SET status=?, seizure_state=?, updated_at=? WHERE task_id=?",
+                        ("open", "unseized", _utc_now_iso(), task_id),
+                    )
+                    conn.commit()
+                    fresh = task_hub.get_item(conn, task_id)
+                finally:
+                    conn.close()
+            return {"status": "ok", "action": action_norm, "task": fresh}
+
     raise HTTPException(status_code=400, detail=f"Unsupported action '{action_norm}' for source '{source}'")
 
 
@@ -20380,6 +20493,82 @@ async def ops_calendar_event_change_confirm(
         "source_ref": source_ref,
         "proposal": proposal,
         "result": result,
+    }
+
+
+@app.post("/api/v1/ops/calendar/nudge-overdue")
+async def ops_calendar_nudge_overdue(request: Request):
+    """Prod all active heartbeat sessions for every overdue, agent-ready task."""
+    _require_ops_auth(request)
+    _scheduling_counter_inc("calendar_nudge_overdue_requests")
+
+    if not _heartbeat_service:
+        raise HTTPException(status_code=503, detail="Heartbeat service not available")
+
+    now_iso = _utc_now_iso()
+    now_ts = time.time()
+    prodded_tasks: list[dict[str, Any]] = []
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT task_id, title, due_at, agent_ready, metadata_json
+                FROM task_hub_items
+                WHERE due_at IS NOT NULL AND due_at != ''
+                  AND status NOT IN ('completed', 'parked', 'archived')
+                  AND agent_ready = 1
+                ORDER BY due_at ASC
+                LIMIT 50
+                """,
+            ).fetchall()
+            overdue_rows = []
+            for row in rows:
+                row_d = dict(row) if hasattr(row, "keys") else {}
+                due_at_str = str(row_d.get("due_at") or "").strip()
+                try:
+                    dt = datetime.fromisoformat(due_at_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt.timestamp() < now_ts:
+                        overdue_rows.append(row_d)
+                except Exception:
+                    continue
+
+            active_session_ids = _heartbeat_service.list_active_session_ids()
+            for row_d in overdue_rows:
+                task_id = str(row_d.get("task_id") or "")
+                sessions_prodded: list[str] = []
+                for sid in active_session_ids:
+                    _heartbeat_service.request_heartbeat_next(sid, reason=f"nudge_overdue:{task_id}")
+                    sessions_prodded.append(sid)
+
+                # Update escalation count
+                try:
+                    meta_raw = str(row_d.get("metadata_json") or "{}")
+                    meta = json.loads(meta_raw)
+                except Exception:
+                    meta = {}
+                meta["escalation_count"] = int(meta.get("escalation_count") or 0) + 1
+                meta["last_escalated_at"] = now_iso
+                conn.execute(
+                    "UPDATE task_hub_items SET metadata_json=?, updated_at=? WHERE task_id=?",
+                    (json.dumps(meta), now_iso, task_id),
+                )
+                prodded_tasks.append({
+                    "task_id": task_id,
+                    "title": str(row_d.get("title") or ""),
+                    "sessions_prodded": sessions_prodded,
+                })
+            conn.commit()
+        finally:
+            conn.close()
+
+    return {
+        "status": "ok",
+        "prodded_count": len(prodded_tasks),
+        "tasks": prodded_tasks,
     }
 
 

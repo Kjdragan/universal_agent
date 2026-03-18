@@ -38,9 +38,10 @@ function asText(value: unknown): string {
 
 type SystemCommandBarProps = {
   sourcePage: string;
+  onSuccess?: () => void;
 };
 
-export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) {
+export default function SystemCommandBar({ sourcePage, onSuccess }: SystemCommandBarProps) {
   const searchParams = useSearchParams();
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -213,6 +214,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
         cron_job_id: asText(payloadCronJob?.job_id),
       });
       setText("");
+      onSuccess?.();
     } catch (err: any) {
       const errMsg = err?.message || "Failed to submit system command.";
       setError(errMsg);

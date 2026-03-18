@@ -163,6 +163,7 @@ const HEARTBEAT_ACTIONS: ActionDef[] = [
 
 const TASK_ACTIONS: ActionDef[] = [
   { action: "complete", icon: "✓", label: "Complete", color: "text-emerald-300 hover:bg-emerald-500/20", hideWhen: ["completed"] },
+  { action: "prod_agent", icon: "⚡", label: "Nudge", color: "text-orange-300 hover:bg-orange-500/20", showWhen: ["overdue", "active"] },
   { action: "reschedule", icon: "↻", label: "Reschedule", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["completed"] },
   { action: "dismiss", icon: "✕", label: "Dismiss", color: "text-slate-400 hover:bg-slate-500/20", hideWhen: ["completed"] },
   { action: "reopen", icon: "↺", label: "Reopen", color: "text-yellow-300 hover:bg-yellow-500/20", showWhen: ["completed"] },
@@ -356,6 +357,7 @@ export default function CalendarPage() {
   const [tz, setTz] = useState("America/Chicago");
   const [showCommandBar, setShowCommandBar] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const [nudging, setNudging] = useState(false);
 
   /* ─── Computed date range ────────────────── */
   const range = useMemo(() => {
@@ -468,11 +470,38 @@ export default function CalendarPage() {
         complete: "Task completed",
         dismiss: "Task dismissed",
         reopen: "Task reopened",
+        prod_agent: "Agent nudged — heartbeats prodded",
       };
       setToast({ message: labels[action] || `Action '${action}' completed`, type: "success" });
       await fetchCalendar();
     } catch (e) {
       setToast({ message: `Error: ${(e as Error).message}`, type: "error" });
+    }
+  }, [fetchCalendar]);
+
+  /* ─── Nudge All Overdue handler ──────────── */
+  const nudgeAllOverdue = useCallback(async () => {
+    setNudging(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/calendar/nudge-overdue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        setToast({ message: `Nudge failed: ${txt || r.statusText}`, type: "error" });
+        return;
+      }
+      const data = await r.json();
+      setToast({
+        message: `Nudged ${data.prodded_count || 0} overdue task(s)`,
+        type: data.prodded_count > 0 ? "success" : "info",
+      });
+      await fetchCalendar();
+    } catch (e) {
+      setToast({ message: `Error: ${(e as Error).message}`, type: "error" });
+    } finally {
+      setNudging(false);
     }
   }, [fetchCalendar]);
 
@@ -601,7 +630,7 @@ export default function CalendarPage() {
           <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold mb-2">
             Schedule a new task, cron job, or reminder
           </div>
-          <SystemCommandBar sourcePage="calendar" />
+          <SystemCommandBar sourcePage="calendar" onSuccess={fetchCalendar} />
         </div>
       )}
 
@@ -732,11 +761,21 @@ export default function CalendarPage() {
           {/* Overdue Panel */}
           {overdue.length > 0 && (
             <div className="tactical-panel rounded-lg p-3 border-red-500/30 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-red-400 font-bold text-sm">🔴 Overdue Tasks</span>
-                <span className="px-2 py-0.5 rounded-full bg-red-500/25 text-red-300 text-[10px] font-bold">
-                  {overdue.length}
-                </span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-red-400 font-bold text-sm">🔴 Overdue Tasks</span>
+                  <span className="px-2 py-0.5 rounded-full bg-red-500/25 text-red-300 text-[10px] font-bold">
+                    {overdue.length}
+                  </span>
+                </div>
+                <button
+                  onClick={nudgeAllOverdue}
+                  disabled={nudging}
+                  className="px-2 py-1 rounded-md border border-orange-500/40 bg-orange-500/10 hover:bg-orange-500/25 text-[10px] font-bold uppercase tracking-wider text-orange-200 transition-all disabled:opacity-50"
+                  title="Prod all overdue agent-ready tasks via heartbeat"
+                >
+                  {nudging ? "⟳ Nudging…" : "⚡ Nudge All"}
+                </button>
               </div>
               <div className="space-y-1.5">
                 {overdue.map((evt) => (
