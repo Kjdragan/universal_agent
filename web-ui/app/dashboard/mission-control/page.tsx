@@ -1066,7 +1066,6 @@ export default function MissionControlPage() {
             <button
               onClick={triggerRefresh}
               disabled={isRefreshing}
-              disabled={isRefreshing}
               className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-60"
             >
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
