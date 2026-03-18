@@ -2887,7 +2887,7 @@ def _continuity_alerts_snapshot() -> dict[str, Any]:
             }
         )
 
-    runtime_faults = 0
+    runtime_faults: int = 0
     for runtime in _session_runtime.values():
         if not isinstance(runtime, dict):
             continue
@@ -3046,7 +3046,7 @@ def _parse_json_text(raw: Any) -> Any:
 def _vp_session_to_dict(row: Any) -> Optional[dict[str, Any]]:
     if row is None:
         return None
-    payload = {k: row[k] for k in row.keys()} if hasattr(row, "keys") else dict(row)
+    payload: dict[str, Any] = {k: row[k] for k in row.keys()} if hasattr(row, "keys") else dict(row)
     metadata = _parse_json_text(payload.get("metadata_json"))
     if isinstance(metadata, dict):
         payload["metadata"] = metadata
@@ -3083,7 +3083,7 @@ def _vp_session_to_dict(row: Any) -> Optional[dict[str, Any]]:
 def _vp_mission_to_dict(row: Any) -> Optional[dict[str, Any]]:
     if row is None:
         return None
-    payload = {k: row[k] for k in row.keys()} if hasattr(row, "keys") else dict(row)
+    payload: dict[str, Any] = {k: row[k] for k in row.keys()} if hasattr(row, "keys") else dict(row)
     budget = _parse_json_text(payload.get("budget_json"))
     if isinstance(budget, dict):
         payload["budget"] = budget
@@ -3156,7 +3156,7 @@ def _reconcile_stale_vp_missions_once(
         """,
         (max(1, min(int(max_rows), 10000)),),
     ).fetchall()
-    reconciled = 0
+    reconciled: int = 0
     for row in rows:
         stale, stale_reason = _vp_is_running_mission_stale(
             row,
@@ -3218,7 +3218,7 @@ def _reconcile_stale_vp_missions_on_startup() -> int:
             pass
 
     seen_files: set[str] = set()
-    reconciled_total = 0
+    reconciled_total: int = 0
     for lane_label, conn in conns:
         if conn is None:
             continue
@@ -3290,9 +3290,9 @@ def _vp_recovery_snapshot(
     session_row: Any,
     parsed_session_events: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    recovery_attempts = 0
-    recovery_successes = 0
-    unresolved_recoveries = 0
+    recovery_attempts: int = 0
+    recovery_successes: int = 0
+    unresolved_recoveries: int = 0
 
     for item in parsed_session_events:
         event_type = str(item.get("event_type") or "")
@@ -4944,7 +4944,7 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
             )
             confidence_score = float(confidence.get("score") or 0.0)
             confidence_method = str(confidence.get("method") or "heuristic")
-            confidence_evidence = confidence.get("evidence") if isinstance(confidence.get("evidence"), dict) else {}
+            confidence_evidence: dict[str, Any] = confidence.get("evidence") if isinstance(confidence.get("evidence"), dict) else {}
             signal_volume = int(confidence_evidence.get("signal_volume") or 0)
             freshness_minutes = int(confidence_evidence.get("freshness_minutes") or 0)
             low_signal = signal_volume < int(_csi_specialist_min_signal_volume)
@@ -5276,7 +5276,7 @@ def _trim_turn_history(state: dict[str, Any]) -> None:
     turns = state.get("turns", {})
     if not isinstance(turns, dict):
         return
-    overflow = len(turns) - TURN_HISTORY_LIMIT
+    overflow: int = len(turns) - TURN_HISTORY_LIMIT
     if overflow <= 0:
         return
     active_turn_id = state.get("active_turn_id")
@@ -6150,7 +6150,7 @@ def _bridge_vp_events_once(*, limit: int = 200) -> int:
     if not rows:
         return 0
 
-    bridged = 0
+    bridged: int = 0
     cursor_advanced = False
     for row in rows:
         rowid = int(row["rowid"] or 0)
@@ -6305,6 +6305,8 @@ def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None
         return "continuity"
     if lowered.startswith("system"):
         return "system"
+    if lowered.startswith("agentmail"):
+        return "simone"
     if str(metadata.get("pipeline") or "").strip().startswith("csi_"):
         return "csi"
     return "system"
@@ -7099,8 +7101,102 @@ def _activity_record_from_notification(record: dict[str, Any]) -> dict[str, Any]
 def _persist_notification_activity(record: dict[str, Any]) -> None:
     try:
         _activity_upsert_record(_activity_record_from_notification(record))
+        _auto_resolve_superseded_failures(record)
     except Exception as exc:
         logger.debug("Failed persisting notification activity record: %s", exc)
+
+
+# ── Auto-resolve stale failure notifications on success/recovery ──────
+#
+# When a youtube_tutorial_ready or youtube_hook_recovery_queued notification
+# arrives for a video_id, find and soft-resolve any existing failure/interrupted
+# notifications for that same video_id.  This prevents stale alerts from
+# lingering after the pipeline has self-healed.
+
+_SUPERSEDE_TRIGGER_KINDS = frozenset({
+    "youtube_tutorial_ready",
+    "youtube_hook_recovery_queued",
+})
+_SUPERSEDED_FAILURE_KINDS = frozenset({
+    "youtube_tutorial_failed",
+    "youtube_tutorial_interrupted",
+})
+
+
+def _auto_resolve_superseded_failures(record: dict[str, Any]) -> None:
+    """Soft-resolve prior failure notifications when a video succeeds or is recovered."""
+    kind = str(record.get("kind") or "").strip().lower()
+    if kind not in _SUPERSEDE_TRIGGER_KINDS:
+        return
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    video_id = str(metadata.get("video_id") or "").strip()
+    if not video_id:
+        return
+    try:
+        with _activity_store_lock:
+            conn = _activity_connect()
+            try:
+                _ensure_activity_schema(conn)
+                # Find failure/interrupted rows for this video_id
+                rows = conn.execute(
+                    """
+                    SELECT id, kind, metadata_json
+                    FROM activity_events
+                    WHERE LOWER(kind) IN (?, ?)
+                      AND status NOT IN ('resolved', 'dismissed')
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                    """,
+                    tuple(_SUPERSEDED_FAILURE_KINDS),
+                ).fetchall()
+                resolved_ids: list[str] = []
+                for row in rows:
+                    row_meta = _activity_json_loads_obj(row["metadata_json"], default={})
+                    row_video_id = str(row_meta.get("video_id") or "").strip()
+                    if row_video_id == video_id:
+                        resolved_ids.append(str(row["id"]))
+                if resolved_ids:
+                    placeholders = ",".join("?" for _ in resolved_ids)
+                    # Stamp resolved_reason into metadata so the frontend can
+                    # distinguish auto-recovery from manual dismiss.
+                    for rid in resolved_ids:
+                        try:
+                            meta_row = conn.execute(
+                                "SELECT metadata_json FROM activity_events WHERE id = ?",
+                                (rid,),
+                            ).fetchone()
+                            existing_meta = _activity_json_loads_obj(
+                                meta_row["metadata_json"] if meta_row else "{}", default={}
+                            )
+                            existing_meta["resolved_reason"] = "auto_recovery"
+                            existing_meta["resolved_by_trigger"] = kind
+                            conn.execute(
+                                "UPDATE activity_events SET metadata_json = ? WHERE id = ?",
+                                (json.dumps(existing_meta, default=str), rid),
+                            )
+                        except Exception:
+                            pass  # best-effort metadata update
+                    conn.execute(
+                        f"""
+                        UPDATE activity_events
+                        SET status = 'resolved',
+                            requires_action = 0,
+                            updated_at = datetime('now')
+                        WHERE id IN ({placeholders})
+                        """,
+                        resolved_ids,
+                    )
+                    conn.commit()
+                    logger.info(
+                        "Auto-resolved %d superseded failure notification(s) for video_id=%s (trigger=%s)",
+                        len(resolved_ids), video_id, kind,
+                    )
+            finally:
+                conn.close()
+    except Exception:
+        logger.debug("auto_resolve_superseded_failures error for video_id=%s", video_id, exc_info=True)
 
 
 def _activity_row_to_notification(row: sqlite3.Row) -> dict[str, Any]:
@@ -8012,7 +8108,7 @@ def _query_notification_activity_rows(
 
 
 def _apply_activity_snooze_expiry() -> int:
-    changed = 0
+    changed: int = 0
     items = _query_notification_activity_rows(status_value="snoozed", limit=5000, apply_default_window=False)
     now_ts = time.time()
     for item in items:
@@ -8188,6 +8284,8 @@ def _activity_digest_should_compact(
         return False
     bypass_prefixes = (
         "simone_handoff_",
+        "simone_session_",
+        "agentmail_sent",
         "csi_pipeline_digest",
         "continuity_",
     )
@@ -8563,7 +8661,7 @@ def _apply_notification_status(
 
 def _apply_notification_snooze_expiry() -> int:
     now_ts = time.time()
-    changed = 0
+    changed: int = 0
     for item in _notifications:
         if _normalize_notification_status(item.get("status")) != "snoozed":
             continue
@@ -9140,7 +9238,7 @@ def _calendar_iter_cron_occurrences(job: Any, start_ts: float, end_ts: float, ma
         if base < start_ts:
             base += every_seconds
     cursor = base
-    count = 0
+    count: int = 0
     while cursor <= end_ts and count < max_count:
         if cursor >= start_ts:
             occurrences.append(cursor)
@@ -9634,9 +9732,9 @@ def _calendar_compute_stats(
     today_start = now_ts - (now_ts % 86400)
     today_end = today_start + 86400
 
-    scheduled_today = 0
+    scheduled_today: int = 0
     cron_job_ids: set[str] = set()
-    pending_tasks = 0
+    pending_tasks: int = 0
     next_event_label = ""
     next_event_epoch: Optional[float] = None
 
@@ -12051,6 +12149,7 @@ async def ops_telegram_status(request: Request):
     recent_notifications: list[dict[str, Any]] = []
     pipeline_activity: list[dict[str, Any]] = []
     recent_failures: list[dict[str, Any]] = []
+    resolved_failures: list[dict[str, Any]] = []
     actionable_alerts: list[dict[str, Any]] = []
     recovery_events: list[dict[str, Any]] = []
     active_tutorial_runs: list[dict[str, Any]] = []
@@ -12065,11 +12164,26 @@ async def ops_telegram_status(request: Request):
             severity = str(entry.get("severity") or "").strip().lower()
             status = str(entry.get("status") or "").strip().lower()
             if (
-                kind in failure_kinds
-                or severity in {"error", "warning"}
-                or (status in {"failed", "error"} and kind.startswith("youtube_"))
+                (
+                    kind in failure_kinds
+                    or severity in {"error", "warning"}
+                    or (status in {"failed", "error"} and kind.startswith("youtube_"))
+                )
+                and status not in {"resolved", "dismissed"}
             ):
                 recent_failures.append(entry)
+            elif (
+                kind in failure_kinds
+                and status in {"resolved", "dismissed"}
+            ):
+                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                resolution_type = (
+                    "auto_recovery"
+                    if str(metadata.get("resolved_reason") or "") == "auto_recovery"
+                    else "manual_dismiss"
+                )
+                resolved_entry = {**entry, "resolution_type": resolution_type}
+                resolved_failures.append(resolved_entry)
             if bool(entry.get("requires_action")) and status not in {"dismissed", "resolved", "completed"}:
                 actionable_alerts.append(entry)
             if kind in recovery_kinds or "recovery" in kind:
@@ -12078,6 +12192,7 @@ async def ops_telegram_status(request: Request):
         active_tutorial_runs = _collect_active_tutorial_runs_from_rows(relevant, limit=20)
 
         recent_failures = recent_failures[:40]
+        resolved_failures = resolved_failures[:20]
         actionable_alerts = actionable_alerts[:40]
         recovery_events = recovery_events[:40]
     except Exception as exc:
@@ -12139,6 +12254,7 @@ async def ops_telegram_status(request: Request):
         "pipeline_activity": pipeline_activity,
         "active_tutorial_runs": active_tutorial_runs,
         "recent_failures": recent_failures,
+        "resolved_failures": resolved_failures,
         "actionable_alerts": actionable_alerts,
         "recovery_events": recovery_events,
         "telegram_sessions": tg_sessions,
@@ -12146,6 +12262,7 @@ async def ops_telegram_status(request: Request):
             "pipeline_activity": len(pipeline_activity),
             "active_tutorial_runs": len(active_tutorial_runs),
             "recent_failures": len(recent_failures),
+            "resolved_failures": len(resolved_failures),
             "actionable_alerts": len(actionable_alerts),
             "recovery_events": len(recovery_events),
             "telegram_sessions": len(tg_sessions),

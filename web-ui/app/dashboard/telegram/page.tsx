@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, MessageSquare, Zap, Radio, Hash, CheckCircle, AlertTriangle, RotateCcw, Trash2 } from "lucide-react";
+import { RefreshCw, MessageSquare, Zap, Radio, Hash, CheckCircle, CheckCircle2, AlertTriangle, RotateCcw, Trash2, XCircle } from "lucide-react";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -62,10 +62,13 @@ type ActiveTutorialRun = {
   message: string;
 };
 
+type ResolvedEvent = ActivityEvent & { resolution_type?: string };
+
 type TelegramCounts = {
   pipeline_activity?: number;
   active_tutorial_runs?: number;
   recent_failures?: number;
+  resolved_failures?: number;
   actionable_alerts?: number;
   recovery_events?: number;
   telegram_sessions?: number;
@@ -78,6 +81,7 @@ type TelegramData = {
   recent_notifications?: ActivityEvent[];
   pipeline_activity?: ActivityEvent[];
   recent_failures?: ActivityEvent[];
+  resolved_failures?: ResolvedEvent[];
   actionable_alerts?: ActivityEvent[];
   recovery_events?: ActivityEvent[];
   active_tutorial_runs?: ActiveTutorialRun[];
@@ -183,7 +187,7 @@ export default function TelegramPage() {
       const nextActionable = filterEvents(current.actionable_alerts);
       const nextRecovery = filterEvents(current.recovery_events);
       const nextCounts = {
-        ...(current.counts || {}),
+        ...current.counts,
         pipeline_activity: nextPipelineActivity.length,
         recent_failures: nextFailures.length,
         actionable_alerts: nextActionable.length,
@@ -242,6 +246,7 @@ export default function TelegramPage() {
   const notifications = data.recent_notifications || [];
   const pipelineActivity = data.pipeline_activity || notifications;
   const failures = data.recent_failures || [];
+  const resolvedFailures: ResolvedEvent[] = data.resolved_failures || [];
   const actionable = data.actionable_alerts || [];
   const recoveryEvents = data.recovery_events || [];
   const activeTutorialRuns = data.active_tutorial_runs || [];
@@ -389,7 +394,11 @@ export default function TelegramPage() {
               <p className="mt-1 text-xs text-slate-500">in pipeline</p>
             </div>
 
-            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+            <div
+              className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 cursor-pointer hover:border-rose-500/30 transition-colors"
+              onClick={() => document.getElementById("section-failures")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              title="Jump to Failures section"
+            >
               <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-slate-500">
                 <AlertTriangle className="h-3.5 w-3.5" />
                 Failures
@@ -398,7 +407,11 @@ export default function TelegramPage() {
               <p className="mt-1 text-xs text-slate-500">recent warnings/errors</p>
             </div>
 
-            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+            <div
+              className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 cursor-pointer hover:border-emerald-500/30 transition-colors"
+              onClick={() => document.getElementById("section-recovery")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              title="Jump to Recovery section"
+            >
               <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-slate-500">
                 <RotateCcw className="h-3.5 w-3.5" />
                 Recovery
@@ -480,7 +493,7 @@ export default function TelegramPage() {
           </section>
 
           {/* Failures */}
-          <section className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <section id="section-failures" className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 scroll-mt-4">
             <h2 className="mb-3 text-sm font-semibold text-slate-200">
               {sectionHeading("Recent Failures & Warnings", failures.length)}
             </h2>
@@ -508,8 +521,59 @@ export default function TelegramPage() {
             )}
           </section>
 
+          {/* Recently Resolved */}
+          {resolvedFailures.length > 0 && (
+            <section className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+              <h2 className="mb-3 text-sm font-semibold text-slate-200">
+                {sectionHeading("Recently Resolved", resolvedFailures.length)}
+              </h2>
+              <div className="space-y-2 max-h-[260px] overflow-y-auto">
+                {resolvedFailures.map((n) => {
+                  const isAutoRecovery = n.resolution_type === "auto_recovery";
+                  return (
+                    <div
+                      key={n.id}
+                      className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 ${
+                        isAutoRecovery
+                          ? "border-emerald-500/20 bg-emerald-500/5"
+                          : "border-white/[0.04] bg-white/[0.01] opacity-60"
+                      }`}
+                    >
+                      {isAutoRecovery ? (
+                        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                      ) : (
+                        <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className={`text-xs font-medium truncate ${isAutoRecovery ? "text-slate-200" : "text-slate-400 line-through"}`}>
+                            {n.title}
+                          </p>
+                          <span
+                            className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                              isAutoRecovery
+                                ? "bg-emerald-500/20 text-emerald-300"
+                                : "bg-slate-600/30 text-slate-400"
+                            }`}
+                          >
+                            {isAutoRecovery ? "Auto-recovered" : "Dismissed"}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[11px] text-slate-400 line-clamp-2">{n.message}</p>
+                        <div className="mt-1 flex items-center gap-3 text-[10px] text-slate-500">
+                          <span>{n.kind}</span>
+                          <span>{formatTime(n.updated_at || n.created_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           {/* Recovery */}
-          <section className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <section id="section-recovery" className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 scroll-mt-4">
             <h2 className="mb-3 text-sm font-semibold text-slate-200">
               {sectionHeading("Recovery Events", recoveryEvents.length)}
             </h2>

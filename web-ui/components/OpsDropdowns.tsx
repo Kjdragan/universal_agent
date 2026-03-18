@@ -2248,7 +2248,12 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
                 const workerStatus = vp.effective_status || vp.status || "unknown";
                 const leaseSeconds = vp.lease_expires_at ? Math.max(0, (new Date(vp.lease_expires_at).getTime() - Date.now()) / 1000) : NaN;
                 return (
-                  <div key={vp.vp_id} className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300">
+                  <div
+                    key={vp.vp_id}
+                    className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300 cursor-pointer hover:border-cyan-500/50 transition-colors"
+                    onClick={() => vp.session_id && openOrFocusChatWindow({ sessionId: vp.session_id, attachMode: "tail" })}
+                    title={vp.session_id ? `Open session ${vp.session_id}` : vp.vp_id}
+                  >
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{vp.vp_id}</span>
                       <div className="flex items-center gap-1.5">
@@ -2284,7 +2289,12 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
                 const age = ageSeconds(h.last_run);
                 const dot = statusDot(h.last_run);
                 return (
-                  <div key={h.session_id} className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300">
+                  <div
+                    key={h.session_id}
+                    className="rounded-lg border bg-slate-950/50 p-4 text-xs text-slate-300 cursor-pointer hover:border-cyan-500/50 transition-colors"
+                    onClick={() => openOrFocusChatWindow({ sessionId: h.session_id, attachMode: "tail" })}
+                    title={`Open session ${h.session_id}`}
+                  >
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[10px] font-mono truncate max-w-[200px]">{h.session_id}</span>
                       <div className="flex items-center gap-1.5">

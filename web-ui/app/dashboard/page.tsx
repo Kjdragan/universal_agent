@@ -146,10 +146,7 @@ const NOTIFICATION_CATEGORIES = {
       n.severity === "error" || n.severity === "critical" ||
       Boolean(n.requires_action) ||
       n.kind === "continuity_alert" || n.kind === "system_error" ||
-      n.kind === "heartbeat_mediation_dispatch_failed" ||
-      n.kind === "heartbeat_operator_review_required" ||
-      n.kind === "heartbeat_findings_parse_failed" ||
-      n.kind.startsWith("simone_"),
+      n.kind.startsWith("simone_") || n.kind.startsWith("agentmail_"),
   },
   heartbeat: {
     label: "Heartbeat",
@@ -180,7 +177,8 @@ const NOTIFICATION_CATEGORIES = {
   simone: {
     label: "Simone",
     icon: "🤖",
-    match: (n: DashboardNotification) => n.kind.startsWith("simone_"),
+    match: (n: DashboardNotification) =>
+      n.kind.startsWith("simone_") || n.kind.startsWith("agentmail_"),
   },
 } as const;
 type NotificationCategoryKey = keyof typeof NOTIFICATION_CATEGORIES | "all";

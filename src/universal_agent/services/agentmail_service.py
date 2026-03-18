@@ -488,6 +488,18 @@ class AgentMailService:
         msg = await self._client.inboxes.messages.send(**kwargs)
         self._messages_sent += 1
         logger.info("📧 Sent email to=%s subject=%r message_id=%s", to, subject, msg.message_id)
+        self._emit_notification(
+            kind="agentmail_sent",
+            title="Simone Sent Email",
+            message=f"To: {to} | Subject: {subject}",
+            severity="info",
+            metadata={
+                "message_id": msg.message_id,
+                "to": to,
+                "subject": subject,
+                "inbox": self._inbox_address,
+            },
+        )
         return {"status": "sent", "message_id": msg.message_id, "inbox": self._inbox_address}
 
     async def _create_draft(
@@ -1290,6 +1302,23 @@ class AgentMailService:
 
             decision = str(result.get("decision") or "").strip().lower()
             if decision == "accepted":
+                subject = str(payload.get("subject") or "").strip() or "(no subject)"
+                sender_email = str(payload.get("sender_email") or "").strip()
+                session_id = str(result.get("session_id") or result.get("session_key") or "").strip()
+                self._emit_notification(
+                    kind="simone_session_started",
+                    title="Simone Started Work",
+                    message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
+                    severity="info",
+                    metadata={
+                        "queue_id": str(payload.get("queue_id") or ""),
+                        "message_id": str(payload.get("message_id") or ""),
+                        "subject": subject,
+                        "sender_email": sender_email,
+                        "session_id": session_id,
+                        "trigger": "trusted_email",
+                    },
+                )
                 self._complete_queue_item(str(payload["queue_id"]), attempts=attempts)
                 continue
             if decision in {"busy", "duplicate_in_progress"}:

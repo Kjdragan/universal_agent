@@ -109,6 +109,7 @@ YOUTUBE_INGEST_DEGRADABLE_FAILURE_CLASSES = {
     "empty_or_low_quality_transcript",
 }
 YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS = (
+    # ── Process-level signals (deployment restarts) ──
     "exit code -15",
     "exit code: -15",
     "terminated process",
@@ -117,6 +118,31 @@ YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS = (
     "sigkill",
     "signal 15",
     "killed",
+    # ── Transient network / API errors (recoverable) ──
+    "connection reset",
+    "connectionreseterror",
+    "connection refused",
+    "connectionrefusederror",
+    "broken pipe",
+    "brokenpipeerror",
+    "timeout",
+    "timed out",
+    "timedout",
+    "deadline exceeded",
+    "503",
+    "service unavailable",
+    "502",
+    "bad gateway",
+    "429",
+    "rate limit",
+    "rate_limit",
+    "quota exceeded",
+    "resource exhausted",
+    "capacity",
+    "no capacity available",
+    "temporarily unavailable",
+    "server overloaded",
+    "overloaded",
 )
 
 
@@ -425,6 +451,10 @@ class HooksService:
         self._youtube_ingest_fail_open = self._safe_bool_env(
             "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN", False
         )
+        # ── Configurable dispatch retry policies ──────────────────────
+        # JSON dict keyed by failure reason, e.g.
+        # {"hook_dispatch_failed": {"max_retries": 3, "delay_seconds": 60, "backoff_factor": 2.0}}
+        self._dispatch_retry_policies: dict[str, dict[str, Any]] = self._parse_dispatch_retry_policies()
         self._default_hook_timeout_seconds = max(
             0, self._safe_int_env("UA_HOOKS_DEFAULT_TIMEOUT_SECONDS", 0)
         )
@@ -571,6 +601,7 @@ class HooksService:
             "youtube_ingest_retry_delay_seconds": float(self._youtube_ingest_retry_delay_seconds),
             "youtube_ingest_retry_jitter_seconds": float(self._youtube_ingest_retry_jitter_seconds),
             "youtube_ingest_cooldown_seconds": int(self._youtube_ingest_cooldown_seconds),
+            "dispatch_retry_policies": self._dispatch_retry_policies,
             "hook_default_timeout_seconds": int(self._default_hook_timeout_seconds or 0),
             "youtube_hook_timeout_seconds": int(self._youtube_hook_timeout_seconds),
             "youtube_hook_idle_timeout_seconds": int(self._youtube_hook_idle_timeout_seconds or 0),
@@ -673,14 +704,17 @@ class HooksService:
         session_id: str,
         reason: str,
         expected_video_id: str,
+        retry_count: int = 0,
+        retry_status: str = "dispatch_interrupted",
     ) -> Path:
         marker = self._pending_hook_recovery_marker_path(session_dir)
         out = {
-            "status": "dispatch_interrupted",
+            "status": retry_status,
             "session_id": session_id,
             "video_id": str(expected_video_id or "").strip(),
             "reason": str(reason or "hook_dispatch_interrupted").strip(),
             "created_at_epoch": time.time(),
+            "retry_count": retry_count,
         }
         try:
             marker.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
@@ -696,6 +730,54 @@ class HooksService:
             marker.unlink()
         except Exception:
             logger.warning("Failed removing pending hook recovery marker path=%s", marker)
+
+    def _parse_dispatch_retry_policies(self) -> dict[str, dict[str, Any]]:
+        """Parse UA_HOOKS_DISPATCH_RETRY_POLICIES env var (JSON dict).
+
+        Falls back to a sensible default: hook_dispatch_failed gets 2 retries
+        with 120s delay and 2.0 backoff factor.
+        """
+        default_policies: dict[str, dict[str, Any]] = {
+            "hook_dispatch_failed": {
+                "max_retries": 2,
+                "delay_seconds": 120,
+                "backoff_factor": 2.0,
+            },
+        }
+        raw = (os.getenv("UA_HOOKS_DISPATCH_RETRY_POLICIES") or "").strip()
+        if not raw:
+            return default_policies
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                # Validate and normalise each entry
+                result: dict[str, dict[str, Any]] = {}
+                for key, val in parsed.items():
+                    if isinstance(val, dict):
+                        result[str(key)] = {
+                            "max_retries": int(val.get("max_retries", 0)),
+                            "delay_seconds": float(val.get("delay_seconds", 60)),
+                            "backoff_factor": float(val.get("backoff_factor", 1.0)),
+                        }
+                return result
+        except Exception:
+            logger.warning("Invalid UA_HOOKS_DISPATCH_RETRY_POLICIES, falling back to defaults")
+        return default_policies
+
+    def _get_current_retry_count(self, session_dir: Optional[Path]) -> int:
+        """Read retry_count from an existing pending_hook_recovery.json marker, or 0."""
+        if session_dir is None:
+            return 0
+        marker = self._pending_hook_recovery_marker_path(session_dir)
+        if not marker.is_file():
+            return 0
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return int(payload.get("retry_count", 0))
+        except Exception:
+            pass
+        return 0
 
     @staticmethod
     def _is_dispatch_interruption_error(reason: str) -> bool:
@@ -893,7 +975,7 @@ class HooksService:
             candidates.append((mtime, session_dir))
         candidates.sort(key=lambda item: item[0], reverse=True)
 
-        recovered = 0
+        recovered: int = 0
         now_epoch = time.time()
         for _, session_dir in candidates:
             if recovered >= self._startup_recovery_max_sessions:
@@ -947,8 +1029,42 @@ class HooksService:
             if not isinstance(pending_payload, dict):
                 continue
             pending_status = str(pending_payload.get("status") or "").strip().lower()
-            if pending_status != "dispatch_interrupted":
+            if pending_status not in {"dispatch_interrupted", "dispatch_retry_pending"}:
                 continue
+            # ── Retry limit check for retry-pending markers ──────────
+            if pending_status == "dispatch_retry_pending":
+                retry_count = int(pending_payload.get("retry_count", 0))
+                failure_reason = str(pending_payload.get("reason") or "hook_dispatch_failed").strip()
+                retry_policy = self._dispatch_retry_policies.get(failure_reason, {})
+                max_retries = int(retry_policy.get("max_retries", 0))
+                if retry_count >= max_retries:
+                    # Exceeded max retries — emit permanent failure and remove marker
+                    self._clear_pending_hook_recovery_marker(session_dir)
+                    video_id = str(pending_payload.get("video_id") or "").strip()
+                    self._emit_notification(
+                        kind="youtube_tutorial_failed",
+                        title="YouTube Tutorial Failed — Retries Exhausted",
+                        message=(
+                            f"{video_id or session_id}: {failure_reason}; "
+                            f"all {max_retries} retries exhausted."
+                        ),
+                        session_id=session_id,
+                        severity="error",
+                        requires_action=True,
+                        metadata={
+                            "source": "hooks",
+                            "video_id": video_id,
+                            "reason": failure_reason,
+                            "retry_count": retry_count,
+                            "max_retries": max_retries,
+                            "retries_exhausted": True,
+                        },
+                    )
+                    logger.warning(
+                        "Retry limit exhausted for session_id=%s reason=%s (%d/%d)",
+                        session_id, failure_reason, retry_count, max_retries,
+                    )
+                    continue
             created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
             if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):
                 continue
@@ -3217,14 +3333,50 @@ class HooksService:
                         },
                     )
                 else:
-                    self._emit_youtube_tutorial_failure_notification(
-                        session_id=session_id,
-                        session_key=session_key,
-                        hook_name=hook_name,
-                        expected_video_id=expected_video_id,
-                        reason=dispatch_failure_reason,
-                        started_at_epoch=start_ts,
-                    )
+                    # ── Configurable retry: check if this hard failure kind has retries left
+                    retry_policy = self._dispatch_retry_policies.get(dispatch_failure_reason, {})
+                    max_retries = int(retry_policy.get("max_retries", 0))
+                    current_retry_count = self._get_current_retry_count(session_workspace) if session_workspace else 0
+                    if max_retries > 0 and current_retry_count < max_retries and session_workspace is not None:
+                        # Convert hard failure to recoverable: write recovery marker with retry count
+                        marker = self._write_pending_hook_recovery_marker(
+                            session_workspace,
+                            session_id=session_id,
+                            reason=dispatch_failure_reason,
+                            expected_video_id=expected_video_id,
+                            retry_count=current_retry_count + 1,
+                            retry_status="dispatch_retry_pending",
+                        )
+                        self._emit_notification(
+                            kind="youtube_tutorial_interrupted",
+                            title="YouTube Tutorial Failed — Retry Queued",
+                            message=(
+                                f"{expected_video_id or session_key}: {dispatch_failure_reason}; "
+                                f"retry {current_retry_count + 1}/{max_retries} queued for startup recovery."
+                            ),
+                            session_id=session_id,
+                            severity="warning",
+                            requires_action=True,
+                            metadata={
+                                "source": "hooks",
+                                "hook_name": hook_name,
+                                "hook_session_key": session_key,
+                                "video_id": expected_video_id or "",
+                                "reason": dispatch_failure_reason,
+                                "retry_count": current_retry_count + 1,
+                                "max_retries": max_retries,
+                                "pending_recovery_file": str(marker),
+                            },
+                        )
+                    else:
+                        self._emit_youtube_tutorial_failure_notification(
+                            session_id=session_id,
+                            session_key=session_key,
+                            hook_name=hook_name,
+                            expected_video_id=expected_video_id,
+                            reason=dispatch_failure_reason,
+                            started_at_epoch=start_ts,
+                        )
             return {
                 "decision": "failed",
                 "turn_id": admitted_turn_id,
@@ -3320,7 +3472,7 @@ class HooksService:
     async def _consume_gateway_execute(
         self, session, request: GatewayRequest, *, workspace_root: Optional[Path] = None,
     ) -> dict[str, Any]:
-        tool_calls = 0
+        tool_calls: int = 0
         duration_seconds = 0.0
         started = time.time()
         reported_error_message: Optional[str] = None
