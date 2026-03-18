@@ -1795,6 +1795,12 @@ class OpsCsiSessionPurgeRequest(BaseModel):
     include_active: bool = False
 
 
+class OpsStaleSessionPurgeRequest(BaseModel):
+    dry_run: bool = False
+    older_than_hours: int = 6
+    include_active: bool = False
+
+
 class OpsMcpAddServerRequest(BaseModel):
     server_name: str
     server_config: dict[str, Any]
@@ -20392,6 +20398,65 @@ async def ops_purge_csi_sessions(request: Request, payload: OpsCsiSessionPurgeRe
             "active": skipped_active,
             "recent": skipped_recent,
         },
+    }
+
+
+@app.post("/api/v1/ops/sessions/purge-stale")
+async def ops_purge_stale_sessions(request: Request, payload: OpsStaleSessionPurgeRequest):
+    """Bulk-delete stale sessions (idle > N hours). Memory is captured before each delete."""
+    _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+
+    older_than_hours = max(1, payload.older_than_hours)
+    dry_run = payload.dry_run
+    include_active = payload.include_active
+
+    all_sessions = _ops_service.list_sessions()
+    now = datetime.now(timezone.utc)
+    stale_threshold = timedelta(hours=older_than_hours)
+
+    deleted: list[str] = []
+    failed: dict[str, str] = {}
+    skipped_active: list[str] = []
+
+    for sess in all_sessions:
+        session_id = str(sess.get("session_id", ""))
+        if not session_id:
+            continue
+        status = str(sess.get("status", "")).lower()
+        if status in ("running", "active") and not include_active:
+            skipped_active.append(session_id)
+            continue
+
+        last_activity_str = sess.get("last_activity") or sess.get("last_modified") or ""
+        last_activity_dt = _parse_iso_timestamp(last_activity_str)
+        if last_activity_dt is None:
+            continue
+        age = now - last_activity_dt
+        if age < stale_threshold:
+            continue
+
+        if dry_run:
+            deleted.append(session_id)
+            continue
+        try:
+            result = await _ops_service.delete_session(session_id)
+            if result:
+                deleted.append(session_id)
+            else:
+                failed[session_id] = "not_found"
+        except Exception as exc:
+            failed[session_id] = str(exc)[:200]
+
+    return {
+        "dry_run": dry_run,
+        "older_than_hours": older_than_hours,
+        "total_sessions": len(all_sessions),
+        "deleted_count": len(deleted),
+        "deleted": deleted,
+        "failed": failed,
+        "skipped_active": skipped_active,
     }
 
 

@@ -141,6 +141,7 @@ function SessionsPageInner() {
     cancelSession,
     cancelOutstandingRuns,
     archiveSession,
+    purgeStale,
   } = useOps();
 
   const [hideNoise, setHideNoise] = useState(true);
@@ -153,6 +154,8 @@ function SessionsPageInner() {
   const [deliveryNoteDraft, setDeliveryNoteDraft] = useState("");
   const [deliveryStatus, setDeliveryStatus] = useState<string>("");
   const [rehydratingId, setRehydratingId] = useState<string | null>(null);
+  const [staleFilter, setStaleFilter] = useState(false);
+  const [purging, setPurging] = useState(false);
 
   const isVpSelected = /^vp_/i.test((selected || "").trim());
 
@@ -321,9 +324,16 @@ function SessionsPageInner() {
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">{stats.active} active</span>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/30">{stats.idle} idle</span>
             {stats.stale > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/30 animate-pulse">
+              <button
+                onClick={() => setStaleFilter(!staleFilter)}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all cursor-pointer ${
+                  staleFilter
+                    ? "bg-red-500/30 text-red-300 border-red-400/60 ring-2 ring-red-500/40 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
+                    : "bg-red-500/15 text-red-400 border-red-500/30 animate-pulse hover:bg-red-500/25"
+                }`}
+              >
                 ⚠ {stats.stale} stale
-              </span>
+              </button>
             )}
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-700/40 text-slate-500 border border-slate-700/30">{stats.total} total</span>
           </div>
@@ -337,6 +347,24 @@ function SessionsPageInner() {
           >
             Kill Outstanding ({runningCount})
           </button>
+          {staleFilter && stats.stale > 0 && (
+            <button
+              onClick={async () => {
+                if (!confirm(`Permanently purge ${stats.stale} stale sessions?\n\nMemory captures will be preserved.`)) return;
+                setPurging(true);
+                const result = await purgeStale(6);
+                setPurging(false);
+                if (result) {
+                  setStaleFilter(false);
+                  alert(`Purged ${result.deleted_count} stale sessions.`);
+                }
+              }}
+              className="text-[11px] px-2.5 py-1 rounded-md border border-red-500/50 bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-all disabled:opacity-40 font-semibold"
+              disabled={purging}
+            >
+              {purging ? "Purging…" : `🗑 Purge ${stats.stale} Stale`}
+            </button>
+          )}
           <button
             onClick={fetchSessions}
             className="text-[11px] px-2.5 py-1 rounded-md border border-slate-600/60 bg-slate-800/40 text-slate-300 hover:bg-slate-700/60 transition-all"
@@ -435,6 +463,7 @@ function SessionsPageInner() {
                   onRehydrate={rehydrateSession}
                   rehydrating={rehydratingId === s.session_id}
                   isActive={false}
+                  hidden={staleFilter && ageTier(s.last_activity || s.created_at) !== "stale"}
                 />
               ))}
             </div>
@@ -584,6 +613,7 @@ function SessionCard({
   onRehydrate,
   rehydrating,
   isActive,
+  hidden,
 }: {
   session: {
     session_id: string;
@@ -607,7 +637,9 @@ function SessionCard({
   onRehydrate: (id: string) => void;
   rehydrating: boolean;
   isActive: boolean;
+  hidden?: boolean;
 }) {
+  if (hidden) return null;
   const tier = ageTier(s.created_at || s.last_modified);
 
   return (

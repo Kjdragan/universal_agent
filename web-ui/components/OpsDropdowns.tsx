@@ -195,6 +195,7 @@ type OpsCtx = {
   updateApproval: (id: string, status: string) => Promise<void>; fetchLogs: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>; resetSession: (id: string) => Promise<void>; compactLogs: (id: string) => Promise<void>;
   cancelSession: (id: string) => Promise<void>; cancelOutstandingRuns: () => Promise<void>; archiveSession: (id: string) => Promise<void>;
+  purgeStale: (olderThanHours?: number) => Promise<{ deleted_count: number } | null>;
   opsConfigText: string; setOpsConfigText: (t: string) => void; opsConfigStatus: string;
   opsConfigError: string | null; opsConfigSaving: boolean;
   loadOpsConfig: () => Promise<void>; saveOpsConfig: () => Promise<void>;
@@ -426,6 +427,20 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     if (!sid || !confirm(`Permanently delete session ${sid}?`)) return;
     try { const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${sid}?confirm=true`, { method: "DELETE", headers: buildHeaders() }); if (r.ok) { setSelected(null); fetchSessions(); } else alert("Delete failed: " + r.statusText); }
     catch (e) { console.error("Delete session failed", e); alert("Delete failed"); }
+  }, [fetchSessions]);
+
+  const purgeStale = useCallback(async (olderThanHours: number = 6): Promise<{ deleted_count: number } | null> => {
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/sessions/purge-stale`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({ older_than_hours: olderThanHours, dry_run: false }),
+      });
+      if (!r.ok) { alert("Purge failed: " + r.statusText); return null; }
+      const data = await r.json();
+      fetchSessions();
+      return data;
+    } catch (e) { console.error("Purge stale sessions failed", e); alert("Purge failed"); return null; }
   }, [fetchSessions]);
 
   const resetSession = useCallback(async (sid: string) => {
@@ -739,11 +754,11 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   const val: OpsCtx = useMemo(() => ({
     sessions, sessionsError, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
-    deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
+    deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, purgeStale, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, remoteSyncEnabled, remoteSyncStatus, remoteSyncError, remoteSyncSaving, loadRemoteSync, setRemoteSync, opsSchemaText, opsSchemaStatus, refreshAll,
   }), [sessions, sessionsError, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
-    deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
+    deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, purgeStale, opsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, remoteSyncEnabled, remoteSyncStatus, remoteSyncError, remoteSyncSaving, loadRemoteSync, setRemoteSync, opsSchemaText, opsSchemaStatus, refreshAll]);
 
   return <OpsContext.Provider value={val}>{children}</OpsContext.Provider>;
