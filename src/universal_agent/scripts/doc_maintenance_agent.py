@@ -3,15 +3,19 @@ Documentation Maintenance Agent — Stage 2
 
 Consumes the structured drift report produced by Stage 1.
 
+Trigger: This script is invoked inline by the GHA workflow
+(nightly-doc-drift-audit.yml) via Tailscale SSH to the VPS, immediately
+after Stage 1 completes. There is NO separate UA cron job — the GHA
+workflow is the sole canonical trigger to guarantee sequencing.
+
 Stage 1 (doc_drift_auditor.py) runs as a GitHub Actions scheduled workflow at
-3:00 AM CDT (08:00 UTC) and commits the drift report directly to the develop
-branch under artifacts/doc-drift-reports/<date>/. After the deploy workflow
-pulls the latest develop SHA onto the VPS, Stage 2 reads the report from disk
-and dispatches a VP coder mission to fix the issues.
+~3:17 AM CDT (08:17 UTC) and commits the drift report directly to the develop
+branch under artifacts/doc-drift-reports/<date>/. The GHA workflow then copies
+the report to the VPS via SCP and runs this script.
 
 Dispatch is performed via the gateway HTTP API (POST /api/v1/ops/vp/missions/dispatch)
 to ensure the mission is written to the same DB the VP workers poll.  When running
-on the VPS (cron), the gateway is at localhost:8000.  A fallback URL is resolved
+on the VPS, the gateway is at localhost:8000.  A fallback URL is resolved
 from UA_GATEWAY_URL or the public endpoint.
 
 The VP agent will:

@@ -2,8 +2,8 @@ name: Nightly Documentation Drift Audit
 
 on:
   schedule:
-    # 08:00 UTC = 3:00 AM CDT (America/Chicago)
-    - cron: '0 8 * * *'
+    # 08:17 UTC ≈ 3:17 AM CDT — off-peak minute to reduce GHA scheduling delay
+    - cron: '17 8 * * *'
   workflow_dispatch:
     inputs:
       since_hours:
