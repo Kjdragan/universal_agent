@@ -24,9 +24,15 @@ Simone has her own email inbox via AgentMail: **Simone D** `<oddcity216@agentmai
 | Reply as Kevin from his Gmail | **Gmail** (gws MCP `mcp__gws__gmail.+send`) |
 | Someone emails Simone directly | **AgentMail** inbound → email-handler agent |
 
-## Sending Email (Python — via UA Service)
+## Sending Email (Python SDK — ALWAYS use this)
 
-The `AgentMailService` is available as a gateway service. Use it through Bash/Python scripts:
+> **CRITICAL**: ALWAYS use the Python SDK (`from agentmail import AsyncAgentMail`) shown below.
+> NEVER use `curl`, `requests.post`, or the ops API endpoint to send emails.
+> - `curl` with HTML content will BREAK due to bash shell escaping of `<` `>` characters.
+> - The ops API port varies by deployment and `localhost:8000` is often WRONG.
+> - The Python SDK approach handles all escaping safely and works in every environment.
+
+Use `python -c "..."` via the Bash tool with the SDK:
 
 ```python
 import asyncio
@@ -122,9 +128,11 @@ async def send_with_attachment(file_path: str, to: str, subject: str):
     print(f"Sent with attachment: {msg.message_id}")
 ```
 
-## Ops API Endpoints
+## Ops API Endpoints (Dashboard/UI reference only — do NOT use from agent execution)
 
-The gateway exposes AgentMail management endpoints:
+> **WARNING**: These endpoints are for the web dashboard UI only.
+> During agent execution, ALWAYS use the Python SDK above.
+> The API port varies by deployment (8000, 9001, etc.) and `localhost` may not resolve correctly.
 
 - `GET /api/v1/ops/agentmail` — Service status (inbox address, WS state, counters)
 - `GET /api/v1/ops/agentmail/messages?label=&limit=20` — List recent messages
