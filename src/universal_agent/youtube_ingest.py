@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import urllib.request
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
+
+log = logging.getLogger(__name__)
 
 _YT_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _LOW_INFO_PHRASES = (
@@ -251,12 +255,119 @@ def _build_webshare_proxy_config() -> tuple[Optional[Any], str]:
     return WebshareProxyConfig(**kwargs), "webshare"
 
 
+def _parse_iso8601_duration(raw: str) -> int | None:
+    """Parse ISO 8601 duration (e.g. 'PT1H2M34S') to total seconds."""
+    if not raw:
+        return None
+    m = re.match(
+        r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$",
+        raw.strip(),
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    hours = int(m.group(1) or 0)
+    minutes = int(m.group(2) or 0)
+    seconds = int(m.group(3) or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _run_youtube_data_api_metadata(
+    video_id: str,
+    *,
+    timeout_seconds: int = 15,
+) -> dict[str, Any]:
+    """Fetch video metadata via YouTube Data API v3.
+
+    Uses YOUTUBE_API_KEY env var.  Returns ~2 KB JSON — no proxy needed,
+    no HTML page scraping, no anti-bot risk.  This replaces the yt-dlp
+    metadata path that was downloading ~500 KB of watch-page HTML through
+    the expensive rotating residential proxy.
+    """
+    api_key = (os.getenv("YOUTUBE_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "ok": False,
+            "error": "youtube_api_key_missing",
+            "detail": "YOUTUBE_API_KEY env var not set",
+            "failure_class": "api_unavailable",
+            "source": "youtube_data_api_v3",
+        }
+
+    url = (
+        f"https://www.googleapis.com/youtube/v3/videos"
+        f"?part=snippet,contentDetails,statistics"
+        f"&id={video_id}"
+        f"&key={api_key}"
+    )
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=max(5, min(timeout_seconds, 60))) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        detail = str(exc)
+        return {
+            "ok": False,
+            "error": "youtube_data_api_request_failed",
+            "detail": detail,
+            "failure_class": _classify_api_error("youtube_data_api_request_failed", detail),
+            "source": "youtube_data_api_v3",
+        }
+
+    items = data.get("items") or []
+    if not items:
+        return {
+            "ok": False,
+            "error": "youtube_data_api_no_results",
+            "detail": f"No video found for id={video_id}",
+            "failure_class": "video_unavailable",
+            "source": "youtube_data_api_v3",
+        }
+
+    item = items[0]
+    snippet = item.get("snippet") or {}
+    content_details = item.get("contentDetails") or {}
+    statistics = item.get("statistics") or {}
+
+    duration_seconds = _parse_iso8601_duration(
+        str(content_details.get("duration") or ""),
+    )
+    upload_date_raw = str(snippet.get("publishedAt") or "").strip()
+    # Convert ISO 8601 date to YYYYMMDD for yt-dlp compat
+    upload_date = None
+    if upload_date_raw:
+        try:
+            upload_date = upload_date_raw[:10].replace("-", "")
+        except Exception:
+            upload_date = upload_date_raw
+
+    metadata = {
+        "title": str(snippet.get("title") or "").strip() or None,
+        "channel": str(snippet.get("channelTitle") or "").strip() or None,
+        "channel_id": str(snippet.get("channelId") or "").strip() or None,
+        "upload_date": upload_date,
+        "duration": duration_seconds,
+        "view_count": int(statistics.get("viewCount") or 0) or None,
+        "like_count": int(statistics.get("likeCount") or 0) or None,
+        "description": str(snippet.get("description") or "").strip() or None,
+        "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+    }
+    return {
+        "ok": True,
+        "source": "youtube_data_api_v3",
+        "metadata": metadata,
+    }
+
+
 def _run_youtube_metadata_extract(
     video_id: str,
     *,
     proxy_url: str,
     timeout_seconds: int,
 ) -> dict[str, Any]:
+    """Fetch metadata via yt-dlp (fallback).  Used only when YouTube Data API
+    key is unavailable.  Runs WITHOUT proxy to avoid wasting residential
+    bandwidth on metadata that doesn't need anti-bot evasion."""
     try:
         import yt_dlp
     except Exception as exc:
@@ -274,8 +385,9 @@ def _run_youtube_metadata_extract(
         "skip_download": True,
         "socket_timeout": max(5, min(int(timeout_seconds or 0), 600)),
     }
-    if proxy_url:
-        ydl_opts["proxy"] = proxy_url
+    # NOTE: proxy intentionally NOT set here.  Metadata fetch via yt-dlp
+    # is a fallback path — we don't spend proxy bandwidth on it.  If it
+    # gets blocked from a datacenter IP it will just fail gracefully.
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -404,7 +516,6 @@ def ingest_youtube_transcript(
         }
 
     proxy_config, proxy_mode = _build_webshare_proxy_config()
-    proxy_url = str(getattr(proxy_config, "url", "") or "")
 
     if require_proxy and proxy_config is None:
         _reason = (
@@ -434,31 +545,41 @@ def ingest_youtube_transcript(
             "attempts": [],
         }
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        transcript_future = executor.submit(
-            _run_youtube_transcript_api_extract,
+    # ── Metadata strategy: API-first, yt-dlp fallback ──────────────────
+    # YouTube Data API v3 returns ~2 KB JSON (no proxy, no anti-bot).
+    # yt-dlp scrapes ~500 KB HTML watch page — used only as fallback and
+    # deliberately runs WITHOUT proxy to conserve residential bandwidth.
+    metadata_result = _run_youtube_data_api_metadata(
+        resolved_video_id, timeout_seconds=min(15, timeout_seconds),
+    )
+    if not metadata_result.get("ok"):
+        log.debug(
+            "YouTube Data API metadata failed for %s (%s), falling back to yt-dlp",
             resolved_video_id,
-            language=language,
-            proxy_config=proxy_config,
-            proxy_mode=proxy_mode,
+            metadata_result.get("error"),
         )
-        metadata_future = executor.submit(
-            _run_youtube_metadata_extract,
+        metadata_result = _run_youtube_metadata_extract(
             resolved_video_id,
-            proxy_url=proxy_url,
+            proxy_url="",  # no proxy for fallback metadata
             timeout_seconds=timeout_seconds,
         )
-        transcript_result = transcript_future.result()
-        metadata_result = metadata_future.result()
+
+    # ── Transcript fetch (always needs proxy for anti-bot) ────────────
+    transcript_result = _run_youtube_transcript_api_extract(
+        resolved_video_id,
+        language=language,
+        proxy_config=proxy_config,
+        proxy_mode=proxy_mode,
+    )
 
     attempts: list[dict[str, Any]] = []
     attempts.append({"method": "youtube_transcript_api", **transcript_result})
-    attempts.append({"method": "yt_dlp_metadata", **metadata_result})
+    attempts.append({"method": "metadata", **metadata_result})
     transcript_text = str(transcript_result.get("transcript_text") or "")
     source = str(transcript_result.get("source") or "youtube_transcript_api")
     metadata = metadata_result.get("metadata") if isinstance(metadata_result.get("metadata"), dict) else {}
     metadata_status = "attempted_succeeded" if metadata_result.get("ok") else "attempted_failed"
-    metadata_source = str(metadata_result.get("source") or "yt_dlp")
+    metadata_source = str(metadata_result.get("source") or "youtube_data_api_v3")
     metadata_error = str(metadata_result.get("error") or "").strip()
     metadata_failure_class = str(metadata_result.get("failure_class") or "").strip()
 
