@@ -2171,6 +2171,26 @@ def _purge_csi_digests() -> int:
     except Exception as exc:
         logger.warning("CSI digest DB purge failed: %s", exc)
         return 0
+
+
+def _delete_csi_digest(digest_id: str) -> bool:
+    """Delete a single CSI digest by ID.  Returns True if found and deleted."""
+    try:
+        with _csi_digest_db_lock:
+            conn = _csi_digest_conn()
+            cursor = conn.execute("DELETE FROM csi_digests WHERE id = ?", (digest_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+        return deleted
+    except Exception as exc:
+        logger.warning("CSI digest delete failed for %s: %s", digest_id, exc)
+        return False
+
+
+def _clear_all_csi_digests() -> int:
+    """Clear all CSI digests (same as purge but used for UI 'clear all' action)."""
+    return _purge_csi_digests()
 _activity_events_retention_days = max(
     7,
     int(os.getenv("UA_ACTIVITY_EVENTS_RETENTION_DAYS", "90") or 90),
@@ -11606,6 +11626,22 @@ async def send_csi_digest_to_simone(digest_id: str, request: Request):
             status_code=500,
             content={"ok": False, "error": str(exc)},
         )
+
+
+@app.delete("/api/v1/dashboard/csi/digests/{digest_id}")
+async def dashboard_csi_delete_digest(digest_id: str):
+    """Delete a single CSI digest by its ID."""
+    deleted = _delete_csi_digest(digest_id)
+    if not deleted:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Digest not found"})
+    return {"ok": True, "deleted": digest_id}
+
+
+@app.delete("/api/v1/dashboard/csi/digests")
+async def dashboard_csi_clear_all():
+    """Clear all CSI digests from the list (notification-style dismiss)."""
+    count = _clear_all_csi_digests()
+    return {"ok": True, "cleared": count}
 
 
 @app.post("/api/v1/dashboard/csi/purge")

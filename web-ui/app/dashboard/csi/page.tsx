@@ -230,6 +230,33 @@ export default function CSIDashboard() {
         }
     }
 
+    async function dismissDigest(digestId: string, evt: React.MouseEvent) {
+        evt.stopPropagation();
+        try {
+            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/digests/${encodeURIComponent(digestId)}`, { method: "DELETE" });
+            if (!resp.ok) return;
+            setDigests((prev) => prev.filter((d) => d.id !== digestId));
+            if (selectedDigest?.id === digestId) setSelectedDigest(null);
+        } catch { /* silent */ }
+    }
+
+    async function clearAllDigests() {
+        if (!confirm(`Clear all ${filteredDigests.length} reports from the list?\nNew reports will still come in on their regular schedule.`)) return;
+        setPurgeBusy(true);
+        try {
+            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/digests`, { method: "DELETE" });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const payload = await resp.json().catch(() => ({}));
+            setPurgeStatus(`Cleared ${payload.cleared || 0} reports.`);
+            setSelectedDigest(null);
+            await loadData();
+        } catch (err: any) {
+            setPurgeStatus(`Clear failed: ${err.message}`);
+        } finally {
+            setPurgeBusy(false);
+        }
+    }
+
     async function sendToSimone(digest: CSIDigest) {
         setSendBusy(true);
         setSendStatus(null);
@@ -268,6 +295,13 @@ export default function CSIDashboard() {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={clearAllDigests}
+                        disabled={purgeBusy || digests.length === 0}
+                        className="rounded-md bg-muted/30 px-3 py-1.5 text-sm font-medium text-foreground/70 hover:bg-muted/50 transition-colors border border-border disabled:opacity-40"
+                    >
+                        {purgeBusy ? "Clearing…" : "Clear All Reports"}
+                    </button>
                     <button
                         onClick={purgeData}
                         disabled={purgeBusy}
@@ -429,9 +463,20 @@ export default function CSIDashboard() {
                                                 <span className="text-[13px] font-semibold text-foreground leading-snug line-clamp-2">
                                                     {extractHeadline(digest)}
                                                 </span>
-                                                <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0">
-                                                    {timeAgo(digest.created_at)}
-                                                </span>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                                        {timeAgo(digest.created_at)}
+                                                    </span>
+                                                    <span
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={(e) => dismissDigest(digest.id, e)}
+                                                        className="text-muted-foreground/40 hover:text-red-400 transition-colors text-sm leading-none px-0.5"
+                                                        title="Dismiss report"
+                                                    >
+                                                        ×
+                                                    </span>
+                                                </div>
                                             </div>
                                             <p className="text-xs text-muted-foreground/70 line-clamp-1">
                                                 {digest.summary || "No summary"}
