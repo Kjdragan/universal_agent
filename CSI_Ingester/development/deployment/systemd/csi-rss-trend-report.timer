@@ -1,10 +1,12 @@
 [Unit]
-Description=Run CSI RSS trend report hourly
+Description=Run CSI RSS trend report 3x daily (7am/1pm/7pm CT)
+PartOf=csi.target
 
 [Timer]
-OnCalendar=*:12
+OnCalendar=*-*-* 12:12:00 UTC
+OnCalendar=*-*-* 18:12:00 UTC
+OnCalendar=*-*-* 00:12:00 UTC
 Persistent=true
-Unit=csi-rss-trend-report.service
 
 [Install]
-WantedBy=timers.target
+WantedBy=csi.target

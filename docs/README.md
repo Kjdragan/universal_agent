@@ -85,6 +85,10 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, and pipeline structure.
 - **[Infisical Factories](deployment/infisical_factories.md)**: Stage naming and machine bootstrap detail (superseded by Secrets and Environments).
 
+### 4C. [CSI Subsystem](04_CSI)
+
+- **[CSI Master Architecture & Design](04_CSI/CSI_Master_Architecture.md)**: Canonical living document for the Creator Signal Intelligence subsystem — domain taxonomy, source management (SQLite), quality scoring, adapter architecture, batch processing, delivery contracts, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference.
+
 ### 5. [API Reference](04_API_Reference)
 
 - **[Gateway Ops API](04_API_Reference/Ops_API.md)**: Session and log management endpoints.

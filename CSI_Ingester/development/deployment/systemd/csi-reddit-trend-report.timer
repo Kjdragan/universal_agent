@@ -1,10 +1,12 @@
 [Unit]
-Description=Run CSI Reddit trend report hourly
+Description=Run CSI Reddit trend report 3x daily (7am/1pm/7pm CT)
+PartOf=csi.target
 
 [Timer]
-OnCalendar=*:18
+OnCalendar=*-*-* 12:18:00 UTC
+OnCalendar=*-*-* 18:18:00 UTC
+OnCalendar=*-*-* 00:18:00 UTC
 Persistent=true
-Unit=csi-reddit-trend-report.service
 
 [Install]
-WantedBy=timers.target
+WantedBy=csi.target

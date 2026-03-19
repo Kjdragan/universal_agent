@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI source quality assessment daily at 11pm CT (04:00 UTC)
+PartOf=csi.target
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=csi.target

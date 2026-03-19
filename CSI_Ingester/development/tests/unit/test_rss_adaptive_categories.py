@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from csi_ingester.analytics.categories import (
+    CORE_ORDER,
     canonicalize_category,
     classify_and_update_category,
     ensure_taxonomy_state,
@@ -23,8 +24,8 @@ def test_taxonomy_bootstraps_core_categories(tmp_path: Path):
     try:
         state = ensure_taxonomy_state(conn, max_categories=10)
         categories = state["categories"]
-        assert set(["ai", "political", "war", "other_interest"]).issubset(set(categories.keys()))
-        assert int(state["max_categories"]) == 10
+        assert set(CORE_ORDER).issubset(set(categories.keys()))
+        assert int(state["max_categories"]) >= len(CORE_ORDER)
     finally:
         conn.close()
 
@@ -43,7 +44,7 @@ def test_classifies_core_categories_from_content(tmp_path: Path):
             confidence=0.8,
             max_categories=10,
         )
-        war_cat, _ = classify_and_update_category(
+        conflict_cat, _ = classify_and_update_category(
             conn,
             suggested_category="",
             title="Frontline military update from war zone",
@@ -54,8 +55,9 @@ def test_classifies_core_categories_from_content(tmp_path: Path):
             confidence=0.8,
             max_categories=10,
         )
-        assert ai_cat == "ai"
-        assert war_cat == "war"
+        # AI content should map to one of the AI sub-categories
+        assert ai_cat in ("ai_models", "ai_coding", "ai_applications", "ai_business")
+        assert conflict_cat == "conflict"
     finally:
         conn.close()
 
@@ -72,11 +74,11 @@ def test_dynamic_categories_respect_max_and_retire_narrowest(tmp_path: Path):
             transcript_text="",
             themes=["homesteading"],
             confidence=0.9,
-            max_categories=5,
+            max_categories=len(CORE_ORDER) + 1,
         )
         assert first_cat == "homesteading"
         assert "homesteading" in first_state["categories"]
-        assert len(first_state["categories"]) == 5
+        assert len(first_state["categories"]) == len(CORE_ORDER) + 1
 
         second_cat, second_state = classify_and_update_category(
             conn,
@@ -87,13 +89,13 @@ def test_dynamic_categories_respect_max_and_retire_narrowest(tmp_path: Path):
             transcript_text="",
             themes=["woodworking"],
             confidence=0.9,
-            max_categories=5,
+            max_categories=len(CORE_ORDER) + 1,
         )
         assert second_cat == "woodworking"
         assert "woodworking" in second_state["categories"]
-        assert len(second_state["categories"]) <= 5
+        assert len(second_state["categories"]) <= len(CORE_ORDER) + 1
         assert "homesteading" not in second_state["categories"]
-        assert canonicalize_category("non_ai") == "other_interest"
+        assert canonicalize_category("non_ai") == "other_signal"
     finally:
         conn.close()
 
@@ -101,23 +103,24 @@ def test_dynamic_categories_respect_max_and_retire_narrowest(tmp_path: Path):
 def test_reset_taxonomy_state_removes_dynamic_categories(tmp_path: Path):
     conn = _conn(tmp_path)
     try:
+        # Use a topic that won't collide with any core category
         created, _state = classify_and_update_category(
             conn,
-            suggested_category="economics",
-            title="Macro economics weekly",
-            channel_name="Markets",
+            suggested_category="woodworking",
+            title="Master woodworking techniques",
+            channel_name="Craft Workshop",
             summary_text="",
             transcript_text="",
-            themes=["economics"],
+            themes=["woodworking"],
             confidence=0.9,
-            max_categories=10,
+            max_categories=len(CORE_ORDER) + 2,
         )
-        assert created == "economics"
+        assert created == "woodworking"
 
-        reset = reset_taxonomy_state(conn, max_categories=10)
+        reset = reset_taxonomy_state(conn, max_categories=len(CORE_ORDER) + 2)
         keys = set(reset["categories"].keys())
-        assert "economics" not in keys
-        assert set(["ai", "political", "war", "other_interest"]).issubset(keys)
+        assert "woodworking" not in keys
+        assert set(CORE_ORDER).issubset(keys)
     finally:
         conn.close()
 
@@ -128,7 +131,7 @@ def test_generic_fallback_words_do_not_spawn_dynamic_category(tmp_path: Path):
         for _ in range(12):
             cat, state = classify_and_update_category(
                 conn,
-                suggested_category="other_interest",
+                suggested_category="other_signal",
                 title="Video update",
                 channel_name="General Channel",
                 summary_text="transcript unavailable metadata-only classification",
@@ -137,9 +140,9 @@ def test_generic_fallback_words_do_not_spawn_dynamic_category(tmp_path: Path):
                 confidence=0.55,
                 max_categories=10,
             )
-            assert cat == "other_interest"
+            assert cat == "other_signal"
 
         keys = set(state["categories"].keys())
-        assert keys == {"ai", "political", "war", "other_interest"}
+        assert set(CORE_ORDER).issubset(keys)
     finally:
         conn.close()

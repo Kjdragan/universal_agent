@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -14,6 +15,10 @@ import httpx
 
 from csi_ingester.adapters.base import RawEvent, SourceAdapter
 from csi_ingester.contract import CreatorSignalEvent
+from csi_ingester.store.source_manager import (
+    get_active_youtube_channels,
+    seed_youtube_channels,
+)
 
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
 logger = logging.getLogger(__name__)
@@ -34,12 +39,18 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         self._watchlist_fallback_file = Path(__file__).resolve().parents[2] / "channels_watchlist.json"
         self._watchlist_file_mtime: float | None = None
         self._watchlist_file_channels: list[dict[str, str]] = []
+        self._db_conn: sqlite3.Connection | None = None
+        self._db_seeded: bool = False
         self._load_state_fn = lambda source_key: None
         self._save_state_fn = lambda source_key, state: None
 
     def set_state_backend(self, load_state_fn, save_state_fn) -> None:
         self._load_state_fn = load_state_fn
         self._save_state_fn = save_state_fn
+
+    def set_db_connection(self, conn: sqlite3.Connection) -> None:
+        """Set the DB connection for source management queries."""
+        self._db_conn = conn
 
     async def fetch_events(self) -> list[RawEvent]:
         watchlist = self._resolve_watchlist()
@@ -101,6 +112,14 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         return events
 
     def _resolve_watchlist(self) -> list[dict[str, str]]:
+        # ── Try DB-backed source list first ──
+        if self._db_conn is not None:
+            try:
+                return self._resolve_watchlist_from_db()
+            except Exception as exc:
+                logger.warning("DB watchlist query failed, falling back to JSON: %s", exc)
+
+        # ── Fallback: legacy JSON-based resolution ──
         configured = list(self.config.get("watchlist") or [])
         merged: list[dict[str, str]] = []
         seen: set[str] = set()
@@ -132,6 +151,28 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             )
 
         return merged
+
+    def _resolve_watchlist_from_db(self) -> list[dict[str, str]]:
+        """Resolve watchlist from SQLite source tables.
+
+        Seeds from JSON on first call, then returns active channels.
+        """
+        assert self._db_conn is not None
+        if not self._db_seeded:
+            seed_path = Path(self._watchlist_file).expanduser() if self._watchlist_file else None
+            if seed_path and not seed_path.exists():
+                seed_path = self._watchlist_fallback_file
+            if seed_path and seed_path.exists():
+                count = seed_youtube_channels(self._db_conn, seed_path)
+                logger.info("YouTube channels seeded from JSON: %d", count)
+            self._db_seeded = True
+
+        channels = get_active_youtube_channels(self._db_conn)
+        logger.info("YouTube watchlist from DB: %d active channels", len(channels))
+        return [
+            {"channel_id": ch["channel_id"], "channel_name": ch.get("channel_name", "")}
+            for ch in channels
+        ]
 
     def _load_watchlist_file_channels(self) -> list[dict[str, str]]:
         if not self._watchlist_file:

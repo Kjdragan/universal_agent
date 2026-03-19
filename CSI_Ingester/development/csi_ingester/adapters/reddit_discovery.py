@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,10 @@ import httpx
 
 from csi_ingester.adapters.base import RawEvent, SourceAdapter
 from csi_ingester.contract import CreatorSignalEvent
+from csi_ingester.store.source_manager import (
+    get_active_reddit_sources,
+    seed_reddit_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +34,18 @@ class RedditDiscoveryAdapter(SourceAdapter):
         self._watchlist_fallback_file = Path(__file__).resolve().parents[2] / "reddit_watchlist.json"
         self._watchlist_file_mtime: float | None = None
         self._watchlist_file_subreddits: list[str] = []
+        self._db_conn: sqlite3.Connection | None = None
+        self._db_seeded: bool = False
         self._load_state_fn = lambda source_key: None
         self._save_state_fn = lambda source_key, state: None
 
     def set_state_backend(self, load_state_fn, save_state_fn) -> None:
         self._load_state_fn = load_state_fn
         self._save_state_fn = save_state_fn
+
+    def set_db_connection(self, conn: sqlite3.Connection) -> None:
+        """Set the DB connection for source management queries."""
+        self._db_conn = conn
 
     def _state_key(self, subreddit: str) -> str:
         return f"reddit_discovery:{subreddit.lower()}"
@@ -63,6 +74,14 @@ class RedditDiscoveryAdapter(SourceAdapter):
         self._save_state_fn(self._state_key(subreddit), payload)
 
     def _subreddits(self) -> list[str]:
+        # ── Try DB-backed source list first ──
+        if self._db_conn is not None:
+            try:
+                return self._resolve_subreddits_from_db()
+            except Exception as exc:
+                logger.warning("DB subreddit query failed, falling back to JSON: %s", exc)
+
+        # ── Fallback: legacy resolution ──
         raw = self.config.get("subreddits")
         out: list[str] = []
         configured_count = 0
@@ -95,6 +114,22 @@ class RedditDiscoveryAdapter(SourceAdapter):
                 self._watchlist_fallback_file,
             )
         return deduped
+
+    def _resolve_subreddits_from_db(self) -> list[str]:
+        """Resolve subreddit list from SQLite source tables."""
+        assert self._db_conn is not None
+        if not self._db_seeded:
+            seed_path = Path(self._watchlist_file).expanduser() if self._watchlist_file else None
+            if seed_path and not seed_path.exists():
+                seed_path = self._watchlist_fallback_file
+            if seed_path and seed_path.exists():
+                count = seed_reddit_sources(self._db_conn, seed_path)
+                logger.info("Reddit sources seeded from JSON: %d", count)
+            self._db_seeded = True
+
+        sources = get_active_reddit_sources(self._db_conn)
+        logger.info("Reddit watchlist from DB: %d active subreddits", len(sources))
+        return [src["subreddit"] for src in sources]
 
     def _load_watchlist_file_subreddits(self) -> list[str]:
         if not self._watchlist_file:

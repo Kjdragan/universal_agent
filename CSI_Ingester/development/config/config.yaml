@@ -61,9 +61,28 @@ sources:
     trend_top_k: 6
     max_seen_cache: 6000
     query_packs:
-      - name: "ai-domain"
-        terms: ["ai agents", "workflow automation", "private credit", "interest rates"]
-    seed_terms: ["market structure"]
+      - name: "ai-models"
+        domain: "ai_models"
+        terms: ["LLM", "foundation model", "model release", "fine tuning", "benchmark", "open source AI", "local LLM"]
+      - name: "ai-coding"
+        domain: "ai_coding"
+        terms: ["agentic coding", "AI agents", "MCP protocol", "code assistant", "cursor AI", "copilot", "prompt engineering"]
+      - name: "ai-applications"
+        domain: "ai_applications"
+        terms: ["AI tools", "AI product", "text to video", "AI search", "ChatGPT", "AI assistant"]
+      - name: "ai-business"
+        domain: "ai_business"
+        terms: ["AI startup", "AI funding", "GPU shortage", "AI regulation", "NVIDIA", "AI infrastructure"]
+      - name: "geopolitics"
+        domain: "geopolitics"
+        terms: ["geopolitics", "sanctions", "trade war", "tariff", "diplomacy"]
+      - name: "economics"
+        domain: "economics"
+        terms: ["interest rates", "market structure", "private credit", "inflation", "venture capital"]
+      - name: "technology"
+        domain: "technology"
+        terms: ["open source", "cybersecurity", "cloud computing", "quantum computing"]
+    seed_terms: ["AI", "machine learning"]
     quota_budgets:
       keyword_search:
         max_requests: 500
@@ -79,7 +98,7 @@ sources:
     trend_windows_minutes: [15, 60, 1440]
     trend_top_k: 8
     max_seen_cache: 8000
-    query_pool: ["ai", "economy", "markets", "creator"]
+    query_pool: ["artificial intelligence", "LLM", "agentic", "economy", "geopolitics", "technology"]
     max_queries_per_cycle: 6
     adaptive_enabled: true
     adaptive_max_terms: 6
@@ -97,3 +116,71 @@ delivery:
   ua_endpoint: "${CSI_UA_ENDPOINT}"
   batch_interval_seconds: 7200
   batch_min_events: 3
+
+# ── Timer schedule design (Option B: Tiered Frequency) ──────────────────
+# Collection runs at source-appropriate intervals (cheap HTTP calls).
+# Reporting runs 3x daily at digest windows.
+# Quality assessment runs once daily in the evening.
+#
+# Collection cadence:
+#   Reddit enrichment:    every 3h  (fast-moving signals)
+#   Threads enrichment:   every 4h  (keyword search, less urgent)
+#   YouTube enrichment:   every 4h  (videos don't go stale)
+#   DLQ replay:           every 4h  (retries aren't urgent)
+#
+# Digest windows (3x daily, Central Time):
+#   Morning:   7:00 AM CT  (12:00 UTC)  — overnight catch-up
+#   Afternoon: 1:00 PM CT  (18:00 UTC)  — midday intelligence
+#   Evening:   7:00 PM CT  (00:00 UTC)  — end-of-day synthesis
+#
+# Each digest window fires in sequence:
+#   :12 — RSS trend report
+#   :18 — Reddit + Threads trend reports
+#   :25 — Global trend brief (synthesizes all)
+#
+# Daily jobs:
+#   Quality assessment:   11:00 PM CT (04:00 UTC)
+#   DB backup:            3:40 AM (local)
+#   Token refresh:        3:15 AM (local)
+#   Daily summary:        00:10 UTC
+batch_schedule:
+  timezone: "America/Chicago"
+  digest_windows:
+    morning:
+      name: "Morning Brief"
+      ct_hour: 7
+      utc_hour: 12
+      purpose: "Process overnight data, morning intelligence digest"
+    afternoon:
+      name: "Afternoon Update"
+      ct_hour: 13
+      utc_hour: 18
+      purpose: "Midday intelligence, flag breaking signals"
+    evening:
+      name: "Evening Digest"
+      ct_hour: 19
+      utc_hour: 0
+      purpose: "End-of-day synthesis, trend summaries"
+  collection_cadence:
+    reddit_enrich_hours: 3
+    threads_enrich_hours: 4
+    youtube_enrich_hours: 4
+    dlq_replay_hours: 4
+
+# ── Source quality assessment ───────────────────────────────────────────
+source_quality:
+  assessment_schedule: "evening"  # Run quality assessment in evening window
+  scoring:
+    relevance_weight: 0.4
+    engagement_weight: 0.2
+    novelty_weight: 0.2
+    confidence_weight: 0.2
+  tier_thresholds:
+    tier1_min_score: 0.7   # Deep analysis with full Claude
+    tier2_min_score: 0.3   # Signal scanning, keyword-only
+    # Below 0.3 → Tier 3 (ambient monitoring)
+  demotion_rules:
+    lookback_days: 30
+    min_items_for_assessment: 10
+    auto_demote_after_days: 60  # Auto-demote if consistently low quality
+

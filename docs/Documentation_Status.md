@@ -52,6 +52,12 @@ These are the authoritative references for each subsystem. When any other docume
 | 98 | Agent Skills Directory (`.agents/skills/`) |
 | 99 | Documentation Drift Maintenance Pipeline
 
+## CSI Subsystem (04_CSI/)
+
+| Doc | Subject |
+|-----|----|
+| CSI_Master_Architecture.md | **Canonical living doc** — domain taxonomy, SQLite source management, quality scoring, adapter architecture, batch processing, delivery, subsystem boundaries. Supersedes scattered CSI docs for architecture reference |
+
 ## Deployment Canonical Docs (deployment/)
 
 | Doc | Subject |

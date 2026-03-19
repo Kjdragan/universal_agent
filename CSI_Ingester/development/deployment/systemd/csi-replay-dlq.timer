@@ -1,11 +1,10 @@
 [Unit]
-Description=Run CSI DLQ replay every 15 minutes
+Description=Run CSI DLQ replay every 4 hours
+PartOf=csi.target
 
 [Timer]
-OnCalendar=*:08/15
+OnCalendar=*-*-* 2/4:08:00
 Persistent=true
-Unit=csi-replay-dlq.service
 
 [Install]
-WantedBy=timers.target
-
+WantedBy=csi.target

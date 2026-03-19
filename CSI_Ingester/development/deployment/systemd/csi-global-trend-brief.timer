@@ -1,10 +1,12 @@
 [Unit]
-Description=Run CSI global trend brief every 2 hours
+Description=Run CSI global trend brief 3x daily (7am/1pm/7pm CT)
+PartOf=csi.target
 
 [Timer]
-OnCalendar=*-*-* 0/2:05:00
+OnCalendar=*-*-* 12:25:00 UTC
+OnCalendar=*-*-* 18:25:00 UTC
+OnCalendar=*-*-* 00:25:00 UTC
 Persistent=true
-Unit=csi-global-trend-brief.service
 
 [Install]
-WantedBy=timers.target
+WantedBy=csi.target

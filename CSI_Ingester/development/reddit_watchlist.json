@@ -1,20 +1,41 @@
 {
   "subreddits": [
-    {
-      "name": "artificial",
-      "category_hint": "ai"
-    },
-    {
-      "name": "LocalLLaMA",
-      "category_hint": "ai"
-    },
-    {
-      "name": "geopolitics",
-      "category_hint": "political"
-    },
-    {
-      "name": "WarCollege",
-      "category_hint": "war"
-    }
+    {"name": "AI_Agents", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "User sub: AI agent frameworks, tool use, agentic patterns"},
+    {"name": "Anthropic", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: Anthropic/Claude company news"},
+    {"name": "ArtificialIntelligence", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: Broad AI discussion hub"},
+    {"name": "Bard", "domain": "ai_applications", "tier": 2, "category_hint": "ai_applications", "note": "User sub: Google Bard/Gemini app"},
+    {"name": "ChatGPT", "domain": "ai_applications", "tier": 2, "category_hint": "ai_applications", "note": "User sub: ChatGPT usage and features"},
+    {"name": "ChatGPTCoding", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "User sub: Coding with ChatGPT"},
+    {"name": "Claude", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: Anthropic Claude model community"},
+    {"name": "ClaudeAI", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: Claude and Claude Code discussion"},
+    {"name": "ClaudeCode", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "User sub: Claude Code IDE product"},
+    {"name": "claudeexplorers", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "User sub: Claude code enthusiasts community"},
+    {"name": "GeminiAI", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: Google Gemini model"},
+    {"name": "LocalLLaMA", "domain": "ai_models", "tier": 1, "category_hint": "ai_models", "note": "User sub: LOCAL/open source LLM discussion — high technical value"},
+    {"name": "notebooklm", "domain": "ai_applications", "tier": 2, "category_hint": "ai_applications", "note": "User sub: Google NotebookLM product"},
+    {"name": "OpenAI", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: OpenAI company and products"},
+    {"name": "singularity", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: AGI, singularity, AI future"},
+    {"name": "Windsurf", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "User sub: Windsurf AI coding IDE"},
+    {"name": "livecoding", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "User sub: Live coding streams/content"},
+    {"name": "ZaGLM", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "User sub: ZETAGLM / Z.ai GLM series"},
+
+    {"name": "MachineLearning", "domain": "ai_models", "tier": 1, "category_hint": "ai_models", "note": "Recommended: Premier ML research community"},
+    {"name": "deeplearning", "domain": "ai_models", "tier": 2, "category_hint": "ai_models", "note": "Recommended: Deep learning techniques"},
+    {"name": "StableDiffusion", "domain": "ai_applications", "tier": 2, "category_hint": "ai_applications", "note": "Recommended: Image generation community"},
+    {"name": "PromptEngineering", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "Recommended: Prompt design and optimization"},
+    {"name": "LangChain", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "Recommended: LangChain/LangGraph agent framework"},
+    {"name": "cursor", "domain": "ai_coding", "tier": 2, "category_hint": "ai_coding", "note": "Recommended: Cursor AI IDE"},
+    {"name": "aiwars", "domain": "ai_business", "tier": 2, "category_hint": "ai_business", "note": "Recommended: AI business competition"},
+
+    {"name": "hacking", "domain": "technology", "tier": 2, "category_hint": "technology", "note": "User sub: Security/hacking"},
+    {"name": "science", "domain": "technology", "tier": 2, "category_hint": "technology", "note": "User sub: Science news"},
+    {"name": "CryptoCurrency", "domain": "economics", "tier": 2, "category_hint": "economics", "note": "User sub: Crypto markets"},
+    {"name": "google", "domain": "technology", "tier": 2, "category_hint": "technology", "note": "User sub: Google news and products"},
+    {"name": "programming", "domain": "technology", "tier": 2, "category_hint": "technology", "note": "Recommended: General programming"},
+    {"name": "selfhosted", "domain": "technology", "tier": 2, "category_hint": "technology", "note": "Recommended: Self-hosted infrastructure"},
+
+    {"name": "geopolitics", "domain": "geopolitics", "tier": 2, "category_hint": "geopolitics", "note": "Existing: International relations"},
+    {"name": "WarCollege", "domain": "conflict", "tier": 2, "category_hint": "conflict", "note": "Existing: Military strategy and analysis"},
+    {"name": "economics", "domain": "economics", "tier": 2, "category_hint": "economics", "note": "Recommended: Economics discussion"}
   ]
 }

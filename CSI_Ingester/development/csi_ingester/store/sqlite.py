@@ -275,6 +275,80 @@ CREATE INDEX IF NOT EXISTS idx_global_trend_briefs_created_at ON global_trend_br
 CREATE INDEX IF NOT EXISTS idx_global_trend_briefs_window ON global_trend_briefs(window_end_utc DESC);
 """
 
+MIGRATION_0009_SOURCE_MANAGEMENT = """
+CREATE TABLE IF NOT EXISTS youtube_channels (
+    channel_id     TEXT PRIMARY KEY,
+    channel_name   TEXT NOT NULL,
+    rss_feed_url   TEXT,
+    youtube_url    TEXT,
+    domain         TEXT NOT NULL DEFAULT 'other_signal',
+    tier           INTEGER NOT NULL DEFAULT 2,
+    quality_score  REAL NOT NULL DEFAULT 0.5,
+    items_assessed INTEGER NOT NULL DEFAULT 0,
+    active         INTEGER NOT NULL DEFAULT 1,
+    seed_video_count INTEGER DEFAULT 0,
+    added_at       TEXT DEFAULT (datetime('now')),
+    last_assessed  TEXT,
+    demoted_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_youtube_channels_domain ON youtube_channels(domain);
+CREATE INDEX IF NOT EXISTS idx_youtube_channels_tier ON youtube_channels(tier);
+CREATE INDEX IF NOT EXISTS idx_youtube_channels_active ON youtube_channels(active);
+
+CREATE TABLE IF NOT EXISTS reddit_sources (
+    subreddit      TEXT PRIMARY KEY,
+    domain         TEXT NOT NULL DEFAULT 'other_signal',
+    tier           INTEGER NOT NULL DEFAULT 2,
+    quality_score  REAL NOT NULL DEFAULT 0.5,
+    items_assessed INTEGER NOT NULL DEFAULT 0,
+    active         INTEGER NOT NULL DEFAULT 1,
+    note           TEXT,
+    added_at       TEXT DEFAULT (datetime('now')),
+    last_assessed  TEXT,
+    demoted_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reddit_sources_domain ON reddit_sources(domain);
+
+CREATE TABLE IF NOT EXISTS threads_search_terms (
+    term           TEXT PRIMARY KEY,
+    query_pack     TEXT,
+    domain         TEXT NOT NULL DEFAULT 'other_signal',
+    tier           INTEGER NOT NULL DEFAULT 2,
+    quality_score  REAL NOT NULL DEFAULT 0.5,
+    items_assessed INTEGER NOT NULL DEFAULT 0,
+    active         INTEGER NOT NULL DEFAULT 1,
+    added_at       TEXT DEFAULT (datetime('now')),
+    last_assessed  TEXT,
+    demoted_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_threads_terms_domain ON threads_search_terms(domain);
+
+CREATE TABLE IF NOT EXISTS source_quality_history (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type    TEXT NOT NULL,
+    source_key     TEXT NOT NULL,
+    assessed_at    TEXT NOT NULL,
+    score          REAL NOT NULL,
+    items_count    INTEGER NOT NULL DEFAULT 0,
+    relevance      REAL,
+    engagement     REAL,
+    novelty        REAL,
+    confidence     REAL,
+    notes          TEXT,
+    created_at     TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sqh_source ON source_quality_history(source_type, source_key);
+CREATE INDEX IF NOT EXISTS idx_sqh_assessed ON source_quality_history(assessed_at DESC);
+"""
+
+MIGRATION_0010_CATEGORY_DEFAULTS = """
+-- Note: SQLite doesn't support ALTER COLUMN to change defaults,
+-- but we update existing rows with the legacy value.
+UPDATE rss_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
+UPDATE reddit_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
+UPDATE threads_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -284,6 +358,8 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0006_delivery_attempts", MIGRATION_0006_DELIVERY_ATTEMPTS),
     ("0007_opportunity_bundles", MIGRATION_0007_OPPORTUNITY_BUNDLES),
     ("0008_cross_source_analysis", MIGRATION_0008_CROSS_SOURCE_ANALYSIS),
+    ("0009_source_management", MIGRATION_0009_SOURCE_MANAGEMENT),
+    ("0010_category_defaults", MIGRATION_0010_CATEGORY_DEFAULTS),
 )
 
 

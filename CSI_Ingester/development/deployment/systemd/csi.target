@@ -1,0 +1,12 @@
+[Unit]
+Description=CSI Intelligence System — all services
+Documentation=https://github.com/kjdragan/universal_agent/tree/main/CSI_Ingester
+
+# This target groups all CSI services for collective start/stop.
+# Usage:
+#   systemctl start csi.target   — start all CSI services
+#   systemctl stop csi.target    — stop all CSI services
+#   systemctl status csi.target  — check status
+
+[Install]
+WantedBy=multi-user.target

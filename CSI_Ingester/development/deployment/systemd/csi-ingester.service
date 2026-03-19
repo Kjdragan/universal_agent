@@ -1,6 +1,7 @@
 [Unit]
 Description=CSI Ingester Service
 After=network.target
+PartOf=csi.target
 
 [Service]
 Type=simple
