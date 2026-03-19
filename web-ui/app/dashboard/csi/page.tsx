@@ -39,23 +39,50 @@ function sourceLabel(source: string): string {
         .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Derive the real content source from event_type.
+ *  The `source` field is just the pipeline name (csi_analytics, csi_ingester_batch).
+ *  The actual content source lives in `event_type`: reddit_trend_report, threads_trend_report, etc. */
+function contentSource(eventType: string): "reddit" | "threads" | "youtube" | "global" | "unknown" {
+    const t = (eventType || "").toLowerCase();
+    if (t.includes("reddit")) return "reddit";
+    if (t.includes("threads")) return "threads";
+    if (t.includes("rss") || t.includes("youtube")) return "youtube";
+    if (t.includes("global") || t.includes("batch") || t.includes("brief")) return "global";
+    return "unknown";
+}
+
+/** Friendly label for a content source */
+function contentSourceLabel(cs: ReturnType<typeof contentSource>): string {
+    switch (cs) {
+        case "reddit": return "Reddit";
+        case "threads": return "Threads";
+        case "youtube": return "YouTube";
+        case "global": return "Global Brief";
+        default: return "Other";
+    }
+}
+
 function sourceColor(source: string): string {
-    const s = source.toLowerCase();
-    if (s.includes("rss") || s.includes("youtube")) return "text-red-400 bg-red-400/15 border-red-400/30";
-    if (s.includes("reddit")) return "text-orange-400 bg-orange-400/15 border-orange-400/30";
-    if (s.includes("threads")) return "text-purple-400 bg-purple-400/15 border-purple-400/30";
-    if (s.includes("global") || s.includes("brief")) return "text-sky-400 bg-sky-400/15 border-sky-400/30";
-    return "text-foreground/80 bg-muted-foreground/15 border-muted-foreground/30";
+    const cs = contentSource(source);
+    switch (cs) {
+        case "youtube": return "text-red-400 bg-red-400/15 border-red-400/30";
+        case "reddit": return "text-orange-400 bg-orange-400/15 border-orange-400/30";
+        case "threads": return "text-purple-400 bg-purple-400/15 border-purple-400/30";
+        case "global": return "text-sky-400 bg-sky-400/15 border-sky-400/30";
+        default: return "text-foreground/80 bg-muted-foreground/15 border-muted-foreground/30";
+    }
 }
 
 /** Color-coded dot icon for rapid source identification */
 function sourceIcon(source: string): string {
-    const s = source.toLowerCase();
-    if (s.includes("rss") || s.includes("youtube")) return "🔴";
-    if (s.includes("reddit")) return "🟠";
-    if (s.includes("threads")) return "🟣";
-    if (s.includes("global") || s.includes("brief")) return "🔵";
-    return "⚪";
+    const cs = contentSource(source);
+    switch (cs) {
+        case "youtube": return "🔴";
+        case "reddit": return "🟠";
+        case "threads": return "🟣";
+        case "global": return "🔵";
+        default: return "⚪";
+    }
 }
 
 function eventTypeIcon(eventType: string): string {
@@ -154,15 +181,17 @@ export default function CSIDashboard() {
 
     /* ── Source filters ───────────────────────────────────────────────── */
 
+    /** Group by content-source derived from event_type, not the pipeline "source" field */
     const sources = useMemo(() => {
         const set = new Set<string>();
-        digests.forEach((d) => set.add(d.source));
+        digests.forEach((d) => set.add(contentSource(d.event_type)));
+        set.delete("unknown");
         return Array.from(set).sort();
     }, [digests]);
 
     const filteredDigests = useMemo(() => {
         if (sourceFilter === "all") return digests;
-        return digests.filter((d) => d.source === sourceFilter);
+        return digests.filter((d) => contentSource(d.event_type) === sourceFilter);
     }, [digests, sourceFilter]);
 
     /* ── Summary cards ───────────────────────────────────────────────── */
@@ -172,7 +201,8 @@ export default function CSIDashboard() {
     const sourceMix = useMemo(() => {
         const counts: Record<string, number> = {};
         digests.forEach((d) => {
-            counts[d.source] = (counts[d.source] || 0) + 1;
+            const cs = contentSource(d.event_type);
+            counts[cs] = (counts[cs] || 0) + 1;
         });
         return counts;
     }, [digests]);
@@ -298,7 +328,7 @@ export default function CSIDashboard() {
                                     <span
                                         key={src}
                                         className="text-sm font-medium text-foreground/80"
-                                        title={sourceLabel(src)}
+                                        title={contentSourceLabel(src as ReturnType<typeof contentSource>)}
                                     >
                                         {sourceIcon(src)} {count}
                                     </span>
@@ -330,7 +360,7 @@ export default function CSIDashboard() {
                                 : "border-border bg-background/50 text-muted-foreground hover:bg-card/60"
                         }`}
                     >
-                        {sourceIcon(src)} {sourceLabel(src)} ({sourceMix[src] || 0})
+                        {sourceIcon(src)} {contentSourceLabel(src as ReturnType<typeof contentSource>)} ({sourceMix[src] || 0})
                     </button>
                 ))}
             </div>
@@ -391,8 +421,8 @@ export default function CSIDashboard() {
                                 >
                                     <div className="flex items-start gap-2.5">
                                         {/* Source icon — instant visual ID */}
-                                        <span className="text-base mt-0.5 shrink-0" title={sourceLabel(digest.source)}>
-                                            {sourceIcon(digest.source)}
+                                        <span className="text-base mt-0.5 shrink-0" title={contentSourceLabel(contentSource(digest.event_type))}>
+                                            {sourceIcon(digest.event_type)}
                                         </span>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center justify-between gap-2 mb-0.5">
@@ -432,8 +462,8 @@ export default function CSIDashboard() {
                                                 {extractHeadline(selectedDigest)}
                                             </h2>
                                             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                                <span className={`text-xs font-medium ${sourceColor(selectedDigest.source).split(" ")[0]}`}>
-                                                    {sourceIcon(selectedDigest.source)} {sourceLabel(selectedDigest.source)}
+                                                <span className={`text-xs font-medium ${sourceColor(selectedDigest.event_type).split(" ")[0]}`}>
+                                                    {sourceIcon(selectedDigest.event_type)} {contentSourceLabel(contentSource(selectedDigest.event_type))}
                                                 </span>
                                                 <span className="text-xs text-muted">•</span>
                                                 <span className="text-xs text-muted-foreground">
