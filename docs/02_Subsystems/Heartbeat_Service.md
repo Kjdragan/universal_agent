@@ -28,12 +28,40 @@ graph TD
 
 ## 3. Configuration & Scheduling
 
-The heartbeat is highly configurable via environment variables or a `heartbeat_config.json` in the workspace.
+The heartbeat is highly configurable via environment variables.
 
-- **`every_seconds`**: Interval between runs.
-- **`active_start` / `active_end`**: Time window during which the heartbeat is allowed to run (e.g., "08:00" to "20:00").
-- **`timezone`**: User-specific timezone for consistent scheduling.
-- **`ok_tokens`**: Special strings (like `HEARTBEAT_OK`) that the agent can say to indicate it has nothing to do, ending the turn without further noise.
+### Primary Settings
+
+| Environment Variable | Default | Description |
+| --- | --- | --- |
+| `UA_HEARTBEAT_INTERVAL` | 1800 (30 min) | Primary interval between heartbeat runs (in seconds). Also accepts legacy `UA_HEARTBEAT_EVERY`. |
+| `UA_HEARTBEAT_MIN_INTERVAL_SECONDS` | Dynamic | Minimum allowed interval; resolved after Infisical bootstrap. |
+| `UA_HEARTBEAT_ACTIVE_START` | None | Start of active hours window (e.g., "08:00"). Heartbeat skips runs outside this window. |
+| `UA_HEARTBEAT_ACTIVE_END` | None | End of active hours window (e.g., "20:00"). |
+| `UA_HEARTBEAT_EXEC_TIMEOUT` | 600 | Maximum execution time for a single heartbeat turn (in seconds). |
+| `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | 1 | Set to "0" to disable autonomous heartbeat actions entirely. |
+
+### Retry & Continuation
+
+| Environment Variable | Default | Description |
+| --- | --- | --- |
+| `UA_HEARTBEAT_RETRY_BASE_SECONDS` | 10 | Base delay for exponential backoff retries. |
+| `UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS` | 300 | Maximum retry backoff delay. |
+| `UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS` | 1 | Short delay after actionable runs for quick re-check. |
+| `UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS` | 1800 | Cooldown after foreground (user) activity before heartbeat resumes. |
+
+### Limits & Tuning
+
+| Environment Variable | Default | Description |
+| --- | --- | --- |
+| `UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE` | 1 | Maximum proactive items to process per heartbeat cycle. |
+| `UA_HEARTBEAT_MAX_ACTIONABLE` | 50 | Maximum actionable items to surface in a single run. |
+| `UA_HEARTBEAT_MAX_SYSTEM_EVENTS` | 25 | Maximum system events to include per heartbeat. |
+| `UA_HEARTBEAT_INVESTIGATION_ONLY` | None | If set, heartbeat runs in investigation-only mode (no mutations). |
+
+### OK Tokens
+
+The agent can emit special strings (like `HEARTBEAT_OK` or `UA_HEARTBEAT_OK`) to indicate it has nothing to do, ending the turn cleanly.
 
 ### Retry Queue and Continuation Passes
 
