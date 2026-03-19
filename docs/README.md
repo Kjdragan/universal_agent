@@ -69,6 +69,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[CSI Todoist Sync Debugging Lessons (2026-02-26)](03_Operations/77_CSI_Todoist_Sync_Debugging_Lessons_2026-02-26.md)**: Root-cause findings and hardening changes for CSI -> Todoist sync failures, including credential diagnostics and repeatable verification steps.
 - **[Daily Autonomous Briefing Reliability and Input Diagnostics (2026-02-26)](03_Operations/78_Daily_Autonomous_Briefing_Reliability_And_Input_Diagnostics_2026-02-26.md)**: Root-cause analysis and hardening changes that prevent empty/ambiguous briefings after resets and upstream ingest failures.
 - **[Agent Skills Directory (2026-03-17)](03_Operations/98_Agent_Skills_Directory.md)**: Documentation for the `.agents/skills/` directory containing clean-code, agentmail, skill-judge, systematic-debugging, and vp-orchestration skills.
+- **[Documentation Drift Maintenance Pipeline (2026-03-19)](03_Operations/99_Documentation_Drift_Maintenance_Pipeline.md)**: Canonical reference for the automated documentation maintenance system — Stage 1 drift auditor, Stage 2 maintenance agent, VP mission dispatch, issue batching, and verify-before-fix rules.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

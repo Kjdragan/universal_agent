@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-19
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -50,6 +50,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 96 | NotebookLM Integration & Research Pipeline |
 | 97 | Infisical CLI Reference & Lessons Learned |
 | 98 | Agent Skills Directory (`.agents/skills/`) |
+| 99 | Documentation Drift Maintenance Pipeline
 
 ## Deployment Canonical Docs (deployment/)
 
