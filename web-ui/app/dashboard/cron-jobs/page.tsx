@@ -89,9 +89,9 @@ export default function DashboardCronJobsPage() {
   const [command, setCommand] = useState("");
   const [scheduleTime, setScheduleTime] = useState("in 30 minutes");
   const [repeat, setRepeat] = useState(false);
-  const [timeoutSeconds, setTimeoutSeconds] = useState("900");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ command: string; schedule: string }>({ command: "", schedule: "" });
 
@@ -139,43 +139,55 @@ export default function DashboardCronJobsPage() {
     load();
   }, [load]);
 
-  const createJob = useCallback(
+  const submitCommand = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
       if (!command.trim()) return;
+      setError(null);
+      setSuccessMsg(null);
+
+      // Build NL command text — combine schedule/repeat context into the text
+      // so the LLM has full context for interpretation.
+      let nlText = command.trim();
       const scheduleValue = scheduleTime.trim();
-      if (!scheduleValue) {
-        setError("Enter a schedule time like 'in 20 minutes' or '4:30 pm'.");
-        return;
+      if (scheduleValue) {
+        nlText += ` | Schedule: ${scheduleValue}`;
       }
-      const payload: Record<string, unknown> = {
-        command: command.trim(),
-        schedule_time: scheduleValue,
-        repeat,
+      if (repeat) {
+        nlText += " | Repeat: yes";
+      }
+
+      const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const payload = {
+        text: nlText,
+        timezone: userTz,
       };
-      const timeoutValue = timeoutSeconds.trim();
-      if (timeoutValue) {
-        const parsed = Number.parseInt(timeoutValue, 10);
-        if (!Number.isFinite(parsed) || parsed <= 0) {
-          setError("Timeout must be a positive number of seconds.");
+
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/cron/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const detail = await res.text();
+          setError(parseErrorDetail(detail) || `Command failed (${res.status})`);
           return;
         }
-        payload.timeout_seconds = parsed;
+        const data = await res.json();
+        const intent = data.intent || "create";
+        const reason = data.interpreted?.reason || "";
+        setSuccessMsg(`✅ ${intent.charAt(0).toUpperCase() + intent.slice(1)}d successfully.${reason ? " — " + reason : ""}`);
+        setCommand("");
+        await load();
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setLoading(false);
       }
-      const res = await fetch(`${API_BASE}/api/v1/cron/jobs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const detail = await res.text();
-        setError(parseErrorDetail(detail) || `Create failed (${res.status})`);
-        return;
-      }
-      setCommand("");
-      await load();
     },
-    [command, scheduleTime, repeat, timeoutSeconds, load],
+    [command, scheduleTime, repeat, load],
   );
 
   const runNow = useCallback(async (jobId: string) => {
@@ -276,17 +288,17 @@ export default function DashboardCronJobsPage() {
         </div>
       </div>
 
-      <form onSubmit={createJob} className="grid gap-2 rounded-xl border border-border bg-background/70 p-4 md:grid-cols-[1fr,230px,130px,130px,auto]">
+      <form onSubmit={submitCommand} className="grid gap-2 rounded-xl border border-border bg-background/70 p-4 md:grid-cols-[1fr,230px,130px,auto]">
         <input
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          placeholder="Command prompt for agent"
+          placeholder="Describe what to do — create, edit, or manage a cron job"
           className="rounded-md border border-border bg-background/70 px-3 py-2 text-sm outline-none focus:border-primary"
         />
         <input
           value={scheduleTime}
           onChange={(e) => setScheduleTime(e.target.value)}
-          placeholder="Time (e.g. in 20 minutes, 4:30 pm)"
+          placeholder="Schedule (optional)"
           className="rounded-md border border-border bg-background/70 px-3 py-2 text-sm outline-none focus:border-primary"
         />
         <div className="flex items-center gap-2 rounded-md border border-border bg-background/70 px-3 py-2 text-sm">
@@ -301,26 +313,22 @@ export default function DashboardCronJobsPage() {
             Repeat
           </label>
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            value={timeoutSeconds}
-            onChange={(e) => setTimeoutSeconds(e.target.value)}
-            placeholder="Timeout (sec)"
-            className="w-full rounded-md border border-border bg-background/70 px-3 py-2 text-sm outline-none focus:border-primary"
-          />
-        </div>
         <button
           type="submit"
-          className="rounded-md border border-primary/30 bg-primary/20 px-3 py-2 text-sm text-primary/90 hover:bg-primary/30"
+          disabled={loading}
+          className="rounded-md border border-primary/30 bg-primary/20 px-3 py-2 text-sm text-primary/90 hover:bg-primary/30 disabled:opacity-50"
         >
-          Create
+          {loading ? "Processing…" : "Submit"}
         </button>
       </form>
       <p className="text-xs text-muted-foreground">
-        Enter a natural time like <span className="font-mono">in 20 minutes</span> or <span className="font-mono">4:30 pm</span>. With{" "}
-        <span className="font-mono">Repeat</span> on, interval phrases repeat (e.g. <span className="font-mono">in 30 minutes</span>) and
-        clock times run daily (e.g. <span className="font-mono">4:30 pm</span>).
+        Use natural language to <strong>create</strong>, <strong>edit</strong>, <strong>delete</strong>, <strong>run</strong>, or <strong>enable/disable</strong> cron jobs.
+        Example: <span className="font-mono">&quot;Change the daily briefing to 7:30 am&quot;</span> or <span className="font-mono">&quot;Run the news summary now&quot;</span>.
       </p>
+
+      {successMsg && (
+        <div className="rounded-lg border border-green-700/60 bg-green-900/20 p-3 text-sm text-green-200">{successMsg}</div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-700/60 bg-red-900/20 p-3 text-sm text-red-200">{error}</div>

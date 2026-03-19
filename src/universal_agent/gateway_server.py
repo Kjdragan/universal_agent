@@ -1674,6 +1674,11 @@ class CronJobUpdateRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
+class CronNLCommandRequest(BaseModel):
+    text: str
+    timezone: str = "UTC"
+
+
 class SystemEventRequest(BaseModel):
     session_id: Optional[str] = None
     event_type: Optional[str] = None
@@ -5844,7 +5849,15 @@ def _emit_heartbeat_event(payload: dict) -> None:
                 requires_action=True,
                 metadata=metadata,
             )
-            if parse_error:
+            # Only emit a parse-failed notification when the artifact *exists*
+            # but is corrupt/invalid.  A missing artifact is normal for many
+            # heartbeat run types (Task Hub dispatch, exec completions, etc.)
+            # and should not generate noisy alerts.
+            _is_actual_parse_failure = bool(
+                parse_error
+                and "missing" not in parse_error
+            )
+            if _is_actual_parse_failure:
                 _add_notification(
                     kind="heartbeat_findings_parse_failed",
                     title="Heartbeat Findings Parse Failed",
@@ -18118,13 +18131,22 @@ def _heartbeat_fallback_findings(
     )
     action_match = re.search(r"^Action:\s*(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
     run_match = re.search(r"^Run\s+(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
+    is_missing = "missing" in parse_error
     summary = (
         warning_match.group(2).strip()
         if warning_match
-        else ("Heartbeat completed with non-OK findings, but the structured findings artifact could not be parsed.")
+        else (
+            "Heartbeat completed; structured findings artifact was not produced for this run."
+            if is_missing
+            else "Heartbeat completed with non-OK findings, but the structured findings artifact could not be parsed."
+        )
     )
     severity = "critical" if warning_match and warning_match.group(1).strip().lower() in {"critical", "error"} else "warn"
-    recommendation = action_match.group(1).strip() if action_match else parse_error
+    recommendation = action_match.group(1).strip() if action_match else (
+        "Findings artifact absent; review heartbeat response text for details."
+        if is_missing
+        else parse_error
+    )
     runbook_command = run_match.group(0).strip() if run_match else ""
     return {
         "version": 1,
@@ -19917,6 +19939,272 @@ async def list_cron_runs(limit: int = 200):
     if not _cron_service:
         raise HTTPException(status_code=400, detail="Chron service not available.")
     return {"runs": _cron_service.list_runs(limit=limit)}
+
+
+# ── NL cron command interpretation ───────────────────────────────────────────
+
+class _AgentCronCommandInterpretation(BaseModel):
+    """Structured output from the system-configuration-agent for NL cron commands."""
+    intent: str = "create"  # create | update | delete | run | enable | disable
+    target_job_id: Optional[str] = None  # which job to act on (for non-create intents)
+    command: Optional[str] = None  # the agent prompt / command text for the cron job
+    schedule_time: Optional[str] = None  # NL schedule (e.g. "every day at 7am")
+    repeat: Optional[bool] = None
+    enabled: Optional[bool] = None
+    timezone: Optional[str] = None
+    reason: Optional[str] = None  # explanation of interpretation
+    confidence: Optional[str] = None  # high | medium | low
+
+
+def _build_cron_nl_command_prompt(*, text: str, timezone_name: str, jobs: list[dict]) -> str:
+    """Build the prompt for the system-configuration-agent to interpret NL cron commands."""
+    now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    jobs_summary = json.dumps(jobs, indent=2, ensure_ascii=True) if jobs else "(no existing jobs)"
+    return (
+        "You are a cron job management assistant. The user has given a natural-language instruction "
+        "about their cron jobs. You must determine the **intent** and route the action correctly.\n\n"
+        "## Available intents\n"
+        "- `create`  — create a brand-new cron job\n"
+        "- `update`  — modify an existing cron job (schedule, command, etc.)\n"
+        "- `delete`  — delete an existing cron job\n"
+        "- `run`     — run an existing cron job immediately\n"
+        "- `enable`  — enable a disabled cron job\n"
+        "- `disable` — disable an enabled cron job\n\n"
+        "## Key Rules\n"
+        "1. If the user's instruction mentions or clearly refers to an EXISTING job (by name, "
+        "command text, job_id, or description), set `intent` accordingly and set `target_job_id`.\n"
+        "2. If the user wants to change the schedule/time of an existing job, use intent=`update` "
+        "and populate `schedule_time` with the new schedule in natural language.\n"
+        "3. If the user wants to change the command/prompt of an existing job, use intent=`update` "
+        "and populate `command` with the new command text.\n"
+        "4. If the instruction looks like a new task that doesn't match any existing job, use "
+        "intent=`create` and populate `command` and `schedule_time`.\n"
+        "5. For `create`, `command` is REQUIRED and must be the actual agent prompt text "
+        "(not the user's meta-instruction about editing).\n\n"
+        f"## Current Time\n{now_utc}\n\n"
+        f"## User Timezone\n{timezone_name}\n\n"
+        f"## Existing Cron Jobs\n```json\n{jobs_summary}\n```\n\n"
+        f"## User Instruction\n\"{text}\"\n\n"
+        "## Response Format\n"
+        "Respond ONLY with a JSON object matching this schema:\n"
+        "```json\n"
+        "{\n"
+        '  "intent": "create|update|delete|run|enable|disable",\n'
+        '  "target_job_id": "string or null",\n'
+        '  "command": "string or null",\n'
+        '  "schedule_time": "string or null",\n'
+        '  "repeat": true/false/null,\n'
+        '  "enabled": true/false/null,\n'
+        '  "timezone": "string or null",\n'
+        '  "reason": "string explaining your interpretation",\n'
+        '  "confidence": "high|medium|low"\n'
+        "}\n```\n"
+    )
+
+
+def _try_deterministic_job_match(text: str, jobs: list[dict]) -> Optional[str]:
+    """Try to match the NL text to an existing job without LLM, using substring heuristics.
+
+    Returns the job_id if a single clear match is found, else None.
+    """
+    text_lower = text.lower()
+    matches: list[str] = []
+    for job_info in jobs:
+        job_id = str(job_info.get("job_id", ""))
+        command = str(job_info.get("command", "")).lower()
+        # Direct job_id mention
+        if job_id and job_id.lower() in text_lower:
+            return job_id  # Exact ID match — highest confidence
+        # Command substring match (skip very short commands to avoid false positives)
+        if len(command) > 8:
+            # Check if a significant portion of the command appears in the text
+            command_words = [w for w in command.split() if len(w) > 3]
+            matching_words = sum(1 for w in command_words if w in text_lower)
+            if command_words and matching_words >= max(2, len(command_words) // 2):
+                matches.append(job_id)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+@app.post("/api/v1/cron/commands")
+async def interpret_cron_nl_command(request: CronNLCommandRequest):
+    """Interpret a natural language cron command and route to the appropriate action."""
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Chron service not available.")
+
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required.")
+
+    timezone_name = request.timezone or "UTC"
+
+    # Gather existing jobs as context
+    existing_jobs: list[dict] = [
+        {
+            "job_id": str(job.job_id),
+            "command": str(getattr(job, "command", "") or ""),
+            "enabled": bool(getattr(job, "enabled", True)),
+            "every_seconds": int(getattr(job, "every_seconds", 0) or 0),
+            "cron_expr": getattr(job, "cron_expr", None),
+            "timezone": str(getattr(job, "timezone", "UTC") or "UTC"),
+        }
+        for job in _cron_service.list_jobs()
+    ]
+
+    # Ask the system-configuration-agent to interpret the command
+    session = await _get_or_create_system_configuration_session()
+    gateway = get_gateway()
+    prompt = _build_cron_nl_command_prompt(
+        text=text,
+        timezone_name=timezone_name,
+        jobs=existing_jobs,
+    )
+    result = await gateway.run_query(
+        session,
+        GatewayRequest(
+            user_input=prompt,
+            force_complex=True,
+            metadata={
+                "source": "ops",
+                "operation": "cron_nl_command_interpretation",
+                "subagent_type": "system-configuration-agent",
+            },
+        ),
+    )
+    payload = extract_json_payload(
+        result.response_text,
+        model=_AgentCronCommandInterpretation,
+        require_model=True,
+    )
+    if not isinstance(payload, _AgentCronCommandInterpretation):
+        raise HTTPException(
+            status_code=500,
+            detail="System configuration agent did not return a valid cron command interpretation.",
+        )
+
+    interpretation = payload
+    intent = (interpretation.intent or "create").lower().strip()
+    target_job_id = interpretation.target_job_id
+
+    # If the LLM didn't identify a target but the intent needs one, try deterministic match
+    if intent != "create" and not target_job_id:
+        target_job_id = _try_deterministic_job_match(text, existing_jobs)
+
+    logger.info(
+        "🔧 NL cron command interpreted: intent=%s target=%s confidence=%s reason=%s",
+        intent, target_job_id, interpretation.confidence, interpretation.reason,
+    )
+
+    # ── Route the action ─────────────────────────────────────────────────
+    if intent == "create":
+        cmd = interpretation.command or text
+        every_raw: Optional[str] = None
+        cron_expr: Optional[str] = None
+        run_at_ts: Optional[float] = None
+        delete_after_run = False
+        if interpretation.schedule_time:
+            every_raw, cron_expr, run_at_ts, delete_after_run = _resolve_simplified_schedule_fields(
+                schedule_time=interpretation.schedule_time,
+                repeat=bool(interpretation.repeat) if interpretation.repeat is not None else True,
+                timezone_name=interpretation.timezone or timezone_name,
+            )
+        job = _cron_service.add_job(
+            user_id="cron",
+            workspace_dir=_sanitize_workspace_dir_or_400(None),
+            command=cmd,
+            every_raw=every_raw,
+            cron_expr=cron_expr,
+            timezone=interpretation.timezone or timezone_name,
+            run_at=run_at_ts,
+            delete_after_run=delete_after_run,
+            enabled=True,
+            metadata={},
+        )
+        return {
+            "ok": True,
+            "intent": "create",
+            "interpreted": interpretation.model_dump(),
+            "job": {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs},
+        }
+
+    # All other intents require a target job
+    if not target_job_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not identify which cron job to {intent}. Please specify a job name or ID.",
+        )
+    target_job = _cron_service.get_job(target_job_id)
+    if not target_job:
+        raise HTTPException(status_code=404, detail=f"Cron job '{target_job_id}' not found.")
+
+    if intent == "update":
+        updates: dict[str, Any] = {}
+        eff_tz = interpretation.timezone or timezone_name
+        if interpretation.command is not None:
+            updates["command"] = interpretation.command
+        if interpretation.schedule_time is not None:
+            every_raw_u, cron_expr_u, run_at_ts_u, delete_after_run_u = (
+                await _resolve_simplified_schedule_update_fields_with_agent(
+                    schedule_time=interpretation.schedule_time,
+                    repeat=interpretation.repeat,
+                    timezone_name=eff_tz,
+                    job=target_job,
+                )
+            )
+            updates["every_seconds"] = 0
+            updates["cron_expr"] = None
+            updates["run_at"] = None
+            if every_raw_u is not None:
+                updates["every"] = every_raw_u
+            if cron_expr_u is not None:
+                updates["cron_expr"] = cron_expr_u
+            if run_at_ts_u is not None:
+                updates["run_at"] = run_at_ts_u
+            updates["delete_after_run"] = delete_after_run_u
+        if interpretation.enabled is not None:
+            updates["enabled"] = interpretation.enabled
+        if interpretation.timezone is not None:
+            updates["timezone"] = interpretation.timezone
+        if not updates:
+            raise HTTPException(status_code=400, detail="No update fields identified from your instruction.")
+        updated_job = _cron_service.update_job(target_job_id, updates)
+        return {
+            "ok": True,
+            "intent": "update",
+            "interpreted": interpretation.model_dump(),
+            "job": {**updated_job.to_dict(), "running": updated_job.job_id in _cron_service.running_jobs},
+        }
+
+    if intent == "delete":
+        _cron_service.delete_job(target_job_id)
+        return {
+            "ok": True,
+            "intent": "delete",
+            "interpreted": interpretation.model_dump(),
+            "job_id": target_job_id,
+        }
+
+    if intent == "run":
+        record = await _cron_service.run_job_now(target_job_id, reason="nl_command")
+        return {
+            "ok": True,
+            "intent": "run",
+            "interpreted": interpretation.model_dump(),
+            "run": record.to_dict(),
+        }
+
+    if intent in ("enable", "disable"):
+        updates_toggle: dict[str, Any] = {"enabled": intent == "enable"}
+        toggled_job = _cron_service.update_job(target_job_id, updates_toggle)
+        return {
+            "ok": True,
+            "intent": intent,
+            "interpreted": interpretation.model_dump(),
+            "job": {**toggled_job.to_dict(), "running": toggled_job.job_id in _cron_service.running_jobs},
+        }
+
+    raise HTTPException(status_code=400, detail=f"Unknown intent: {intent}")
 
 
 @app.get("/api/v1/sessions/{session_id}")

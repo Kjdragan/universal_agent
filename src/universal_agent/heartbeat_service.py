@@ -1945,6 +1945,76 @@ class HeartbeatService:
                 "reason": state.retry_reason,
             }
             _persist_heartbeat_state(state_path, state)
+
+            # ------------------------------------------------------------------
+            # Synthetic findings: when the agent completes a non-OK run but did
+            # not write heartbeat_findings_latest.json, create a minimal
+            # synthetic one so the gateway can always parse structured findings.
+            # ------------------------------------------------------------------
+            _findings_filename = "heartbeat_findings_latest.json"
+            _findings_written = any(
+                _findings_filename in str(p)
+                for p in (write_paths + work_product_paths)
+            )
+            if not _findings_written and not ok_only and not should_skip_agent_run:
+                try:
+                    _wp_dir = Path(session.workspace_dir) / "work_products"
+                    _wp_dir.mkdir(parents=True, exist_ok=True)
+                    _synthetic = {
+                        "version": 1,
+                        "overall_status": "warn" if not run_failed else "critical",
+                        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "source": "heartbeat_synthetic",
+                        "summary": (
+                            f"Heartbeat completed with activity but the agent did not "
+                            f"write structured findings. Response preview: "
+                            f"{(response_text or full_response)[:200]}"
+                        ),
+                        "findings": [
+                            {
+                                "finding_id": "synthetic_missing_findings_artifact",
+                                "category": "gateway",
+                                "severity": "warn" if not run_failed else "critical",
+                                "metric_key": "heartbeat_findings_artifact_written",
+                                "observed_value": False,
+                                "threshold_text": "agent should write findings JSON",
+                                "known_rule_match": False,
+                                "confidence": "medium",
+                                "title": "Synthetic Findings (Agent Omitted Artifact)",
+                                "recommendation": (
+                                    "Review heartbeat response text for details. "
+                                    "The agent did not produce a structured findings "
+                                    "JSON during this run."
+                                ),
+                                "runbook_command": "",
+                                "metadata": {
+                                    "ok_only": ok_only,
+                                    "run_failed": run_failed,
+                                    "timed_out": timed_out,
+                                    "write_count": len(write_paths),
+                                    "work_product_count": len(work_product_paths),
+                                },
+                            }
+                        ],
+                    }
+                    _synthetic_path = _wp_dir / _findings_filename
+                    _synthetic_path.write_text(
+                        json.dumps(_synthetic, indent=2, default=str),
+                        encoding="utf-8",
+                    )
+                    work_product_paths.append(str(_synthetic_path))
+                    logger.info(
+                        "Wrote synthetic heartbeat findings for %s → %s",
+                        session.session_id,
+                        _synthetic_path,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to write synthetic heartbeat findings for %s: %s",
+                        session.session_id,
+                        exc,
+                    )
+
             completed_event_payload = {
                 "type": "heartbeat_completed",
                 "session_id": session.session_id,
