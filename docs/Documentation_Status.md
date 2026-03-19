@@ -172,6 +172,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 78 | Daily Autonomous Briefing Reliability |
 | 79 | Golden Run Research Report Pipeline Reference |
 | 80 | Google Workspace Integration Retrospective Memo |
+| 99 | **Tutorial Pipeline Architecture & Operations** — canonical source-of-truth |
 
 ## Cleanup Summary
 

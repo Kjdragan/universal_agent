@@ -606,7 +606,35 @@ export default function DashboardPage() {
     if (notifSeverityFilter !== "all") {
       filtered = filtered.filter((item) => item.severity === notifSeverityFilter);
     }
-    return filtered;
+    // Video-level dedup for tutorial pipeline notifications:
+    // For each unique video, keep only the latest notification so the panel
+    // shows one entry per video instead of every pipeline stage.
+    const seenVideoKeys = new Map<string, number>();
+    const deduped: typeof filtered = [];
+    for (const item of filtered) {
+      if (!isTutorialKind(item.kind)) {
+        deduped.push(item);
+        continue;
+      }
+      const vk = tutorialVideoKey(item);
+      if (!vk) {
+        deduped.push(item);
+        continue;
+      }
+      const prevIdx = seenVideoKeys.get(vk);
+      if (prevIdx === undefined) {
+        seenVideoKeys.set(vk, deduped.length);
+        deduped.push(item);
+        continue;
+      }
+      // Replace the earlier entry if this one is newer.
+      const prevTs = new Date(deduped[prevIdx].created_at).getTime();
+      const curTs = new Date(item.created_at).getTime();
+      if (Number.isFinite(curTs) && Number.isFinite(prevTs) && curTs > prevTs) {
+        deduped[prevIdx] = item;
+      }
+    }
+    return deduped;
   }, [notificationFilter, notifCategoryFilter, notifSeverityFilter, notifications]);
 
   const categoryBadgeCounts = useMemo(() => {

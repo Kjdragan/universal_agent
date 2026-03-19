@@ -8416,6 +8416,29 @@ _HEALTH_ALERT_NOTIFICATION_KINDS: frozenset[str] = frozenset({
     "hook_dispatch_queue_overflow",
 })
 
+# Tutorial pipeline stage kinds that track a single video through the pipeline.
+# Only one live notification is kept per video_id across all of these kinds.
+# When a newer stage arrives for the same video, it replaces the earlier one.
+#
+# IMPORTANT: youtube_ingest_proxy_alert is intentionally EXCLUDED here.
+# It is a global system-health alert (in _HEALTH_ALERT_NOTIFICATION_KINDS)
+# that uses kind-level upsert, not video-level.  Adding it here would break
+# that behaviour because the video-level check runs first.
+_TUTORIAL_PIPELINE_STAGE_KINDS: frozenset[str] = frozenset({
+    "youtube_playlist_new_video",
+    "youtube_playlist_dispatch_failed",
+    "youtube_tutorial_started",
+    "youtube_tutorial_progress",
+    "youtube_tutorial_ready",
+    "youtube_tutorial_failed",
+    "youtube_tutorial_interrupted",
+    "youtube_ingest_failed",
+    "youtube_hook_recovery_queued",
+    "tutorial_repo_bootstrap_queued",
+    "tutorial_repo_bootstrap_ready",
+    "tutorial_repo_bootstrap_failed",
+})
+
 
 def _add_notification(
 
@@ -8463,6 +8486,42 @@ def _add_notification(
             _replace_notification_cache_record(existing)
             _persist_notification_activity(existing)
             return existing
+
+    # Video-level upsert for tutorial pipeline stage notifications.
+    # As a video moves through the pipeline (new_video → started → ready),
+    # each new stage replaces the previous notification for the same video_id.
+    if kind_norm_check in _TUTORIAL_PIPELINE_STAGE_KINDS:
+        video_id = str(metadata_obj.get("video_id") or metadata_obj.get("video_key") or "").strip()
+        if video_id:
+            for existing in reversed(_notifications):
+                ex_kind = str(existing.get("kind") or "").strip().lower()
+                if ex_kind not in _TUTORIAL_PIPELINE_STAGE_KINDS:
+                    continue
+                if _normalize_notification_status(existing.get("status") or "new") == "dismissed":
+                    continue
+                ex_meta = existing.get("metadata")
+                if not isinstance(ex_meta, dict):
+                    continue
+                ex_vid = str(ex_meta.get("video_id") or ex_meta.get("video_key") or "").strip()
+                if ex_vid != video_id:
+                    continue
+                # Update the existing record in-place with the new stage.
+                existing["kind"] = kind
+                existing["title"] = title
+                existing["message"] = full_message_text
+                existing["full_message"] = full_message_text
+                existing["summary"] = summary_text if summary_text is not None else _activity_summary_text(message)
+                existing["session_id"] = session_id
+                existing["severity"] = severity
+                existing["requires_action"] = requires_action
+                existing["updated_at"] = _utc_now_iso()
+                existing["status"] = "new"
+                if isinstance(metadata, dict):
+                    ex_meta.update(metadata_obj)
+                    ex_meta["source_domain"] = _activity_source_domain(str(kind or ""), metadata_obj)
+                _replace_notification_cache_record(existing)
+                _persist_notification_activity(existing)
+                return existing
 
     # Idempotency for repeated ingest/replay of the same source event.
     event_id = str(metadata_obj.get("event_id") or "").strip()

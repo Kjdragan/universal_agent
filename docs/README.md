@@ -104,6 +104,10 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Final Integration Sprint Review (2026-02-14)](03_Run_Reviews/06_Final_Integration_Sprint_Review_2026-02-14.md)**: Integration sprint close.
 - **[Happy Path Review and Markdown Remediation (2026-02-19)](03_Run_Reviews/07_Session_20260218_232750_Happy_Path_Review_and_Markdown_Remediation_2026-02-19.md)**: Happy path validation.
 
+### 8. Tutorial Pipeline
+
+- **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, notification kinds, 3-layer dedup, proxy config, env vars, API endpoints.
+
 ### 8. [CSI Rebuild](csi-rebuild)
 
 - **[Master Plan](csi-rebuild/00_master_plan.md)**: CSI rebuild master plan.

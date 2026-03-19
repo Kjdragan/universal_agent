@@ -74,28 +74,96 @@ HEALTH_ALERT_COOLDOWN_SECONDS: float = float(
 # Resets on restart which is intentional — a restart is a meaningful event.
 _health_alert_last_sent: dict[str, float] = {}
 
-# Per-video dedup for youtube_tutorial_ready: prevents the same video from
-# generating multiple "artifacts ready" Telegram messages within a window.
-# Key = video_id, value = monotonic timestamp of last send.
+# Per-video dedup: prevents duplicate Telegram messages for the same video
+# within a cooldown window.  Keyed by (kind, video_id) → monotonic timestamp.
+# Old entries are evicted on each maybe_send() call to prevent unbounded growth.
 VIDEO_READY_DEDUP_SECONDS: float = float(
     os.getenv("UA_TUTORIAL_VIDEO_READY_DEDUP_SECONDS", "1800")
 )
-_video_ready_last_sent: dict[str, float] = {}
-
-# Per-video dedup for youtube_playlist_new_video: prevents the same video
-# from generating multiple "new video detected" Telegram messages within a
-# window (common when multiple UA instances watch the same playlist).
 VIDEO_NEW_DEDUP_SECONDS: float = float(
     os.getenv("UA_TUTORIAL_VIDEO_NEW_DEDUP_SECONDS", "1800")
 )
-_video_new_last_sent: dict[str, float] = {}
-
-# Per-video dedup for youtube_tutorial_failed: prevents duplicate failure
-# messages for the same video within a window.
 VIDEO_FAILED_DEDUP_SECONDS: float = float(
     os.getenv("UA_TUTORIAL_VIDEO_FAILED_DEDUP_SECONDS", "1800")
 )
+
+# Shared state for all per-video dedup — one dict per kind.
+_video_ready_last_sent: dict[str, float] = {}
+_video_new_last_sent: dict[str, float] = {}
 _video_failed_last_sent: dict[str, float] = {}
+
+# Config table: kind → (dedup dict, cooldown attr name)
+# We store the *attribute name* rather than the float value so that
+# monkeypatch / runtime changes to the module-level cooldown variables
+# are reflected immediately (the value is read via getattr at call time).
+_PER_VIDEO_DEDUP_CONFIG: dict[str, tuple[dict[str, float], str]] = {}
+
+# Cache a reference to this module for dynamic lookups.
+import sys as _sys
+_THIS_MODULE = _sys.modules[__name__]
+
+
+def _init_per_video_dedup_config() -> None:
+    """Populate the dedup config table.  Called once at module load."""
+    _PER_VIDEO_DEDUP_CONFIG.update({
+        "youtube_tutorial_ready": (_video_ready_last_sent, "VIDEO_READY_DEDUP_SECONDS"),
+        "youtube_playlist_new_video": (_video_new_last_sent, "VIDEO_NEW_DEDUP_SECONDS"),
+        "youtube_tutorial_failed": (_video_failed_last_sent, "VIDEO_FAILED_DEDUP_SECONDS"),
+    })
+
+
+_init_per_video_dedup_config()
+
+
+def _get_ttl(attr_name: str) -> float:
+    """Read the current cooldown value from the module attribute."""
+    return float(getattr(_THIS_MODULE, attr_name, 1800.0))
+
+
+def _evict_stale_dedup_entries() -> None:
+    """Remove entries older than their cooldown window to prevent unbounded growth."""
+    now = time.monotonic()
+    for dedup_dict, ttl_attr in _PER_VIDEO_DEDUP_CONFIG.values():
+        ttl = _get_ttl(ttl_attr)
+        stale = [vid for vid, ts in dedup_dict.items() if (now - ts) >= ttl]
+        for vid in stale:
+            dedup_dict.pop(vid, None)
+
+
+def _check_per_video_dedup(kind: str, video_id: str) -> bool:
+    """Return True if this (kind, video_id) should be suppressed.
+
+    Also records a successful check for future dedup.
+    """
+    config = _PER_VIDEO_DEDUP_CONFIG.get(kind)
+    if config is None:
+        return False
+    dedup_dict, ttl_attr = config
+    if not video_id:
+        return False
+    ttl = _get_ttl(ttl_attr)
+    now_mono = time.monotonic()
+    last = dedup_dict.get(video_id)
+    if last is None:
+        return False  # Never sent before — allow through.
+    remaining = ttl - (now_mono - last)
+    if remaining > 0:
+        logger.debug(
+            "tutorial_telegram_notifier: suppressed duplicate %s "
+            "video_id=%s cooldown_remaining=%.0fs",
+            kind, video_id, remaining,
+        )
+        return True
+    return False
+
+
+def _record_per_video_send(kind: str, video_id: str) -> None:
+    """Record a successful send for per-video dedup."""
+    config = _PER_VIDEO_DEDUP_CONFIG.get(kind)
+    if config is None or not video_id:
+        return
+    dedup_dict, _ = config
+    dedup_dict[video_id] = time.monotonic()
 
 _KIND_EMOJI: dict[str, str] = {
     "youtube_playlist_new_video": "🎬",
@@ -241,64 +309,23 @@ def maybe_send(payload: dict[str, Any]) -> bool:
     # --- health alert rate-limiting (per-kind cooldown) ---
     if kind in _HEALTH_ALERT_KINDS:
         now = time.monotonic()
-        last = _health_alert_last_sent.get(kind, 0.0)
-        remaining = HEALTH_ALERT_COOLDOWN_SECONDS - (now - last)
-        if remaining > 0:
-            logger.debug(
-                "tutorial_telegram_notifier: health alert throttled kind=%s cooldown_remaining=%.0fs",
-                kind,
-                remaining,
-            )
-            return False
+        last = _health_alert_last_sent.get(kind)
+        if last is not None:
+            remaining = HEALTH_ALERT_COOLDOWN_SECONDS - (now - last)
+            if remaining > 0:
+                logger.debug(
+                    "tutorial_telegram_notifier: health alert throttled kind=%s cooldown_remaining=%.0fs",
+                    kind,
+                    remaining,
+                )
+                return False
         _health_alert_last_sent[kind] = now
 
-    # --- per-video dedup for youtube_playlist_new_video ---
-    if kind == "youtube_playlist_new_video":
-        video_id = str((payload.get("metadata") or {}).get("video_id") or "").strip()
-        if video_id:
-            now_mono = time.monotonic()
-            last = _video_new_last_sent.get(video_id, 0.0)
-            remaining = VIDEO_NEW_DEDUP_SECONDS - (now_mono - last)
-            if remaining > 0:
-                logger.debug(
-                    "tutorial_telegram_notifier: suppressed duplicate "
-                    "youtube_playlist_new_video video_id=%s cooldown_remaining=%.0fs",
-                    video_id,
-                    remaining,
-                )
-                return False
-
-    # --- per-video dedup for youtube_tutorial_ready ---
-    if kind == "youtube_tutorial_ready":
-        video_id = str((payload.get("metadata") or {}).get("video_id") or "").strip()
-        if video_id:
-            now_mono = time.monotonic()
-            last = _video_ready_last_sent.get(video_id, 0.0)
-            remaining = VIDEO_READY_DEDUP_SECONDS - (now_mono - last)
-            if remaining > 0:
-                logger.debug(
-                    "tutorial_telegram_notifier: suppressed duplicate "
-                    "youtube_tutorial_ready video_id=%s cooldown_remaining=%.0fs",
-                    video_id,
-                    remaining,
-                )
-                return False
-
-    # --- per-video dedup for youtube_tutorial_failed ---
-    if kind == "youtube_tutorial_failed":
-        video_id = str((payload.get("metadata") or {}).get("video_id") or "").strip()
-        if video_id:
-            now_mono = time.monotonic()
-            last = _video_failed_last_sent.get(video_id, 0.0)
-            remaining = VIDEO_FAILED_DEDUP_SECONDS - (now_mono - last)
-            if remaining > 0:
-                logger.debug(
-                    "tutorial_telegram_notifier: suppressed duplicate "
-                    "youtube_tutorial_failed video_id=%s cooldown_remaining=%.0fs",
-                    video_id,
-                    remaining,
-                )
-                return False
+    # --- per-video dedup (unified) ---
+    _evict_stale_dedup_entries()
+    video_id_for_dedup = str((payload.get("metadata") or {}).get("video_id") or "").strip()
+    if _check_per_video_dedup(kind, video_id_for_dedup):
+        return False
 
     title = str(payload.get("title") or "Tutorial Event")
     message = str(payload.get("message") or "")
@@ -311,13 +338,7 @@ def maybe_send(payload: dict[str, Any]) -> bool:
         # Record successful send for per-video dedup
         if sent:
             video_id = str(metadata.get("video_id") or "").strip()
-            if video_id:
-                if kind == "youtube_tutorial_ready":
-                    _video_ready_last_sent[video_id] = time.monotonic()
-                elif kind == "youtube_playlist_new_video":
-                    _video_new_last_sent[video_id] = time.monotonic()
-                elif kind == "youtube_tutorial_failed":
-                    _video_failed_last_sent[video_id] = time.monotonic()
+            _record_per_video_send(kind, video_id)
         return sent
     except Exception:
         logger.exception("tutorial_telegram_notifier.maybe_send failed kind=%s", kind)
