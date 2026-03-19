@@ -1,6 +1,6 @@
 # Local Runtime Modes
 
-Last updated: March 12, 2026
+Last updated: March 19, 2026
 
 ## Purpose
 
@@ -96,3 +96,56 @@ Worker-only helpers can use:
 - `8012`
 
 This prevents worker-side helpers from colliding with the HQ dev lane.
+
+## Desktop Transcript Worker (Always-On Requirement)
+
+> [!IMPORTANT]
+> The desktop **must be running** for YouTube transcript fetching to work via the primary path.
+> Without the desktop, transcripts fall back to the VPS rotating proxy (more expensive, rate-limited).
+
+The desktop transcript worker is a **standalone program** that runs independently
+of both the HQ Dev Lane and the Desktop Worker Lane. It does not require any
+gateway, factory, or Infisical bootstrap — it only needs:
+
+1. SSH access to the VPS (`root@srv1360701`)
+2. `youtube-transcript-api` installed (via `uv`)
+3. Network access to YouTube (residential IP)
+
+### How It Works
+
+- checkout: `/home/kjdragan/lrepos/universal_agent`
+- script: `src/universal_agent/desktop_transcript_worker.py`
+- run mode: standalone CLI or cron/systemd timer
+- NOT a UA cron job, NOT part of the gateway process
+
+### Running It
+
+```bash
+# One-shot batch (fetch from VPS, process, write back)
+DTW_BATCH_SIZE=25 uv run python src/universal_agent/desktop_transcript_worker.py --batch
+
+# Dry run (show what would be processed)
+uv run python src/universal_agent/desktop_transcript_worker.py --batch --dry-run
+
+# Test specific videos (no VPS interaction)
+uv run python src/universal_agent/desktop_transcript_worker.py --test daPwd4DnEfA avXA9Jgi-WE
+```
+
+### Scheduling
+
+The worker can be scheduled via:
+
+- **systemd timer**: `~/.config/systemd/user/desktop-transcript-worker.timer`
+- **cron**: `0 * * * * cd /home/kjdragan/lrepos/universal_agent && uv run python src/universal_agent/desktop_transcript_worker.py --batch`
+- **manual**: run on-demand as needed
+
+### What Happens When the Desktop Is Off
+
+When the desktop is not running:
+- New videos accumulate in the CSI database with `transcript_status='failed'`
+- The VPS proxy path in `youtube_ingest.py` continues to work as a fallback
+- When the desktop comes back online, the next batch run picks up all pending videos
+
+### Kill Switch
+
+Set `DESKTOP_TRANSCRIPT_WORKER_ENABLED=false` to disable without uninstalling.
