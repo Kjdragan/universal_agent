@@ -11438,12 +11438,59 @@ async def signals_ingest_endpoint(request: Request):
             subject_obj = event.subject if isinstance(event.subject, dict) else {}
             event_type_norm = str(event.event_type or "").strip().lower()
 
-            # Build human-readable title + summary from the event payload
+            # Build human-readable title + summary from the event payload.
+            # Strategy: use explicit title fields first, then intelligently
+            # extract from structured data (top_narratives) or markdown.
             _digest_title = str(
                 subject_obj.get("title")
                 or subject_obj.get("brief_title")
-                or f"CSI: {event.event_type or 'Report'} — {event.source or 'Unknown'}"
+                or ""
             ).strip()
+
+            # If title is missing or a generic slug, try smarter extraction
+            if not _digest_title or _digest_title.lower() in {
+                "headline", "untitled", "untitled report",
+            } or _digest_title.startswith("CSI:"):
+                # Try top narratives (global briefs carry these)
+                _top_narrs = subject_obj.get("top_narratives") or []
+                if isinstance(_top_narrs, list) and _top_narrs:
+                    _first = _top_narrs[0]
+                    if isinstance(_first, dict):
+                        _digest_title = str(
+                            _first.get("title") or _first.get("narrative")
+                            or _first.get("theme") or ""
+                        ).strip()
+
+                # Try extracting first real heading from markdown preview
+                if not _digest_title:
+                    _md_preview = str(
+                        subject_obj.get("markdown_preview")
+                        or subject_obj.get("brief_body") or ""
+                    ).strip()
+                    for _line in _md_preview.split("\n"):
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        # Skip generic markdown headings
+                        if _line.startswith("#"):
+                            _heading_text = _line.lstrip("#").strip()
+                            if _heading_text.lower() in {
+                                "headline", "summary", "overview", "report",
+                                "csi trend report", "trend report",
+                            }:
+                                continue
+                            if _heading_text:
+                                _digest_title = _heading_text[:120]
+                                break
+                        elif len(_line) > 10 and not _line.startswith("|"):
+                            _digest_title = _line[:120]
+                            break
+
+                # Final fallback: clean event type label
+                if not _digest_title:
+                    _etype = str(event.event_type or "report").replace("_", " ").title()
+                    _digest_title = _etype
+
             _digest_summary = str(
                 subject_obj.get("summary")
                 or subject_obj.get("brief_summary")

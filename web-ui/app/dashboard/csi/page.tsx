@@ -41,11 +41,21 @@ function sourceLabel(source: string): string {
 
 function sourceColor(source: string): string {
     const s = source.toLowerCase();
-    if (s.includes("rss") || s.includes("youtube")) return "text-secondary bg-red-400/15 border-red-400/30";
-    if (s.includes("reddit")) return "text-accent bg-accent/15 border-accent/30";
-    if (s.includes("threads")) return "text-secondary bg-secondary/15 border-secondary/30";
-    if (s.includes("global") || s.includes("brief")) return "text-primary bg-primary/15 border-primary/30";
+    if (s.includes("rss") || s.includes("youtube")) return "text-red-400 bg-red-400/15 border-red-400/30";
+    if (s.includes("reddit")) return "text-orange-400 bg-orange-400/15 border-orange-400/30";
+    if (s.includes("threads")) return "text-purple-400 bg-purple-400/15 border-purple-400/30";
+    if (s.includes("global") || s.includes("brief")) return "text-sky-400 bg-sky-400/15 border-sky-400/30";
     return "text-foreground/80 bg-muted-foreground/15 border-muted-foreground/30";
+}
+
+/** Color-coded dot icon for rapid source identification */
+function sourceIcon(source: string): string {
+    const s = source.toLowerCase();
+    if (s.includes("rss") || s.includes("youtube")) return "🔴";
+    if (s.includes("reddit")) return "🟠";
+    if (s.includes("threads")) return "🟣";
+    if (s.includes("global") || s.includes("brief")) return "🔵";
+    return "⚪";
 }
 
 function eventTypeIcon(eventType: string): string {
@@ -253,7 +263,7 @@ export default function CSIDashboard() {
             {/* ─── Summary Cards ───────────────────────────────────── */}
             <div className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-muted-foreground">Total Digests</div>
+                    <div className="text-sm font-medium text-muted-foreground">Reports</div>
                     <div className="mt-2">
                         <span className="text-3xl font-bold text-foreground">{loading ? "…" : totalDigests}</span>
                     </div>
@@ -275,8 +285,8 @@ export default function CSIDashboard() {
                 </div>
 
                 <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-muted-foreground">Source Mix</div>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
+                    <div className="text-sm font-medium text-muted-foreground">Sources</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
                         {loading ? (
                             <span className="text-lg font-bold text-foreground">…</span>
                         ) : Object.keys(sourceMix).length === 0 ? (
@@ -287,9 +297,10 @@ export default function CSIDashboard() {
                                 .map(([src, count]) => (
                                     <span
                                         key={src}
-                                        className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${sourceColor(src)}`}
+                                        className="text-sm font-medium text-foreground/80"
+                                        title={sourceLabel(src)}
                                     >
-                                        {sourceLabel(src)} {count}
+                                        {sourceIcon(src)} {count}
                                     </span>
                                 ))
                         )}
@@ -315,11 +326,11 @@ export default function CSIDashboard() {
                         onClick={() => setSourceFilter(src)}
                         className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
                             sourceFilter === src
-                                ? "border-primary/40 bg-primary/20 text-primary/80"
+                                ? `border-primary/40 bg-primary/20 ${sourceColor(src).split(" ")[0]}`
                                 : "border-border bg-background/50 text-muted-foreground hover:bg-card/60"
                         }`}
                     >
-                        {sourceLabel(src)} ({sourceMix[src] || 0})
+                        {sourceIcon(src)} {sourceLabel(src)} ({sourceMix[src] || 0})
                     </button>
                 ))}
             </div>
@@ -378,27 +389,23 @@ export default function CSIDashboard() {
                                             : "border-l-2 border-l-transparent"
                                     }`}
                                 >
-                                    <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-start gap-2.5">
+                                        {/* Source icon — instant visual ID */}
+                                        <span className="text-base mt-0.5 shrink-0" title={sourceLabel(digest.source)}>
+                                            {sourceIcon(digest.source)}
+                                        </span>
                                         <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-1.5 mb-1">
-                                                <span className="text-sm">{eventTypeIcon(digest.event_type)}</span>
-                                                <span className="text-sm font-medium text-foreground truncate">
+                                            <div className="flex items-center justify-between gap-2 mb-0.5">
+                                                <span className="text-[13px] font-semibold text-foreground leading-snug line-clamp-2">
                                                     {extractHeadline(digest)}
                                                 </span>
+                                                <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0">
+                                                    {timeAgo(digest.created_at)}
+                                                </span>
                                             </div>
-                                            <p className="text-xs text-muted-foreground line-clamp-2">
+                                            <p className="text-xs text-muted-foreground/70 line-clamp-1">
                                                 {digest.summary || "No summary"}
                                             </p>
-                                        </div>
-                                        <div className="flex flex-col items-end gap-1 shrink-0">
-                                            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                                {timeAgo(digest.created_at)}
-                                            </span>
-                                            <span
-                                                className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${sourceColor(digest.source)}`}
-                                            >
-                                                {sourceLabel(digest.source)}
-                                            </span>
                                         </div>
                                     </div>
                                 </button>
@@ -422,22 +429,29 @@ export default function CSIDashboard() {
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
                                             <h2 className="text-lg font-bold text-foreground leading-tight">
-                                                {eventTypeIcon(selectedDigest.event_type)}{" "}
                                                 {extractHeadline(selectedDigest)}
                                             </h2>
                                             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                                <span
-                                                    className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${sourceColor(selectedDigest.source)}`}
-                                                >
-                                                    {sourceLabel(selectedDigest.source)}
-                                                </span>
-                                                <span className="text-xs text-muted-foreground">
-                                                    {formatDateTimeTz(selectedDigest.created_at, { placeholder: "--" })}
+                                                <span className={`text-xs font-medium ${sourceColor(selectedDigest.source).split(" ")[0]}`}>
+                                                    {sourceIcon(selectedDigest.source)} {sourceLabel(selectedDigest.source)}
                                                 </span>
                                                 <span className="text-xs text-muted">•</span>
                                                 <span className="text-xs text-muted-foreground">
-                                                    {selectedDigest.event_type}
+                                                    {formatDateTimeTz(selectedDigest.created_at, { placeholder: "--" })}
                                                 </span>
+                                                {selectedDigest.source_types && selectedDigest.source_types.length > 0 && (
+                                                    <>
+                                                        <span className="text-xs text-muted">•</span>
+                                                        {selectedDigest.source_types.map((st) => (
+                                                            <span
+                                                                key={st}
+                                                                className="rounded bg-muted-foreground/10 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                                            >
+                                                                {st}
+                                                            </span>
+                                                        ))}
+                                                    </>
+                                                )}
                                             </div>
                                         </div>
                                         <button

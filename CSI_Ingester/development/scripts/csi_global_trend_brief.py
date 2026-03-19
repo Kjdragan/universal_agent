@@ -500,6 +500,23 @@ def main() -> int:
         total_tokens=total_tokens,
     )
 
+    # Build a meaningful title from the top narrative for the CSI dashboard
+    _top_narrs = payload.get("top_narratives") or []
+    _brief_title = "Cross-Source Intelligence Brief"
+    if _top_narrs and isinstance(_top_narrs[0], dict):
+        _lead = str(_top_narrs[0].get("title") or _top_narrs[0].get("narrative") or "").strip()
+        if _lead:
+            _brief_title = _lead[:120]
+
+    _yt = int(source_totals.get("youtube") or 0)
+    _rd = int(source_totals.get("reddit") or 0)
+    _th = int(source_totals.get("threads") or 0)
+    _brief_summary = f"YouTube {_yt} · Reddit {_rd} · Threads {_th} signals"
+    if len(_top_narrs) > 1 and isinstance(_top_narrs[1], dict):
+        _second = str(_top_narrs[1].get("title") or _top_narrs[1].get("narrative") or "").strip()
+        if _second:
+            _brief_summary += f" — also: {_second[:80]}"
+
     cfg = load_config(Path(args.config_path).expanduser())
     event = CreatorSignalEvent(
         event_id=f"csi_global_trend_brief_ready:{brief_key}",
@@ -509,6 +526,8 @@ def main() -> int:
         occurred_at=end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         received_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         subject={
+            "title": _brief_title,
+            "summary": _brief_summary,
             "brief_key": brief_key,
             "window_hours": int(args.window_hours),
             "window_start_utc": payload.get("window_start_utc"),
