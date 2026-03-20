@@ -15,7 +15,8 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
 - Afternoon execution window: run at least one mission-progress task.
 - Night execution window: run at least one mission-progress task
 ## Active Monitors and Tasks
-- [ ] VPS System Health Check (run every heartbeat cycle on  - Collect and report system resource utilization. Run the following checks:
+<!-- scope:hq -->
+- [ ] VPS System Health Check (run every heartbeat cycle — target: `srv1360701.taildcc090.ts.net` via Tailscale SSH as user `ua`, hosted on Hostinger VPS `srv1360701.hstgr.cloud`) - Collect and report system resource utilization. Run the following checks:
     1. **CPU**: `uptime` (load averages vs core count from `nproc`)
     2. **RAM**: `free -h` (used vs total, swap usage)
     3. **Disk**: `df -h /` and `du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES/`
@@ -59,6 +60,17 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
     ```
   - Include at least one `findings[]` entry whenever `overall_status` is `warn` or `critical`.
   - Use `known_rule_match=true` only when the issue clearly maps to a stable runbookable condition. Unknown edge cases should still be emitted with `known_rule_match=false`.
+<!-- scope:local -->
+- [ ] Local Desktop Health Check (run every heartbeat cycle) - Monitor the local machine running this agent instance:
+    1. **CPU**: `uptime` (load averages vs core count from `nproc`)
+    2. **RAM**: `free -h` (used vs total, swap usage)
+    3. **Disk**: `df -h /` and `du -sh AGENT_RUN_WORKSPACES/`
+    4. **Gateway process**: `ps aux | grep gateway_server | grep -v grep | wc -l`
+    5. **DB sizes**: `ls -lh AGENT_RUN_WORKSPACES/*.db`
+  - Summarize as a compact table: metric | value | status (OK/WARN/CRITICAL)
+  - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN
+  - Write the report to `work_products/system_health_latest.md` (overwrite each cycle).
+<!-- scope:all -->
 - [ ] Mission Control build kickoff
   - Confirm first concrete milestone and produce a short execution checklist.
 - [ ] AI-native freelance system progress

@@ -592,11 +592,13 @@ class HeartbeatService:
         connection_manager,
         system_event_provider: Optional[SystemEventProvider] = None,
         event_sink: Optional[HeartbeatEventSink] = None,
+        heartbeat_scope: str = "global",
     ):
         self.gateway = gateway
         self.connection_manager = connection_manager
         self.system_event_provider = system_event_provider
         self.event_sink = event_sink
+        self.heartbeat_scope = heartbeat_scope
         self.execution_timeout_seconds = _resolve_exec_timeout_seconds()
         self.retry_base_seconds = max(
             1,
@@ -1212,6 +1214,9 @@ class HeartbeatService:
         heartbeat_content = ""
         if hb_file.exists():
             heartbeat_content = hb_file.read_text()
+            # Filter sections by factory role scope (HQ vs local desktop)
+            from universal_agent.heartbeat_scope_filter import filter_heartbeat_by_scope
+            heartbeat_content = filter_heartbeat_by_scope(heartbeat_content, self.heartbeat_scope)
             if _is_effectively_empty(heartbeat_content):
                 state.last_run = now
                 state.last_summary = {
