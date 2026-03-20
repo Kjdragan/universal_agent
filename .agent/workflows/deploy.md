@@ -3,106 +3,118 @@ description: Full deployment pipeline — push to develop, verify staging, promo
 ---
 // turbo-all
 
-# Full Deployment Pipeline
+# Full Production Deployment Pipeline
 
-This workflow handles the complete path from committing to verified production deployment.
-**CRITICAL**: Never claim deployment success until the CI/CD pipeline run is verified as ✅.
+Use this workflow when the user explicitly requests production deployment
+(keywords: "deploy", "production", "push to main", "promote to main").
+
+For staging-only (commit + push to develop), use `/gitcommit` instead.
 
 ---
 
-## Phase 1: Stage, Commit, and Push to Develop
+## Phase 1: Commit & Push to Develop
 
-1. Run `git status --short` to review all pending changes.
+1. Run `git status --short` to review pending changes.
 2. Run `git add .` to stage all changes.
 3. Run `git diff --staged --stat` to confirm what will be committed.
-4. Generate a concise, descriptive commit message based on the changes (use conventional commit format: `feat:`, `fix:`, `docs:`, `chore:`, etc.).
+4. Generate a commit message (conventional commit format).
 5. Run `git commit -m "YOUR_GENERATED_MESSAGE"`.
 6. Push to develop:
-   - If on `develop` branch: `git push origin develop`
+   - If on `develop`: `git push origin develop`
    - If on a feature branch: `git push origin HEAD:develop`
 
 ---
 
-## Phase 2: Verify Staging Deployment (MANDATORY)
+## Phase 2: Verify Staging (MANDATORY GATE)
 
-7. Check that the staging deployment was triggered:
+7. Check staging was triggered:
+
    ```bash
    gh run list --workflow="deploy-staging.yml" --limit 1 --json status,conclusion,headSha,databaseId
    ```
-8. Wait for the staging deploy to complete (timeout 5 minutes):
+
+8. Wait for completion:
+
    ```bash
    gh run watch <RUN_ID> --exit-status
    ```
-9. **GATE CHECK**: Confirm the staging run shows `conclusion: success`.
-   - If it **failed**, investigate the logs: `gh run view <RUN_ID> --log-failed`
-   - Do NOT proceed to Phase 3 if staging failed.
-   - Report the failure to the user with the error details.
-10. Report staging status to the user: "✅ Staging deployed successfully (run #NNN, Xs)."
+
+9. **GATE**: Confirm `conclusion: success`. If failed, investigate with `gh run view <RUN_ID> --log-failed` and STOP.
 
 ---
 
-## Phase 3: Promote to Main (Only After Staging Succeeds)
+## Phase 3: Promote to Main
 
-11. Get the current develop SHA:
-    ```bash
-    git rev-parse origin/develop
-    ```
-12. Fast-forward merge develop into main:
+10. Fast-forward merge:
+
     ```bash
     git checkout main && git merge --ff-only develop && git push origin main
     ```
-    - If the fast-forward fails, **stop and report** — there may be divergence.
-13. Switch back to develop:
+
+    If fast-forward fails, STOP and report divergence.
+
+11. Return to develop:
+
     ```bash
     git checkout develop
     ```
 
 ---
 
-## Phase 4: Verify Production Deployment (MANDATORY)
+## Phase 4: Verify Production (MANDATORY GATE)
 
-14. Check that the production deployment was triggered:
+12. Check production was triggered:
+
     ```bash
     gh run list --workflow="deploy-prod.yml" --limit 1 --json status,conclusion,headSha,databaseId
     ```
-15. Wait for the production deploy to complete (timeout 5 minutes):
+
+13. Wait for completion:
+
     ```bash
     gh run watch <RUN_ID> --exit-status
     ```
-16. **GATE CHECK**: Confirm the production run shows `conclusion: success`.
-    - If it **failed**, investigate: `gh run view <RUN_ID> --log-failed`
-    - Common failure: `.venv/lib directory not empty` (process lock). Fix: re-run the job via `gh run rerun <RUN_ID>` and wait again.
-    - Report failures to the user with the error details and what was done to remediate.
-17. Report final status to the user: "✅ Production deployed successfully (run #NNN, Xs)."
+
+14. **GATE**: Confirm `conclusion: success`.
+    - If failed, investigate: `gh run view <RUN_ID> --log-failed`
+    - Common fix for `.venv` lock: `gh run rerun <RUN_ID>`, then wait again.
 
 ---
 
-## Final Report Template
+## Final Report
 
-After ALL phases complete, report this summary to the user:
-
-```
+```text
 ## Deployment Summary
-- **Commit**: <SHA> — <commit message>
-- **Staging**: ✅ Deploy #NNN succeeded (Xs)
-- **Production**: ✅ Deploy #NNN succeeded (Xs)
-- **Files changed**: N files
+- Commit: <SHA> — <message>
+- Staging:    ✅ Deploy #NNN succeeded (Xs)
+- Production: ✅ Deploy #NNN succeeded (Xs)
 ```
 
 ---
 
-## Common Mistakes to AVOID
+## CRITICAL RULES
 
-- ❌ **Never claim "deployed" before verifying the CI/CD pipeline succeeded.**
-- ❌ Do NOT develop directly on `develop` — use feature branches when possible.
-- ❌ Do NOT skip staging verification before promoting to production.
-- ❌ Do NOT use short SHAs when the workflow requires full 40-character SHAs.
-- ❌ Do NOT leave the local checkout on `main` — always switch back to `develop`.
+- ❌ **Never claim "deployed" until the CI/CD run shows success.**
+- ❌ Never skip staging verification before promoting.
+- ❌ Never leave local checkout on `main` — always return to `develop`.
 
-## Known Failure Modes
+## Known Failures
 
 | Error | Cause | Fix |
-|-------|-------|-----|
-| `failed to remove directory '.venv/lib': Directory not empty` | Running process holds file lock | Re-run the job: `gh run rerun <RUN_ID>` |
-| `SSH preflight failed` | VPS unreachable or Tailscale auth issue | Check VPS status and Tailscale ACLs |
-| `fast-forward merge failed` | develop and main diverged | Investigate manually, do not force push |
+| ----- | ----- | --- |
+| `.venv/lib: Directory not empty` | Process lock | `gh run rerun <RUN_ID>` |
+| SSH preflight failed | VPS unreachable | Check VPS + Tailscale ACLs |
+| Fast-forward failed | Branch divergence | Investigate manually |
+
+## GitHub Actions Inventory
+
+| Workflow | Trigger | Purpose |
+| -------- | ------- | ------- |
+| `deploy-staging.yml` | Auto on `develop` push | Deploy to staging VPS |
+| `deploy-prod.yml` | Auto on `main` push | Deploy to production VPS |
+| `promote-develop-to-main.yml` | Manual dispatch (SHA input) | CI-based promotion with SHA validation |
+| `codex-review-develop-pr.yml` | PR to `develop` | Codex code review |
+| `nightly-doc-drift-audit.yml` | Scheduled | Documentation freshness check |
+| `debug-prod.yml` | Manual dispatch | Break-glass: fetch prod logs |
+| `fix-prod-repo.yml` | Manual dispatch | Break-glass: reconstitute prod git repo |
+| `run-clear-queue.yml` | Manual dispatch | Break-glass: clear agent task queue |
