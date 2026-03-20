@@ -66,7 +66,7 @@ def _load_file(path: str) -> str:
     return ""
 
 
-def _load_workspace_key_file_block(workspace_path: str, *, max_chars_per_file: int = 2500) -> str:
+def _load_workspace_key_file_block(workspace_path: str, *, max_chars_per_file: int = 2500, heartbeat_scope: str = "global") -> str:
     """Load key workspace files (excluding SOUL.md) for continuity-aware prompts."""
     key_files = (
         "AGENTS.md",
@@ -81,6 +81,10 @@ def _load_workspace_key_file_block(workspace_path: str, *, max_chars_per_file: i
         content = _load_file(path)
         if not content:
             continue
+        # Filter HEARTBEAT.md sections by factory role scope
+        if name == "HEARTBEAT.md":
+            from universal_agent.heartbeat_scope_filter import filter_heartbeat_by_scope
+            content = filter_heartbeat_by_scope(content, heartbeat_scope)
         if len(content) > max_chars_per_file:
             content = content[: max_chars_per_file - 3] + "..."
         parts.append(f"### {name}\n```md\n{content}\n```")

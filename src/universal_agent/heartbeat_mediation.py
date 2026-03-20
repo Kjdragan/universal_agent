@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import re
 
-_DIGITALOCEAN_FIREWALL_RE = re.compile(
-    r"add workstation IP to (?:the )?DigitalOcean firewall",
+# Normalize any cloud provider mention to the canonical provider (Hostinger).
+# Pink elephant approach: state what it IS, never mention incorrect providers.
+_CLOUD_PROVIDER_RE = re.compile(
+    r"\b(?:DigitalOcean|Linode|Vultr|AWS|GCP|Azure|Hetzner|Contabo|OVH)\b",
     re.IGNORECASE,
 )
-_DIGITALOCEAN_PROVIDER_RE = re.compile(r"\bDigitalOcean\b", re.IGNORECASE)
+_PROVIDER_FIREWALL_RE = re.compile(
+    r"add workstation IP to (?:the )?(?:DigitalOcean|DO|cloud provider|VPS provider) firewall",
+    re.IGNORECASE,
+)
 _DO_FIREWALL_RE = re.compile(r"\bDO firewall\b", re.IGNORECASE)
 
 _CANONICAL_SSH_BLOCKED_NEXT_STEP = (
@@ -30,10 +35,11 @@ def sanitize_heartbeat_recommendation_text(text: str, *, field: str = "generic")
     ):
         return _CANONICAL_SSH_BLOCKED_NEXT_STEP
 
-    cleaned = _DIGITALOCEAN_FIREWALL_RE.sub(
+    cleaned = _PROVIDER_FIREWALL_RE.sub(
         "allowlist the workstation public IP in the VPS host firewall if you are using a public fallback path",
         cleaned,
     )
     cleaned = _DO_FIREWALL_RE.sub("VPS host firewall", cleaned)
-    cleaned = _DIGITALOCEAN_PROVIDER_RE.sub("Hostinger-hosted VPS", cleaned)
+    cleaned = _CLOUD_PROVIDER_RE.sub("Hostinger VPS", cleaned)
     return cleaned
+

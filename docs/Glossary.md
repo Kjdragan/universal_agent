@@ -6,6 +6,7 @@
 | **Artifact** | A persistent file produced by the agent (e.g., a PDF, image, or research report) stored in a session's `artifacts/` folder. |
 | **Brain Transplant** | The process of injecting global memory files into a new session's workspace at startup. |
 | **Checkpoint** | A serialized snapshot of the agent's state (history, variables, plan) saved to the durable database. |
+| **CSI (Creator Signal Intelligence)** | The ingestion subsystem that monitors, fetches, and processes creator signals from external sources (YouTube RSS, Reddit, X/Twitter trends) for trend analysis and opportunity detection. |
 | **Durable Execution** | The system's ability to survive restarts and crashes by persisting state and resuming from checkpoints. |
 | **Gateway** | A communication adapter that mediates between an interface (Telegram, CLI, Web) and the agent. |
 | **Heartbeat** | An autonomic loop that triggers periodic agent "thinking" turns without user input. |
