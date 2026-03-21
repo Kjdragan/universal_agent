@@ -182,6 +182,14 @@ class EmailTaskBridge:
             if security_classification:
                 email_labels.append(f"security-{security_classification}")
 
+        # Auto-reactivate if this thread was waiting-on-reply
+        if is_update and existing and str(existing.get("status", "")) == "waiting-on-reply":
+            self._reactivate_waiting_thread(thread_id)
+            logger.info(
+                "📧→📋 Auto-reactivated waiting thread=%s because new inbound arrived",
+                thread_id,
+            )
+
         # ① Upsert the mapping row
         now = _now_iso()
         if is_update:
@@ -293,6 +301,86 @@ class EmailTaskBridge:
         )
         self._conn.commit()
         return True
+
+    def mark_waiting_on_reply(self, thread_id: str) -> bool:
+        """Mark an email task as waiting for the user's reply.
+
+        Called after Simone sends a response and is awaiting user feedback.
+        Swaps labels in Todoist: removes ``agent-ready``, adds ``waiting-on-reply``.
+        """
+        now = _now_iso()
+        self._conn.execute(
+            "UPDATE email_task_mappings SET status = 'waiting-on-reply', updated_at = ? WHERE thread_id = ?",
+            (now, thread_id),
+        )
+        self._conn.commit()
+
+        # Update Todoist labels if we have a todoist task
+        if self._todoist:
+            mapping = self._get_mapping(thread_id)
+            todoist_id = str(mapping.get("todoist_task_id", "")) if mapping else ""
+            if todoist_id:
+                try:
+                    self._todoist.swap_labels(
+                        todoist_id,
+                        remove_labels=["agent-ready"],
+                        add_labels=["waiting-on-reply"],
+                    )
+                    logger.info("📧→📋 Marked task waiting-on-reply: thread=%s todoist=%s", thread_id, todoist_id)
+                except Exception as exc:
+                    logger.warning("📧→📋 Failed to update Todoist labels for waiting-on-reply: %s", exc)
+
+        # Update Task Hub status
+        try:
+            from universal_agent.task_hub import update_item_status
+            task_id = _deterministic_task_id(thread_id)
+            update_item_status(
+                self._conn, task_id,
+                status="waiting-on-reply",
+                labels=["email-task", "waiting-on-reply"],
+            )
+        except Exception:
+            pass
+
+        return True
+
+    def _reactivate_waiting_thread(self, thread_id: str) -> None:
+        """Reactivate a thread that was waiting-on-reply because a new inbound arrived.
+
+        Called automatically by materialize() when an update arrives for a waiting thread.
+        """
+        now = _now_iso()
+        self._conn.execute(
+            "UPDATE email_task_mappings SET status = 'active', updated_at = ? WHERE thread_id = ?",
+            (now, thread_id),
+        )
+        self._conn.commit()
+
+        if self._todoist:
+            mapping = self._get_mapping(thread_id)
+            todoist_id = str(mapping.get("todoist_task_id", "")) if mapping else ""
+            if todoist_id:
+                try:
+                    self._todoist.swap_labels(
+                        todoist_id,
+                        remove_labels=["waiting-on-reply"],
+                        add_labels=["agent-ready"],
+                    )
+                    logger.info("📧→📋 Reactivated waiting task: thread=%s todoist=%s", thread_id, todoist_id)
+                except Exception as exc:
+                    logger.warning("📧→📋 Failed to reactivate Todoist labels: %s", exc)
+
+        # Update Task Hub
+        try:
+            from universal_agent.task_hub import update_item_status
+            task_id = _deterministic_task_id(thread_id)
+            update_item_status(
+                self._conn, task_id,
+                status="open",
+                labels=["email-task", "agent-ready"],
+            )
+        except Exception:
+            pass
 
     # ── Internal Methods ──────────────────────────────────────────────────
 

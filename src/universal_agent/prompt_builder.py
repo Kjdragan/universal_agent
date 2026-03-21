@@ -491,6 +491,7 @@ def build_system_prompt(
         "| `blocked` | Skip — waiting on external dependency |\n"
         "| `human-only` | Off-limits — do not touch |\n"
         "| `escalated` | Skip — waiting for human resolution |\n"
+        "| `waiting-on-reply` | Skip — you sent a reply and are awaiting user feedback |\n"
         "| `auto-corrected` | You self-corrected using past escalation memory |\n\n"
         "### Execution Flow\n"
         "1. Call `get_actionable_tasks()` to find `agent-ready` tasks\n"

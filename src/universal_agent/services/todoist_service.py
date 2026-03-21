@@ -83,6 +83,8 @@ DEFAULT_AGENT_LABELS = [
     "human-only",
     "escalated",
     "auto-corrected",
+    "waiting-on-reply",
+    "email-task",
     "sub-agent:research",
     "sub-agent:writer",
     "sub-agent:code",
@@ -295,7 +297,7 @@ class TodoService:
         try:
             filter_value = (
                 (filter_str or "").strip()
-                or "(overdue | today | no date) & @agent-ready & !@blocked & !@human-only & !@escalated"
+                or "(overdue | today | no date) & @agent-ready & !@blocked & !@human-only & !@escalated & !@waiting-on-reply"
             )
 
             tasks: list[object]
@@ -1029,6 +1031,22 @@ class TodoService:
             if needle in desc:
                 return task
         return None
+
+    def swap_labels(
+        self,
+        task_id: str,
+        *,
+        remove_labels: list[str] | None = None,
+        add_labels: list[str] | None = None,
+        comment: str = "",
+    ) -> bool:
+        """Swap labels on a Todoist task — public API for the email task bridge."""
+        return self._swap_labels(
+            task_id,
+            remove=set(remove_labels or []),
+            add=set(add_labels or []),
+            comment=comment or f"Labels updated: -{remove_labels} +{add_labels}",
+        )
 
     def _swap_labels(self, task_id: str, *, remove: set[str], add: set[str], comment: str) -> bool:
         try:
