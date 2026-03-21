@@ -1,5 +1,7 @@
 # 41. Todoist Heartbeat and Triage Operational Runbook (2026-02-16)
 
+> **Updated:** 2026-03-20 — Added autonomous execution framework, MCP integration, and Infisical secret references.
+
 ## Purpose
 
 This runbook defines the day-to-day operating rhythm for the Todoist-backed task system in UA v1.
@@ -19,9 +21,9 @@ This runbook aligns with current v1 boundaries:
 
 ## Preconditions
 
-1. `TODOIST_API_TOKEN` is set in `.env`.
+1. `TODOIST_API_TOKEN` is set in Infisical (not `.env` — see `docs/deployment/secrets_and_environments.md`).
 2. Todoist dependency is installed via `uv` lock (`todoist-api-python`).
-3. Gateway heartbeat flow is running in an environment that can read `.env`.
+3. Gateway heartbeat flow is running in an environment bootstrapped via Infisical.
 
 Quick bootstrap:
 
@@ -62,10 +64,11 @@ Interpretation:
 
 ### Midday triage (10-15 min)
 
-1. Resolve stale blockers:
+1. Resolve stale blockers and escalations:
 
 ```bash
 uv run python -m universal_agent.cli.todoist_cli tasks --filter "@blocked"
+uv run python -m universal_agent.cli.todoist_cli tasks --filter "@escalated"
 ```
 
 2. Move completed work out of active queue (`complete`) and annotate if needed (`comment`).
@@ -150,10 +153,10 @@ uv run python -m universal_agent.cli.todoist_cli heartbeat
 
 ### Symptom: heartbeat is not reflecting Todoist tasks
 
-1. Confirm token in environment:
+1. Confirm token in environment (via Infisical, not raw env):
 
 ```bash
-env | grep TODOIST_API_TOKEN
+infisical secrets get TODOIST_API_TOKEN --plain
 ```
 
 2. Confirm CLI can read tasks:
@@ -177,18 +180,44 @@ uv run python -m universal_agent.cli.todoist_cli tasks
 ```bash
 uv run pytest \
   tests/unit/test_todoist_service.py \
-  tests/unit/test_todoist_cli.py \
-  tests/unit/test_todoist_bridge.py \
-  tests/unit/test_heartbeat_todoist_injection.py -q
+  tests/unit/test_autonomous_execution.py \
+  tests/unit/test_email_task_bridge.py -q
 ```
 
 Optional guarded live integration suite:
 
 ```bash
 RUN_TODOIST_LIVE_TESTS=1 \
-TODOIST_API_TOKEN=<token> \
 uv run pytest tests/integration/test_todoist_live_guarded.py -q
 ```
+
+---
+
+## Autonomous Execution Framework (2026-03-20)
+
+The following capabilities are now available for agent-driven task management:
+
+### Labels
+
+| Label | Purpose |
+|---|---|
+| `agent-ready` | Task is actionable by agents (default for new tasks) |
+| `blocked` | Task is blocked — agents skip it |
+| `human-only` | Explicitly restricted to human action — agents cannot touch |
+| `escalated` | Agent encountered an issue — waiting for human resolution |
+| `auto-corrected` | Agent self-corrected using escalation memory |
+
+### Escalation Loop
+
+1. Agent calls `escalate_task(task_id, reason, issue_pattern)` → label swaps to `escalated`
+2. Human (or operator) calls `resolve_escalation(task_id, resolution, guidance)` → label restores to `agent-ready`
+3. Future agents call `check_escalation_memory(issue_pattern)` → learns from past resolutions
+
+### MCP Integration
+
+The `@doist/todoist-ai` MCP server (v8.4.0) is available as an agent-facing tool provider:
+- Batch task creation, task search, productivity stats, filter management
+- See `docs/deployment/todoist_mcp_integration.md` for the responsibility split
 
 ---
 
@@ -196,6 +225,6 @@ uv run pytest tests/integration/test_todoist_live_guarded.py -q
 
 Not included in this runbook's implementation scope:
 
-1. automatic brainstorm promotion,
+1. ~~automatic brainstorm promotion~~ — now partially covered by autonomous execution framework,
 2. automatic work-thread creation from approved ideas,
 3. heartbeat/cron self-maintenance automation for CODIE.
