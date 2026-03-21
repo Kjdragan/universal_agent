@@ -7015,15 +7015,22 @@ def _delete_event_filter_preset(*, owner_id: str, preset_id: str) -> bool:
 
 
 def _activity_prune_old(conn: sqlite3.Connection) -> None:
-    conn.execute(
+    c1 = conn.execute(
         "DELETE FROM activity_events WHERE created_at < datetime('now', ?)",
         (f"-{int(_activity_events_retention_days)} days",),
     )
-    conn.execute(
+    c2 = conn.execute(
         "DELETE FROM activity_event_stream WHERE created_at < datetime('now', ?)",
         (f"-{int(_activity_stream_retention_days)} days",),
     )
     conn.commit()
+    deleted = (c1.rowcount or 0) + (c2.rowcount or 0)
+    if deleted > 0:
+        try:
+            conn.execute("VACUUM")
+            logger.info("Activity DB pruned %d rows and vacuumed", deleted)
+        except Exception as exc:
+            logger.debug("Activity DB VACUUM skipped: %s", exc)
 
 
 def _activity_upsert_record(record: dict[str, Any]) -> None:
@@ -11079,15 +11086,29 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
-    # Start the session reaper (TTL-based cleanup for admin and VP sessions)
+    # Start the session reaper (TTL-based cleanup for admin, VP, and user sessions)
     try:
         get_gateway().start_reaper()
-        logger.info("🧹 Session reaper started (admin TTL=%ss, VP TTL=%ss)",
+        logger.info("🧹 Session reaper started (admin TTL=%ss, VP TTL=%ss, user TTL=%ss)",
             os.getenv("UA_SESSION_ADMIN_TTL_SECONDS", "600"),
             os.getenv("UA_SESSION_VP_INACTIVITY_TTL_SECONDS", "900"),
+            os.getenv("UA_SESSION_USER_TTL_SECONDS", "14400"),
         )
     except Exception as _reaper_exc:
         logger.warning("Failed to start session reaper: %s", _reaper_exc)
+
+    # Auto-archive stale workspace directories (older than 48h)
+    try:
+        from universal_agent.session.reaper import cleanup_stale_workspaces as _archive_stale
+        _archived = await _archive_stale(
+            max_age_hours=int(os.getenv("UA_WORKSPACE_ARCHIVE_AGE_HOURS", "48")),
+            workspaces_dir=WORKSPACES_DIR,
+            dry_run=False,
+        )
+        if _archived:
+            logger.info("🗄️ Archived %d stale workspace(s) at startup", len(_archived))
+    except Exception as _archive_exc:
+        logger.warning("Workspace auto-archiver failed at startup: %s", _archive_exc)
 
     # Always enabled Ops Service
     _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)

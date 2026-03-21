@@ -1523,8 +1523,10 @@ class InProcessGateway(Gateway):
             return int(os.getenv("UA_SESSION_ADMIN_TTL_SECONDS", "600"))
         if source in self._VP_SOURCES:
             return int(os.getenv("UA_SESSION_VP_INACTIVITY_TTL_SECONDS", "900"))
-        # Interactive user sessions are never reaped.
-        return None
+        # Interactive user sessions: reap after long inactivity (default 4h).
+        # Workspace files on disk are preserved — only the in-memory session
+        # and adapter are released.  Dashboard still shows archived sessions.
+        return int(os.getenv("UA_SESSION_USER_TTL_SECONDS", "14400"))
 
     async def _session_reaper(self) -> None:
         """Background task: periodically close sessions that have exceeded their inactivity TTL."""
