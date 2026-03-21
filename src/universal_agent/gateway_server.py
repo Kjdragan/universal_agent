@@ -11682,6 +11682,28 @@ async def signals_ingest_endpoint(request: Request):
                 or _digest_summary
             ).strip()
 
+            # Auto-derive summary from markdown when explicit summary is empty
+            if not _digest_summary and _digest_full_md:
+                _auto_lines: list[str] = []
+                for _mdline in _digest_full_md.split("\n"):
+                    _mdline = _mdline.strip()
+                    if not _mdline:
+                        continue
+                    # Skip headings, horizontal rules, table separators
+                    if _mdline.startswith("#") or re.match(r"^[-=]{3,}$", _mdline):
+                        continue
+                    if re.match(r"^\|[-:| ]+\|$", _mdline) or re.match(r"^\*{3,}$", _mdline):
+                        continue
+                    # Clean markdown formatting for summary display
+                    _cleaned = re.sub(r"\*\*|`", "", _mdline)
+                    _cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", _cleaned).strip()
+                    if len(_cleaned) > 8:
+                        _auto_lines.append(_cleaned)
+                        if len(_auto_lines) >= 2:
+                            break
+                if _auto_lines:
+                    _digest_summary = " · ".join(_auto_lines)[:500]
+
             # Collect source type tags if present
             _source_types: list[str] = []
             for opp in (subject_obj.get("opportunities") or []):

@@ -136,6 +136,41 @@ function extractHeadline(digest: CSIDigest): string {
     return raw || "Untitled Report";
 }
 
+/** Auto-derive a summary from markdown content when the summary field is empty.
+ *  Extracts the first 1-2 meaningful non-heading lines as a preview snippet. */
+function extractSummary(digest: CSIDigest): string {
+    const raw = (digest.summary ?? "").trim();
+    if (raw && raw.toLowerCase() !== "no summary") return raw;
+
+    const md = digest.full_report_md || "";
+    if (!md) return "";
+
+    const lines = md.split("\n").map((l) => l.trim()).filter(Boolean);
+    const snippets: string[] = [];
+    for (const line of lines) {
+        // Skip headings, horizontal rules, table separators
+        if (/^#{1,6}\s/.test(line)) continue;
+        if (/^[-=]{3,}$/.test(line)) continue;
+        if (/^\|[-:| ]+\|$/.test(line)) continue;
+        if (/^\*{3,}$/.test(line)) continue;
+        // Skip lines that are the same as the title
+        if (line === extractHeadline(digest)) continue;
+        // Clean markdown formatting for summary display
+        const cleaned = line
+            .replace(/\*\*/g, "")
+            .replace(/\*/g, "")
+            .replace(/`/g, "")
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+            .trim();
+        if (cleaned.length > 8) {
+            snippets.push(cleaned);
+            if (snippets.length >= 2) break;
+        }
+    }
+    const result = snippets.join(" · ");
+    return result.length > 200 ? result.slice(0, 197) + "…" : result;
+}
+
 /* ── Component ──────────────────────────────────────────────────────────── */
 
 export default function CSIDashboard() {
@@ -194,7 +229,7 @@ export default function CSIDashboard() {
         return digests.filter((d) => contentSource(d.event_type) === sourceFilter);
     }, [digests, sourceFilter]);
 
-    /* ── Summary cards ───────────────────────────────────────────────── */
+    /* ── Summary stats ───────────────────────────────────────────────── */
 
     const latestTime = digests.length > 0 ? formatDateTimeTz(digests[0].created_at, { placeholder: "N/A" }) : "N/A";
 
@@ -283,100 +318,75 @@ export default function CSIDashboard() {
     /* ── Render ────────────────────────────────────────────────────────── */
 
     return (
-        <div className="flex h-full flex-col gap-5">
-            {/* ─── Header ──────────────────────────────────────────── */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                        Creator Signal Intelligence
-                    </h1>
-                    <p className="text-sm text-muted-foreground">
-                        Trend reports and digests from your watchlists
-                    </p>
+        <div className="flex h-full flex-col" style={{ minHeight: 0 }}>
+            {/* ─── Compact Header Bar ──────────────────────────────── */}
+            <div className="flex items-center justify-between gap-3 pb-2 shrink-0">
+                <div className="flex items-center gap-4 min-w-0">
+                    <div className="min-w-0">
+                        <h1 className="text-lg font-bold tracking-tight text-foreground leading-tight">
+                            Creator Signal Intelligence
+                        </h1>
+                    </div>
+                    {/* Inline stats */}
+                    {!loading && (
+                        <div className="hidden md:flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+                            <span className="font-medium text-foreground/70">{totalDigests}</span>
+                            <span>reports</span>
+                            <span className="text-muted/40">·</span>
+                            <span>Latest: {latestTime}</span>
+                            {digests.length > 0 && (
+                                <span className="opacity-60">({timeAgo(digests[0].created_at)})</span>
+                            )}
+                            <span className="text-muted/40">·</span>
+                            {Object.entries(sourceMix)
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([src, count]) => (
+                                    <span
+                                        key={src}
+                                        className="font-medium"
+                                        title={contentSourceLabel(src as ReturnType<typeof contentSource>)}
+                                    >
+                                        {sourceIcon(src)}{count}
+                                    </span>
+                                ))}
+                        </div>
+                    )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 shrink-0">
                     <button
                         onClick={clearAllDigests}
                         disabled={purgeBusy || digests.length === 0}
-                        className="rounded-md bg-muted/30 px-3 py-1.5 text-sm font-medium text-foreground/70 hover:bg-muted/50 transition-colors border border-border disabled:opacity-40"
+                        className="rounded-md bg-muted/30 px-2.5 py-1 text-xs font-medium text-foreground/70 hover:bg-muted/50 transition-colors border border-border disabled:opacity-40"
                     >
-                        {purgeBusy ? "Clearing…" : "Clear All Reports"}
+                        {purgeBusy ? "…" : "Clear All"}
                     </button>
                     <button
                         onClick={purgeData}
                         disabled={purgeBusy}
-                        className="rounded-md bg-amber-600/20 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-600/30 transition-colors border border-accent/30 disabled:opacity-60"
+                        className="rounded-md bg-amber-600/20 px-2.5 py-1 text-xs font-medium text-amber-200 hover:bg-amber-600/30 transition-colors border border-accent/30 disabled:opacity-60"
                     >
-                        {purgeBusy ? "Purging…" : "Purge Stale Data"}
+                        {purgeBusy ? "…" : "Purge Stale"}
                     </button>
                     <button
                         onClick={() => void loadData()}
-                        className="rounded-md bg-primary/20 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/30 transition-colors border border-primary/30"
+                        className="rounded-md bg-primary/20 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/30 transition-colors border border-primary/30"
                     >
-                        Refresh
+                        ↻
                     </button>
                 </div>
             </div>
 
             {purgeStatus && (
-                <div className="rounded-md border border-border bg-background/60 px-3 py-2 text-xs text-foreground/80">
+                <div className="rounded-md border border-border bg-background/60 px-3 py-1.5 text-xs text-foreground/80 mb-1.5 shrink-0">
                     {purgeStatus}
                 </div>
             )}
 
-            {/* ─── Summary Cards ───────────────────────────────────── */}
-            <div className="grid gap-4 md:grid-cols-3">
-                <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-muted-foreground">Reports</div>
-                    <div className="mt-2">
-                        <span className="text-3xl font-bold text-foreground">{loading ? "…" : totalDigests}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                        {filteredDigests.length !== digests.length
-                            ? `${filteredDigests.length} shown (filtered)`
-                            : "Persisted"}
-                    </div>
-                </div>
-
-                <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-muted-foreground">Latest Report</div>
-                    <div className="mt-2">
-                        <span className="text-lg font-bold text-foreground">{loading ? "…" : latestTime}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                        {digests.length > 0 ? timeAgo(digests[0].created_at) : "No reports yet"}
-                    </div>
-                </div>
-
-                <div className="rounded-xl border border-border bg-background/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-muted-foreground">Sources</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                        {loading ? (
-                            <span className="text-lg font-bold text-foreground">…</span>
-                        ) : Object.keys(sourceMix).length === 0 ? (
-                            <span className="text-sm text-muted-foreground">No data</span>
-                        ) : (
-                            Object.entries(sourceMix)
-                                .sort((a, b) => b[1] - a[1])
-                                .map(([src, count]) => (
-                                    <span
-                                        key={src}
-                                        className="text-sm font-medium text-foreground/80"
-                                        title={contentSourceLabel(src as ReturnType<typeof contentSource>)}
-                                    >
-                                        {sourceIcon(src)} {count}
-                                    </span>
-                                ))
-                        )}
-                    </div>
-                </div>
-            </div>
-
-            {/* ─── Source Filter Tabs ──────────────────────────────── */}
-            <div className="flex items-center gap-1.5 flex-wrap">
+            {/* ─── Source Filter Pills ─────────────────────────────── */}
+            <div className="flex items-center gap-1 flex-wrap pb-2 shrink-0">
                 <button
                     onClick={() => setSourceFilter("all")}
-                    className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
                         sourceFilter === "all"
                             ? "border-primary/40 bg-primary/20 text-primary/80"
                             : "border-border bg-background/50 text-muted-foreground hover:bg-card/60"
@@ -388,7 +398,7 @@ export default function CSIDashboard() {
                     <button
                         key={src}
                         onClick={() => setSourceFilter(src)}
-                        className={`rounded-md border px-3 py-1 text-xs font-semibold transition-colors ${
+                        className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
                             sourceFilter === src
                                 ? `border-primary/40 bg-primary/20 ${sourceColor(src).split(" ")[0]}`
                                 : "border-border bg-background/50 text-muted-foreground hover:bg-card/60"
@@ -401,14 +411,14 @@ export default function CSIDashboard() {
 
             {/* ─── Error State ─────────────────────────────────────── */}
             {error && (
-                <div className="rounded-xl border border-red-400/25 bg-red-400/10 p-4 text-sm text-red-400/80">
+                <div className="rounded-xl border border-red-400/25 bg-red-400/10 p-3 text-sm text-red-400/80 shrink-0 mb-2">
                     <span className="font-semibold">Error:</span> {error}
                 </div>
             )}
 
             {/* ─── Loading State ───────────────────────────────────── */}
             {loading && (
-                <div className="flex items-center justify-center py-20 text-muted-foreground">
+                <div className="flex items-center justify-center py-20 text-muted-foreground flex-1">
                     <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-cyan-400" />
                     <span className="ml-3 text-sm">Loading digests…</span>
                 </div>
@@ -416,7 +426,7 @@ export default function CSIDashboard() {
 
             {/* ─── Empty State ─────────────────────────────────────── */}
             {!loading && !error && filteredDigests.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="flex flex-col items-center justify-center py-20 text-center flex-1">
                     <div className="text-4xl mb-3">📡</div>
                     <h3 className="text-lg font-semibold text-foreground/80">No Digests Yet</h3>
                     <p className="text-sm text-muted-foreground mt-1 max-w-sm">
@@ -427,18 +437,18 @@ export default function CSIDashboard() {
 
             {/* ─── List/Detail Split ──────────────────────────────── */}
             {!loading && !error && filteredDigests.length > 0 && (
-                <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 flex-1 min-h-0">
-                    {/* Digest List */}
-                    <div className="lg:col-span-2 rounded-xl border border-border bg-background/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
-                        <div className="sticky top-0 z-10 bg-background/90 backdrop-blur border-b border-border px-4 py-2.5">
-                            <h2 className="text-sm font-semibold text-foreground/80 tracking-wide">
-                                Recent Reports
-                                <span className="ml-2 text-xs text-muted-foreground font-normal">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 overflow-hidden">
+                    {/* Digest List — compact left panel */}
+                    <div className="lg:col-span-4 rounded-xl border border-border bg-background/50 backdrop-blur flex flex-col min-h-0 overflow-hidden">
+                        <div className="sticky top-0 z-10 bg-background/90 backdrop-blur border-b border-border px-3 py-2">
+                            <h2 className="text-xs font-semibold text-foreground/80 tracking-wide uppercase">
+                                Reports
+                                <span className="ml-1.5 text-[10px] text-muted-foreground font-normal normal-case">
                                     {filteredDigests.length}
                                 </span>
                             </h2>
                         </div>
-                        <div className="divide-y divide-slate-800/60">
+                        <div className="divide-y divide-slate-800/60 overflow-y-auto flex-1">
                             {filteredDigests.map((digest) => (
                                 <button
                                     key={digest.id}
@@ -447,23 +457,23 @@ export default function CSIDashboard() {
                                         setSendStatus(null);
                                         setSendComment("");
                                     }}
-                                    className={`w-full text-left px-4 py-3 transition-colors hover:bg-card/40 ${
+                                    className={`w-full text-left px-3 py-2.5 transition-colors hover:bg-card/40 ${
                                         selectedDigest?.id === digest.id
                                             ? "bg-primary/10 border-l-2 border-l-cyan-400"
                                             : "border-l-2 border-l-transparent"
                                     }`}
                                 >
-                                    <div className="flex items-start gap-2.5">
+                                    <div className="flex items-start gap-2">
                                         {/* Source icon — instant visual ID */}
-                                        <span className="text-base mt-0.5 shrink-0" title={contentSourceLabel(contentSource(digest.event_type))}>
+                                        <span className="text-sm mt-0.5 shrink-0" title={contentSourceLabel(contentSource(digest.event_type))}>
                                             {sourceIcon(digest.event_type)}
                                         </span>
                                         <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between gap-2 mb-0.5">
-                                                <span className="text-[13px] font-semibold text-foreground leading-snug line-clamp-2">
+                                            <div className="flex items-center justify-between gap-1.5 mb-0.5">
+                                                <span className="text-[12px] font-semibold text-foreground leading-snug line-clamp-2">
                                                     {extractHeadline(digest)}
                                                 </span>
-                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                <div className="flex items-center gap-1 shrink-0">
                                                     <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                                                         {timeAgo(digest.created_at)}
                                                     </span>
@@ -471,15 +481,15 @@ export default function CSIDashboard() {
                                                         role="button"
                                                         tabIndex={0}
                                                         onClick={(e) => dismissDigest(digest.id, e)}
-                                                        className="text-muted-foreground/40 hover:text-red-400 transition-colors text-sm leading-none px-0.5"
+                                                        className="text-muted-foreground/40 hover:text-red-400 transition-colors text-xs leading-none px-0.5"
                                                         title="Dismiss report"
                                                     >
                                                         ×
                                                     </span>
                                                 </div>
                                             </div>
-                                            <p className="text-xs text-muted-foreground/70 line-clamp-1">
-                                                {digest.summary || "No summary"}
+                                            <p className="text-[11px] text-muted-foreground/70 line-clamp-2 leading-relaxed">
+                                                {extractSummary(digest) || "No summary"}
                                             </p>
                                         </div>
                                     </div>
@@ -488,8 +498,8 @@ export default function CSIDashboard() {
                         </div>
                     </div>
 
-                    {/* Detail Pane */}
-                    <div className="lg:col-span-3 rounded-xl border border-border bg-background/50 backdrop-blur overflow-auto max-h-[calc(100vh-26rem)]">
+                    {/* Detail / Reading Pane — expanded right panel */}
+                    <div className="lg:col-span-8 rounded-xl border border-border bg-background/50 backdrop-blur flex flex-col min-h-0 overflow-hidden">
                         {!selectedDigest ? (
                             <div className="flex flex-col items-center justify-center h-full py-20 text-center">
                                 <div className="text-3xl mb-3 opacity-40">←</div>
@@ -498,15 +508,15 @@ export default function CSIDashboard() {
                                 </p>
                             </div>
                         ) : (
-                            <div className="flex flex-col h-full">
-                                {/* Detail Header */}
-                                <div className="sticky top-0 z-10 bg-background/90 backdrop-blur border-b border-border px-5 py-3">
+                            <div className="flex flex-col h-full min-h-0">
+                                {/* Detail Header — compact */}
+                                <div className="shrink-0 bg-background/90 backdrop-blur border-b border-border px-5 py-2.5">
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
-                                            <h2 className="text-lg font-bold text-foreground leading-tight">
+                                            <h2 className="text-base font-bold text-foreground leading-tight">
                                                 {extractHeadline(selectedDigest)}
                                             </h2>
-                                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                            <div className="flex items-center gap-2 mt-1 flex-wrap">
                                                 <span className={`text-xs font-medium ${sourceColor(selectedDigest.event_type).split(" ")[0]}`}>
                                                     {sourceIcon(selectedDigest.event_type)} {contentSourceLabel(contentSource(selectedDigest.event_type))}
                                                 </span>
@@ -541,16 +551,28 @@ export default function CSIDashboard() {
                                     </div>
                                 </div>
 
-                                {/* Report Content */}
-                                <div className="flex-1 px-5 py-4 overflow-auto">
+                                {/* Report Content — scrollable markdown reader */}
+                                <div className="flex-1 overflow-y-auto px-6 py-5">
                                     {selectedDigest.full_report_md ? (
-                                        <div className="prose prose-invert prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/80 prose-li:text-foreground/80 prose-strong:text-foreground prose-a:text-primary prose-code:text-primary prose-pre:bg-background/60 prose-pre:border prose-pre:border-border">
+                                        <div className="prose prose-invert prose-sm max-w-none
+                                            prose-headings:text-foreground prose-headings:font-semibold prose-headings:mt-5 prose-headings:mb-2
+                                            prose-h1:text-xl prose-h2:text-lg prose-h3:text-base
+                                            prose-p:text-foreground/85 prose-p:leading-relaxed prose-p:my-2
+                                            prose-li:text-foreground/85 prose-li:my-0.5
+                                            prose-strong:text-foreground prose-strong:font-semibold
+                                            prose-a:text-primary prose-a:no-underline hover:prose-a:underline
+                                            prose-code:text-primary/90 prose-code:bg-primary/10 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs
+                                            prose-pre:bg-background/60 prose-pre:border prose-pre:border-border prose-pre:rounded-lg
+                                            prose-blockquote:border-l-primary/40 prose-blockquote:bg-primary/5 prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:px-4
+                                            prose-table:text-sm prose-th:text-foreground/80 prose-td:text-foreground/70
+                                            prose-hr:border-border"
+                                        >
                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                 {selectedDigest.full_report_md}
                                             </ReactMarkdown>
                                         </div>
                                     ) : selectedDigest.summary ? (
-                                        <div className="prose prose-invert prose-sm max-w-none prose-p:text-foreground/80">
+                                        <div className="prose prose-invert prose-sm max-w-none prose-p:text-foreground/85 prose-p:leading-relaxed">
                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                 {selectedDigest.summary}
                                             </ReactMarkdown>
@@ -560,8 +582,8 @@ export default function CSIDashboard() {
                                     )}
                                 </div>
 
-                                {/* Send to Simone Bar */}
-                                <div className="sticky bottom-0 border-t border-border bg-background/95 backdrop-blur px-5 py-3">
+                                {/* Send to Simone Bar — fixed at bottom */}
+                                <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur px-5 py-2">
                                     <div className="flex items-center gap-2">
                                         <input
                                             type="text"
@@ -573,13 +595,13 @@ export default function CSIDashboard() {
                                         <button
                                             onClick={() => void sendToSimone(selectedDigest)}
                                             disabled={sendBusy}
-                                            className="rounded-md bg-primary/20 px-4 py-1.5 text-sm font-medium text-primary hover:bg-primary/30 transition-colors border border-primary/30 disabled:opacity-60 whitespace-nowrap"
+                                            className="rounded-md bg-primary/20 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/30 transition-colors border border-primary/30 disabled:opacity-60 whitespace-nowrap"
                                         >
                                             {sendBusy ? "Sending…" : "📨 Send to Simone"}
                                         </button>
                                     </div>
                                     {sendStatus && (
-                                        <div className={`mt-2 text-xs ${sendStatus.startsWith("✓") ? "text-primary" : "text-secondary"}`}>
+                                        <div className={`mt-1.5 text-xs ${sendStatus.startsWith("✓") ? "text-primary" : "text-secondary"}`}>
                                             {sendStatus}
                                         </div>
                                     )}
