@@ -1,0 +1,18 @@
+# Multimodal RAG Project Dependencies
+# Install with: pip install -r requirements.txt
+
+# PDF Processing
+pymupdf>=1.24.0
+
+# Vector Database
+chromadb>=0.5.0
+
+# AI/ML APIs
+google-genai>=1.0.0
+openai>=1.0.0
+
+# Web Interface
+streamlit>=1.30.0
+
+# Utilities
+python-dotenv>=1.0.0
