@@ -1,6 +1,7 @@
-# 41. Todoist Heartbeat and Triage Operational Runbook (2026-02-16)
+# 41. Todoist Heartbeat and Triage Operational Runbook (2026-03-20)
 
-> **Updated:** 2026-03-20 — Added autonomous execution framework, MCP integration, and Infisical secret references.
+> **Originally created:** 2026-02-16
+> **Updated:** 2026-03-20 — Added autonomous execution framework (human-only/escalated/auto-corrected labels, escalation loop with memory), todoist-ai MCP integration, Infisical-first secret references, and updated verification commands.
 
 ## Purpose
 
