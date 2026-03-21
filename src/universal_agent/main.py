@@ -8296,6 +8296,31 @@ async def process_turn(
     # injected by the gateway/heartbeat service via env for this single turn.
     # This is intentionally not persisted in chat history.
     def _system_events_prompt_from_env() -> str:
+        # Prefer file-based events (written by execution_engine.py to avoid
+        # E2BIG from env var stuffing).
+        events_file = (os.getenv("UA_SYSTEM_EVENTS_FILE") or "").strip()
+        if events_file and os.path.isfile(events_file):
+            try:
+                with open(events_file, "r") as f:
+                    parsed = json.load(f)
+                # Clean up the temp file after reading
+                try:
+                    os.unlink(events_file)
+                except OSError:
+                    pass
+                if isinstance(parsed, list) and parsed:
+                    lines: list[str] = []
+                    for evt in parsed:
+                        if isinstance(evt, dict):
+                            text = str(evt.get("text") or "").strip()
+                            if not text:
+                                continue
+                            lines.append(f"System: {text}")
+                    return "\n".join(lines)
+            except Exception:
+                pass
+
+        # Legacy: read from env vars (backward compatibility).
         raw = (os.getenv("UA_SYSTEM_EVENTS_PROMPT") or "").strip()
         if raw:
             return raw
@@ -8308,7 +8333,7 @@ async def process_turn(
             return ""
         if not isinstance(parsed, list) or not parsed:
             return ""
-        lines: list[str] = []
+        lines = []
         for evt in parsed:
             if isinstance(evt, dict):
                 text = str(evt.get("text") or "").strip()

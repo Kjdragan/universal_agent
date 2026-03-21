@@ -1,5 +1,15 @@
 # Repository Agent Rules
 
+## Problem-Solving Philosophy
+
+When investigating or fixing issues, always solve the **root cause** holistically — never just cure symptoms with band-aids. Before implementing a fix, ask:
+
+1. **Can we expand capabilities** rather than restrict them? (e.g., raise a system limit rather than cap our data to fit under it)
+2. **Is there a proper architectural pattern** for this? (e.g., write large data to files instead of stuffing it into env vars)
+3. **Are we losing information or functionality** with this approach? If yes, find a better way.
+
+Defensive guards and safety nets are acceptable as a *last resort backstop*, but they must not be the primary fix. The primary fix should eliminate the problem at its source.
+
 ## Deployment
 
 This repository has exactly one supported application deployment path:

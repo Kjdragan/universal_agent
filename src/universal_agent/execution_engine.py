@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 import sys
 import time
 import logging
@@ -166,6 +167,106 @@ def _temporary_env(overrides: dict[str, Optional[str]]) -> Any:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = previous
+
+
+# ---------------------------------------------------------------------------
+# Environment sanitisation guard – prevent E2BIG on subprocess spawn
+# ---------------------------------------------------------------------------
+
+# Linux default MAX_ARG_STRLEN is ~2 MB for argv + envp combined.
+# We leave headroom for CLI args (system prompt, MCP config, etc.).
+_ENV_SAFE_THRESHOLD_BYTES = 1_500_000  # 1.5 MB
+
+# Env vars that are safe to strip when we need to shed size.
+# Ordered roughly by typical size (biggest savings first).
+_ENV_STRIP_CANDIDATES = (
+    "LS_COLORS",
+    "UA_SYSTEM_EVENTS_JSON",
+    "UA_SYSTEM_EVENTS_PROMPT",
+    "CLAUDE_AGENT_CONVERSATION_HISTORY",
+    "LSCOLORS",
+    "LESS_TERMCAP_md",
+    "LESS_TERMCAP_me",
+    "LESS_TERMCAP_se",
+    "LESS_TERMCAP_so",
+    "LESS_TERMCAP_ue",
+    "LESS_TERMCAP_us",
+)
+
+# Prefixes for env vars that can be bulk-stripped (bash exported functions etc.).
+_ENV_STRIP_PREFIXES = (
+    "BASH_FUNC_",
+    "LESS_TERMCAP_",
+)
+
+# Max bytes for a single system-events env var before it gets truncated.
+_MAX_SYSTEM_EVENTS_ENV_BYTES = 32_000  # 32 KB
+
+
+def _env_total_size() -> int:
+    """Return the approximate total byte size of the current process environ."""
+    return sum(len(k) + len(v) + 2 for k, v in os.environ.items())
+
+
+def sanitize_env_for_subprocess() -> list[str]:
+    """Strip non-essential large env vars if total env exceeds the safe threshold.
+
+    Modifies ``os.environ`` **in-place** and returns the list of keys removed.
+    Intended to be called inside a ``_temporary_env()`` context manager so the
+    changes are automatically reverted after the subprocess completes.
+    """
+    total = _env_total_size()
+    if total <= _ENV_SAFE_THRESHOLD_BYTES:
+        return []
+
+    removed: list[str] = []
+
+    # Phase 1: strip well-known bloat candidates
+    for key in _ENV_STRIP_CANDIDATES:
+        if key in os.environ:
+            removed.append(key)
+            os.environ.pop(key)
+            total = _env_total_size()
+            if total <= _ENV_SAFE_THRESHOLD_BYTES:
+                break
+
+    # Phase 2: strip by prefix (bash exported functions, terminal escapes)
+    if total > _ENV_SAFE_THRESHOLD_BYTES:
+        for key in list(os.environ):
+            if any(key.startswith(p) for p in _ENV_STRIP_PREFIXES) and key not in removed:
+                removed.append(key)
+                os.environ.pop(key)
+        total = _env_total_size()
+
+    # Phase 3: if still over, drop the largest non-critical vars
+    if total > _ENV_SAFE_THRESHOLD_BYTES:
+        _critical = {
+            "PATH", "HOME", "USER", "SHELL", "LANG", "TERM",
+            "ANTHROPIC_API_KEY", "COMPOSIO_API_KEY", "LOGFIRE_TOKEN",
+            "LOGFIRE_WRITE_TOKEN", "INFISICAL_TOKEN",
+            "PYTHONPATH", "VIRTUAL_ENV", "PWD",
+        }
+        by_size = sorted(
+            ((k, len(v)) for k, v in os.environ.items() if k not in _critical),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        for key, _ in by_size:
+            if total <= _ENV_SAFE_THRESHOLD_BYTES:
+                break
+            removed.append(key)
+            os.environ.pop(key)
+            total = _env_total_size()
+
+    if removed:
+        logger.warning(
+            "Sanitized env for subprocess: removed %d vars (%s) to stay under %d bytes (now %d bytes)",
+            len(removed),
+            ", ".join(removed[:5]) + ("..." if len(removed) > 5 else ""),
+            _ENV_SAFE_THRESHOLD_BYTES,
+            total,
+        )
+    return removed
 
 
 def _build_memory_env_overrides(memory_policy: dict[str, Any] | None) -> dict[str, Optional[str]]:
@@ -520,20 +621,42 @@ class ProcessTurnAdapter:
                 )
 
                 system_events = self.config.__dict__.get("_system_events")
+                _events_tmp_path: Optional[str] = None
                 if isinstance(system_events, list) and system_events:
-                    # Keep the raw JSON in env so the engine can choose formatting/filters.
-                    # This is scoped to this single turn via _temporary_env().
+                    # Write events to a temp file and pass the path via env.
+                    # This avoids stuffing potentially large payloads into env
+                    # vars, which can trigger E2BIG on subprocess spawn.
                     try:
-                        env_overrides["UA_SYSTEM_EVENTS_JSON"] = json.dumps(system_events, ensure_ascii=True)
+                        workspace = Path(self.config.workspace_dir)
+                        workspace.mkdir(parents=True, exist_ok=True)
+                        fd, _events_tmp_path = tempfile.mkstemp(
+                            prefix="ua_events_", suffix=".json", dir=str(workspace)
+                        )
+                        with os.fdopen(fd, "w") as f:
+                            json.dump(system_events, f, ensure_ascii=True)
+                        env_overrides["UA_SYSTEM_EVENTS_FILE"] = _events_tmp_path
+                        logger.debug(
+                            "Wrote %d system events (%d bytes) to %s",
+                            len(system_events),
+                            os.path.getsize(_events_tmp_path),
+                            _events_tmp_path,
+                        )
                     except Exception:
-                        env_overrides["UA_SYSTEM_EVENTS_JSON"] = None
-                    # Also include a pre-rendered block for convenience.
-                    env_overrides["UA_SYSTEM_EVENTS_PROMPT"] = _format_system_events_for_prompt(system_events) or None
+                        logger.warning("Failed to write system events file", exc_info=True)
+                        env_overrides["UA_SYSTEM_EVENTS_FILE"] = None
+                    # Clear legacy env vars — subprocess reads from file now.
+                    env_overrides["UA_SYSTEM_EVENTS_JSON"] = None
+                    env_overrides["UA_SYSTEM_EVENTS_PROMPT"] = None
                 else:
+                    env_overrides["UA_SYSTEM_EVENTS_FILE"] = None
                     env_overrides["UA_SYSTEM_EVENTS_JSON"] = None
                     env_overrides["UA_SYSTEM_EVENTS_PROMPT"] = None
 
                 with _temporary_env(env_overrides):
+                    # Guard against E2BIG: strip bloat env vars if env is too large.
+                    # This runs inside _temporary_env so removals revert automatically.
+                    sanitize_env_for_subprocess()
+
                     if USE_PROCESS_STDIO_REDIRECT:
                         with _redirect_stdio_to_run_log(self.config.workspace_dir) as log_handle:
                             # Log user input
