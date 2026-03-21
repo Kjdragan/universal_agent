@@ -35,7 +35,7 @@ Do not treat any older manual VPS deployment flow as canonical.
 - `main` deploys to production on the VPS checkout at `/opt/universal_agent`, with `/opt/universal_agent_repo` as the safe fallback checkout path if the legacy directory is occupied.
 - Pull requests into `develop` are the single Codex review gate.
 - Production promotion is a direct, exact-SHA fast-forward from validated `develop` to `main`; there is no second PR review on `main`.
-- Tailscale CI access is GitHub Actions -> `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_SECRET` -> tag identity `tag:ci-gha`.
+- Tailscale CI access is GitHub Actions -> `TAILSCALE_AUTHKEY` -> tag identity `tag:ci-gha`.
 - Production is branch-driven and automated; do not recommend ad hoc `ssh`, `rsync`, or `git pull` as the default deployment method.
 
 ## Documentation
