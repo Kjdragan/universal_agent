@@ -66,7 +66,8 @@ stale historical lines cannot survive a lane migration.
 ## Required GitHub Secrets
 
 - `OPENAI_API_KEY` (Codex PR review workflow)
-- `TAILSCALE_AUTHKEY` (reusable + ephemeral + preauthorized, tag identity `tag:ci-gha`)
+- `TAILSCALE_OAUTH_CLIENT_ID` (Tailscale OAuth API client ID, tag identity `tag:ci-gha`)
+- `TAILSCALE_OAUTH_SECRET` (Tailscale OAuth API client secret)
 - `VPS_SSH_HOST`
 - `VPS_SSH_USER`
 - `VPS_SSH_KEY`
@@ -342,7 +343,7 @@ If stderr includes either:
 
 then CI identity is not matching the required non-interactive SSH policy. Verify:
 
-- GitHub Action uses `TAILSCALE_AUTHKEY` with `tags: tag:ci-gha`.
+- GitHub Action uses `oauth-client-id`/`oauth-secret` with `tags: tag:ci-gha`.
 - Tailscale node(s) are tagged correctly (`tag:ci-gha` for runner identity, `tag:vps` on destination).
 - SSH rule is `action: "accept"` from `tag:ci-gha` to `tag:vps` for `root`/`ua`.
 - Network policy allows TCP/22 from `tag:ci-gha` to `tag:vps`.
@@ -355,8 +356,8 @@ then CI identity is not matching the required non-interactive SSH policy. Verify
 
 ### Tailscale Connection Issues
 
-- Ensure `TAILSCALE_AUTHKEY` is valid and not expired/revoked.
-- Ensure the auth key was created with tag identity `tag:ci-gha` (reusable + ephemeral + preauthorized).
+- Ensure `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` are valid and not expired/revoked in GitHub Secrets.
+- The OAuth client must have the writable `auth_keys` scope with `tag:ci-gha`.
 - Check the [Tailscale Admin Console](https://login.tailscale.com/admin/machines) to see if the GitHub Runner is joining properly.
 - Verify ACL/grants permit runner-to-VPS traffic on SSH.
 ### Service Startup Errors
