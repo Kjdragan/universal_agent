@@ -38,26 +38,6 @@ type AgentQueuePayload = {
   };
 };
 
-type DispatchQueueItem = {
-  task_id: string;
-  title: string;
-  rank?: number;
-  eligible?: boolean;
-  skip_reason?: string | null;
-  built_at?: string;
-  updated_at?: string;
-  status?: string;
-  priority?: number;
-  source_kind?: string;
-};
-
-type DispatchQueuePayload = {
-  status: string;
-  queue_build_id?: string;
-  items: DispatchQueueItem[];
-  eligible_total?: number;
-};
-
 type HealthPayload = {
   status: "healthy" | "unhealthy";
   timestamp: string;
@@ -431,15 +411,50 @@ function SystemStatusPanel() {
 
 const CLEARED_EVENTS_LS_KEY = "mc_cleared_events_before";
 
-// Recent Events Panel
+// Activity Event type for the /api/v1/dashboard/events endpoint
+type ActivityEvent = {
+  id: string;
+  event_class?: string;
+  source_domain?: string;
+  kind?: string;
+  title?: string;
+  summary?: string;
+  severity?: string;
+  status?: string;
+  requires_action?: boolean;
+  created_at_utc?: string;
+  updated_at_utc?: string;
+  session_id?: string;
+  metadata?: Record<string, unknown>;
+};
+
+function severityBadge(severity?: string): { color: string; label: string } {
+  const s = (severity || "info").toLowerCase();
+  if (s === "error" || s === "critical") return { color: "bg-red-500/10 text-red-400", label: s };
+  if (s === "warning" || s === "warn") return { color: "bg-accent/10 text-accent", label: "warn" };
+  if (s === "success") return { color: "bg-primary/10 text-primary", label: s };
+  return { color: "bg-muted-foreground/10 text-muted-foreground", label: s };
+}
+
+function sourceDomainIcon(domain?: string): string {
+  const d = (domain || "").toLowerCase();
+  if (d === "csi") return "📊";
+  if (d === "heartbeat") return "💓";
+  if (d === "tutorial") return "🎬";
+  if (d === "cron") return "⏰";
+  if (d === "simone" || d === "agentmail") return "📧";
+  if (d === "continuity") return "🔄";
+  return "⚡";
+}
+
+// Recent Events Panel — wired to /api/v1/dashboard/events (real activity events)
 function RecentEventsPanel() {
   const [loading, setLoading] = useState(true);
   const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<DispatchQueuePayload | null>(null);
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [clearedBefore, setClearedBefore] = useState<string | null>(null);
 
-  // Load the "cleared before" timestamp from localStorage on mount
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CLEARED_EVENTS_LS_KEY);
@@ -451,14 +466,13 @@ function RecentEventsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/dispatch-queue?limit=20`, {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/events?limit=20`, {
         cache: "no-store",
       });
-      if (!res.ok) {
-        throw new Error(`Failed to load: ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
       const json = await res.json();
-      setData(json as DispatchQueuePayload);
+      const items: ActivityEvent[] = Array.isArray(json.events) ? json.events : [];
+      setEvents(items);
     } catch (err: any) {
       setError(err.message || "Failed to load recent events");
     } finally {
@@ -472,9 +486,7 @@ function RecentEventsPanel() {
 
   const handleClearAll = () => {
     const now = new Date().toISOString();
-    try {
-      localStorage.setItem(CLEARED_EVENTS_LS_KEY, now);
-    } catch { /* ignore */ }
+    try { localStorage.setItem(CLEARED_EVENTS_LS_KEY, now); } catch { /* ignore */ }
     setClearedBefore(now);
   };
 
@@ -519,30 +531,24 @@ function RecentEventsPanel() {
     );
   }
 
-  // Sort by updated_at descending (most recent first), then filter out cleared items
-  const allItems = (data?.items || []).slice().sort((a, b) => {
-    const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-    const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
-    return tb - ta;
-  });
-
   const clearedTs = clearedBefore ? new Date(clearedBefore).getTime() : null;
   const items = clearedTs
-    ? allItems.filter((item) => {
-        if (!item.updated_at) return false;
-        return new Date(item.updated_at).getTime() > clearedTs;
+    ? events.filter((e) => {
+        const ts = e.created_at_utc || e.updated_at_utc || "";
+        if (!ts) return false;
+        return new Date(ts).getTime() > clearedTs;
       })
-    : allItems;
+    : events;
 
   return (
     <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <Link href="/dashboard/events" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <Clock className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
-        </div>
+        </Link>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{data?.eligible_total || 0} eligible</span>
+          <span className="text-xs text-muted-foreground">{items.length} shown</span>
           {items.length > 0 && (
             <button
               onClick={handleClearAll}
@@ -560,89 +566,88 @@ function RecentEventsPanel() {
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
-          {items.map((item) => (
-            <div
-              key={item.task_id}
-              className="rounded-lg border border-border/50 bg-card/30 p-3"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground leading-snug">{item.title}</p>
+          {items.map((event) => {
+            const sev = severityBadge(event.severity);
+            return (
+              <div
+                key={event.id}
+                className="rounded-lg border border-border/50 bg-card/30 p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground leading-snug">
+                      {sourceDomainIcon(event.source_domain)} {event.title || event.kind || "Event"}
+                    </p>
+                    {event.summary && (
+                      <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-2">
+                        {event.summary}
+                      </p>
+                    )}
+                  </div>
+                  <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${sev.color}`}>
+                    {sev.label}
+                  </span>
                 </div>
-                {item.eligible !== undefined && (
-                  <span
-                    className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${
-                      item.eligible
-                        ? "bg-primary/10 text-primary"
-                        : "bg-accent/10 text-accent"
-                    }`}
-                  >
-                    {item.eligible ? "eligible" : "skipped"}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {event.source_domain && (
+                    <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
+                      {event.source_domain}
+                    </span>
+                  )}
+                  {event.status && event.status !== "new" && (
+                    <span className="text-xs text-muted-foreground">{event.status}</span>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    {formatTs(event.created_at_utc || event.updated_at_utc)}
                   </span>
-                )}
+                </div>
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                {item.rank !== undefined && (
-                  <span className="text-xs text-muted-foreground">Rank: {item.rank}</span>
-                )}
-                {item.source_kind && (
-                  <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
-                    {item.source_kind}
-                  </span>
-                )}
-                {item.updated_at && (
-                  <span className="text-xs text-muted-foreground">{formatTs(item.updated_at)}</span>
-                )}
-              </div>
-              {item.skip_reason && (
-                <p className="mt-1 text-xs text-accent/80">Skip reason: {item.skip_reason}</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-type CSINotificationItem = {
+type CSIDigestItem = {
   id: string;
-  kind: string;
-  title?: string;
-  body?: string;
-  source_domain?: string;
-  created_at?: string;
-  updated_at?: string;
-  status?: string;
+  event_id: string;
+  source: string;
+  event_type: string;
+  title: string;
+  summary: string;
+  created_at: string;
 };
 
-// CSI Signals Panel -- fetches from the working notifications endpoint filtered by source_domain=csi
+function csiSourceIcon(eventType: string): string {
+  const t = (eventType || "").toLowerCase();
+  if (t.includes("reddit")) return "🟠";
+  if (t.includes("threads")) return "🟣";
+  if (t.includes("rss") || t.includes("youtube")) return "🔴";
+  if (t.includes("global") || t.includes("batch") || t.includes("brief")) return "🔵";
+  return "📊";
+}
+
+// CSI Signals Panel — wired to /api/v1/dashboard/csi/digests (actual CSI reports)
 function CSISignalsPanel() {
   const [loading, setLoading] = useState(true);
   const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
-  const [items, setItems] = useState<CSINotificationItem[]>([]);
+  const [items, setItems] = useState<CSIDigestItem[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        `${API_BASE}/api/v1/dashboard/notifications?source_domain=csi&limit=10`,
+        `${API_BASE}/api/v1/dashboard/csi/digests?limit=10`,
         { cache: "no-store" }
       );
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
       const json = await res.json();
-      const notifications: CSINotificationItem[] = Array.isArray(json.notifications)
-        ? json.notifications
-        : [];
-      // Sort most recent first
-      notifications.sort((a, b) => {
-        const ta = a.updated_at || a.created_at || "";
-        const tb = b.updated_at || b.created_at || "";
-        return tb.localeCompare(ta);
-      });
-      setItems(notifications);
+      const digests: CSIDigestItem[] = Array.isArray(json.digests) ? json.digests : [];
+      setItems(digests);
     } catch (err: any) {
       setError(err.message || "Failed to load CSI signals");
     } finally {
@@ -690,49 +695,45 @@ function CSISignalsPanel() {
     );
   }
 
-  const signals = items;
-
   return (
     <div className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <Link href="/dashboard/csi" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <TrendingUp className="h-4 w-4 text-secondary" />
           <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
-        </div>
-        <span className="text-xs text-muted-foreground">{signals.length} signals</span>
+        </Link>
+        <span className="text-xs text-muted-foreground">{items.length} signals</span>
       </div>
 
-      {signals.length === 0 ? (
+      {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
           <p className="text-sm text-muted-foreground">No recent CSI signals</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
-          {signals.map((signal) => (
-            <div
-              key={signal.id}
-              className="rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border"
+          {items.map((digest) => (
+            <Link
+              key={digest.id}
+              href="/dashboard/csi"
+              className="block rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
             >
               <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground leading-snug">
-                  {signal.title || signal.kind || "CSI Signal"}
+                <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
+                  {csiSourceIcon(digest.event_type)} {digest.title || "CSI Report"}
                 </p>
-                {signal.body && (
-                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{signal.body}</p>
+                {digest.summary && (
+                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{digest.summary}</p>
                 )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="rounded bg-secondary/10 px-1.5 py-0.5 text-xs text-secondary">
-                  {signal.kind}
+                  {digest.event_type?.replace(/_/g, " ") || digest.source}
                 </span>
-                {signal.status && (
-                  <span className="text-xs text-muted-foreground">{signal.status}</span>
-                )}
                 <span className="text-xs text-muted-foreground">
-                  {formatTs(signal.updated_at || signal.created_at)}
+                  {formatTs(digest.created_at)}
                 </span>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}
