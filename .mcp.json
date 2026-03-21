@@ -7,6 +7,16 @@
         "agentation-mcp",
         "server"
       ]
+    },
+    "todoist-ai": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@doist/todoist-ai"
+      ],
+      "env": {
+        "TODOIST_API_KEY": "${TODOIST_API_KEY}"
+      }
     }
   }
 }

@@ -80,6 +80,9 @@ DEFAULT_AGENT_LABELS = [
     "agent-ready",
     "needs-review",
     "blocked",
+    "human-only",
+    "escalated",
+    "auto-corrected",
     "sub-agent:research",
     "sub-agent:writer",
     "sub-agent:code",
@@ -287,12 +290,12 @@ class TodoService:
             }
 
     def get_actionable_tasks(self, filter_str: str | None = None) -> list[dict[str, Any]]:
-        """Default filter: '(overdue | today | no date) & @agent-ready & !@blocked'."""
+        """Default filter excludes blocked, human-only, and escalated tasks."""
 
         try:
             filter_value = (
                 (filter_str or "").strip()
-                or "(overdue | today | no date) & @agent-ready & !@blocked"
+                or "(overdue | today | no date) & @agent-ready & !@blocked & !@human-only & !@escalated"
             )
 
             tasks: list[object]
@@ -423,6 +426,111 @@ class TodoService:
                     return task_dict
             raise
 
+    # ── Subtask Hierarchy Methods ──────────────────────────────────────────────
+
+    def create_subtask(
+        self,
+        parent_id: str,
+        content: str,
+        description: str = "",
+        priority: str = "low",
+        labels: list[str] | None = None,
+        due_string: str | None = None,
+        sub_agent: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a subtask under an existing parent (master) task.
+
+        Uses Todoist's native ``parent_id`` to build the hierarchy.
+        The subtask inherits the parent's project automatically.
+        """
+        return self.create_task(
+            content=content,
+            description=description,
+            priority=priority,
+            section="background",
+            labels=labels,
+            due_string=due_string,
+            sub_agent=sub_agent,
+            parent_id=parent_id,
+            project_key="default",
+        )
+
+    def get_subtasks(self, parent_id: str) -> list[dict[str, Any]]:
+        """Retrieve all direct subtasks of a parent task.
+
+        Uses the Todoist ``GET /tasks?parent_id=X`` filter.
+        """
+        try:
+            tasks = _collect_items(self.api.get_tasks(parent_id=parent_id))
+            return [self._task_to_dict(task) for task in tasks]
+        except Exception:
+            return []
+
+    def reparent_task(self, task_id: str, new_parent_id: str | None) -> bool:
+        """Move a task to a different parent (or make it a root task if None).
+
+        Uses the Todoist ``POST /tasks/{id}/move`` endpoint.
+        """
+        try:
+            self.api.move_task(task_id=task_id, parent_id=new_parent_id)
+            return True
+        except Exception:
+            # Fallback: some SDK versions may not have move_task directly.
+            # Try via update_task which the sync API sometimes allows.
+            try:
+                self.api.update_task(task_id=task_id, parent_id=new_parent_id)
+                return True
+            except Exception:
+                return False
+
+    def find_or_create_master_task(
+        self,
+        master_key: str,
+        content: str,
+        *,
+        project_key: str = "immediate",
+        section: str = "immediate",
+        description: str = "",
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Find an existing master task by a ``ua_master_key`` marker in its description,
+        or create one if it doesn't exist.
+
+        Returns the master task dict (always includes ``id``).
+        """
+        marker = f"ua_master_key:{master_key}"
+        taxonomy = self._get_taxonomy_or_bootstrap()
+        project_name = PROJECT_KEY_MAP.get((project_key or "").strip().lower(), UA_PROJECT_IMMEDIATE)
+        project_id = taxonomy.project_ids.get(project_name, taxonomy.agent_project_id)
+
+        # Search existing tasks for the marker
+        try:
+            all_tasks = self.get_all_tasks(project_id=project_id)
+            for task in all_tasks:
+                desc = str(task.get("description") or "")
+                if marker in desc:
+                    return task
+        except Exception:
+            pass
+
+        # Not found — create the master task
+        full_description = description.rstrip()
+        if marker not in full_description:
+            full_description = (full_description + f"\n\n{marker}").strip()
+
+        task_labels = set(labels or [])
+        task_labels.add("agent-ready")
+        task_labels.add("master-task")
+
+        return self.create_task(
+            content=content,
+            description=full_description,
+            priority="medium",
+            section=section,
+            labels=sorted(task_labels),
+            project_key=project_key,
+        )
+
     def create_personal_task(
         self,
         content: str,
@@ -548,6 +656,142 @@ class TodoService:
             add={"needs-review"},
             comment=f"**Needs review:** {result_summary}",
         )
+
+    def mark_human_only(self, task_id: str, reason: str = "") -> bool:
+        """Restrict task to human-only. Agents will skip it."""
+        comment = f"**Human-only:** {reason}" if reason else "**Human-only:** Reserved for Kevin"
+        return self._swap_labels(
+            task_id,
+            remove={"agent-ready"},
+            add={"human-only"},
+            comment=comment,
+        )
+
+    def release_to_agents(self, task_id: str) -> bool:
+        """Remove human-only restriction and make task agent-ready again."""
+        return self._swap_labels(
+            task_id,
+            remove={"human-only"},
+            add={"agent-ready"},
+            comment="**Released:** Task returned to agent pool",
+        )
+
+    # ── Escalation Loop ────────────────────────────────────────────────────
+
+    def escalate_task(
+        self,
+        task_id: str,
+        reason: str,
+        context: str = "",
+        issue_pattern: str = "",
+        *,
+        db_conn: Any = None,
+    ) -> bool:
+        """Escalate a task to human-in-the-loop.
+
+        Removes agent-ready, adds escalated label, logs to Todoist comment
+        and optionally to the task_escalations SQLite table for memory.
+        """
+        ok = self._swap_labels(
+            task_id,
+            remove={"agent-ready"},
+            add={"escalated"},
+            comment=(
+                f"**Escalated to human:**\n"
+                f"**Reason:** {reason}\n"
+                f"**Pattern:** {issue_pattern or 'unclassified'}\n"
+                + (f"**Context:** {context[:500]}" if context else "")
+            ),
+        )
+        if ok and db_conn is not None:
+            try:
+                _ensure_escalation_schema(db_conn)
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                db_conn.execute(
+                    """
+                    INSERT INTO task_escalations
+                        (task_id, todoist_task_id, issue_pattern,
+                         escalation_reason, context, escalated_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'open')
+                    """,
+                    (task_id, task_id, issue_pattern or "unclassified",
+                     reason, context[:2000], now),
+                )
+                db_conn.commit()
+            except Exception:
+                pass  # best-effort
+        return ok
+
+    def resolve_escalation(
+        self,
+        task_id: str,
+        resolution: str,
+        guidance: str = "",
+        *,
+        db_conn: Any = None,
+        resolved_by: str = "human",
+    ) -> bool:
+        """Resolve an escalated task and persist the resolution for future memory.
+
+        Restores agent-ready, removes escalated label, and logs the resolution
+        so agents can self-correct next time.
+        """
+        ok = self._swap_labels(
+            task_id,
+            remove={"escalated"},
+            add={"agent-ready"},
+            comment=(
+                f"**Escalation resolved ({resolved_by}):**\n"
+                f"**Resolution:** {resolution}\n"
+                + (f"**Guidance for future:** {guidance}" if guidance else "")
+            ),
+        )
+        if ok and db_conn is not None:
+            try:
+                _ensure_escalation_schema(db_conn)
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                db_conn.execute(
+                    """
+                    UPDATE task_escalations
+                    SET resolution = ?, resolved_by = ?, resolved_at = ?, status = 'resolved'
+                    WHERE task_id = ? AND status = 'open'
+                    """,
+                    (f"{resolution}\n---\n{guidance}".strip(), resolved_by, now, task_id),
+                )
+                db_conn.commit()
+            except Exception:
+                pass  # best-effort
+        return ok
+
+    @staticmethod
+    def check_escalation_memory(
+        issue_pattern: str,
+        *,
+        db_conn: Any,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Search past escalation resolutions for similar issues.
+
+        Returns resolved escalations matching the pattern so agents can
+        self-correct without human help.
+        """
+        try:
+            _ensure_escalation_schema(db_conn)
+            rows = db_conn.execute(
+                """
+                SELECT issue_pattern, escalation_reason, resolution, resolved_by,
+                       escalated_at, resolved_at
+                FROM task_escalations
+                WHERE status = 'resolved'
+                  AND issue_pattern = ?
+                ORDER BY resolved_at DESC
+                LIMIT ?
+                """,
+                (issue_pattern, max(1, limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
 
     def heartbeat_summary(self) -> dict[str, Any]:
         """Deterministic summary for heartbeat integration. Never raises."""
@@ -869,6 +1113,8 @@ def _apply_local_filter(rows: list[dict[str, Any]], filter_value: str) -> list[d
     wants_agent_ready = "@agent-ready" in q
     wants_blocked = "@blocked" in q and "!@blocked" not in q
     excludes_blocked = "!@blocked" in q
+    excludes_human_only = "!@human-only" in q
+    excludes_escalated = "!@escalated" in q
     wants_due_window = any(token in q for token in ("overdue", "today", "no date"))
 
     if wants_agent_ready:
@@ -877,10 +1123,43 @@ def _apply_local_filter(rows: list[dict[str, Any]], filter_value: str) -> list[d
         out = [row for row in out if "blocked" in (row.get("labels") or [])]
     if excludes_blocked:
         out = [row for row in out if "blocked" not in (row.get("labels") or [])]
+    if excludes_human_only:
+        out = [row for row in out if "human-only" not in (row.get("labels") or [])]
+    if excludes_escalated:
+        out = [row for row in out if "escalated" not in (row.get("labels") or [])]
     if wants_due_window:
         out = [row for row in out if _matches_due_window(row)]
 
     return out
+
+
+# ── Escalation Schema ─────────────────────────────────────────────────────
+
+_ESCALATION_SCHEMA_SQL = """\
+CREATE TABLE IF NOT EXISTS task_escalations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    todoist_task_id TEXT NOT NULL DEFAULT '',
+    issue_pattern TEXT NOT NULL DEFAULT 'unclassified',
+    escalation_reason TEXT NOT NULL,
+    context TEXT NOT NULL DEFAULT '',
+    resolution TEXT NOT NULL DEFAULT '',
+    resolved_by TEXT NOT NULL DEFAULT '',
+    escalated_at TEXT NOT NULL,
+    resolved_at TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open'
+);
+CREATE INDEX IF NOT EXISTS idx_task_escalations_pattern
+    ON task_escalations(issue_pattern, status);
+CREATE INDEX IF NOT EXISTS idx_task_escalations_task_id
+    ON task_escalations(task_id);
+"""
+
+
+def _ensure_escalation_schema(conn: Any) -> None:
+    """Idempotently create the task_escalations table."""
+    conn.executescript(_ESCALATION_SCHEMA_SQL)
+    conn.commit()
 
 
 def _matches_due_window(row: dict[str, Any]) -> bool:

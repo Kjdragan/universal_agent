@@ -1,0 +1,188 @@
+name: OpenClaw Release Sync
+
+on:
+  schedule:
+    # Twice weekly: Tuesday 10:13 UTC and Friday 10:13 UTC
+    # (~5:13 AM CDT — off-peak minute to reduce GHA scheduling delay)
+    - cron: '13 10 * * 2,5'
+  workflow_dispatch:
+    inputs:
+      force_rescan:
+        description: 'Re-scan all recent releases regardless of state (default: false)'
+        required: false
+        default: 'false'
+      max_releases:
+        description: 'Maximum number of releases to process (default: 5)'
+        required: false
+        default: '5'
+
+jobs:
+  openclaw-release-sync:
+    name: OpenClaw Release Scanner & Sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install project dependencies
+        run: uv sync --frozen --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
+
+      # ── Stage 1: Scan OpenClaw releases ──
+      - name: "Stage 1 — Scan OpenClaw Releases"
+        id: scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_RESCAN: ${{ github.event.inputs.force_rescan || 'false' }}
+          MAX_RELEASES: ${{ github.event.inputs.max_releases || '5' }}
+        run: |
+          echo "Scanning OpenClaw releases..."
+          ARGS=""
+          if [ "${FORCE_RESCAN}" = "true" ]; then
+            ARGS="${ARGS} --force-rescan"
+          fi
+          ARGS="${ARGS} --max-releases ${MAX_RELEASES}"
+
+          set +e
+          uv run --no-sync python src/universal_agent/scripts/openclaw_release_scanner.py ${ARGS}
+          EXIT_CODE=$?
+          set -e
+
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          REPORT_DATE=$(date -u +%Y-%m-%d)
+          echo "report_date=${REPORT_DATE}" >> "$GITHUB_OUTPUT"
+          echo "report_dir=artifacts/openclaw-sync/${REPORT_DATE}" >> "$GITHUB_OUTPUT"
+
+          if [ "${EXIT_CODE}" -eq 0 ]; then
+            echo "✅ No new OpenClaw releases found."
+          else
+            echo "🆕 New OpenClaw releases detected — reports generated."
+          fi
+
+      - name: Verify report files were produced
+        if: steps.scan.outputs.exit_code != '0'
+        run: |
+          REPORT_DIR="${{ steps.scan.outputs.report_dir }}"
+          echo "Checking for reports in ${REPORT_DIR}..."
+          if [ ! -f "${REPORT_DIR}/release_report.json" ]; then
+            echo "::error::release_report.json was not produced!"
+            exit 1
+          fi
+          if [ ! -f "${REPORT_DIR}/RELEASE_REPORT.md" ]; then
+            echo "::error::RELEASE_REPORT.md was not produced!"
+            exit 1
+          fi
+          echo "✅ Both report files confirmed present."
+          echo "--- Report summary ---"
+          python3 -c "
+          import json
+          r = json.load(open('${REPORT_DIR}/release_report.json'))
+          print(f\"New releases: {r['new_releases_count']}\")
+          for rel in r['releases']:
+              print(f\"  {rel['tag']}: {rel.get('total_files_changed', 0)} files changed\")
+          "
+
+      - name: Upload release report artifact
+        if: always() && steps.scan.outputs.exit_code != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-release-report-${{ steps.scan.outputs.report_date }}
+          path: artifacts/openclaw-sync/
+          retention-days: 30
+
+      - name: Commit release report and state to develop
+        if: steps.scan.outputs.exit_code != '0'
+        continue-on-error: true
+        run: |
+          REPORT_DIR="${{ steps.scan.outputs.report_dir }}"
+          REPORT_DATE="${{ steps.scan.outputs.report_date }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage report files and state (force because artifacts/ is gitignored)
+          git add -f "${REPORT_DIR}/release_report.json"
+          git add -f "${REPORT_DIR}/RELEASE_REPORT.md"
+          git add -f "artifacts/openclaw-sync/last_checked.json"
+
+          if git diff --cached --quiet; then
+            echo "ℹ️  No changes to commit — reports are identical to last run."
+          else
+            RELEASE_COUNT=$(python3 -c "import json; r = json.load(open('${REPORT_DIR}/release_report.json')); print(r['new_releases_count'])")
+            COMMIT_MSG="chore(openclaw-sync): release report ${REPORT_DATE} — ${RELEASE_COUNT} new releases [auto]"
+            git commit -m "${COMMIT_MSG}"
+            git push origin develop
+            echo "✅ Release report committed and pushed to develop."
+          fi
+
+      - name: Summarize in Job Summary
+        if: always()
+        run: |
+          REPORT_DIR="${{ steps.scan.outputs.report_dir }}"
+          if [ -f "${REPORT_DIR}/RELEASE_REPORT.md" ]; then
+            echo "## 🔍 OpenClaw Release Report" >> "$GITHUB_STEP_SUMMARY"
+            cat "${REPORT_DIR}/RELEASE_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ✅ No New Releases" >> "$GITHUB_STEP_SUMMARY"
+            echo "No new OpenClaw releases detected since last check." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ── Stage 2: Dispatch sync analysis VP mission on VPS ──
+      - name: "Stage 2 — Connect to Tailscale"
+        if: steps.scan.outputs.exit_code != '0'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: gha-openclaw-sync-${{ github.run_id }}
+
+      - name: "Stage 2 — Dispatch OpenClaw Sync Analysis Mission"
+        if: steps.scan.outputs.exit_code != '0'
+        env:
+          SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          echo "🔄 Stage 2: Dispatching OpenClaw sync analysis mission to VPS..."
+
+          # Configure SSH key
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Copy release report to VPS
+          REPORT_DIR="${{ steps.scan.outputs.report_dir }}"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$SSH_USER@$SSH_HOST" "mkdir -p /opt/universal_agent/${REPORT_DIR}" || true
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${REPORT_DIR}/release_report.json" \
+            "$SSH_USER@$SSH_HOST:/opt/universal_agent/${REPORT_DIR}/" || true
+
+          # Run Stage 2 sync agent on VPS
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /opt/universal_agent && PYTHONPATH=src ./.venv/bin/python3 -m universal_agent.scripts.openclaw_sync_agent" \
+            2>&1 | tee stage2_output.log
+
+          STAGE2_EXIT=$?
+          if [ "${STAGE2_EXIT}" -eq 0 ]; then
+            echo "✅ Stage 2 complete — sync analysis mission dispatched"
+            echo "### 🤖 Stage 2: Sync Analysis Mission Dispatched" >> "$GITHUB_STEP_SUMMARY"
+            tail -5 stage2_output.log >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ Stage 2 dispatch failed (exit ${STAGE2_EXIT})"
+            echo "### ⚠️ Stage 2: Dispatch Failed" >> "$GITHUB_STEP_SUMMARY"
+            tail -10 stage2_output.log >> "$GITHUB_STEP_SUMMARY"
+          fi

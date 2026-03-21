@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-19
+**Last updated:** 2026-03-21
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -9,6 +9,15 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 - All documentation MUST be located strictly within the `docs/` directory.
 - Always check this index to update existing documents before creating new ones.
 - **Rule:** If you create a new documentation file, you MUST log it and link it in this file and in `docs/README.md`.
+
+## Subsystems (02_Subsystems/)
+
+| Doc | Subject |
+|-----|---------| 
+| Heartbeat_Service.md | **Canonical source of truth** — heartbeat cycle, scheduling, JSON findings contract, 3-layer repair pipeline, mediation flow, implementation map |
+| Memory_System.md | Tiered memory & auto-flush |
+| Durable_Execution.md | Resilience features |
+| URW_Orchestration.md | Multi-phase tasks |
 
 ## Architecture (01_Architecture/)
 
@@ -51,6 +60,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 97 | Infisical CLI Reference & Lessons Learned |
 | 98 | Agent Skills Directory (`.agents/skills/`) |
 | 99 | Documentation Drift Maintenance Pipeline
+| 100 | OpenClaw Release Sync Pipeline
 
 ## CSI Subsystem (04_CSI/)
 

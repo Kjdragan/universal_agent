@@ -70,6 +70,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Daily Autonomous Briefing Reliability and Input Diagnostics (2026-02-26)](03_Operations/78_Daily_Autonomous_Briefing_Reliability_And_Input_Diagnostics_2026-02-26.md)**: Root-cause analysis and hardening changes that prevent empty/ambiguous briefings after resets and upstream ingest failures.
 - **[Agent Skills Directory (2026-03-17)](03_Operations/98_Agent_Skills_Directory.md)**: Documentation for the `.agents/skills/` directory containing clean-code, agentmail, skill-judge, systematic-debugging, and vp-orchestration skills.
 - **[Documentation Drift Maintenance Pipeline (2026-03-19)](03_Operations/99_Documentation_Drift_Maintenance_Pipeline.md)**: Canonical reference for the automated documentation maintenance system — Stage 1 drift auditor, Stage 2 maintenance agent, VP mission dispatch, issue batching, and verify-before-fix rules.
+- **[OpenClaw Release Sync Pipeline (2026-03-20)](03_Operations/100_OpenClaw_Release_Sync_Pipeline.md)**: Biweekly automated pipeline — Stage 1 release scanner fetches OpenClaw releases, Stage 2 VP sync agent analyzes features for adoption. Reports saved to `Openclaw Sync Discoveries/`.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

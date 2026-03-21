@@ -168,6 +168,149 @@ function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[
   return { messages: messages.slice(-80), logs: logs.slice(-200) };
 }
 
+// ---------------------------------------------------------------------------
+// trace.json-based rehydration — provides full-detail tool calls & messages
+// ---------------------------------------------------------------------------
+
+type TraceJsonToolCall = {
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  input_size_bytes?: number;
+  time_offset_seconds?: number;
+  iteration?: number;
+};
+
+type TraceJsonToolResult = {
+  tool_use_id?: string;
+  is_error?: boolean | null;
+  content_preview?: string;
+  content_size_bytes?: number;
+  time_offset_seconds?: number;
+};
+
+type TraceJsonIteration = {
+  iteration?: number;
+  duration_seconds?: number;
+  tool_calls?: number;
+  stop_reason?: string;
+  query?: string;
+};
+
+type TraceJsonData = {
+  query?: string;
+  tool_calls?: TraceJsonToolCall[];
+  tool_results?: TraceJsonToolResult[];
+  iterations?: TraceJsonIteration[];
+  start_time?: string;
+  end_time?: string;
+  total_duration_seconds?: number;
+  session_info?: Record<string, unknown>;
+  token_usage?: Record<string, unknown>;
+};
+
+type TraceHydrationResult = {
+  messages: HydratedChatMessage[];
+  logs: HydratedActivityLog[];
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+    time_offset: number;
+    status: "complete" | "error";
+    result?: {
+      tool_use_id: string;
+      is_error: boolean;
+      content_preview: string;
+      content_size: number;
+    };
+  }>;
+};
+
+function extractHistoryFromTraceJson(data: TraceJsonData): TraceHydrationResult {
+  const messages: HydratedChatMessage[] = [];
+  const logs: HydratedActivityLog[] = [];
+  const toolCalls: TraceHydrationResult["toolCalls"] = [];
+
+  // 1. Full user query → chat message
+  const query = String(data.query || "").trim();
+  if (query) {
+    messages.push({ role: "user", content: query });
+  }
+
+  // 2. Build tool_use_id → result lookup
+  const resultsByToolUseId = new Map<string, TraceJsonToolResult>();
+  for (const tr of (data.tool_results || [])) {
+    const tid = String(tr.tool_use_id || "").trim();
+    if (tid) resultsByToolUseId.set(tid, tr);
+  }
+
+  // 3. Process tool calls → structured ToolCall objects
+  for (const tc of (data.tool_calls || [])) {
+    const id = String(tc.id || "").trim();
+    const name = String(tc.name || "unknown_tool").trim();
+    const input = (tc.input && typeof tc.input === "object") ? tc.input : {};
+    const timeOffset = Number(tc.time_offset_seconds || 0);
+
+    const matchedResult = id ? resultsByToolUseId.get(id) : undefined;
+    const isError = matchedResult?.is_error === true;
+
+    // Unwrap content_preview: trace.json stores it as a Python repr string
+    // e.g. "[{'type': 'text', 'text': '...'}]" — extract the inner text
+    let contentPreview = String(matchedResult?.content_preview || "");
+    const textBlockMatch = contentPreview.match(
+      /\[\{['"]type['"]:\s*['"]text['"],\s*['"]text['"]:\s*['"]((?:.|[\r\n])*)['"]\}\]/
+    );
+    if (textBlockMatch?.[1]) {
+      contentPreview = textBlockMatch[1];
+    }
+
+    const toolCallEntry = {
+      id: id || `rehydrated_tc_${toolCalls.length}`,
+      name,
+      input,
+      time_offset: timeOffset,
+      status: (isError ? "error" : "complete") as "complete" | "error",
+      result: matchedResult
+        ? {
+            tool_use_id: id,
+            is_error: isError,
+            content_preview: contentPreview,
+            content_size: Number(matchedResult.content_size_bytes || contentPreview.length),
+          }
+        : undefined,
+    };
+    toolCalls.push(toolCallEntry);
+  }
+
+  // 4. Iteration summaries → activity logs
+  for (const iter of (data.iterations || [])) {
+    const iterNum = Number(iter.iteration || 0);
+    const duration = Number(iter.duration_seconds || 0);
+    const tcCount = Number(iter.tool_calls || 0);
+    const stopReason = String(iter.stop_reason || "complete").trim();
+    logs.push({
+      message: `Iteration ${iterNum} ${stopReason} — ${tcCount} tool call${tcCount !== 1 ? "s" : ""}, ${duration.toFixed(1)}s`,
+      level: "INFO",
+      prefix: "rehydrated",
+      event_kind: "iteration_summary",
+    });
+  }
+
+  // 5. Session summary log
+  const totalDuration = Number(data.total_duration_seconds || 0);
+  if (totalDuration > 0 || toolCalls.length > 0) {
+    logs.push({
+      message: `Session completed — ${toolCalls.length} tool calls, ${totalDuration.toFixed(1)}s total`,
+      level: "INFO",
+      prefix: "rehydrated",
+      event_kind: "session_summary",
+    });
+  }
+
+  return { messages, logs, toolCalls };
+}
+
 function vpIdFromObserverSession(sessionId: string): string {
   const sid = String(sessionId || "").trim();
   if (!sid) return "";
@@ -1525,23 +1668,87 @@ function ChatInterface() {
           } else {
             raw = await response.text();
           }
-          const { messages, logs } = extractHistoryFromRunLog(raw);
-          if (!cancelled && messages.length > 0 && store.messages.length === 0) {
-            for (const msg of messages) {
-              store.addMessage({
-                role: msg.role,
-                content: msg.content,
-                time_offset: 0,
-                is_complete: true,
-              });
+
+          // ── Try trace.json for full-detail rehydration ──
+          let usedTraceJson = false;
+          if (!cancelled && !isVpObserverSession) {
+            try {
+              const traceUrl = isVpObserverSession && vpWorkspaceRel
+                ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/trace.json`)}`
+                : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/trace.json`;
+              const traceResp = await fetch(traceUrl, { cache: "no-store" });
+              if (traceResp.ok) {
+                const traceData = await traceResp.json() as TraceJsonData;
+                const traceResult = extractHistoryFromTraceJson(traceData);
+
+                // Populate chat messages from trace.json (full query text)
+                if (traceResult.messages.length > 0 && store.messages.length === 0) {
+                  for (const msg of traceResult.messages) {
+                    store.addMessage({
+                      role: msg.role,
+                      content: msg.content,
+                      time_offset: 0,
+                      is_complete: true,
+                    });
+                  }
+                  hydratedMessageCount += traceResult.messages.length;
+                }
+
+                // Populate structured tool calls (rich ToolRow rendering)
+                if (traceResult.toolCalls.length > 0 && store.toolCalls.length === 0) {
+                  for (const tc of traceResult.toolCalls) {
+                    store.addToolCall({
+                      id: tc.id,
+                      name: tc.name,
+                      input: tc.input,
+                      time_offset: tc.time_offset,
+                      status: tc.status,
+                    });
+                    if (tc.result) {
+                      store.updateToolCall(tc.id, {
+                        result: tc.result,
+                        status: tc.status,
+                      });
+                    }
+                  }
+                }
+
+                // Populate iteration/session summary logs
+                if (traceResult.logs.length > 0) {
+                  for (const log of traceResult.logs) {
+                    store.addLog(log);
+                  }
+                  hydratedLogCount += traceResult.logs.length;
+                }
+
+                usedTraceJson = true;
+              }
+            } catch (traceErr) {
+              // trace.json not available or parse error — fall through to run.log
+              console.debug("trace.json hydration skipped:", traceErr);
             }
-            hydratedMessageCount += messages.length;
           }
-          if (!cancelled && logs.length > 0 && store.logs.length === 0) {
-            for (const log of logs) {
-              store.addLog(log);
+
+          // ── Fallback: run.log abbreviated hydration ──
+          if (!usedTraceJson) {
+            const { messages, logs } = extractHistoryFromRunLog(raw);
+            if (!cancelled && messages.length > 0 && store.messages.length === 0) {
+              for (const msg of messages) {
+                store.addMessage({
+                  role: msg.role,
+                  content: msg.content,
+                  time_offset: 0,
+                  is_complete: true,
+                });
+              }
+              hydratedMessageCount += messages.length;
             }
-            hydratedLogCount += logs.length;
+            if (!cancelled && logs.length > 0 && store.logs.length === 0) {
+              for (const log of logs) {
+                store.addLog(log);
+              }
+              hydratedLogCount += logs.length;
+            }
           }
         } else if (response.status !== 404) {
           // Non-404 failures indicate a connectivity/proxy issue

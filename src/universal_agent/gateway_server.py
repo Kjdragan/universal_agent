@@ -144,6 +144,7 @@ from universal_agent.session_policy import (
     update_session_policy,
 )
 from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
 from universal_agent.signals_ingest import (
     extract_valid_events,
@@ -15396,6 +15397,63 @@ async def dashboard_todolist_delete_completed(task_id: str):
     return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_PARKED}
 
 
+@app.get("/api/v1/dashboard/todolist/email-tasks")
+async def dashboard_todolist_email_tasks(limit: int = 50):
+    """Return all email-originated tasks with their thread context."""
+    try:
+        from universal_agent.services.email_task_bridge import EmailTaskBridge, ensure_email_task_schema
+
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                ensure_email_task_schema(conn)
+                rows = conn.execute(
+                    """
+                    SELECT m.*, t.title, t.status AS task_status, t.priority,
+                           t.description, t.updated_at AS task_updated_at,
+                           t.agent_ready, t.score
+                    FROM email_task_mappings m
+                    LEFT JOIN task_hub_items t ON t.task_id = m.task_id
+                    WHERE m.status = 'active'
+                    ORDER BY m.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (max(1, min(int(limit), 200)),),
+                ).fetchall()
+                items = []
+                for row in rows:
+                    r = dict(row)
+                    todoist_id = str(r.get("todoist_task_id") or "").strip()
+                    items.append({
+                        "thread_id": str(r.get("thread_id") or ""),
+                        "task_id": str(r.get("task_id") or ""),
+                        "todoist_task_id": todoist_id,
+                        "todoist_href": (
+                            f"https://app.todoist.com/app/task/{todoist_id}"
+                            if todoist_id else ""
+                        ),
+                        "subject": str(r.get("subject") or ""),
+                        "sender_email": str(r.get("sender_email") or ""),
+                        "message_count": int(r.get("message_count") or 1),
+                        "status": str(r.get("status") or "active"),
+                        "task_status": str(r.get("task_status") or ""),
+                        "priority": int(r.get("priority") or 1),
+                        "title": str(r.get("title") or ""),
+                        "description": str(r.get("description") or "")[:500],
+                        "agent_ready": bool(r.get("agent_ready")),
+                        "score": float(r.get("score") or 0.0),
+                        "created_at": str(r.get("created_at") or ""),
+                        "updated_at": str(r.get("updated_at") or ""),
+                        "task_updated_at": str(r.get("task_updated_at") or ""),
+                    })
+                return {"status": "ok", "items": items, "total": len(items)}
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.warning("Email tasks endpoint error: %s", exc)
+        return {"status": "ok", "items": [], "total": 0, "error": str(exc)}
+
+
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/history")
 async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
     with _activity_store_lock:
@@ -18359,12 +18417,15 @@ def _heartbeat_findings_from_artifacts(
     findings: Optional[dict[str, Any]] = None
     if findings_path and findings_path.exists():
         try:
-            loaded = json.loads(findings_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
+            raw_text = findings_path.read_text(encoding="utf-8")
+            loaded = extract_json_payload(raw_text, model=HeartbeatFindings)
+            if isinstance(loaded, HeartbeatFindings):
+                findings = loaded.model_dump()
+            elif isinstance(loaded, dict):
                 findings = loaded
             else:
                 parse_error = "heartbeat findings artifact is not a JSON object"
-        except Exception as exc:
+        except (ValueError, Exception) as exc:
             parse_error = f"heartbeat findings artifact parse failed: {exc}"
     else:
         parse_error = "heartbeat findings artifact missing"

@@ -14,6 +14,8 @@ from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent import task_hub
+from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 import shutil
 
 
@@ -1961,6 +1963,36 @@ class HeartbeatService:
                 _findings_filename in str(p)
                 for p in (write_paths + work_product_paths)
             )
+            if _findings_written:
+                # ── Post-write validation: repair & re-serialize agent JSON ──
+                try:
+                    _wp_dir = Path(session.workspace_dir) / "work_products"
+                    _agent_path = _wp_dir / _findings_filename
+                    if _agent_path.exists():
+                        _raw = _agent_path.read_text(encoding="utf-8")
+                        _validated = extract_json_payload(_raw, model=HeartbeatFindings)
+                        if isinstance(_validated, HeartbeatFindings):
+                            _clean = _validated.model_dump()
+                        elif isinstance(_validated, dict):
+                            _clean = _validated
+                        else:
+                            _clean = None
+                        if _clean is not None:
+                            _agent_path.write_text(
+                                json.dumps(_clean, indent=2, default=str),
+                                encoding="utf-8",
+                            )
+                            logger.debug(
+                                "Post-write validation repaired findings for %s",
+                                session.session_id,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "Post-write findings validation failed for %s: %s",
+                        session.session_id,
+                        exc,
+                    )
+
             if not _findings_written and not ok_only and not should_skip_agent_run:
                 try:
                     _wp_dir = Path(session.workspace_dir) / "work_products"

@@ -228,6 +228,10 @@ class AgentMailService:
         self._notification_sink = notification_sink
         self._trusted_ingress_fn = trusted_ingress_fn
 
+        # Email-to-task bridge (lazy init, created when first needed)
+        self._email_task_bridge: Any = None
+        self._email_task_bridge_initialized = False
+
         # SDK client (lazy init)
         self._client: Any = None
         self._inbox_id: str = ""
@@ -829,6 +833,17 @@ class AgentMailService:
                     session_key=session_key,
                     action_payload=action_payload,
                 )
+
+                # ── Email-to-Task Bridge: materialize as trackable task ──
+                bridge_result = self._materialize_email_task(
+                    thread_id=thread_id,
+                    message_id=message_id,
+                    sender_email=sender_email,
+                    subject=subject,
+                    reply_text=reply_text,
+                    session_key=session_key,
+                )
+
                 # No automatic ack reply — Kevin trusts Simone is working
                 # on the email and only expects a meaningful reply when done.
                 self._emit_notification(
@@ -842,6 +857,7 @@ class AgentMailService:
                         "queue_id": queue_id,
                         "sender_email": sender_email,
                         "subject": subject,
+                        "email_task_id": bridge_result.get("task_id", "") if bridge_result else "",
                     },
                 )
                 self._queue_wakeup.set()
@@ -873,6 +889,80 @@ class AgentMailService:
             if message_id and claimed_message:
                 self._release_seen_message_id(message_id)
             logger.exception("📧 Error handling inbound email: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Email-to-Task Bridge
+    # ------------------------------------------------------------------
+
+    def _get_email_task_bridge(self) -> Any:
+        """Lazily initialize the EmailTaskBridge."""
+        if self._email_task_bridge_initialized:
+            return self._email_task_bridge
+        self._email_task_bridge_initialized = True
+        try:
+            from universal_agent.services.email_task_bridge import EmailTaskBridge
+
+            conn = connect_runtime_db(get_activity_db_path())
+            conn.row_factory = sqlite3.Row
+
+            # Try to get the Todoist service (optional — best-effort)
+            todoist_svc = None
+            try:
+                todoist_token = (
+                    (os.getenv("TODOIST_API_TOKEN") or "").strip()
+                    or (os.getenv("TODOIST_API_KEY") or "").strip()
+                )
+                if todoist_token:
+                    from universal_agent.services.todoist_service import TodoService
+                    todoist_svc = TodoService(api_token=todoist_token)
+            except Exception as t_exc:
+                logger.debug("📧→📋 Todoist service unavailable for email tasks: %s", t_exc)
+
+            self._email_task_bridge = EmailTaskBridge(
+                db_conn=conn,
+                todoist_service=todoist_svc,
+            )
+            logger.info("📧→📋 EmailTaskBridge initialized successfully")
+        except Exception as exc:
+            logger.warning("📧→📋 EmailTaskBridge initialization failed: %s", exc)
+            self._email_task_bridge = None
+        return self._email_task_bridge
+
+    def _materialize_email_task(
+        self,
+        *,
+        thread_id: str,
+        message_id: str,
+        sender_email: str,
+        subject: str,
+        reply_text: str,
+        session_key: str,
+    ) -> Optional[dict[str, Any]]:
+        """Materialize an inbound trusted email as a tracked task.
+
+        This creates/updates a Task Hub entry, Todoist task, and HEARTBEAT.md
+        entry so the email conversation becomes visible on the To-Do List
+        dashboard and gets picked up by the heartbeat scheduler.
+        Returns the bridge result dict, or None if the bridge is unavailable.
+        """
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return None
+        try:
+            return bridge.materialize(
+                thread_id=thread_id,
+                message_id=message_id,
+                sender_email=sender_email,
+                subject=subject,
+                reply_text=reply_text,
+                session_key=session_key,
+            )
+        except Exception as exc:
+            logger.warning(
+                "📧→📋 Email task materialization failed thread=%s: %s",
+                thread_id, exc,
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Trusted inbox queue
