@@ -1,0 +1,42 @@
+{
+  "report_date": "2026-03-21",
+  "generated_at": "2026-03-21T17:01:59.378113+00:00",
+  "total_issues": 3,
+  "issues_by_severity": {
+    "P0": 0,
+    "P1": 0,
+    "P2": 3
+  },
+  "git_summary": {
+    "files_changed": 111,
+    "areas_affected": [
+      ".github/workflows/deploy",
+      ".agents/",
+      "src/universal_agent/gateway_server",
+      "src/universal_agent/heartbeat"
+    ]
+  },
+  "issues": [
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'agents' appears 4 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'agents' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "code_doc_drift",
+      "severity": "P2",
+      "file": "src/universal_agent/gateway_server",
+      "description": "Code in `src/universal_agent/gateway_server` changed (4 files) but related doc areas (02_Flows/, 04_API_Reference/) were not updated",
+      "suggested_action": "Review docs in 02_Flows/, 04_API_Reference/ to verify they still accurately describe the code in src/universal_agent/gateway_server"
+    },
+    {
+      "category": "code_doc_drift",
+      "severity": "P2",
+      "file": ".agents/",
+      "description": "Code in `.agents/` changed (1 files) but related doc areas (AGENTS.md) were not updated",
+      "suggested_action": "Review docs in AGENTS.md to verify they still accurately describe the code in .agents/"
+    }
+  ]
+}
