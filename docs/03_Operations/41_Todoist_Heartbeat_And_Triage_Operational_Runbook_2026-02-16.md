@@ -222,10 +222,10 @@ The `@doist/todoist-ai` MCP server (v8.4.0) is available as an agent-facing tool
 
 ---
 
-## Scope reminders
+## Scope and status
 
-Not included in this runbook's implementation scope:
-
-1. ~~automatic brainstorm promotion~~ — now partially covered by autonomous execution framework,
-2. automatic work-thread creation from approved ideas,
-3. heartbeat/cron self-maintenance automation for CODIE.
+| Item | Status |
+| --- | --- |
+| Automatic brainstorm promotion | ✅ **Done** — agents can pick up and execute `agent-ready` tasks; Simone can triage brainstorm items during heartbeat |
+| Automatic work-thread creation from approved ideas | 🔮 **Future** — approved brainstorm items still need manual `POST /api/v1/ops/work-threads`; candidate for Simone heartbeat enhancement |
+| Heartbeat self-tuning (schedule, skip-path thresholds) | 🔮 **Future** — nice-to-have; heartbeat already runs on a stable cron cycle |
