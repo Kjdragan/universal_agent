@@ -908,13 +908,8 @@ class AgentMailService:
             # Try to get the Todoist service (optional — best-effort)
             todoist_svc = None
             try:
-                todoist_token = (
-                    (os.getenv("TODOIST_API_TOKEN") or "").strip()
-                    or (os.getenv("TODOIST_API_KEY") or "").strip()
-                )
-                if todoist_token:
-                    from universal_agent.services.todoist_service import TodoService
-                    todoist_svc = TodoService(api_token=todoist_token)
+                from universal_agent.services.todoist_service import TodoService
+                todoist_svc = TodoService()  # Uses env var from infisical run wrapper
             except Exception as t_exc:
                 logger.debug("📧→📋 Todoist service unavailable for email tasks: %s", t_exc)
 
