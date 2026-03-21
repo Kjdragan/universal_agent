@@ -222,11 +222,13 @@ class AgentMailService:
         dispatch_with_admission_fn: Optional[DispatchAdmissionFn] = None,
         notification_sink: Optional[NotifyFn] = None,
         trusted_ingress_fn: Optional[TrustedIngressFn] = None,
+        priority_dispatch_fn: Optional[Any] = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._dispatch_with_admission_fn = dispatch_with_admission_fn
         self._notification_sink = notification_sink
         self._trusted_ingress_fn = trusted_ingress_fn
+        self._priority_dispatch_fn = priority_dispatch_fn
 
         # Email-to-task bridge (lazy init, created when first needed)
         self._email_task_bridge: Any = None
@@ -844,6 +846,21 @@ class AgentMailService:
                     session_key=session_key,
                 )
 
+                # ── Priority-aware dispatch ──
+                # Classify the email and dispatch immediately for P0/P1
+                self._try_priority_dispatch(
+                    sender_trusted=True,
+                    is_reply=bool(reply_text),
+                    thread_message_count=int(
+                        bridge_result.get("message_count", 1) if bridge_result else 1
+                    ),
+                    subject=subject,
+                    body_snippet=(reply_text or text_body or "")[:200],
+                    task_id=bridge_result.get("task_id", "") if bridge_result else "",
+                    thread_id=thread_id,
+                    sender_email=sender_email,
+                )
+
                 # No automatic ack reply — Kevin trusts Simone is working
                 # on the email and only expects a meaningful reply when done.
                 self._emit_notification(
@@ -958,6 +975,72 @@ class AgentMailService:
                 thread_id, exc,
             )
             return None
+
+    def _try_priority_dispatch(
+        self,
+        *,
+        sender_trusted: bool,
+        is_reply: bool,
+        thread_message_count: int,
+        subject: str,
+        body_snippet: str,
+        task_id: str,
+        thread_id: str,
+        sender_email: str,
+    ) -> None:
+        """Classify email priority and dispatch immediately for P0/P1.
+
+        For P0 (immediate) and P1 (soon) priorities, triggers a heartbeat
+        wake so Simone picks up the task without waiting for the next
+        scheduled heartbeat cycle.
+        """
+        try:
+            from universal_agent.services.priority_classifier import (
+                classify_email_priority,
+                TaskPriority,
+            )
+
+            decision = classify_email_priority(
+                sender_trusted=sender_trusted,
+                is_reply=is_reply,
+                thread_message_count=thread_message_count,
+                subject=subject,
+                body_snippet=body_snippet,
+            )
+
+            logger.info(
+                "📧⚡ Priority classified: %s (%s) strategy=%s subject='%s'",
+                decision.priority.value,
+                decision.reason,
+                decision.strategy,
+                subject[:60],
+            )
+
+            # P0/P1: trigger immediate dispatch via callback
+            if decision.priority in (TaskPriority.P0_IMMEDIATE, TaskPriority.P1_SOON):
+                if self._priority_dispatch_fn:
+                    dispatch_result = self._priority_dispatch_fn(
+                        task_id=task_id,
+                        thread_id=thread_id,
+                        sender_email=sender_email,
+                        priority=decision.priority.value,
+                        reason=decision.reason,
+                    )
+                    logger.info(
+                        "📧⚡ Immediate dispatch result: %s",
+                        dispatch_result,
+                    )
+                else:
+                    logger.debug(
+                        "📧⚡ Priority dispatch fn not wired — "
+                        "falling back to heartbeat for %s task",
+                        decision.priority.value,
+                    )
+            # P2/P3: no immediate dispatch, heartbeat will pick it up
+
+        except Exception as exc:
+            # Never fail the email flow due to priority classification
+            logger.debug("📧⚡ Priority dispatch failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Trusted inbox queue

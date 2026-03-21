@@ -11186,11 +11186,129 @@ async def lifespan(app: FastAPI):
             result["heartbeat_wake"] = wake_result
         return result
 
+    def _priority_dispatch_for_email(
+        *,
+        task_id: str = "",
+        thread_id: str = "",
+        sender_email: str = "",
+        priority: str = "p1",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Priority-aware immediate dispatch for inbound emails.
+
+        Called by AgentMailService after priority classification.
+        For P0/P1: wakes heartbeat immediately so Simone picks up the task.
+        If all agents are busy, emits a notification with what they're working on.
+        """
+        if not _heartbeat_service:
+            return {"dispatched": False, "reason": "heartbeat_unavailable"}
+
+        target_sessions: set[str] = {str(sid) for sid in _sessions.keys() if str(sid)}
+        for session in get_gateway().list_sessions():
+            sid = str(session.session_id or "").strip()
+            if sid:
+                target_sessions.add(sid)
+
+        if not target_sessions:
+            return {"dispatched": False, "reason": "no_sessions"}
+
+        # Check which sessions are idle vs busy
+        busy = _heartbeat_service.busy_sessions
+        idle_sessions = [sid for sid in target_sessions if sid not in busy]
+        all_busy = len(idle_sessions) == 0
+
+        if all_busy:
+            # All agents busy — send a notification with ETA
+            busy_info = _get_busy_agent_summary()
+            _add_notification(
+                kind="agent_busy_signal",
+                title=f"Agent Busy — queued {priority.upper()} email task",
+                message=(
+                    f"Received {priority.upper()} email from {sender_email}. "
+                    f"All agents currently busy: {busy_info}. "
+                    f"Task queued and will be dispatched as soon as an agent is free."
+                ),
+                severity="info" if priority != "p0" else "warning",
+                requires_action=False,
+                metadata={
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "priority": priority,
+                    "reason": reason,
+                    "busy_sessions": len(busy),
+                    "total_sessions": len(target_sessions),
+                },
+            )
+            # Still queue heartbeat wake so it fires as soon as the agent finishes
+            for sid in sorted(target_sessions)[:1]:  # Wake one session
+                _heartbeat_service.request_heartbeat_now(
+                    sid, reason=f"priority_email_{priority}:{reason}"
+                )
+            return {
+                "dispatched": True,
+                "reason": "queued_busy",
+                "priority": priority,
+                "busy_count": len(busy),
+            }
+
+        # Idle agent(s) available — wake them immediately
+        wake_reason = f"priority_email_{priority}:{reason}"
+        woke_count = 0
+        for sid in sorted(idle_sessions)[:1]:  # Wake one idle session
+            try:
+                _heartbeat_service.register_session(
+                    next(s for s in get_gateway().list_sessions() if s.session_id == sid)
+                )
+            except Exception:
+                pass
+            _heartbeat_service.request_heartbeat_now(sid, reason=wake_reason)
+            woke_count += 1
+
+        _add_notification(
+            kind="priority_email_dispatched",
+            title=f"Priority Email Dispatched ({priority.upper()})",
+            message=(
+                f"Immediately dispatched {priority.upper()} email from "
+                f"{sender_email}: {reason}"
+            ),
+            severity="info",
+            requires_action=False,
+            metadata={
+                "task_id": task_id,
+                "thread_id": thread_id,
+                "priority": priority,
+                "reason": reason,
+                "woke_count": woke_count,
+            },
+        )
+        return {
+            "dispatched": True,
+            "reason": "immediate_wake",
+            "priority": priority,
+            "woke_count": woke_count,
+        }
+
+    def _get_busy_agent_summary() -> str:
+        """Summarize what busy agents are working on for notifications."""
+        if not _heartbeat_service:
+            return "unknown"
+        parts: list[str] = []
+        for sid in _heartbeat_service.busy_sessions:
+            session = _sessions.get(sid)
+            if session:
+                runtime = session.metadata.get("runtime", {}) if isinstance(session.metadata, dict) else {}
+                task = runtime.get("current_task_summary", "") if isinstance(runtime, dict) else ""
+                parts.append(f"{sid}({task[:30]})" if task else str(sid))
+            else:
+                parts.append(str(sid))
+        return ", ".join(parts[:3]) or "background tasks"
+
     _agentmail_service = AgentMailService(
         dispatch_fn=_agentmail_dispatch_fn,
         dispatch_with_admission_fn=_agentmail_dispatch_with_admission_fn,
         notification_sink=_hook_notification_sink,
         trusted_ingress_fn=_maybe_trigger_heartbeat_from_agentmail_action,
+        priority_dispatch_fn=_priority_dispatch_for_email,
     )
     try:
         await _agentmail_service.startup()
@@ -11210,6 +11328,20 @@ async def lifespan(app: FastAPI):
     if _scheduling_projection.enabled:
         _scheduling_projection.seed_from_runtime()
         logger.info("📈 Scheduling projection enabled (event-driven chron projection path)")
+
+    # --- Idle Agent Dispatch Loop (Phase D — proactive task processing) ---
+    try:
+        from universal_agent.services.idle_dispatch_loop import idle_dispatch_loop as _idle_loop
+        _spawn_background_task(
+            _idle_loop(
+                heartbeat_service=_heartbeat_service,
+                get_sessions_fn=lambda: dict(_sessions),
+                notification_sink=_hook_notification_sink,
+            )
+        )
+        logger.info("🔄 Idle dispatch loop background task started")
+    except Exception:
+        logger.exception("Failed starting idle dispatch loop")
 
     if _vp_event_bridge_enabled:
         _vp_event_bridge_prime_cursor_to_latest()
