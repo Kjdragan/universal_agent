@@ -1,7 +1,7 @@
 # 16 — Concurrency Conflict: Root Cause, Parallel Execution Model, and VP General Interim Path
 
-**Date**: 2026-03-02  
-**Status**: DECISION REQUIRED — choose whether to pursue VP General interim path and/or schedule full refactor  
+**Date**: 2026-03-02
+**Status**: HISTORICAL — VP General interim path was implemented (agent now named **ATLAS**). See [VP Agent Identity & Prompt Architecture](101_VP_Agent_Identity_And_Prompt_Architecture_2026-03-21.md) for current VP architecture. The full `SessionContext` refactor remains a future milestone.
 **Related doc**: `15_Execution_Lock_Concurrency_Architecture_2026-03-02.md`
 
 ---

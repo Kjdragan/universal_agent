@@ -610,3 +610,166 @@ def build_system_prompt(
     )
 
     return "\n\n".join(sections)
+
+
+def _load_mission_briefing(workspace_path: str, *, max_chars: int = 4000) -> str:
+    """Load a mission-specific briefing if present in the workspace.
+
+    VP workers receive mission briefings written by the dispatcher into
+    MISSION_BRIEFING.md.  This is additive context — injected between the
+    soul and capabilities sections.
+    """
+    try:
+        briefing_path = os.path.join(workspace_path, "MISSION_BRIEFING.md")
+        content = _load_file(briefing_path)
+        if not content:
+            return ""
+        if len(content) > max_chars:
+            content = content[: max_chars - 3] + "..."
+        return (
+            "## 🎯 MISSION BRIEFING\n"
+            "The following mission-specific context was provided by the dispatcher.\n"
+            "Follow these instructions for this mission.\n\n"
+            f"{content}"
+        )
+    except Exception:
+        return ""
+
+
+def build_vp_system_prompt(
+    *,
+    workspace_path: str,
+    soul_context: str = "",
+    memory_context: str = "",
+    capabilities_content: str = "",
+    skills_xml: str = "",
+) -> str:
+    """Build a streamlined system prompt for VP workers.
+
+    This is a trimmed version of build_system_prompt() that:
+    - Keeps: soul, temporal, workspace key files, recovery handoff,
+      capabilities, memory, architecture basics, capability domains,
+      autonomous behavior, memory management, skills
+    - Strips: coordinator role (§2), showcase (§8), search hygiene (§9),
+      data flow (§10), workbench restrictions (§11), artifact output (§12),
+      email routing (§13), task queue (§14b), report delegation (§15),
+      system config delegation (§16)
+    - Adds: mission briefing injection from MISSION_BRIEFING.md
+    """
+    today_str, tomorrow_str, _ = _resolve_temporal_context()
+
+    sections: list[str] = []
+
+    # ── 0. SOUL / IDENTITY ────────────────────────────────────────────
+    if soul_context:
+        sections.append(soul_context)
+
+    # ── 0b. MISSION BRIEFING (VP-specific) ────────────────────────────
+    briefing = _load_mission_briefing(workspace_path)
+    if briefing:
+        sections.append(briefing)
+
+    # ── 0c. WORKSPACE KEY FILES ───────────────────────────────────────
+    key_file_block = _load_workspace_key_file_block(workspace_path)
+    if key_file_block:
+        sections.append(key_file_block)
+
+    # ── 1. TEMPORAL CONTEXT ───────────────────────────────────────────
+    sections.append(
+        f"Current Date: {today_str}\n"
+        f"Tomorrow is: {tomorrow_str}\n\n"
+        "TEMPORAL CONTEXT: Use the current date above as authoritative. "
+        "Do not treat post-training dates as hallucinations if they are supported by tool results."
+    )
+
+    # ── 2. RECOVERY HANDOFF (if present) ──────────────────────────────
+    handoff_block = _load_recovery_handoff(workspace_path)
+    if handoff_block:
+        sections.append(handoff_block)
+
+    # ── 3. CAPABILITIES REGISTRY (dynamic, trimmed header) ────────────
+    if capabilities_content:
+        sections.append(capabilities_content)
+
+    # ── 4. MEMORY CONTEXT ─────────────────────────────────────────────
+    if memory_context:
+        sections.append(
+            "## 🧠 MEMORY CONTEXT\n"
+            "Below are your persistent memory blocks — facts, preferences, and prior context.\n\n"
+            f"{memory_context}"
+        )
+
+    # ── 5. ARCHITECTURE & TOOL USAGE (simplified for VPs) ─────────────
+    sections.append(
+        "## ARCHITECTURE & TOOL USAGE\n"
+        "You interact with external tools via MCP tool calls.\n"
+        "**Tool Namespaces:**\n"
+        "- `mcp__composio__*` - Remote tools (Slack, YouTube, GitHub, CodeInterpreter, etc.)\n"
+        "- `mcp__gws__*` - Google Workspace tools (Gmail, Calendar, Drive, Sheets, Docs)\n"
+        "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, Todoist, etc.)\n"
+        "- `memory_search` / `memory_get` - Memory retrieval tools\n"
+        "- `Task` - Delegate to specialist sub-agents\n\n"
+        "**Reliability note:** If you issue multiple tool calls in the same message, they are siblings.\n"
+        "If one fails, others may be auto-failed. Prefer sequential tool calls for error-prone steps."
+    )
+
+    # ── 6. CAPABILITY DOMAINS ─────────────────────────────────────────
+    sections.append(
+        "## CAPABILITY DOMAINS\n"
+        "You have access to multiple capability domains:\n"
+        "- **Intelligence**: Composio search, URL/PDF extraction, X trends, Reddit trending\n"
+        "- **Computation**: Local Bash + Python, CodeInterpreter sandbox\n"
+        "- **Media Creation**: Image generation, video creation, Mermaid diagrams\n"
+        "- **Communication**: AgentMail, Gmail (via gws), Slack, Discord\n"
+        "- **Browser Operations**: agent-browser for automation, screenshots, data extraction\n"
+        "- **Engineering**: GitHub API, code analysis, test execution\n"
+        "- **Knowledge Capture**: Notion, Google Docs/Sheets/Drive, memory tools\n"
+        "- **250+ integrations**: Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover more"
+    )
+
+    # ── 7. ZAI VISION ─────────────────────────────────────────────────
+    sections.append(
+        "## 👁️ IMAGE & VIDEO ANALYSIS (ZAI VISION)\n"
+        "Use `mcp__zai_vision__*` tools for image/video analysis. Do NOT try to view images with Read/cat.\n"
+        "Available: image_analysis, extract_text_from_screenshot, diagnose_error_screenshot, "
+        "understand_technical_diagram, analyze_data_visualization, ui_diff_check, video_analysis"
+    )
+
+    # ── 8. AUTONOMOUS BEHAVIOR ────────────────────────────────────────
+    sections.append(
+        "## ⚡ AUTONOMOUS BEHAVIOR\n"
+        "- Proceed immediately with actions without asking for confirmation.\n"
+        "- Complete the full task end-to-end in a single workflow.\n"
+        "- If faced with a choice, choose the most aggressive safe option to maximize results."
+    )
+
+    # ── 9. INFISICAL SECRETS ──────────────────────────────────────────
+    sections.append(
+        "## 🔐 SECRETS (INFISICAL)\n"
+        "Infisical is the single source of truth for secrets. Never hardcode secrets or store them in files.\n"
+        "Use `infisical secrets get KEY --env=production --plain` to retrieve secrets."
+    )
+
+    # ── 10. MEMORY MANAGEMENT ─────────────────────────────────────────
+    sections.append(
+        "## 🧠 MEMORY MANAGEMENT\n"
+        "You have a persistent memory system. Use it actively:\n"
+        "- Read: call `memory_search` at start of complex tasks\n"
+        "- Write: save notable findings to `MEMORY.md` and `memory/YYYY-MM-DD.md`\n"
+        "- Keep entries concise, factual, and deduplicated"
+    )
+
+    # ── 11. SKILLS ────────────────────────────────────────────────────
+    if skills_xml:
+        sections.append(
+            "## 🎯 SKILLS\n"
+            "Skills are pre-defined workflows for complex tasks. Check if one exists before building from scratch.\n"
+            f"{skills_xml}"
+        )
+
+    # ── 12. WORKSPACE CONTEXT ─────────────────────────────────────────
+    sections.append(
+        f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}"
+    )
+
+    return "\n\n".join(sections)

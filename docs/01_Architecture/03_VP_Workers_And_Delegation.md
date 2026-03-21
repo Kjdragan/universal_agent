@@ -1,17 +1,19 @@
 # 03. VP Workers and Delegation Architecture
 
-**Last verified against source code:** 2026-03-06
+**Last verified against source code:** 2026-03-21
 
 ## Overview
 
 VP (Virtual Primary) workers are external agent processes that execute delegated work on behalf of Simone (the primary agent). This architecture separates the control plane (Simone decides what to delegate) from the execution plane (VP workers do the work).
 
+Each VP worker has its own **identity (soul)**, **streamlined system prompt**, and **mission briefing** injection. For VP identity, prompt architecture, and soul details, see [VP Agent Identity & Prompt Architecture](../03_Operations/101_VP_Agent_Identity_And_Prompt_Architecture_2026-03-21.md).
+
 ## Two VP Lanes
 
-| VP ID | Service | Purpose |
-|-------|---------|---------|
-| `vp.general.primary` | `universal-agent-vp-worker@vp.general.primary` | General tasks — research, content, analysis |
-| `vp.coder.primary` | `universal-agent-vp-worker@vp.coder.primary` | Coding tasks — implementation, refactoring |
+| VP ID | Agent Name | Service | Purpose |
+|-------|-----------|---------|----------|
+| `vp.coder.primary` | **CODIE** | `universal-agent-vp-worker@vp.coder.primary` | Code implementation, refactoring, doc maintenance |
+| `vp.general.primary` | **ATLAS** | `universal-agent-vp-worker@vp.general.primary` | Research, analysis, content creation, system ops |
 
 Each VP worker runs as a separate systemd service with its own Claude Agent SDK session.
 
@@ -141,11 +143,11 @@ The inbound bridge routes missions by `mission_kind`:
 | `system:resume_factory` | Handled inline — resumes bridge consumption |
 | Unknown kinds | Default to `vp.general.primary` |
 
-## CODIE (Coder VP Runtime)
+## CODIE (Coder VP — `vp.coder.primary`)
 
-**Primary implementation:** `vp/coder_runtime.py`
+**Primary implementation:** `vp/coder_runtime.py` | **Soul:** `prompt_assets/CODIE_SOUL.md`
 
-CODIE is the specialized coder VP with additional runtime management:
+CODIE is the autonomous coding VP agent with additional runtime management:
 
 - **Session isolation** — dedicated SQLite DB (`coder_vp_state.db`) separate from Simone's runtime
 - **Lease management** — lease heartbeat and release to prevent stale locks

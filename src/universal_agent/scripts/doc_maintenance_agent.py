@@ -250,6 +250,22 @@ def _dispatch_via_gateway(
         "priority": 100,
         "idempotency_key": idempotency_key,
         "execution_mode": "sdk",
+        "system_prompt_injection": (
+            "## Documentation Maintenance Mission\n\n"
+            "You are operating as a **Documentation Maintenance Agent** for this mission.\n\n"
+            "### Your Task\n"
+            "Verify and fix documentation drift issues identified by an automated audit.\n"
+            "Each issue includes a file path, line reference, and suspected staleness.\n\n"
+            "### Verification Rules\n"
+            "1. **Read the source** before making changes — some 'drift' may be a false positive.\n"
+            "2. If the documentation is actually correct, skip the issue and note it as verified.\n"
+            "3. Prefer updating docs to match code, not code to match docs.\n"
+            "4. Keep changes minimal — fix the drift, don't rewrite the document.\n\n"
+            "### Commit Discipline\n"
+            "- Create a `docs/` branch for your changes.\n"
+            "- Make atomic commits per file or logical change.\n"
+            "- Do NOT push — the build system handles push/PR/merge automatically.\n"
+        ),
     }).encode("utf-8")
 
     req = urllib.request.Request(

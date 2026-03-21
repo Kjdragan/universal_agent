@@ -143,6 +143,21 @@ YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS = (
     "temporarily unavailable",
     "server overloaded",
     "overloaded",
+    # ── LLM / model-provider transient errors ──
+    "model overloaded",
+    "model_overloaded",
+    "request failed",
+    "request_failed",
+    "invalid response",
+    "invalid_response",
+    "api error",
+    "api_error",
+    "internal server error",
+    "internal_server_error",
+    "500",
+    "server error",
+    "iteration_status:error",
+    "iteration_status:failed",
 )
 
 
@@ -488,6 +503,10 @@ class HooksService:
             300,
             self._safe_int_env("UA_HOOKS_STARTUP_RECOVERY_COOLDOWN_SECONDS", 1800),
         )
+        self._startup_warmup_delay_seconds = max(
+            0,
+            self._safe_int_env("UA_HOOKS_STARTUP_WARMUP_DELAY_SECONDS", 15),
+        )
         # Video-level dispatch dedup: prevents the same YouTube video from being
         # processed concurrently by multiple dispatch sources (e.g. playlist watcher
         # + any other webhook source).  Key = video_id, value = start timestamp.
@@ -614,6 +633,7 @@ class HooksService:
             "startup_recovery_max_sessions": int(self._startup_recovery_max_sessions),
             "startup_recovery_min_age_seconds": int(self._startup_recovery_min_age_seconds),
             "startup_recovery_cooldown_seconds": int(self._startup_recovery_cooldown_seconds),
+            "startup_warmup_delay_seconds": int(self._startup_warmup_delay_seconds),
         }
 
     @staticmethod
@@ -961,6 +981,13 @@ class HooksService:
     async def recover_interrupted_youtube_sessions(self, workspace_root: Path) -> int:
         if not self._startup_recovery_enabled:
             return 0
+        # Warmup delay: give LLM adapters time to initialise after deploy/restart
+        if self._startup_warmup_delay_seconds > 0:
+            logger.info(
+                "Startup recovery: waiting %ds for LLM adapters to warm up",
+                self._startup_warmup_delay_seconds,
+            )
+            await asyncio.sleep(self._startup_warmup_delay_seconds)
         root = Path(str(workspace_root or "")).expanduser().resolve()
         if not root.exists() or not root.is_dir():
             return 0
@@ -3531,6 +3558,10 @@ class HooksService:
                     if isinstance(data.get("tool_calls"), int):
                         tool_calls = int(data.get("tool_calls"))
                     iteration_status = str(data.get("status") or "").strip().lower()
+                    # R2: Log non-success iteration status to run.log for debugging
+                    if iteration_status and iteration_status not in {"complete", "completed", "success"}:
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] \u26a0\ufe0f ITERATION STATUS: {iteration_status}")
                 elif event_name == "status" and isinstance(getattr(event, "data", None), dict):
                     status_msg = str((event.data or {}).get("message") or "").strip()
                     if status_msg:
@@ -3541,11 +3572,28 @@ class HooksService:
                 try:
                     _rl_ts_end = time.strftime("%H:%M:%S", time.gmtime())
                     _rl_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_calls} tool calls) ===\n")
+                    # R3: Structured warning for 0-tool-call completions
+                    if tool_calls == 0 and (time.time() - started) < 30:
+                        _zero_tc_dur = round(time.time() - started, 1)
+                        _rl_handle.write(
+                            f"[{_rl_ts_end}] \u26a0\ufe0f ZERO TOOL CALLS in {_zero_tc_dur}s — "
+                            f"status={iteration_status or 'unknown'} "
+                            f"error={reported_error_message or 'none'}\n"
+                        )
                     _rl_handle.close()
                 except Exception:
                     pass
         if duration_seconds <= 0:
             duration_seconds = round(max(0.0, time.time() - started), 3)
+        # R3: Structured logging for 0-tool-call completions
+        if tool_calls == 0 and duration_seconds < 30:
+            logger.warning(
+                "Hook dispatch completed with zero tool calls in %.1fs "
+                "iteration_status=%s reported_error=%s",
+                duration_seconds,
+                iteration_status or "unknown",
+                reported_error_message or "none",
+            )
         text_window = "\n".join(text_tail).lower()
         if "request timed out" in text_window or "execution timed out" in text_window:
             reported_timeout_message = "agent_response_timeout_text"

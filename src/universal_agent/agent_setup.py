@@ -468,13 +468,35 @@ class AgentSetup:
         except Exception:
             capabilities_content = "Capabilities registry not found."
 
-        return build_system_prompt(
+        # ── VP detection: use streamlined prompt for VP workers ────────
+        # VP workers receive their soul (CODIE/ATLAS) seeded into the workspace.
+        # Detect by checking the soul content for VP identity markers.
+        is_vp_worker = any(
+            marker in (self._soul_context or "")
+            for marker in ("CODIE", "ATLAS", "VP Coder Agent", "VP General Agent")
+        )
+
+        if is_vp_worker:
+            from universal_agent.prompt_builder import build_vp_system_prompt
+            prompt = build_vp_system_prompt(
+                workspace_path=workspace_path,
+                soul_context=self._soul_context,
+                memory_context=self._memory_context,
+                capabilities_content=capabilities_content,
+                skills_xml=self._skills_xml,
+            )
+            self._log(f"📦 VP system prompt built ({len(prompt)} chars, ~{len(prompt)//4} tokens)")
+            return prompt
+
+        prompt = build_system_prompt(
             workspace_path=workspace_path,
             soul_context=self._soul_context,
             memory_context=self._memory_context,
             capabilities_content=capabilities_content,
             skills_xml=self._skills_xml,
         )
+        self._log(f"📦 System prompt built ({len(prompt)} chars, ~{len(prompt)//4} tokens)")
+        return prompt
 
     def _build_mcp_servers(self) -> dict:
         """Build MCP servers configuration."""

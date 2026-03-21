@@ -20,6 +20,7 @@ class VpProfile:
     runtime_id: str
     client_kind: str
     workspace_root: Path
+    soul_file: str = "SOUL.md"
     cli_capable: bool = True
 
 
@@ -35,16 +36,18 @@ def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str
                 configured_root=vp_coder_workspace_root(default=""),
                 fallback=(base / "vp_coder_primary_external"),
             ),
+            soul_file="CODIE_SOUL.md",
         ),
         "vp.general.primary": VpProfile(
             vp_id="vp.general.primary",
-            display_name="GENERALIST",
+            display_name="ATLAS",
             runtime_id="runtime.general.external",
             client_kind="claude_generalist",
             workspace_root=_resolve_workspace_root(
                 configured_root=vp_general_workspace_root(default=""),
                 fallback=(base / "vp_general_primary_external"),
             ),
+            soul_file="ATLAS_SOUL.md",
         ),
     }
 

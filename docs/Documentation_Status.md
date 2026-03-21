@@ -27,7 +27,7 @@ Written from source code review — these describe the system as it actually exi
 |-----|---------|
 | 01 | System Architecture Overview — component map, services, data stores, deployment topology |
 | 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
-| 03 | VP Workers & Delegation — mission lifecycle, cross-machine delegation, factory heartbeat |
+| 03 | VP Workers & Delegation — VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat |
 | 04 | Dual Factory and Capability Expansion Brainstorm |
 
 ## Root Architecture Docs
@@ -61,6 +61,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 98 | Agent Skills Directory (`.agents/skills/`) |
 | 99 | Documentation Drift Maintenance Pipeline
 | 100 | OpenClaw Release Sync Pipeline
+| 101 | VP Agent Identity & Prompt Architecture — CODIE/ATLAS souls, VP system prompt, mission briefing injection
 
 ## CSI Subsystem (04_CSI/)
 

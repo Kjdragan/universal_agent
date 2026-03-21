@@ -25,7 +25,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 - **[System Architecture Overview](01_Architecture/01_System_Architecture_Overview.md)**: Component map, services, data stores, deployment topology.
 - **[Gateway, Sessions & Execution](01_Architecture/02_Gateway_Sessions_And_Execution.md)**: Session model, auth surfaces, execution engine, background services.
-- **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: Mission lifecycle, cross-machine delegation, factory heartbeat.
+- **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat.
 - **[Dual Factory and Capability Expansion Brainstorm](01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md)**: Factory expansion concepts.
 - **[Agent Architecture: agent_core.py vs main.py](001_AGENT_ARCHITECTURE.md)**: Entry point comparison, AgentSetup synchronization, URW session management.
 - **[SDK Permissions, Hooks & Subagents](002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md)**: Permission model, hooks architecture, subagent patterns.
@@ -71,6 +71,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Agent Skills Directory (2026-03-17)](03_Operations/98_Agent_Skills_Directory.md)**: Documentation for the `.agents/skills/` directory containing clean-code, agentmail, skill-judge, systematic-debugging, and vp-orchestration skills.
 - **[Documentation Drift Maintenance Pipeline (2026-03-19)](03_Operations/99_Documentation_Drift_Maintenance_Pipeline.md)**: Canonical reference for the automated documentation maintenance system — Stage 1 drift auditor, Stage 2 maintenance agent, VP mission dispatch, issue batching, and verify-before-fix rules.
 - **[OpenClaw Release Sync Pipeline (2026-03-20)](03_Operations/100_OpenClaw_Release_Sync_Pipeline.md)**: Biweekly automated pipeline — Stage 1 release scanner fetches OpenClaw releases, Stage 2 VP sync agent analyzes features for adoption. Reports saved to `Openclaw Sync Discoveries/`.
+- **[VP Agent Identity & Prompt Architecture (2026-03-21)](03_Operations/101_VP_Agent_Identity_And_Prompt_Architecture_2026-03-21.md)**: Canonical reference for VP agent identities (CODIE & ATLAS), soul files, streamlined VP system prompt, mission briefing injection, sub-agent capability, and prompt size logging.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

@@ -279,6 +279,8 @@ class VpWorkerLoop:
         mission = get_vp_mission(self.conn, mission_id)
         if mission is None:
             return
+        # Convert sqlite3.Row → dict so .get() works in soul seeding, briefing, etc.
+        mission = dict(mission)
         source_context = _mission_source_context(mission)
         if int(mission["cancel_requested"] or 0) == 1:
             finalize_vp_mission(self.conn, mission_id, "cancelled")
@@ -303,6 +305,18 @@ class VpWorkerLoop:
             vp_id=self.vp_id,
             worker_id=self.worker_id,
             lease_ttl_seconds=self.lease_ttl_seconds,
+        )
+
+        # ── VP identity & mission briefing ────────────────────────────
+        self._seed_vp_soul(mission)
+        self._write_mission_briefing(mission)
+
+        logger.info(
+            "VP mission starting: vp_id=%s soul=%s mission_id=%s mission_type=%s",
+            self.vp_id,
+            self.profile.soul_file,
+            mission_id,
+            str(mission.get("mission_type") or ""),
         )
 
         client = self._select_client_for_mission(mission)
@@ -418,6 +432,82 @@ class VpWorkerLoop:
             lease_owner=self.worker_id,
             metadata={"client_kind": self.profile.client_kind, "display_name": self.profile.display_name},
         )
+
+    def _seed_vp_soul(self, mission: Any) -> None:
+        """Seed the VP's soul file into the mission workspace.
+
+        agent_setup.py._load_soul_context() checks {workspace_dir}/SOUL.md first,
+        so placing the VP-specific soul there ensures the VP agent gets its own
+        identity instead of Simone's.
+        """
+        try:
+            # Resolve the mission workspace directory (same logic as the client)
+            workspace_dir = self._resolve_mission_workspace(mission)
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+
+            soul_dest = workspace_dir / "SOUL.md"
+            if soul_dest.exists():
+                return  # Don't overwrite an existing soul (may be from a previous run)
+
+            soul_src = Path(__file__).resolve().parents[1] / "prompt_assets" / self.profile.soul_file
+            if soul_src.exists() and soul_src.is_file():
+                content = soul_src.read_text(encoding="utf-8").rstrip()
+                if content:
+                    soul_dest.write_text(content + "\n", encoding="utf-8")
+                    logger.info("Seeded VP soul %s → %s", self.profile.soul_file, soul_dest)
+            else:
+                logger.warning("VP soul file not found: %s", soul_src)
+        except Exception as exc:
+            logger.warning("Failed to seed VP soul for mission: %s", exc)
+
+    def _write_mission_briefing(self, mission: Any) -> None:
+        """Write a mission-specific briefing into the workspace if provided.
+
+        Dispatchers may include a `system_prompt_injection` field in the mission
+        payload to provide task-specific context that gets loaded into the VP's
+        system prompt as a MISSION BRIEFING section.
+        """
+        try:
+            payload_json = mission.get("payload_json") if hasattr(mission, "get") else mission["payload_json"]
+            if isinstance(payload_json, str) and payload_json.strip():
+                payload = json.loads(payload_json)
+            elif isinstance(payload_json, dict):
+                payload = payload_json
+            else:
+                return
+
+            injection = str(payload.get("system_prompt_injection") or "").strip()
+            if not injection:
+                return
+
+            workspace_dir = self._resolve_mission_workspace(mission)
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            briefing_path = workspace_dir / "MISSION_BRIEFING.md"
+            briefing_path.write_text(injection + "\n", encoding="utf-8")
+            logger.info("Wrote mission briefing (%d chars) → %s", len(injection), briefing_path)
+        except Exception as exc:
+            logger.warning("Failed to write mission briefing: %s", exc)
+
+    def _resolve_mission_workspace(self, mission: Any) -> Path:
+        """Resolve the workspace directory for a mission.
+
+        Must match the workspace resolution logic in the VP client (ClaudeCodeClient
+        or ClaudeGeneralistClient) so the soul/briefing land in the same directory
+        that the agent will run in.
+        """
+        mission_id = str(mission.get("mission_id") or mission["mission_id"]).replace("/", "_").replace("..", "_")
+        payload_json = mission.get("payload_json") if hasattr(mission, "get") else mission["payload_json"]
+        if isinstance(payload_json, str) and payload_json.strip():
+            try:
+                payload = json.loads(payload_json)
+                constraints = payload.get("constraints") if isinstance(payload, dict) else {}
+                if isinstance(constraints, dict):
+                    target_path = str(constraints.get("target_path") or "").strip()
+                    if target_path:
+                        return Path(target_path).expanduser().resolve()
+            except Exception:
+                pass
+        return (self.profile.workspace_root / (mission_id or "mission")).resolve()
 
     def _select_client_for_mission(self, mission: Any) -> VpClient:
         """Select SDK or CLI client based on mission payload's execution_mode."""
