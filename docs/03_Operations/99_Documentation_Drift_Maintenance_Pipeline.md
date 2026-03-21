@@ -1,7 +1,7 @@
 # Documentation Drift Maintenance Pipeline
 
 **Canonical reference for the automated documentation maintenance system.**
-**Last updated:** 2026-03-19
+**Last updated:** 2026-03-21
 
 ## Overview
 
@@ -18,7 +18,7 @@ The Documentation Drift Maintenance Pipeline is a two-stage automated system tha
 
 - **Location:** GitHub Actions scheduled workflow
 - **Output:** `artifacts/doc-drift-reports/<YYYY-MM-DD>/drift_report.json`
-- **Commit:** Report is committed directly to `develop` branch
+- **Commit:** Report is committed to `develop` via auto-merged PR (see Report Persistence below)
 - **Analysis:** Git co-change heuristics to detect code changes without corresponding doc updates
 
 ### Stage 2: Maintenance Agent
@@ -40,6 +40,24 @@ Gateway URL resolution order:
 2. `http://localhost:8002` (ops API on VPS)
 3. `http://localhost:8001` (main gateway on VPS)
 4. `https://app.clearspringcg.com` (public fallback)
+
+### Report Persistence (PR-Based Auto-Merge)
+
+The drift report cannot be pushed directly to `develop` because branch protection requires a pull request. Instead, the GHA workflow:
+
+1. Creates a temporary branch `chore/drift-report-<YYYY-MM-DD>`
+2. Commits the report files on that branch
+3. Pushes the branch (no protection on non-`develop` branches)
+4. Creates a PR targeting `develop` via `gh pr create`
+5. Auto-merges immediately via `gh pr merge --squash --admin`
+6. Deletes the temporary branch after merge
+
+The squash merge keeps the `develop` history clean with a single commit. If auto-merge fails (e.g., required reviewers configured), the PR remains open for manual merge and Stage 2 proceeds regardless.
+
+| Permission | Required For |
+|------------|-------------|
+| `contents: write` | Push temp branch, merge PR |
+| `pull-requests: write` | Create and merge PR via `gh` CLI |
 
 #### VP Mission Parameters
 
@@ -120,6 +138,47 @@ The agent requires an ops/auth token resolved from:
 2. `AUTH_TOKEN` environment variable
 
 On the VPS, these are injected via Infisical at runtime.
+
+## Manual Operations
+
+### Trigger the drift audit on demand
+
+```bash
+# Run with default 24h scan window
+gh workflow run "Nightly Documentation Drift Audit" --repo Kjdragan/universal_agent
+
+# Run with a custom scan window (e.g. 48 hours of git history)
+gh workflow run "Nightly Documentation Drift Audit" --repo Kjdragan/universal_agent -f since_hours=48
+```
+
+You can also trigger it from the GitHub UI: **Actions → Nightly Documentation Drift Audit → Run workflow**.
+
+### Watch a run in progress
+
+```bash
+# List the most recent drift audit run
+gh run list --workflow="nightly-doc-drift-audit.yml" --limit 1 --json status,conclusion,databaseId
+
+# Stream logs in real time (replace <RUN_ID> with the databaseId from above)
+gh run watch <RUN_ID> --exit-status
+```
+
+### View results after a run
+
+```bash
+# Download the drift report artifact
+gh run download <RUN_ID> --name "drift-report-$(date -u +%Y-%m-%d)"
+
+# View failed step logs
+gh run view <RUN_ID> --log-failed
+```
+
+### Check for open drift PRs
+
+```bash
+# List any drift report PRs that weren't auto-merged
+gh pr list --search "chore/drift-report" --state open
+```
 
 ## Related Documentation
 

@@ -29,7 +29,7 @@ This is the only supported app deployment path in this repository.
 | `Debug Production Services` | Manual workflow dispatch | Fetch logs and status from production services (gateway, API) for troubleshooting |
 | `Fix Production Repo Directory` | Manual workflow dispatch | Reconstitute git repository in production checkout if `.git` directory is corrupted |
 | `Run Clear Agent Queue` | Manual workflow dispatch | Clear all pending tasks in the agent task hub (staging + production) |
-| `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift where code changes lack corresponding doc updates |
+| `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift. Commits report to `develop` via auto-merged PR, then dispatches VP fix missions to VPS. |
 
 ## Current Targets
 
@@ -274,6 +274,7 @@ Configure these settings in GitHub repository settings.
 - Require branches to be up to date before merging
 - Restrict direct pushes if you want review to be mandatory in practice
 - If `OPENAI_API_KEY` is still missing, this required check will pass in "review skipped" mode rather than enforcing a real Codex review
+- The `Nightly Doc Drift Audit` workflow creates auto-merged PRs (`chore/drift-report-<date>`) using `gh pr merge --squash --admin`. These are automated report commits, not feature changes.
 
 ### `main`
 
