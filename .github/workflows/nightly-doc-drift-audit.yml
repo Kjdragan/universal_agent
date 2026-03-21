@@ -163,7 +163,9 @@ jobs:
         if: steps.audit.outputs.exit_code != '0'
         uses: tailscale/github-action@v4
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci-gha
           hostname: gha-doc-stage2-${{ github.run_id }}
 
       - name: "Stage 2 — Dispatch VP doc-maintenance missions"
