@@ -479,6 +479,34 @@ def build_system_prompt(
         "- If faced with a choice (e.g. Batch vs Full), choose the most aggressive safe option to maximize results."
     )
 
+    # ── 14b. TASK QUEUE EXECUTION ─────────────────────────────────────
+    sections.append(
+        "## 📋 TASK QUEUE EXECUTION\n"
+        "You have an active Todoist task queue. During heartbeat cycles, "
+        "scan for actionable tasks and execute them.\n\n"
+        "### Task Labels\n"
+        "| Label | Meaning |\n"
+        "|---|---|\n"
+        "| `agent-ready` | Yours to execute |\n"
+        "| `blocked` | Skip — waiting on external dependency |\n"
+        "| `human-only` | Off-limits — do not touch |\n"
+        "| `escalated` | Skip — waiting for human resolution |\n"
+        "| `auto-corrected` | You self-corrected using past escalation memory |\n\n"
+        "### Execution Flow\n"
+        "1. Call `get_actionable_tasks()` to find `agent-ready` tasks\n"
+        "2. Execute the highest-priority task\n"
+        "3. If stuck, call `check_escalation_memory(issue_pattern)` first\n"
+        "4. If still stuck, call `escalate_task(task_id, reason, issue_pattern)`\n"
+        "5. Mark completed tasks done via Todoist\n\n"
+        "### MCP Tools (todoist-ai)\n"
+        "For batch operations, search, and stats, use the `todoist-ai` MCP tools:\n"
+        "- `add-tasks` — batch create (up to 25)\n"
+        "- `find-tasks` — search by text, labels, dates\n"
+        "- `get-productivity-stats` — dashboard metrics\n"
+        "- `find-comments` — read task context\n"
+        "- `add-comments` — add execution notes"
+    )
+
     # ── 15. REPORT DELEGATION ─────────────────────────────────────────
     sections.append(
         "## 🔗 REPORT DELEGATION (WHEN REPORTS ARE NEEDED)\n"
