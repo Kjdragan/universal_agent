@@ -119,6 +119,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState("");
   const [ownerId, setOwnerId] = useState("owner_primary");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const sidebarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCorporationNav, setShowCorporationNav] = useState(false);
   const [commandBarVisible, setCommandBarVisible] = useState(false);
   const commandBarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -329,7 +331,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Sidebar Overlay (Mobile) */}
         {isMobileSidebarOpen && (
           <div
@@ -338,12 +340,31 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           />
         )}
 
-        {/* Sidebar */}
+        {/* Desktop hover trigger strip — invisible 16px zone on left edge */}
+        <div
+          className="hidden md:block fixed inset-y-12 left-0 w-4 z-50"
+          onMouseEnter={() => {
+            if (sidebarTimeoutRef.current) clearTimeout(sidebarTimeoutRef.current);
+            setSidebarHovered(true);
+          }}
+        />
+
+        {/* Sidebar — auto-hides on desktop, slides in on hover */}
         <aside
           className={[
-            "fixed inset-y-12 left-0 z-50 flex w-64 flex-col border-r border-border/40 bg-background transition-transform duration-200 md:relative md:inset-0 md:translate-x-0",
+            "fixed inset-y-12 left-0 z-50 flex w-64 flex-col border-r border-border/40 bg-background shadow-2xl transition-transform duration-200",
+            // Mobile: toggle via hamburger
             isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
+            // Desktop: hover-reveal overlay
+            sidebarHovered ? "md:translate-x-0" : "md:-translate-x-full",
           ].join(" ")}
+          onMouseEnter={() => {
+            if (sidebarTimeoutRef.current) clearTimeout(sidebarTimeoutRef.current);
+            setSidebarHovered(true);
+          }}
+          onMouseLeave={() => {
+            sidebarTimeoutRef.current = setTimeout(() => setSidebarHovered(false), 400);
+          }}
         >
           <nav className="flex-1 overflow-y-auto px-3 py-4">
             {NAV_GROUPS.map((group) => {
