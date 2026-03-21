@@ -26,7 +26,7 @@ No new commits are made — just moves the validated staging code to production.
    echo "main:    $(git rev-parse origin/main)"
    ```
 
-   If SHAs match → "Nothing to promote — staging and production are already in sync."
+   If SHAs match → report "Nothing to promote — staging and production are already in sync." and STOP.
 
 ## Promote via GitHub Actions
 
@@ -34,13 +34,14 @@ No new commits are made — just moves the validated staging code to production.
 
    ```bash
    DEVELOP_SHA=$(git rev-parse origin/develop)
+   echo "Promoting SHA: $DEVELOP_SHA"
    gh workflow run "Promote Validated Develop To Main" -f develop_sha=$DEVELOP_SHA
    ```
 
-4. Wait for promotion:
+4. Wait for promotion (check after 5s):
 
    ```bash
-   sleep 10
+   sleep 5
    gh run list --workflow="promote-develop-to-main.yml" --limit 1 --json status,conclusion,databaseId
    gh run watch <RUN_ID> --exit-status
    ```
@@ -50,7 +51,7 @@ No new commits are made — just moves the validated staging code to production.
 5. Wait for production deploy:
 
    ```bash
-   sleep 10
+   sleep 5
    gh run list --workflow="deploy-prod.yml" --limit 1 --json status,conclusion,databaseId
    gh run watch <RUN_ID> --exit-status
    ```
@@ -61,7 +62,12 @@ No new commits are made — just moves the validated staging code to production.
 
 ## Post-flight
 
-7. Confirm you are on `feature/latest2`.
+7. Confirm you are on `feature/latest2`:
+
+   ```bash
+   git branch --show-current
+   ```
+
 8. Report: "✅ Production promoted and deployed (run #NNN)."
 
 ## Rules
