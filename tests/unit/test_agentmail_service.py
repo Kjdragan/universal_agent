@@ -153,6 +153,17 @@ class TestInboxResolution:
     async def test_inbox_id_set(self, service):
         assert service._inbox_id == "simone@testdomain.com"
 
+    @pytest.mark.asyncio
+    async def test_resolves_multiple_configured_addresses(self, monkeypatch, mock_agentmail_client):
+        monkeypatch.setenv("UA_AGENTMAIL_INBOX_ADDRESSES", "simone@testdomain.com,alert@testdomain.com")
+        from universal_agent.services.agentmail_service import AgentMailService
+        svc = AgentMailService()
+        svc._client = mock_agentmail_client
+        await svc._ensure_inbox()
+        assert "simone@testdomain.com" in svc._inbox_ids
+        assert "alert@testdomain.com" in svc._inbox_ids
+        assert svc._inbox_id == "simone@testdomain.com"
+
 
 class TestSendEmail:
     @pytest.mark.asyncio
@@ -313,6 +324,28 @@ class TestTrustedInboundHandling:
         assert "sender_email: kevin.dragan@outlook.com" in dispatch_payload["message"]
         assert "sender_role: trusted_operator" in dispatch_payload["message"]
         assert "sender_trusted: True" in dispatch_payload["message"]
+
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_dispatches_with_receiving_inbox(
+        self, service, mock_agentmail_client
+    ):
+        class _Message:
+            from_ = "Kevin Dragan <kevin.dragan@outlook.com>"
+            subject = "Hello Simone"
+            thread_id = "thd_direct_002"
+            message_id = "msg_direct_002"
+            text = "test inbox"
+            html = ""
+            attachments = []
+            inbox_id = "alert@testdomain.com"
+
+        class _Event:
+            message = _Message()
+            inbox_id = "alert@testdomain.com"
+
+        await service._handle_inbound_email(_Event())
+        dispatch_payload = service._dispatch_fn.await_args.args[0]
+        assert dispatch_payload["receiving_inbox"] == "alert@testdomain.com"
 
     @pytest.mark.asyncio
     async def test_untrusted_inbound_skips_ack(self, service, mock_agentmail_client):
