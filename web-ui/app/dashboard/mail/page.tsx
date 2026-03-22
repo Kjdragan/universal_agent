@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 
@@ -73,6 +74,18 @@ function senderShortName(from: string): string {
   if (!from) return "Unknown";
   const at = from.indexOf("@");
   return at > 0 ? from.substring(0, at) : from;
+}
+
+/** Map known email patterns to avatar image paths */
+function getAvatar(emailOrName: string): { src: string; alt: string } | null {
+  const lower = (emailOrName || "").toLowerCase();
+  if (lower.includes("simone") || lower.includes("oddcity")) {
+    return { src: "/assets/avatars/simone.png", alt: "Simone" };
+  }
+  if (lower.includes("kevin") || lower.includes("kev") || lower.includes("kjdragan")) {
+    return { src: "/assets/avatars/kevin.png", alt: "Kevin" };
+  }
+  return null;
 }
 
 /* ── Design Tokens (Stitch: Kinetic Command Deck) ────────────────── */
@@ -696,22 +709,32 @@ function ThreadRow({
           (e.currentTarget as HTMLElement).style.background = "transparent";
       }}
     >
-      {/* Inbox Badge */}
-      <span
-        style={{
-          fontFamily: TOKENS.fontMono,
-          fontSize: 9,
-          fontWeight: 700,
-          padding: "2px 6px",
-          background: TOKENS.surfaceHigh,
-          color: TOKENS.textSecondary,
-          whiteSpace: "nowrap",
-          marginTop: 2,
-          letterSpacing: "0.05em",
-        }}
-      >
-        {inboxShortName(thread.inbox_id).toUpperCase()}
-      </span>
+      {/* Avatar or Inbox Badge */}
+      {getAvatar(thread.inbox_id) ? (
+        <Image
+          src={getAvatar(thread.inbox_id)!.src}
+          alt={getAvatar(thread.inbox_id)!.alt}
+          width={28}
+          height={28}
+          style={{ borderRadius: 0, objectFit: "cover", flexShrink: 0, marginTop: 2 }}
+        />
+      ) : (
+        <span
+          style={{
+            fontFamily: TOKENS.fontMono,
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "2px 6px",
+            background: TOKENS.surfaceHigh,
+            color: TOKENS.textSecondary,
+            whiteSpace: "nowrap",
+            marginTop: 2,
+            letterSpacing: "0.05em",
+          }}
+        >
+          {inboxShortName(thread.inbox_id).toUpperCase()}
+        </span>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
@@ -854,13 +877,37 @@ function MessageBubble({ message }: { message: Message }) {
       >
         <span
           style={{
-            fontFamily: TOKENS.fontMono,
-            fontSize: 12,
-            fontWeight: 600,
-            color: TOKENS.cyan,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
           }}
         >
-          {senderShortName(message.from)}
+          {getAvatar(message.from) ? (
+            <Image
+              src={getAvatar(message.from)!.src}
+              alt={getAvatar(message.from)!.alt}
+              width={22}
+              height={22}
+              style={{ borderRadius: 0, objectFit: "cover" }}
+            />
+          ) : (
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: 18, color: TOKENS.textMuted }}
+            >
+              person
+            </span>
+          )}
+          <span
+            style={{
+              fontFamily: TOKENS.fontMono,
+              fontSize: 12,
+              fontWeight: 600,
+              color: TOKENS.cyan,
+            }}
+          >
+            {senderShortName(message.from)}
+          </span>
         </span>
         <span
           style={{
