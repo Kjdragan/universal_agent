@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from universal_agent.services.daemon_sessions import DAEMON_SESSION_PREFIX
+
 from universal_agent.gateway import InProcessGateway
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
@@ -80,6 +82,8 @@ class OpsService:
     def _infer_source(self, session_id: str, owner: Optional[str]) -> str:
         sid = session_id.lower()
         owner_norm = (owner or "").lower()
+        if sid.startswith(DAEMON_SESSION_PREFIX):
+            return "daemon"
         if sid.startswith("tg_") or owner_norm.startswith("telegram_"):
             return "telegram"
         if sid.startswith("session_"):
@@ -199,6 +203,51 @@ class OpsService:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
+    @staticmethod
+    def _extract_daemon_agent(session_id: str) -> Optional[str]:
+        """Extract agent name from a daemon workspace directory name.
+
+        ``daemon_simone_20260322_051942_f38ff5bf`` → ``simone``
+        ``daemon_atlas`` → ``atlas``
+        Returns None for non-daemon session IDs.
+        """
+        if not session_id.startswith(DAEMON_SESSION_PREFIX):
+            return None
+        suffix = session_id[len(DAEMON_SESSION_PREFIX):]  # "simone_20260322_..."
+        parts = suffix.split("_", 1)
+        return parts[0].lower() if parts else None
+
+    def _deduplicate_daemon_sessions(
+        self, summaries: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep only the newest daemon workspace per agent.
+
+        When multiple ``daemon_{agent}_*`` workspace directories exist (from
+        server restarts), only the most recently modified one is returned.
+        The rest are silently dropped from the listing.
+        """
+        # Partition into daemon workspaces and everything else
+        daemon_groups: Dict[str, List[Dict[str, Any]]] = {}  # agent -> [summaries]
+        result: List[Dict[str, Any]] = []
+
+        for s in summaries:
+            agent = self._extract_daemon_agent(str(s.get("session_id", "")))
+            if agent:
+                daemon_groups.setdefault(agent, []).append(s)
+            else:
+                result.append(s)
+
+        # For each agent, keep only the newest by last_modified
+        for agent, group in daemon_groups.items():
+            # Sort by mtime descending; pick newest
+            group.sort(
+                key=lambda g: g.get("last_modified") or g.get("created_at") or "",
+                reverse=True,
+            )
+            result.append(group[0])
+
+        return result
+
     def list_sessions(
         self,
         status_filter: str = "all",
@@ -212,6 +261,10 @@ class OpsService:
         session_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         
         summaries = [self._build_session_summary(p) for p in session_dirs]
+
+        # Daemon workspace dedup: multiple daemon_{agent}_* dirs may exist
+        # from server restarts; only keep the newest per agent.
+        summaries = self._deduplicate_daemon_sessions(summaries)
 
         if sdk_session_history_enabled(default=False):
             try:

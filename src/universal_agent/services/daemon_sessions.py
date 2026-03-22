@@ -128,11 +128,59 @@ class DaemonSessionManager:
     def session_ids(self) -> set[str]:
         return set(self._session_ids.values())
 
+    def _cleanup_stale_workspaces(self) -> int:
+        """Archive leftover daemon workspace dirs from previous server runs.
+
+        On restart, old ``daemon_{agent}_{timestamp}_{uuid}`` directories may
+        linger in the workspaces root.  Move them to ``_daemon_archives/``
+        so that ``OpsService.list_sessions()`` doesn't treat them as separate
+        live sessions.
+
+        Returns the number of directories archived.
+        """
+        if not self.workspaces_dir.exists():
+            return 0
+
+        archived = 0
+        for entry in self.workspaces_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            name = entry.name
+            # Match directories like daemon_simone_20260322_051942_f38ff5bf
+            # but NOT the _daemon_archives directory itself or bare daemon_simone
+            if not name.startswith(DAEMON_SESSION_PREFIX):
+                continue
+            if name == "_daemon_archives":
+                continue
+            # Check if it's a timestamped workspace (has underscores beyond
+            # the agent name part) rather than the stable session ID itself
+            # e.g. "daemon_simone" is the stable ID, but
+            #       "daemon_simone_20260322_051942_f38ff5bf" is a workspace dir
+            suffix = name[len(DAEMON_SESSION_PREFIX):]  # "simone_20260322_..."
+            # If the suffix contains an underscore after the agent name,
+            # it's a timestamped workspace dir, not just "daemon_simone"
+            parts = suffix.split("_", 1)
+            agent_candidate = parts[0].lower()
+            if agent_candidate in {a.lower() for a in self.agent_names} and len(parts) > 1:
+                # This is a leftover timestamped workspace — archive it
+                self._archive_workspace(entry)
+                archived += 1
+
+        if archived:
+            logger.info(
+                "🧹 Archived %d stale daemon workspace(s) from previous runs",
+                archived,
+            )
+        return archived
+
     def ensure_daemon_sessions(self) -> list[str]:
         """Create and register daemon sessions for all configured agents.
 
         Returns list of created session IDs.
         """
+        # Clean up leftover workspace dirs from previous server runs first
+        self._cleanup_stale_workspaces()
+
         created: list[str] = []
         for agent_name in self.agent_names:
             session_id = f"{DAEMON_SESSION_PREFIX}{agent_name}"

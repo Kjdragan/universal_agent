@@ -77,7 +77,7 @@ TEXT_EXTENSIONS = (
 )
 _STORAGE_ROOT_SOURCES = {"local", "mirror"}
 _STORAGE_SCOPES = {"workspaces", "artifacts", "vps"}
-_SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_")
+_SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_", "daemon_")
 _PROTECTED_STORAGE_DELETE_SUFFIXES = (".db", ".db-shm", ".db-wal")
 _SYSTEM_SESSION_OWNERS = {
     "webhook",
