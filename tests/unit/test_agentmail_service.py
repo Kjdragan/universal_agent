@@ -974,3 +974,162 @@ class TestPostTriageLifecycle:
         assert notifications[0]["kind"] == "agentmail_processing_failed"
         assert "q2" in notifications[0]["message"]
 
+
+# ── Bounce / Automated Email Filtering ─────────────────────────────────
+
+
+class TestIsAutomatedSender:
+    """Tests for the _is_automated_sender helper."""
+
+    def test_mailer_daemon_detected(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("mailer-daemon@amazonses.com") is True
+
+    def test_postmaster_detected(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("postmaster@mail.example.com") is True
+
+    def test_noreply_detected(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("noreply@github.com") is True
+        assert _is_automated_sender("no-reply@service.example.com") is True
+
+    def test_bounce_detected(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("bounce@ses.amazonses.com") is True
+
+    def test_dsn_subject_detected(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender(
+            "someone@example.com", "Delivery Status Notification (Failure)"
+        ) is True
+
+    def test_undeliverable_subject_detected(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("system@mail.com", "Undeliverable: Test email") is True
+
+    def test_legitimate_sender_not_filtered(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("kevin.dragan@outlook.com", "Hello Simone") is False
+
+    def test_empty_not_filtered(self):
+        from universal_agent.services.agentmail_service import _is_automated_sender
+
+        assert _is_automated_sender("", "") is False
+
+
+class TestBounceFilteringInHandleInbound:
+    """Integration tests: bounce emails are suppressed in _handle_inbound_email."""
+
+    @pytest.mark.asyncio
+    async def test_bounce_email_skipped_no_notification(self, service):
+        """mailer-daemon DSN should be silently dropped — no notification, no dispatch."""
+
+        class _Message:
+            from_ = "mailer-daemon@amazonses.com"
+            subject = "Delivery Status Notification (Failure)"
+            thread_id = "thd_bounce_001"
+            message_id = "msg_bounce_001"
+            text = "This is a delivery failure report."
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+
+        # Dispatch should NOT have been called
+        service._dispatch_fn.assert_not_awaited()
+
+        # No "agentmail_received" notification should have been emitted
+        for call in service._notification_sink.call_args_list:
+            payload = call[0][0]
+            assert payload["kind"] != "agentmail_received", (
+                "Bounce email should not emit agentmail_received notification"
+            )
+
+    @pytest.mark.asyncio
+    async def test_noreply_email_skipped(self, service):
+        """noreply sender should be filtered out."""
+
+        class _Message:
+            from_ = "noreply@github.com"
+            subject = "You have a new notification"
+            thread_id = "thd_noreply_001"
+            message_id = "msg_noreply_001"
+            text = "GitHub notification"
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+        service._dispatch_fn.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dsn_subject_filtered_even_normal_sender(self, service):
+        """Emails with DSN-style subjects should be filtered regardless of sender."""
+
+        class _Message:
+            from_ = "system@mail.example.com"
+            subject = "Mail Delivery Failed: returning message to sender"
+            thread_id = "thd_dsn_001"
+            message_id = "msg_dsn_001"
+            text = "Your email could not be delivered."
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+        service._dispatch_fn.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_legitimate_email_not_filtered(self, service):
+        """Normal emails should pass through to dispatch as before."""
+
+        class _Message:
+            from_ = "colleague@company.com"
+            subject = "Project update"
+            thread_id = "thd_legit_001"
+            message_id = "msg_legit_001"
+            text = "Here is the update."
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+        service._dispatch_fn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bounce_claims_seen_message_id(self, service):
+        """Suppressed bounce emails should still claim the message_id to prevent re-processing."""
+
+        class _Message:
+            from_ = "mailer-daemon@amazonses.com"
+            subject = "Delivery Status Notification (Failure)"
+            thread_id = "thd_bounce_seen"
+            message_id = "msg_bounce_seen_001"
+            text = "Bounce."
+            html = ""
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service._handle_inbound_email(_Event())
+        assert service._seen_message_id("msg_bounce_seen_001") is True
+
+

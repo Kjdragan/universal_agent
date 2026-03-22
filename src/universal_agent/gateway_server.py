@@ -16526,28 +16526,65 @@ async def handle_dashboard_system_resources(request: Request):
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to read heartbeat findings: %s", exc)
 
-    # Fallback: live metrics
+    # Fallback: live metrics via psutil
+    try:
+        import psutil
+
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        disk = psutil.disk_usage("/")
+        ram_percent = mem.percent
+        ram_used_gb = round(mem.used / (1024 ** 3), 2)
+        ram_total_gb = round(mem.total / (1024 ** 3), 2)
+        swap_percent = swap.percent
+        swap_used_gb = round(swap.used / (1024 ** 3), 2)
+        swap_total_gb = round(swap.total / (1024 ** 3), 2)
+        disk_percent = disk.percent
+        disk_used_gb = round(disk.used / (1024 ** 3), 2)
+        disk_total_gb = round(disk.total / (1024 ** 3), 2)
+    except Exception as exc:
+        logger.warning("psutil metrics collection failed: %s", exc)
+        ram_percent = ram_used_gb = ram_total_gb = 0
+        swap_percent = swap_used_gb = swap_total_gb = 0
+        disk_percent = disk_used_gb = disk_total_gb = 0
+
+    cpu_load = os.getloadavg()[0]
+    cpu_cores = os.cpu_count() or 1
+    load_per_core = round(cpu_load / max(cpu_cores, 1), 2)
+
+    # Determine overall_status from actual metrics
+    if ram_percent > 90 or disk_percent > 90 or load_per_core > 2.0:
+        live_status = "critical"
+    elif ram_percent > 75 or disk_percent > 80 or load_per_core > 1.5:
+        live_status = "warn"
+    elif ram_percent > 0:
+        live_status = "ok"
+    else:
+        live_status = "unknown"
+
+    active_sessions = len(_sessions) if _sessions else 0
+
     return {
         "version": 1,
-        "overall_status": "unknown",
+        "overall_status": live_status,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "summary": "No heartbeat findings file found. Showing live fallback.",
+        "summary": "Live system metrics (no heartbeat findings file found).",
         "metrics": {
-            "cpu_load_1m": os.getloadavg()[0],
+            "cpu_load_1m": cpu_load,
             "cpu_load_5m": os.getloadavg()[1],
             "cpu_load_15m": os.getloadavg()[2],
-            "cpu_cores": os.cpu_count() or 1,
-            "load_per_core": round(os.getloadavg()[0] / max(os.cpu_count() or 1, 1), 2),
-            "ram_percent": 0,
-            "ram_used_gb": 0,
-            "ram_total_gb": 0,
-            "swap_percent": 0,
-            "swap_used_gb": 0,
-            "swap_total_gb": 0,
-            "disk_percent": 0,
-            "disk_used_gb": 0,
-            "disk_total_gb": 0,
-            "active_agent_sessions": 0,
+            "cpu_cores": cpu_cores,
+            "load_per_core": load_per_core,
+            "ram_percent": ram_percent,
+            "ram_used_gb": ram_used_gb,
+            "ram_total_gb": ram_total_gb,
+            "swap_percent": swap_percent,
+            "swap_used_gb": swap_used_gb,
+            "swap_total_gb": swap_total_gb,
+            "disk_percent": disk_percent,
+            "disk_used_gb": disk_used_gb,
+            "disk_total_gb": disk_total_gb,
+            "active_agent_sessions": active_sessions,
             "gateway_errors_30m": 0,
             "dispatch_concurrency": int(os.environ.get("UA_HOOKS_AGENT_DISPATCH_CONCURRENCY", "2")),
         },

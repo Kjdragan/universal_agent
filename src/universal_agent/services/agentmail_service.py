@@ -212,6 +212,47 @@ def _trusted_sender_addresses() -> tuple[str, ...]:
     return tuple(normalized)
 
 
+# ── Automated / bounce sender detection ──────────────────────────────────
+
+_AUTOMATED_SENDER_PREFIXES = (
+    "mailer-daemon@",
+    "postmaster@",
+    "noreply@",
+    "no-reply@",
+    "notifications@",
+    "bounce@",
+    "auto-reply@",
+    "autoreply@",
+    "do-not-reply@",
+    "donotreply@",
+)
+
+_DSN_SUBJECT_PATTERNS = (
+    "delivery status notification",
+    "undeliverable",
+    "mail delivery failed",
+    "returned mail",
+    "failure notice",
+    "delivery failure",
+    "non-delivery report",
+)
+
+
+def _is_automated_sender(sender_email: str, subject: str = "") -> bool:
+    """Return True if the sender looks like an automated / bounce / DSN email.
+
+    Checks both the sender address (mailer-daemon, postmaster, noreply, etc.)
+    and the subject line (DSN patterns like 'Delivery Status Notification').
+    """
+    email_lower = (sender_email or "").strip().lower()
+    if any(email_lower.startswith(prefix) for prefix in _AUTOMATED_SENDER_PREFIXES):
+        return True
+    subject_lower = (subject or "").strip().lower()
+    if any(pattern in subject_lower for pattern in _DSN_SUBJECT_PATTERNS):
+        return True
+    return False
+
+
 class AgentMailService:
     """Async AgentMail service for Simone's email inbox."""
 
@@ -755,6 +796,19 @@ class AgentMailService:
             message_id = str(getattr(msg, "message_id", "") or "").strip()
             text_body = getattr(msg, "text", "") or ""
             html_body = getattr(msg, "html", "") or ""
+
+            # ── Filter automated / bounce / DSN emails ──
+            # Drop mailer-daemon, noreply, postmaster, DSN subjects, etc.
+            # before they create noisy dashboard notifications or trigger
+            # dispatch / task materialization.
+            if _is_automated_sender(sender_email, subject):
+                logger.debug(
+                    "📧 Suppressing automated/bounce email from=%s subject=%r message_id=%s",
+                    sender_email, subject, message_id,
+                )
+                if message_id:
+                    self._claim_seen_message_id(message_id)
+                return
 
             if message_id:
                 claimed_message = self._claim_seen_message_id(message_id)
@@ -1540,6 +1594,15 @@ class AgentMailService:
             sender_email = _normalize_sender_email(str(getattr(msg, "from_", "") or ""))
             # Ignore self-authored outbound copies in inbox listing.
             if sender_email and inbox_sender and sender_email == inbox_sender:
+                self._claim_seen_message_id(message_id)
+                continue
+            # Filter automated / bounce / DSN emails in the polling path too.
+            subject = str(getattr(msg, "subject", "") or "")
+            if _is_automated_sender(sender_email, subject):
+                logger.debug(
+                    "📧 Poll: suppressing automated/bounce email from=%s subject=%r",
+                    sender_email, subject,
+                )
                 self._claim_seen_message_id(message_id)
                 continue
             hydrated_msg = msg

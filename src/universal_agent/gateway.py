@@ -449,6 +449,8 @@ class InProcessGateway(Gateway):
                     "engine": "process_turn",
                     "logfire_enabled": bool(os.getenv("LOGFIRE_TOKEN")),
                     "workspace_bootstrap": bootstrap_result,
+                    "created_at": time.time(),
+                    "last_activity_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             self._sessions[session_id] = session
@@ -471,6 +473,8 @@ class InProcessGateway(Gateway):
             "logfire_enabled": session_info.logfire_enabled,
             "engine": "agent_bridge_legacy",
             "workspace_bootstrap": bootstrap_result,
+            "created_at": time.time(),
+            "last_activity_at": datetime.now(timezone.utc).isoformat(),
         }
         if workspace_dir and workspace_dir != session_info.workspace:
             metadata["requested_workspace_dir"] = workspace_dir
@@ -1555,9 +1559,12 @@ class InProcessGateway(Gateway):
                                 age = time.time() - float(created)
                                 if age < ttl * 2:
                                     continue  # too young, give it time to stamp activity
+                                # Old enough without any activity — treat as inactive
+                                inactivity = age
                             except Exception:
-                                pass
-                        continue
+                                continue
+                        else:
+                            continue  # no created_at either — skip this cycle
                     if inactivity >= ttl:
                         logger.info(
                             "Reaper closing stale session %s (source=%s, inactive=%.0fs, ttl=%ds)",
@@ -1596,7 +1603,7 @@ class InProcessGateway(Gateway):
                 pass
         logger.info("Session reaper task stopped")
 
-    def list_sessions(self, since_hours: int = 48) -> list[GatewaySessionSummary]:
+    def list_sessions(self, since_hours: int = 24) -> list[GatewaySessionSummary]:
         """List active and recently-completed sessions.
 
         Only sessions that are currently in memory (live) or whose workspace
