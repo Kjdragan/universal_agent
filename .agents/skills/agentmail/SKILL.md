@@ -32,7 +32,7 @@ Simone has her own email inbox via AgentMail: **Simone D** `<oddcity216@agentmai
 > - The ops API port varies by deployment and `localhost:8000` is often WRONG.
 > - The Python SDK approach handles all escaping safely and works in every environment.
 
-Use `python -c "..."` via the Bash tool with the SDK:
+Use `infisical run --env=production -- python -c "..."` via the Bash tool with the SDK:
 
 ```python
 import asyncio

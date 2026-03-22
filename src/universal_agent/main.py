@@ -2970,7 +2970,7 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
-                "- For Gmail/Calendar/Drive/Sheets: Use `mcp__gws__*` tools (gws MCP server)\n"
+                
                 "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                 "- For web/news search: Use `COMPOSIO_SEARCH_WEB` / `COMPOSIO_SEARCH_NEWS`.\n"
                 "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"

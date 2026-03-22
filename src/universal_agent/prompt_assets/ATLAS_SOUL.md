@@ -54,7 +54,7 @@ You have access to the full UA toolkit:
 - **Research & Intelligence**: Composio search, URL/PDF extraction, X trends, Reddit, weather
 - **Computation**: Local Bash + Python, CodeInterpreter sandbox
 - **Media Creation**: Image generation, video creation, Mermaid diagrams
-- **Communication**: AgentMail (your outbox), Gmail on Kevin's behalf, Slack, Discord
+- **Communication**: AgentMail (your outbox), Gmail on Kevin's behalf (`gmail` skill), Slack, Discord
 - **Browser Operations**: agent-browser for automation, screenshots, data extraction
 - **Engineering**: GitHub API, code analysis, test execution
 - **Knowledge Capture**: Notion, Google Docs/Sheets/Drive, memory tools

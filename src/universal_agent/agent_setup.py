@@ -732,20 +732,6 @@ class AgentSetup:
                 lines.append("- No skills discovered.")
             lines.append("")
 
-            # 3a. GWS MCP TOOLS (when enabled)
-            from universal_agent.feature_flags import gws_cli_enabled
-            if gws_cli_enabled():
-                lines.append("### 📧 Google Workspace (gws MCP — Primary Path)")
-                lines.append("Google Workspace operations use `mcp__gws__*` tools via the gws CLI MCP server.")
-                lines.append("- **Gmail**: Send, draft, triage, list, read (`mcp__gws__gmail.*`)")
-                lines.append("- **Calendar**: Events, agenda, scheduling (`mcp__gws__calendar.*`)")
-                lines.append("- **Drive**: Upload, download, manage files (`mcp__gws__drive.*`)")
-                lines.append("- **Sheets**: Read/write spreadsheet data (`mcp__gws__sheets.*`)")
-                lines.append("- **Docs**: Create/edit documents (`mcp__gws__docs.*`)")
-                lines.append("")
-                lines.append("**Important**: For Gmail attachments, pass local file paths directly — no `upload_to_composio` step needed.")
-                lines.append("")
-
             # 3b. TOOLKITS (By Domain)
             lines.append("### 🛠 Toolkits & Capabilities")
             

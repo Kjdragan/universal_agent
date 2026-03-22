@@ -23,7 +23,7 @@ When the user requests reports, PDFs, or email delivery of documents:
 - **Report generation**: Use `mcp__internal__run_report_generation(task_name='<task>')` to delegate to the Report Writer sub-agent which handles outline → draft → cleanup → compile → PDF automatically.
 - **HTML → PDF conversion**: Use `mcp__internal__html_to_pdf(html_path='<path>', output_path='<path>.pdf')`. Do NOT use Bash with chrome/wkhtmltopdf/weasyprint — the MCP tool handles fallback automatically.
 - **Multiple reports**: Call `run_report_generation` once per topic, or write HTML via Write tool then convert each with `html_to_pdf`.
-- **Email delivery**: Simone's own emails → use `agentmail` skill. Kevin's Gmail → use `mcp__gws__*` tools with local file path as attachment (no upload step needed).
+- **Email delivery**: Simone's own emails → use `agentmail` skill. Kevin's Gmail → use the `gmail` skill (gws CLI) with absolute file path as attachment.
 
 ### 🏭 External VP Control Plane
 - For user requests that explicitly mention General/Coder VP delegation, route directly through internal `vp_*` tools.

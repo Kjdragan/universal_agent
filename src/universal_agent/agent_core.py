@@ -515,7 +515,7 @@ async def malformed_tool_guardrail_hook(
                 "systemMessage": (
                     "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                     "**USE MCP TOOLS INSTEAD:**\n"
-                    "- For Gmail/Calendar/Drive/Sheets: Use `mcp__gws__*` tools (gws MCP server)\n"
+                    
                     "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                     "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool (EXCEPT X/Twitter).\n"
                     "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
@@ -1511,7 +1511,7 @@ class UniversalAgent:
             "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
             "**Tool Namespaces:**\n"
             "- `mcp__composio__*` - Remote tools (Slack, Search, etc.) -> Call directly\n"
-            "- `mcp__gws__*` - Google Workspace tools (Gmail, Calendar, Drive, Sheets) -> Call directly\n"
+            
             "- `mcp__internal__*` - Local tools (File I/O, Memory) -> Call directly\n"
             "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
             "## 🚀 EXECUTION STRATEGY (THE COORDINATOR LOOP)\n"
@@ -1544,8 +1544,8 @@ class UniversalAgent:
             "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
             "## 📧 EMAIL & COMMUNICATION\n"
             "- **Simone's own email**: Use the `agentmail` Skill (Skill invocation, NOT curl/ops-API). This is Simone's default for sending reports, descriptions, replies.\n"
-            "- **Kevin's Gmail**: Use `mcp__gws__*` tools ONLY when explicitly acting as Kevin.\n"
-            "- **Deprecated**: Composio Gmail tools (`GMAIL_SEND_EMAIL`), `mcp__internal__upload_to_composio` for email. Do NOT use.\n"
+            "- **Kevin's Gmail**: Use the `gmail` Skill (gws CLI) ONLY when explicitly acting as Kevin.\n"
+            "- **Deprecated**: Composio Gmail tools. Do NOT use.\n"
             "- Keep email bodies concise.\n\n"
             f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
