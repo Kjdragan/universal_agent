@@ -33,7 +33,7 @@ def _is_session_workspace(path_value: str) -> bool:
         candidate = Path(path_value).resolve()
     except Exception:
         return False
-    if candidate.name.startswith("session_"):
+    if candidate.name.startswith("session_") and candidate.parent.name == "AGENT_RUN_WORKSPACES":
         return True
     return (
         (candidate / "session_policy.json").exists()
@@ -167,7 +167,6 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     input_schema={
         "query": str, 
         "task_name": str,
-        "workspace_dir": str,
     }
 )
 async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -192,7 +191,6 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
         "query": str, 
         "task_name": str,
         "corpus_data": str,  # Option to provide corpus directly (for non-search tasks)
-        "workspace_dir": str,
     }
 )
 async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
