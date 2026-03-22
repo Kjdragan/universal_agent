@@ -576,12 +576,12 @@ export default function CSIDashboard() {
 
                                         {/* Report Body — Markdown Renderer */}
                                         {selectedDigest.full_report_md ? (
-                                            <div className="prose prose-invert prose-sm max-w-none
+                                            <div className="prose prose-invert prose-sm max-w-none font-display
                                                 prose-headings:text-foreground prose-headings:font-semibold
-                                                prose-h2:text-lg prose-h2:border-b prose-h2:border-border/20 prose-h2:pb-2 prose-h2:mb-3 prose-h2:mt-4
-                                                prose-h3:text-[14px] prose-h3:text-primary/80 prose-h3:mb-2 prose-h3:mt-3
-                                                prose-p:text-secondary prose-p:text-[14px] prose-p:leading-[1.2] prose-p:my-2
-                                                prose-li:text-secondary prose-li:text-[14px] prose-li:my-0.5
+                                                prose-h2:text-[16px] prose-h2:border-b prose-h2:border-border/20 prose-h2:pb-2 prose-h2:mb-3 prose-h2:mt-5
+                                                prose-h3:text-[14px] prose-h3:text-primary/80 prose-h3:mb-2 prose-h3:mt-4
+                                                prose-p:text-muted-foreground prose-p:text-[13px] prose-p:leading-[1.6] prose-p:my-2
+                                                prose-li:text-muted-foreground prose-li:text-[13px] prose-li:leading-[1.6] prose-li:my-0.5
                                                 prose-ul:space-y-1 prose-ul:mb-3
                                                 prose-strong:text-foreground prose-strong:font-semibold
                                                 prose-a:text-primary prose-a:no-underline hover:prose-a:underline
@@ -597,7 +597,7 @@ export default function CSIDashboard() {
                                                 </ReactMarkdown>
                                             </div>
                                         ) : selectedDigest.summary ? (
-                                            <div className="prose prose-invert prose-sm max-w-none prose-p:text-secondary prose-p:leading-[1.2]">
+                                            <div className="prose prose-invert prose-sm max-w-none font-display prose-p:text-muted-foreground prose-p:text-[13px] prose-p:leading-[1.6]">
                                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                                     {selectedDigest.summary}
                                                 </ReactMarkdown>
