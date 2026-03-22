@@ -209,62 +209,53 @@ def _env_total_size() -> int:
 
 
 def sanitize_env_for_subprocess() -> list[str]:
-    """Strip non-essential large env vars if total env exceeds the safe threshold.
+    """Strip non-essential env vars so the subprocess argv+envp stays under ARG_MAX.
+
+    Uses a **whitelist** approach: only env vars the Claude Code CLI actually
+    needs are kept.  Everything else (190+ Infisical secrets, build metadata,
+    systemd vars, etc.) is removed.
 
     Modifies ``os.environ`` **in-place** and returns the list of keys removed.
-    Intended to be called inside a ``_temporary_env()`` context manager so the
-    changes are automatically reverted after the subprocess completes.
     """
-    total = _env_total_size()
-    if total <= _ENV_SAFE_THRESHOLD_BYTES:
+    # Env vars the Claude Code CLI subprocess genuinely requires.
+    _KEEP_PREFIXES = (
+        "ANTHROPIC_",     # API key, model config
+        "CLAUDE_",        # SDK / CLI flags
+        "UA_",            # Universal Agent runtime flags
+        "LOGFIRE_",       # Observability
+        "COMPOSIO_",      # Tool integrations
+    )
+    _KEEP_EXACT = {
+        "PATH", "HOME", "USER", "SHELL", "LANG", "TERM", "DISPLAY",
+        "PYTHONPATH", "VIRTUAL_ENV", "PWD", "TMPDIR", "TZ",
+        "INFISICAL_TOKEN",  # If the CLI itself needs to call Infisical
+        "NODE_PATH", "NODE_OPTIONS",
+        "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+    }
+
+    total_before = _env_total_size()
+    if total_before <= _ENV_SAFE_THRESHOLD_BYTES:
         return []
 
     removed: list[str] = []
+    for key in list(os.environ):
+        if key in _KEEP_EXACT:
+            continue
+        if any(key.startswith(p) for p in _KEEP_PREFIXES):
+            continue
+        removed.append(key)
+        os.environ.pop(key)
 
-    # Phase 1: strip well-known bloat candidates
-    for key in _ENV_STRIP_CANDIDATES:
-        if key in os.environ:
-            removed.append(key)
-            os.environ.pop(key)
-            total = _env_total_size()
-            if total <= _ENV_SAFE_THRESHOLD_BYTES:
-                break
-
-    # Phase 2: strip by prefix (bash exported functions, terminal escapes)
-    if total > _ENV_SAFE_THRESHOLD_BYTES:
-        for key in list(os.environ):
-            if any(key.startswith(p) for p in _ENV_STRIP_PREFIXES) and key not in removed:
-                removed.append(key)
-                os.environ.pop(key)
-        total = _env_total_size()
-
-    # Phase 3: if still over, drop the largest non-critical vars
-    if total > _ENV_SAFE_THRESHOLD_BYTES:
-        _critical = {
-            "PATH", "HOME", "USER", "SHELL", "LANG", "TERM",
-            "ANTHROPIC_API_KEY", "COMPOSIO_API_KEY", "LOGFIRE_TOKEN",
-            "LOGFIRE_WRITE_TOKEN", "INFISICAL_TOKEN",
-            "PYTHONPATH", "VIRTUAL_ENV", "PWD",
-        }
-        by_size = sorted(
-            ((k, len(v)) for k, v in os.environ.items() if k not in _critical),
-            key=lambda x: x[1],
-            reverse=True,
-        )
-        for key, _ in by_size:
-            if total <= _ENV_SAFE_THRESHOLD_BYTES:
-                break
-            removed.append(key)
-            os.environ.pop(key)
-            total = _env_total_size()
-
+    total_after = _env_total_size()
     if removed:
         logger.warning(
-            "Sanitized env for subprocess: removed %d vars (%s) to stay under %d bytes (now %d bytes)",
+            "Sanitized env for subprocess (whitelist): removed %d of %d vars, "
+            "%d KB → %d KB (headroom for CLI args: %d KB)",
             len(removed),
-            ", ".join(removed[:5]) + ("..." if len(removed) > 5 else ""),
-            _ENV_SAFE_THRESHOLD_BYTES,
-            total,
+            len(removed) + len(os.environ),
+            total_before // 1024,
+            total_after // 1024,
+            (2_097_152 - total_after) // 1024,
         )
     return removed
 
