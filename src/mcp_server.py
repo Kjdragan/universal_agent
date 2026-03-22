@@ -1987,9 +1987,29 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
     if not urls:
         return json.dumps({"error": "No URLs provided to crawl"}, indent=2)
 
-    # Check if we should use Cloud API (CRAWL4AI_API_KEY env var set)
+    # Ensure Infisical is loaded if key is missing (happens when mcp_server is spawned in worker scope)
     crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
+    if not crawl4ai_api_key:
+        try:
+            from universal_agent.infisical_loader import initialize_runtime_secrets
+            initialize_runtime_secrets()
+            crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
+        except Exception as e:
+            mcp_log(f"Failed to hot-load Infisical secrets in _crawl_core: {e}", level="WARNING")
+
     crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")  # For Docker fallback
+
+    if not crawl4ai_api_key:
+        error_msg = "CRAWL4AI_API_KEY is missing from environment. Cloud API is required for crawling."
+        mcp_log(f"❌ {error_msg}", level="ERROR")
+        return json.dumps({
+            "error": error_msg,
+            "total": len(urls),
+            "successful": 0,
+            "failed": len(urls),
+            "saved_files": [],
+            "errors": [error_msg],
+        }, indent=2)
 
     if crawl4ai_api_key:
         # Cloud API mode: Use crawl4ai-cloud.com synchronous /query endpoint
@@ -2776,9 +2796,15 @@ async def finalize_research(
             f"({len(filtered_urls)} after blacklist). Starting crawl (this may take 30-60s)...\n"
         )
 
-        # Call Core Logic
-        crawl_result_json = await _crawl_core(filtered_urls, session_dir)
-        crawl_result = json.loads(crawl_result_json)
+        try:
+            # Call Core Logic
+            crawl_result_json = await _crawl_core(filtered_urls, session_dir)
+            crawl_result = json.loads(crawl_result_json)
+        except Exception as e:
+            error_msg = f"CRAWL CORE FATAL ERROR: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            sys.stderr.write(f"[finalize] ❌ {error_msg}\n")
+            crawl_result = {"successful": 0, "failed": len(filtered_urls), "errors": [error_msg], "saved_files": []}
         
         sys.stderr.write(
             f"[finalize] ✅ Crawl complete. Successful: {crawl_result.get('successful', 0)}, Failed: {crawl_result.get('failed', 0)}. Processing filtering...\n"
@@ -4365,9 +4391,20 @@ async def _run_research_phase_legacy(
     # 1. FINALIZE (Crawl & Refine)
     try:
         mcp_log("[Research Phase] Step 1/1: Crawling & Refining...", level="INFO")
-        res = await finalize_research(session_dir=workspace, task_name=task_name)
-        if "error" in res.lower() and "status" not in res.lower():
-             return f"❌ Research Phase Failed: {res}"
+        res_str = await finalize_research(session_dir=workspace, task_name=task_name)
+        
+        # Check for immediate fatal error string returned
+        if "error" in res_str.lower() and "status" not in res_str.lower():
+             return f"❌ Research Phase Failed: {res_str}"
+             
+        # Parse the JSON returned by finalize_research
+        try:
+            res_json = json.loads(res_str)
+            if "error" in res_json:
+                return f"❌ Research Phase Failed: {res_json['error']}"
+        except Exception:
+            res_json = {}
+            
     except Exception as e:
         return json.dumps({
             "status": "error",
@@ -4376,6 +4413,27 @@ async def _run_research_phase_legacy(
         }, indent=2)
         
     corpus_path = os.path.join(workspace, 'tasks', task_name, 'refined_corpus.md')
+    
+    # deeply inspect if the file actually exists
+    if not os.path.exists(corpus_path):
+        filtered_info = res_json.get("filtered_corpus", {})
+        kept_files = filtered_info.get("kept_files", 0)
+        urls_after_blacklist = res_json.get("urls_after_blacklist", 0)
+        
+        if urls_after_blacklist == 0:
+            error_msg = "Research Phase failed to find any usable URLs after blacklist filtering."
+        elif kept_files == 0:
+            error_msg = "Research Phase completed crawling, but ALL files were filtered out (likely due to strict topic filters). Try searching with different keywords to find more relevant content."
+        else:
+            error_msg = "Research Phase completed, but failed to generate the refined_corpus.md file internally."
+            
+        return json.dumps({
+            "status": "error",
+            "message": f"❌ {error_msg} The refined_corpus.md file was NOT created.",
+            "workspace": workspace,
+            "details": res_json
+        }, indent=2)
+
     return json.dumps({
         "status": "success",
         "message": "Research Phase Complete! Refined corpus created.",
