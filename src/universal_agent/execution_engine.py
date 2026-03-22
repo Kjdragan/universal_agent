@@ -215,6 +215,9 @@ def sanitize_env_for_subprocess() -> list[str]:
     needs are kept.  Everything else (190+ Infisical secrets, build metadata,
     systemd vars, etc.) is removed.
 
+    Always runs — there is no threshold gate.  The CLI subprocess never needs
+    Infisical secrets, Slack tokens, or other service credentials.
+
     Modifies ``os.environ`` **in-place** and returns the list of keys removed.
     """
     # Env vars the Claude Code CLI subprocess genuinely requires.
@@ -234,8 +237,6 @@ def sanitize_env_for_subprocess() -> list[str]:
     }
 
     total_before = _env_total_size()
-    if total_before <= _ENV_SAFE_THRESHOLD_BYTES:
-        return []
 
     removed: list[str] = []
     for key in list(os.environ):
@@ -247,16 +248,15 @@ def sanitize_env_for_subprocess() -> list[str]:
         os.environ.pop(key)
 
     total_after = _env_total_size()
-    if removed:
-        logger.warning(
-            "Sanitized env for subprocess (whitelist): removed %d of %d vars, "
-            "%d KB → %d KB (headroom for CLI args: %d KB)",
-            len(removed),
-            len(removed) + len(os.environ),
-            total_before // 1024,
-            total_after // 1024,
-            (2_097_152 - total_after) // 1024,
-        )
+    logger.info(
+        "Sanitized env for subprocess: kept %d vars, removed %d vars, "
+        "%d KB → %d KB (headroom: %d KB)",
+        len(os.environ),
+        len(removed),
+        total_before // 1024,
+        total_after // 1024,
+        (2_097_152 - total_after) // 1024,
+    )
     return removed
 
 
