@@ -2001,6 +2001,7 @@ _hooks_service: Optional[HooksService] = None
 _yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
 _gws_event_listener: Optional[GwsEventListener] = None
 _agentmail_service: Optional[AgentMailService] = None
+_daemon_session_manager: Optional[Any] = None  # DaemonSessionManager (lazy import)
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -11042,6 +11043,26 @@ async def lifespan(app: FastAPI):
                 logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
         except Exception as exc:
             logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
+
+        # --- Persistent Daemon Sessions (always-on agents) ---
+        try:
+            from universal_agent.services.daemon_sessions import (
+                DaemonSessionManager,
+                daemon_sessions_enabled,
+            )
+            if daemon_sessions_enabled(heartbeat_enabled=True):
+                global _daemon_session_manager
+                _daemon_session_manager = DaemonSessionManager(
+                    workspaces_dir=WORKSPACES_DIR,
+                    heartbeat_service=_heartbeat_service,
+                )
+                _daemon_ids = _daemon_session_manager.ensure_daemon_sessions()
+                # Clean up old archived daemon workspaces (>48h)
+                _daemon_session_manager.cleanup_old_archives(max_age_hours=48)
+            else:
+                logger.info("🤖 Daemon sessions disabled (UA_DAEMON_SESSIONS_ENABLED=0)")
+        except Exception:
+            logger.exception("Failed creating daemon sessions")
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
@@ -11208,6 +11229,10 @@ async def lifespan(app: FastAPI):
             sid = str(session.session_id or "").strip()
             if sid:
                 target_sessions.add(sid)
+        # Include daemon sessions (always-on agents) as dispatch targets
+        if _heartbeat_service and hasattr(_heartbeat_service, "active_sessions"):
+            for sid in _heartbeat_service.active_sessions:
+                target_sessions.add(str(sid))
 
         if not target_sessions:
             return {"dispatched": False, "reason": "no_sessions"}
@@ -11337,6 +11362,10 @@ async def lifespan(app: FastAPI):
                 heartbeat_service=_heartbeat_service,
                 get_sessions_fn=lambda: dict(_sessions),
                 notification_sink=_hook_notification_sink,
+                get_heartbeat_sessions_fn=(
+                    (lambda: dict(_heartbeat_service.active_sessions))
+                    if _heartbeat_service else None
+                ),
             )
         )
         logger.info("🔄 Idle dispatch loop background task started")
@@ -11425,6 +11454,12 @@ async def lifespan(app: FastAPI):
         await _gws_event_listener.stop()
     if _agentmail_service:
         await _agentmail_service.shutdown()
+    # Shut down daemon sessions before heartbeat service
+    try:
+        if "_daemon_session_manager" in globals() and _daemon_session_manager is not None:
+            _daemon_session_manager.shutdown()
+    except Exception:
+        logger.debug("Daemon session manager shutdown error (non-fatal)")
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:

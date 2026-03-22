@@ -31,6 +31,7 @@ async def idle_dispatch_loop(
     heartbeat_service: Any,
     get_sessions_fn: Any,
     notification_sink: Optional[Any] = None,
+    get_heartbeat_sessions_fn: Optional[Any] = None,
 ) -> None:
     """Background loop: if agents are idle and tasks exist, dispatch.
 
@@ -42,6 +43,10 @@ async def idle_dispatch_loop(
         Returns dict of active sessions {session_id: session_obj}.
     notification_sink : callable, optional
         For emitting notifications to the dashboard.
+    get_heartbeat_sessions_fn : callable, optional
+        Returns dict of heartbeat-registered sessions (including daemon sessions).
+        Used as a fallback when no WebSocket sessions exist — ensures daemon
+        sessions are discoverable by the idle dispatch loop.
     """
     if not IDLE_POLL_ENABLED:
         logger.info("🔄 Idle dispatch loop disabled (UA_IDLE_POLL_ENABLED=0)")
@@ -62,8 +67,12 @@ async def idle_dispatch_loop(
             if not heartbeat_service:
                 continue
 
-            # 1. Find all sessions
+            # 1. Find all sessions — prefer gateway sessions, fall back to
+            #    heartbeat-registered sessions (includes daemon sessions)
             sessions = get_sessions_fn()
+            if not sessions and get_heartbeat_sessions_fn:
+                sessions = get_heartbeat_sessions_fn()
+
             if not sessions:
                 continue
 
@@ -115,3 +124,4 @@ async def idle_dispatch_loop(
                 logger.exception("🔄 Idle dispatch loop error (attempt %d)", consecutive_errors)
             # Back off on repeated errors
             await asyncio.sleep(min(300, IDLE_POLL_INTERVAL_SECONDS * consecutive_errors))
+

@@ -972,6 +972,13 @@ class HeartbeatService:
         Check if session is idle (no connections, no active runs, and past timeout).
         Returns True if session was unregistered (and thus processing should stop).
         """
+        # Daemon sessions (persistent agent sessions) are intentionally
+        # connection-less; they exist solely for proactive heartbeat dispatch.
+        # Never reap them via idle timeout.
+        from universal_agent.services.daemon_sessions import is_daemon_session
+        if is_daemon_session(session.session_id):
+            return False
+
         unregister_idle = _parse_bool(os.getenv("UA_HEARTBEAT_UNREGISTER_IDLE"), default=True)
         if not unregister_idle:
             return False
