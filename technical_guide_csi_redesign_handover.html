@@ -1,0 +1,57 @@
+# Technical Implementation Guide: CSI "Glass-Minimal" Dashboard
+
+This document provides the technical blueprint for implementing the redesigned **Creator Signal Intelligence (CSI)** tab. It maps the visual components to data structures and outlines the functional requirements for your AI development agent.
+
+---
+
+## 1. Visual Architecture: "Glass-Minimal"
+The redesign transitions the CSI tab to a high-density, tactical command deck.
+
+### Key UI Features:
+- **Collapsible Sidebar**: Hover-activated (`w-20` to `w-64`) to maximize content workspace.
+- **Glassmorphic Paneling**: `backdrop-blur-xl` combined with `bg-white/5` and subtle borders (`border-white/10`).
+- **Tactical Typography**: `Inter` for primary headers; `JetBrains Mono` for metadata, timestamps, and confidence scores.
+- **Micro-Interactions**: Hover states for list items revealing contextual actions (e.g., Delete icon).
+
+---
+
+## 2. Functional Components & Logic
+
+### A. Live Feed List (Left Pane)
+- **Data Source**: Real-time signal stream (WebSocket or Polling).
+- **Interactive Actions**:
+    - **Individual Delete**: A garbage can icon appears in the bottom-right corner of a feed item on hover.
+    - **Trigger**: `onClick` calls the backend `archive_signal(signal_id)` or `delete_signal(signal_id)`.
+    - **Clear All**: Button in the header (`[ CLEAR_ALL ]`).
+    - **Trigger**: Calls a batch endpoint to archive/dismiss all visible signals in the current filtered view.
+
+### B. Global Brief / Intelligence Summary (Center Pane)
+- **Data Mapping**:
+    - `Confidence Score`: Percentage metric with a color-coded bar (Cyan/Gold).
+    - `Signal Velocity`: Trend indicator (HIGH/LOW/STABLE) with a corresponding sparkline icon.
+    - `Source Reliability`: Tier-based classification (e.g., TIER_1).
+- **AI Assessor Insights**: A glassmorphic block featuring a quoted summary of the current intelligence pulse.
+
+### C. Source Breakdown (Bottom Center)
+- **Visual**: Horizontal progress bars showing distribution across platforms (GitHub, Reddit, Tech Forums, etc.).
+- **Logic**: Percentages should animate on load and update dynamically as new signals are ingested.
+
+---
+
+## 3. Dark/Light Mode Integration
+The sidebar includes a mode toggle at the bottom.
+- **State Management**: Should hook into your app's global theme provider (e.g., Tailwind `dark` class).
+- **Design Note**: While "Tactical Core" is dark-first, ensure the `bg-white/5` and `text-cyan-400` maintain accessibility and visual consistency in a light-mode variant.
+
+---
+
+## 4. Implementation Checklist for AI Coder
+1. **Layout Scaffold**: Use the `flex` container with a fixed-width sidebar (`transition-all`) and an auto-expanding main content area.
+2. **State Wiring**: Bind the `Live Feed` array to a reactive state. Implement an `onDelete` handler that optimistically removes the item from the UI while firing the API call.
+3. **Refactor CSI Logic**: Map existing CSI report data to the new "Global Brief" and "Confidence Score" components.
+4. **Sidebar Hover Logic**: Ensure the sidebar expansion doesn't jitter the main content; use a smooth transition and `z-index` layering if necessary.
+
+---
+
+## 5. Reference Design
+See the HTML/Tailwind structure in `{{DATA:SCREEN:SCREEN_13}}` for the exact code implementation of these features.
