@@ -593,17 +593,6 @@ def build_system_prompt(
         "- Build institutional knowledge that compounds across sessions"
     )
 
-    # ── 18. SKILLS ────────────────────────────────────────────────────
-    if skills_xml:
-        sections.append(
-            "## 🎯 SKILLS — BEST PRACTICES KNOWLEDGE\n"
-            "Skills are pre-defined workflows and patterns for complex tasks (PDF, PPTX, DOCX, XLSX creation).\n"
-            "Before building document creation scripts from scratch, CHECK if a skill exists.\n"
-            "To use a skill: `read_local_file` the SKILL.md path, then follow its patterns.\n"
-            "Available skills (read SKILL.md for detailed instructions):\n"
-            f"{skills_xml}"
-        )
-
     # ── 18. WORKSPACE CONTEXT ─────────────────────────────────────────
     sections.append(
         f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}"
@@ -758,14 +747,6 @@ def build_vp_system_prompt(
         "- Write: save notable findings to `MEMORY.md` and `memory/YYYY-MM-DD.md`\n"
         "- Keep entries concise, factual, and deduplicated"
     )
-
-    # ── 11. SKILLS ────────────────────────────────────────────────────
-    if skills_xml:
-        sections.append(
-            "## 🎯 SKILLS\n"
-            "Skills are pre-defined workflows for complex tasks. Check if one exists before building from scratch.\n"
-            f"{skills_xml}"
-        )
 
     # ── 12. WORKSPACE CONTEXT ─────────────────────────────────────────
     sections.append(

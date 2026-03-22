@@ -483,7 +483,6 @@ class AgentSetup:
                 soul_context=self._soul_context,
                 memory_context=self._memory_context,
                 capabilities_content=capabilities_content,
-                skills_xml=self._skills_xml,
             )
             self._log(f"📦 VP system prompt built ({len(prompt)} chars, ~{len(prompt)//4} tokens)")
             return prompt
@@ -686,30 +685,30 @@ class AgentSetup:
                     agents_by_domain[domain] = []
                 agents_by_domain[domain].append((name, desc))
             
+            lines.append("> *To assign a workflow, dispatch `Task(subagent_type='<name>', ...)`*")
             for domain, agents in agents_by_domain.items():
                 lines.append(f"\n#### {domain}")
                 for name, desc in agents:
-                    lines.append(f"- **{name}**: {desc}")
-                    lines.append(f"  -> Delegate: `Task(subagent_type='{name}', ...)`")
+                    clean_desc = desc.replace('\n', ' ').strip()
+                    lines.append(f"- **{name}**: {clean_desc}")
 
             # Ensure system-configuration-agent guidance is always explicit in the registry.
             if "system-configuration-agent" in found_agents:
                 lines.append("\n#### 🛠 Mandatory System Operations Routing")
                 lines.append("- **system-configuration-agent**: Platform/runtime operations specialist for Chron scheduling, heartbeat, and ops config.")
-                lines.append("  -> Delegate immediately for schedule and runtime parameter changes:")
-                lines.append("  `Task(subagent_type='system-configuration-agent', prompt='Apply this system change safely and verify it.')`")
+                lines.append("  -> Delegate immediately for schedule and runtime parameter changes: `Task(subagent_type='system-configuration-agent', prompt='...')`")
                 lines.append("- Do not use OS-level crontab for product scheduling requests; use Chron APIs and runtime config paths.")
 
             lines.append("")
 
             # 2. SKILLS (Standard Operating Procedures)
             lines.append("### 📚 Standard Operating Procedures (Skills)")
-            lines.append("These organized guides are available to **ALL** agents and sub-agents. You should prioritize using these instead of improvising.")
-            lines.append("They represent the collective knowledge of the system. **Think about your capabilities** and how these guides can help you.")
+            lines.append("These guides represent the collective knowledge of the system.")
+            lines.append("Prioritize using these highly-optimized procedures instead of improvising.")
             lines.append("")
             lines.append("**Progressive Disclosure**:")
-            lines.append("1. **Scan**: Read the YAML frontmatter below to identifying relevant skills.")
-            lines.append("2. **Read**: If a skill seems useful, use `mcp__internal__read_file` to read the full Markdown content (SOP).")
+            lines.append("1. **Scan**: Read the high-level index below to identify relevant skills.")
+            lines.append("2. **Read**: If a skill seems useful, use `mcp__internal__read_file` to read the full SKILL.md content.")
             lines.append("3. **Execute**: Follow the procedure step-by-step.")
             lines.append("")
             
@@ -719,31 +718,16 @@ class AgentSetup:
                 
                 for skill in sorted_skills:
                     name = skill["name"]
-                    desc = skill["description"]
+                    desc = skill["description"].replace('\n', ' ').strip()
                     path = skill["path"]
                     is_enabled = skill.get("enabled", True)
                     
                     if not is_enabled:
                         reason = skill.get("disabled_reason", "Missing requirements")
-                        lines.append(f"#### ~~{name}~~ (Unavailable)")
-                        lines.append(f"> **Reason**: {reason}")
+                        lines.append(f"- ~~**{name}**~~ (Unavailable: {reason})")
                         continue
 
-                    lines.append(f"#### {name}")
-                    lines.append(f"{desc}")
-                    lines.append(f"Source: `{path}`")
-                    
-                    # Dump Frontmatter to YAML block
-                    frontmatter = skill.get("frontmatter", {})
-                    # Clean up description from frontmatter if it's long, or just dump all
-                    try:
-                        yaml_str = yaml.dump(frontmatter, default_flow_style=False, sort_keys=False).strip()
-                        lines.append("```yaml")
-                        lines.append(yaml_str)
-                        lines.append("```")
-                    except Exception:
-                        pass
-                    lines.append("")
+                    lines.append(f"- **{name}** (`{path}`): {desc}")
             else:
                 lines.append("- No skills discovered.")
             lines.append("")

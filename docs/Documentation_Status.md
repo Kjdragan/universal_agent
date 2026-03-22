@@ -62,6 +62,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 99 | Documentation Drift Maintenance Pipeline
 | 100 | OpenClaw Release Sync Pipeline
 | 101 | VP Agent Identity & Prompt Architecture — CODIE/ATLAS souls, VP system prompt, mission briefing injection
+| 102 | E2BIG Kernel Limits and Prompt Architecture — 128KB execution limit constraints and prompt optimization strategy
 
 ## CSI Subsystem (04_CSI/)
 
