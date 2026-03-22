@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -114,6 +115,7 @@ const TOKENS = {
 /* ── Main Component ──────────────────────────────────────────────────── */
 
 export default function MailPage() {
+  const router = useRouter();
   /* ── State ─── */
   const [threads, setThreads] = useState<Thread[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -305,23 +307,59 @@ export default function MailPage() {
             </div>
           )}
         </div>
-        <button
-          onClick={() => fetchAll()}
-          style={{
-            background: TOKENS.cyanDim,
-            color: TOKENS.cyan,
-            border: "none",
-            borderRadius: 0,
-            padding: "6px 14px",
-            fontFamily: TOKENS.fontMono,
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: "pointer",
-            letterSpacing: "0.05em",
-          }}
-        >
-          ↻ REFRESH
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            className="material-symbols-outlined"
+            onClick={() => fetchAll()}
+            title="Refresh"
+            style={{
+              fontSize: 22,
+              color: TOKENS.cyan,
+              cursor: "pointer",
+              padding: 4,
+              transition: "opacity 0.15s",
+            }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.7"; }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1"; }}
+          >
+            refresh
+          </span>
+          <span
+            className="material-symbols-outlined"
+            onClick={() => {
+              const w = window.open("/?new_session=1&focus_input=1", "ua-chat-window");
+              if (w) w.focus();
+            }}
+            title="Chat"
+            style={{
+              fontSize: 20,
+              color: TOKENS.textMuted,
+              cursor: "pointer",
+              padding: 4,
+              transition: "color 0.15s",
+            }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.color = TOKENS.cyan; }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.color = TOKENS.textMuted; }}
+          >
+            chat
+          </span>
+          <span
+            className="material-symbols-outlined"
+            onClick={() => router.push("/dashboard")}
+            title="Home"
+            style={{
+              fontSize: 20,
+              color: TOKENS.textMuted,
+              cursor: "pointer",
+              padding: 4,
+              transition: "color 0.15s",
+            }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.color = TOKENS.cyan; }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.color = TOKENS.textMuted; }}
+          >
+            home
+          </span>
+        </div>
       </header>
 
       {/* ══════════ Inbox Filter Tabs ══════════ */}
