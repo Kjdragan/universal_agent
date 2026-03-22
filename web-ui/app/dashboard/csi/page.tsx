@@ -5,8 +5,33 @@ import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatDateTimeTz, toEpochMs } from "@/lib/timezone";
+import Image from "next/image";
 
-/* ── Types ──────────────────────────────────────────────────────────────── */
+/* ── Design Tokens (Stitch: Kinetic Command Deck) ───────────────────── */
+
+const T = {
+    bg: "#0b1326",
+    surfaceDim: "#0f1a33",
+    surfaceLow: "#131f3d",
+    surfaceHigh: "#1a2847",
+    surfaceBright: "#223054",
+    cyan: "#22D3EE",
+    cyanDim: "rgba(34,211,238,0.12)",
+    cyanGhost: "rgba(34,211,238,0.20)",
+    amber: "#EE9800",
+    amberDim: "rgba(238,152,0,0.12)",
+    green: "#4ADE80",
+    red: "#EF4444",
+    redDim: "rgba(239,68,68,0.12)",
+    textPrimary: "#E2E8F0",
+    textSecondary: "#BBC9CD",
+    textMuted: "#64748B",
+    ghostBorder: "rgba(187,201,205,0.15)",
+    fontMono: "'JetBrains Mono', 'Fira Code', monospace",
+    fontUi: "'Inter', system-ui, sans-serif",
+};
+
+/* ── Types ──────────────────────────────────────────────────────────── */
 
 type CSIDigest = {
     id: string;
@@ -22,7 +47,28 @@ type CSIDigest = {
 
 const API_BASE = "/api/dashboard/gateway";
 
-/* ── Helpers ────────────────────────────────────────────────────────────── */
+/* ── Source Mapping ─────────────────────────────────────────────────── */
+
+type SourceKey = "reddit" | "threads" | "youtube" | "global" | "unknown";
+
+function contentSource(eventType: string): SourceKey {
+    const t = (eventType || "").toLowerCase();
+    if (t.includes("reddit")) return "reddit";
+    if (t.includes("threads")) return "threads";
+    if (t.includes("rss") || t.includes("youtube")) return "youtube";
+    if (t.includes("global") || t.includes("batch") || t.includes("brief")) return "global";
+    return "unknown";
+}
+
+const SOURCE_META: Record<SourceKey, { label: string; icon: string | null; color: string; badge: string }> = {
+    reddit:  { label: "Reddit",       icon: "/assets/icons/sources/reddit.png",  color: "#f97316", badge: "RD" },
+    threads: { label: "Threads",      icon: "/assets/icons/sources/threads.png", color: "#a855f7", badge: "TH" },
+    youtube: { label: "YouTube",      icon: "/assets/icons/sources/youtube.png", color: "#ef4444", badge: "YT" },
+    global:  { label: "Global Brief", icon: null,                                 color: T.cyan,    badge: "GB" },
+    unknown: { label: "Other",        icon: null,                                 color: T.textMuted, badge: "??" },
+};
+
+/* ── Helpers ────────────────────────────────────────────────────────── */
 
 function timeAgo(dateStr: string): string {
     const ts = toEpochMs(dateStr);
@@ -32,53 +78,6 @@ function timeAgo(dateStr: string): string {
     if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
     if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
     return `${Math.floor(delta / 86400)}d ago`;
-}
-
-function contentSource(eventType: string): "reddit" | "threads" | "youtube" | "global" | "unknown" {
-    const t = (eventType || "").toLowerCase();
-    if (t.includes("reddit")) return "reddit";
-    if (t.includes("threads")) return "threads";
-    if (t.includes("rss") || t.includes("youtube")) return "youtube";
-    if (t.includes("global") || t.includes("batch") || t.includes("brief")) return "global";
-    return "unknown";
-}
-
-function contentSourceLabel(cs: ReturnType<typeof contentSource>): string {
-    switch (cs) {
-        case "reddit": return "Reddit";
-        case "threads": return "Threads";
-        case "youtube": return "YouTube";
-        case "global": return "Global Brief";
-        default: return "Other";
-    }
-}
-
-/** Source icon as JSX — Material Symbols for Reddit/Threads/Global, unicode for YouTube */
-function SourceIcon({ source, size = 16 }: { source: string; size?: number }) {
-    const cs = contentSource(source);
-    switch (cs) {
-        case "youtube":
-            return <span className="text-[#ef4444] leading-none" style={{ fontSize: size }}>▶</span>;
-        case "reddit":
-            return <span className="material-symbols-outlined text-[#f97316] leading-none" style={{ fontSize: size }}>sensors</span>;
-        case "threads":
-            return <span className="material-symbols-outlined text-[#a855f7] leading-none" style={{ fontSize: size }}>alternate_email</span>;
-        case "global":
-            return <span className="material-symbols-outlined text-primary leading-none" style={{ fontSize: size }}>language</span>;
-        default:
-            return <span className="material-symbols-outlined text-muted-foreground leading-none" style={{ fontSize: size }}>article</span>;
-    }
-}
-
-/** Source type badge abbreviations */
-function sourceTypeBadge(cs: ReturnType<typeof contentSource>): string {
-    switch (cs) {
-        case "youtube": return "YT";
-        case "reddit": return "RD";
-        case "threads": return "TH";
-        case "global": return "GB";
-        default: return "??";
-    }
 }
 
 function extractHeadline(digest: CSIDigest): string {
@@ -138,7 +137,34 @@ function extractSummary(digest: CSIDigest): string {
     return result.length > 200 ? result.slice(0, 197) + "…" : result;
 }
 
-/* ── Component ──────────────────────────────────────────────────────────── */
+/* ── Source Icon Sub-component ──────────────────────────────────────── */
+
+function SourceIcon({ source, size = 20 }: { source: string; size?: number }) {
+    const meta = SOURCE_META[contentSource(source)];
+    if (meta.icon) {
+        return (
+            <Image
+                src={meta.icon}
+                alt={meta.label}
+                width={size}
+                height={size}
+                style={{ borderRadius: 0, objectFit: "contain" }}
+            />
+        );
+    }
+    /* Fallback for global / unknown — use material icon */
+    const iconName = contentSource(source) === "global" ? "language" : "article";
+    return (
+        <span
+            className="material-symbols-outlined"
+            style={{ fontSize: size, color: meta.color, lineHeight: 1 }}
+        >
+            {iconName}
+        </span>
+    );
+}
+
+/* ── Component ─────────────────────────────────────────────────────── */
 
 export default function CSIDashboard() {
     const router = useRouter();
@@ -155,7 +181,7 @@ export default function CSIDashboard() {
     const [sendComment, setSendComment] = useState("");
     const [expandedSummaries, setExpandedSummaries] = useState<Set<string>>(new Set());
 
-    /* ── Data Loading ─────────────────────────────────────────────────── */
+    /* ── Data Loading ─────────────────────────────────────────────── */
 
     const loadData = useCallback(async () => {
         try {
@@ -169,8 +195,8 @@ export default function CSIDashboard() {
             setDigests(contentDigests);
             setTotalDigests(data.total || 0);
             setError(null);
-        } catch (err: any) {
-            setError(err.message);
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : String(err));
         } finally {
             setLoading(false);
         }
@@ -182,7 +208,7 @@ export default function CSIDashboard() {
         return () => window.clearInterval(timer);
     }, [loadData]);
 
-    /* ── Source filters ───────────────────────────────────────────────── */
+    /* ── Source filters ───────────────────────────────────────────── */
 
     const sources = useMemo(() => {
         const set = new Set<string>();
@@ -196,7 +222,7 @@ export default function CSIDashboard() {
         return digests.filter((d) => contentSource(d.event_type) === sourceFilter);
     }, [digests, sourceFilter]);
 
-    /* ── Summary stats ───────────────────────────────────────────────── */
+    /* ── Summary stats ───────────────────────────────────────────── */
 
     const latestTime = digests.length > 0 ? formatDateTimeTz(digests[0].created_at, { placeholder: "N/A" }) : "N/A";
 
@@ -209,7 +235,7 @@ export default function CSIDashboard() {
         return counts;
     }, [digests]);
 
-    /* ── Actions ──────────────────────────────────────────────────────── */
+    /* ── Actions ──────────────────────────────────────────────────── */
 
     async function purgeData() {
         if (!confirm("Purge all stale CSI data from the database?\nThis clears old notifications, specialist loops, and task hub items.")) return;
@@ -225,8 +251,8 @@ export default function CSIDashboard() {
             setPurgeStatus(`Purged ${payload.total_purged || 0} items.`);
             setSelectedDigest(null);
             await loadData();
-        } catch (err: any) {
-            setPurgeStatus(`Purge failed: ${err.message}`);
+        } catch (err: unknown) {
+            setPurgeStatus(`Purge failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
             setPurgeBusy(false);
         }
@@ -252,8 +278,8 @@ export default function CSIDashboard() {
             setPurgeStatus(`Cleared ${payload.cleared || 0} reports.`);
             setSelectedDigest(null);
             await loadData();
-        } catch (err: any) {
-            setPurgeStatus(`Clear failed: ${err.message}`);
+        } catch (err: unknown) {
+            setPurgeStatus(`Clear failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
             setPurgeBusy(false);
         }
@@ -275,8 +301,8 @@ export default function CSIDashboard() {
             if (!resp.ok) throw new Error(payload?.detail || `HTTP ${resp.status}`);
             setSendStatus("✓ Sent to Simone");
             setSendComment("");
-        } catch (err: any) {
-            setSendStatus(`Send failed: ${err.message}`);
+        } catch (err: unknown) {
+            setSendStatus(`Send failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
             setSendBusy(false);
         }
@@ -292,359 +318,717 @@ export default function CSIDashboard() {
         });
     }
 
-    /* ── Render ────────────────────────────────────────────────────────── */
+    /* ── Render ────────────────────────────────────────────────────── */
 
     return (
-        <div className="flex h-full flex-col font-display" style={{ minHeight: 0 }}>
-            {/* ─── Header Bar ──────────────────────────────────────── */}
-            <header className="flex items-center justify-between w-full px-6 border-b border-border/30 bg-background h-14 shrink-0">
-                <div className="flex items-center gap-6">
-                    <span className="text-[22px] font-bold tracking-tight text-foreground">
-                        Creator Signal Intelligence
+        <div
+            style={{
+                background: T.bg,
+                color: T.textPrimary,
+                fontFamily: T.fontUi,
+                display: "flex",
+                flexDirection: "column",
+                height: "100%",
+                minHeight: 0,
+            }}
+        >
+            {/* ═══════════ Header Bar ═══════════ */}
+            <header
+                style={{
+                    background: T.surfaceDim,
+                    padding: "0 24px",
+                    height: 56,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    borderBottom: `1px solid ${T.ghostBorder}`,
+                    flexShrink: 0,
+                }}
+            >
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 22, color: T.cyan }}>
+                        sensors
                     </span>
-                    {/* Inline stats */}
+                    <h1
+                        style={{
+                            fontFamily: T.fontMono,
+                            fontSize: 15,
+                            fontWeight: 700,
+                            letterSpacing: "0.1em",
+                            margin: 0,
+                            color: T.textPrimary,
+                        }}
+                    >
+                        CSI FEED
+                    </h1>
+                    {/* Telemetry strip */}
                     {!loading && (
-                        <div className="hidden lg:flex items-center gap-4 text-[13px] font-medium tracking-tight text-muted-foreground uppercase">
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 16,
+                                marginLeft: 20,
+                                fontFamily: T.fontMono,
+                                fontSize: 11,
+                                color: T.textMuted,
+                            }}
+                        >
                             <span>{totalDigests} reports</span>
-                            <span className="opacity-30">•</span>
+                            <span style={{ opacity: 0.3 }}>│</span>
                             <span>Latest: {latestTime}</span>
                             {digests.length > 0 && (
-                                <span className="opacity-60 normal-case">({timeAgo(digests[0].created_at)})</span>
+                                <span style={{ color: T.cyan }}>({timeAgo(digests[0].created_at)})</span>
                             )}
-                            <div className="flex items-center gap-3 ml-2 normal-case">
-                                {Object.entries(sourceMix)
-                                    .sort((a, b) => b[1] - a[1])
-                                    .map(([src, count]) => (
-                                        <span key={src} className="flex items-center gap-1.5">
-                                            <SourceIcon source={src} size={16} />
-                                            <span>{count}</span>
-                                        </span>
-                                    ))}
-                            </div>
+                            <span style={{ opacity: 0.3 }}>│</span>
+                            {Object.entries(sourceMix)
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([src, count]) => (
+                                    <span key={src} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                        <SourceIcon source={src} size={14} />
+                                        <span>{count}</span>
+                                    </span>
+                                ))}
                         </div>
                     )}
                 </div>
-                <nav className="flex items-center gap-2">
-                    <button
-                        onClick={clearAllDigests}
-                        disabled={purgeBusy || digests.length === 0}
-                        className="px-3 py-1 text-[13px] font-medium text-muted-foreground hover:bg-card/40 hover:text-primary transition-all duration-200 rounded-lg disabled:opacity-40"
-                    >
-                        {purgeBusy ? "…" : "Clear All"}
-                    </button>
-                    <button
-                        onClick={purgeData}
-                        disabled={purgeBusy}
-                        className="px-3 py-1 text-[13px] font-medium text-accent border border-accent/20 hover:bg-accent/10 transition-all duration-200 rounded-lg disabled:opacity-60"
-                    >
-                        {purgeBusy ? "…" : "Purge Stale"}
-                    </button>
-                    <button
-                        onClick={() => void loadData()}
-                        className="px-3 py-1 text-[13px] font-medium text-accent bg-card/30 hover:bg-card/50 transition-all duration-200 rounded-lg flex items-center gap-1"
-                    >
-                        <span className="material-symbols-outlined text-sm">refresh</span>
-                        Refresh
-                    </button>
-                    <div className="w-px h-4 bg-border/30 mx-2" />
-                    <span
-                        onClick={() => {
-                            const url = "/?new_session=1&focus_input=1";
-                            const w = window.open(url, "ua-chat-window");
-                            if (w) w.focus();
-                        }}
-                        className="material-symbols-outlined text-muted-foreground cursor-pointer hover:text-primary transition-colors text-[20px]"
-                        title="Chat"
-                    >
-                        chat
-                    </span>
-                    <span
-                        onClick={() => router.push("/dashboard")}
-                        className="material-symbols-outlined text-muted-foreground cursor-pointer hover:text-primary transition-colors text-[20px]"
-                        title="Home"
-                    >
-                        home
-                    </span>
-                    <span className="material-symbols-outlined text-muted-foreground cursor-pointer hover:text-primary transition-colors text-[20px]" title="Notifications">
-                        notifications
-                    </span>
-                    <span className="material-symbols-outlined text-muted-foreground cursor-pointer hover:text-primary transition-colors text-[20px]" title="Settings">
-                        settings
-                    </span>
+                <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <HeaderBtn label="CLEAR ALL" onClick={clearAllDigests} disabled={purgeBusy || digests.length === 0} />
+                    <HeaderBtn label="PURGE STALE" onClick={purgeData} disabled={purgeBusy} accent />
+                    <HeaderBtn label="↻ REFRESH" onClick={() => void loadData()} />
+                    <div style={{ width: 1, height: 20, background: T.ghostBorder, margin: "0 8px" }} />
+                    <NavIcon icon="chat" title="Chat" onClick={() => { const w = window.open("/?new_session=1&focus_input=1", "ua-chat-window"); if (w) w.focus(); }} />
+                    <NavIcon icon="home" title="Home" onClick={() => router.push("/dashboard")} />
                 </nav>
             </header>
 
-            {/* ─── Purge Status ─────────────────────────────────────── */}
+            {/* ═══════════ Purge Status ═══════════ */}
             {purgeStatus && (
-                <div className="rounded-md border border-border bg-background/60 px-4 py-1.5 text-xs text-foreground/80 mx-6 mt-2 shrink-0">
+                <div
+                    style={{
+                        background: T.surfaceLow,
+                        padding: "6px 24px",
+                        fontFamily: T.fontMono,
+                        fontSize: 11,
+                        color: T.textSecondary,
+                        borderBottom: `1px solid ${T.ghostBorder}`,
+                        flexShrink: 0,
+                    }}
+                >
                     {purgeStatus}
                 </div>
             )}
 
-            {/* ─── Source Filter Pills ─────────────────────────────── */}
-            <div className="py-3 bg-background px-6 flex items-center gap-2 border-b border-border/20 shrink-0">
-                <button
+            {/* ═══════════ Source Filter Tabs ═══════════ */}
+            <div
+                style={{
+                    background: T.surfaceDim,
+                    padding: "0 24px",
+                    display: "flex",
+                    gap: 0,
+                    borderBottom: `1px solid ${T.ghostBorder}`,
+                    flexShrink: 0,
+                }}
+            >
+                <FilterTab
+                    label="ALL"
+                    active={sourceFilter === "all"}
                     onClick={() => setSourceFilter("all")}
-                    className={`px-3 h-6 flex items-center text-[11px] font-bold uppercase tracking-widest rounded-full transition-colors ${
-                        sourceFilter === "all"
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-card/40"
-                    }`}
-                >
-                    All ({digests.length})
-                </button>
+                    count={digests.length}
+                />
                 {sources.map((src) => (
-                    <button
+                    <FilterTab
                         key={src}
+                        label={SOURCE_META[src as SourceKey]?.label.toUpperCase() ?? src.toUpperCase()}
+                        active={sourceFilter === src}
                         onClick={() => setSourceFilter(src)}
-                        className={`px-3 h-6 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest rounded-full transition-colors ${
-                            sourceFilter === src
-                                ? "bg-primary/20 text-primary border border-primary/30"
-                                : "text-muted-foreground hover:bg-card/40"
-                        }`}
-                    >
-                        <SourceIcon source={src} size={14} />
-                        {contentSourceLabel(src as ReturnType<typeof contentSource>)} ({sourceMix[src] || 0})
-                    </button>
+                        count={sourceMix[src] || 0}
+                        icon={<SourceIcon source={src} size={14} />}
+                    />
                 ))}
             </div>
 
-            {/* ─── Error State ─────────────────────────────────────── */}
+            {/* ═══════════ Error State ═══════════ */}
             {error && (
-                <div className="rounded-xl border border-red-400/25 bg-red-400/10 p-3 text-sm text-red-400/80 shrink-0 mx-6 mt-2">
-                    <span className="font-semibold">Error:</span> {error}
+                <div
+                    style={{
+                        background: T.redDim,
+                        color: T.red,
+                        padding: "8px 24px",
+                        fontFamily: T.fontMono,
+                        fontSize: 12,
+                        flexShrink: 0,
+                    }}
+                >
+                    ⚠ {error}
                 </div>
             )}
 
-            {/* ─── Loading State ───────────────────────────────────── */}
+            {/* ═══════════ Loading State ═══════════ */}
             {loading && (
-                <div className="flex items-center justify-center py-20 text-muted-foreground flex-1">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
-                    <span className="ml-3 text-sm">Loading digests…</span>
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ fontFamily: T.fontMono, fontSize: 12, color: T.textMuted }}>
+                        Loading digests…
+                    </span>
                 </div>
             )}
 
-            {/* ─── Empty State ─────────────────────────────────────── */}
+            {/* ═══════════ Empty State ═══════════ */}
             {!loading && !error && filteredDigests.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-20 text-center flex-1">
-                    <div className="text-4xl mb-3">📡</div>
-                    <h3 className="text-lg font-semibold text-foreground/80">No Digests Yet</h3>
-                    <p className="text-sm text-muted-foreground mt-1 max-w-sm">
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 48, color: T.textMuted, opacity: 0.4, marginBottom: 12 }}>
+                        satellite_alt
+                    </span>
+                    <span style={{ fontFamily: T.fontMono, fontSize: 13, fontWeight: 600, color: T.textSecondary }}>
+                        NO DIGESTS YET
+                    </span>
+                    <span style={{ fontSize: 12, color: T.textMuted, marginTop: 4, maxWidth: 320, textAlign: "center" }}>
                         CSI trend reports will appear here as they are generated by your hourly analysis pipeline.
-                    </p>
+                    </span>
                 </div>
             )}
 
-            {/* ─── Main Content: Centered Two-Panel Layout ──────── */}
+            {/* ═══════════ Main Two-Panel Layout ═══════════ */}
             {!loading && !error && filteredDigests.length > 0 && (
-                <main className="flex-1 flex overflow-hidden justify-center">
-                    <div className="max-w-[1076px] w-full flex h-full" style={{ gap: 96 }}>
+                <main style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+                    {/* ── Left Panel: Report List ── */}
+                    <aside
+                        style={{
+                            width: 420,
+                            minWidth: 420,
+                            background: T.bg,
+                            borderRight: `1px solid ${T.ghostBorder}`,
+                            display: "flex",
+                            flexDirection: "column",
+                            height: "100%",
+                        }}
+                    >
+                        <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+                            <span
+                                style={{
+                                    fontFamily: T.fontMono,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    letterSpacing: "0.1em",
+                                    color: T.textMuted,
+                                }}
+                            >
+                                REPORTS
+                            </span>
+                            <span
+                                style={{
+                                    fontFamily: T.fontMono,
+                                    fontSize: 9,
+                                    fontWeight: 700,
+                                    letterSpacing: "0.05em",
+                                    padding: "2px 8px",
+                                    background: T.cyanDim,
+                                    color: T.cyan,
+                                }}
+                            >
+                                LIVE FEED
+                            </span>
+                        </div>
+                        <div style={{ flex: 1, overflowY: "auto" }}>
+                            {filteredDigests.map((digest) => {
+                                const isSelected = selectedDigest?.id === digest.id;
+                                const isExpanded = expandedSummaries.has(digest.id);
+                                const summary = extractSummary(digest);
+                                return (
+                                    <ReportCard
+                                        key={digest.id}
+                                        digest={digest}
+                                        summary={summary}
+                                        isSelected={isSelected}
+                                        isExpanded={isExpanded}
+                                        onSelect={() => {
+                                            setSelectedDigest(digest);
+                                            setSendStatus(null);
+                                            setSendComment("");
+                                        }}
+                                        onToggleExpand={(e) => toggleSummaryExpand(digest.id, e)}
+                                        onDismiss={(e) => dismissDigest(digest.id, e)}
+                                    />
+                                );
+                            })}
+                        </div>
+                    </aside>
 
-                        {/* ── Left Panel: Reports List ──────────────── */}
-                        <aside className="w-[420px] shrink-0 bg-background flex flex-col border-r border-border/30 h-full">
-                            <div className="p-4 flex items-center justify-between shrink-0">
-                                <span className="text-[10px] font-bold tracking-[0.1em] text-muted-foreground uppercase">
-                                    Reports
-                                </span>
-                                <span className="bg-card/40 text-[9px] px-1.5 py-0.5 rounded text-primary border border-primary/20">
-                                    LIVE FEED
-                                </span>
+                    {/* ── Right Panel: Report Reader ── */}
+                    <section
+                        style={{
+                            flex: 1,
+                            minWidth: 0,
+                            background: T.surfaceDim,
+                            display: "flex",
+                            flexDirection: "column",
+                            position: "relative",
+                            height: "100%",
+                        }}
+                    >
+                        {!selectedDigest ? (
+                            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                                <span style={{ fontSize: 32, opacity: 0.3, color: T.textMuted, marginBottom: 8 }}>←</span>
+                                <span style={{ fontFamily: T.fontMono, fontSize: 12, color: T.textMuted }}>Select a report to read</span>
                             </div>
-                            <div className="flex-1 overflow-y-auto scrollbar-thin">
-                                {filteredDigests.map((digest) => {
-                                    const isSelected = selectedDigest?.id === digest.id;
-                                    const isExpanded = expandedSummaries.has(digest.id);
-                                    const summary = extractSummary(digest);
-                                    return (
-                                        <article
-                                            key={digest.id}
-                                            onClick={() => {
-                                                setSelectedDigest(digest);
-                                                setSendStatus(null);
-                                                setSendComment("");
-                                            }}
-                                            className={`p-4 cursor-pointer border-l-2 transition-colors group relative ${
-                                                isSelected
-                                                    ? "bg-card/40 border-l-primary"
-                                                    : "hover:bg-card/20 border-l-transparent"
-                                            }`}
-                                        >
-                                            <div className="flex items-start gap-3">
-                                                <span className="mt-1 shrink-0">
-                                                    <SourceIcon source={digest.event_type} size={16} />
-                                                </span>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex justify-between items-start gap-2 mb-1">
-                                                        <h3 className="text-[15px] font-semibold text-foreground line-clamp-2 leading-tight">
-                                                            {extractHeadline(digest)}
-                                                        </h3>
-                                                        <span className={`text-[11px] font-medium px-1 rounded shrink-0 ${
-                                                            isSelected
-                                                                ? "text-primary bg-primary/10"
-                                                                : "text-muted-foreground opacity-50"
-                                                        }`}>
-                                                            {timeAgo(digest.created_at)}
+                        ) : (
+                            <>
+                                {/* Scrollable content */}
+                                <div style={{ flex: 1, overflowY: "auto", padding: "32px 40px 80px 32px" }}>
+                                    {/* Report Header */}
+                                    <header style={{ marginBottom: 32 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                                            <span
+                                                style={{
+                                                    fontFamily: T.fontMono,
+                                                    fontSize: 10,
+                                                    fontWeight: 700,
+                                                    padding: "3px 10px",
+                                                    background: T.cyanDim,
+                                                    color: T.cyan,
+                                                    letterSpacing: "0.1em",
+                                                }}
+                                            >
+                                                {SOURCE_META[contentSource(selectedDigest.event_type)]?.label.toUpperCase()}
+                                            </span>
+                                            <span style={{ fontFamily: T.fontMono, fontSize: 11, color: T.textMuted }}>
+                                                {formatDateTimeTz(selectedDigest.created_at, { placeholder: "--" })}
+                                            </span>
+                                            {/* Source type badges */}
+                                            {selectedDigest.source_types && selectedDigest.source_types.length > 0 && (
+                                                <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+                                                    {selectedDigest.source_types.map((st) => (
+                                                        <span
+                                                            key={st}
+                                                            style={{
+                                                                width: 22,
+                                                                height: 22,
+                                                                background: T.surfaceHigh,
+                                                                display: "flex",
+                                                                alignItems: "center",
+                                                                justifyContent: "center",
+                                                                fontFamily: T.fontMono,
+                                                                fontSize: 9,
+                                                                fontWeight: 700,
+                                                                color: T.textSecondary,
+                                                            }}
+                                                        >
+                                                            {SOURCE_META[contentSource(st)]?.badge}
                                                         </span>
-                                                    </div>
-                                                    {summary && (
-                                                        <>
-                                                            <p className={`text-[13px] text-muted-foreground leading-[1.6] ${
-                                                                isExpanded ? "" : "line-clamp-3"
-                                                            }`}>
-                                                                {summary}
-                                                            </p>
-                                                            {summary.length > 100 && (
-                                                                <button
-                                                                    onClick={(e) => toggleSummaryExpand(digest.id, e)}
-                                                                    className="text-[11px] text-muted-foreground mt-1 hover:text-primary transition-colors"
-                                                                >
-                                                                    {isExpanded ? "Show less ▲" : "Show more ▼"}
-                                                                </button>
-                                                            )}
-                                                        </>
-                                                    )}
+                                                    ))}
                                                 </div>
-                                            </div>
-                                            {/* Trash icon — visible on hover */}
-                                            <button
-                                                onClick={(e) => dismissDigest(digest.id, e)}
-                                                className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                                                title="Delete report"
-                                            >
-                                                <span className="material-symbols-outlined text-[18px] text-primary hover:text-red-400 transition-colors">
-                                                    delete
-                                                </span>
-                                            </button>
-                                        </article>
-                                    );
-                                })}
-                            </div>
-                        </aside>
-
-                        {/* ── Right Panel: Report Reader ────────────── */}
-                        <section className="w-[560px] shrink-0 bg-background flex flex-col relative h-full">
-                            {!selectedDigest ? (
-                                <div className="flex flex-col items-center justify-center h-full py-20 text-center">
-                                    <div className="text-3xl mb-3 opacity-40">←</div>
-                                    <p className="text-sm text-muted-foreground">
-                                        Select a report to read
-                                    </p>
-                                </div>
-                            ) : (
-                                <>
-                                    {/* Scrollable content */}
-                                    <div className="flex-1 overflow-y-auto pr-12 pl-0 py-8 scrollbar-thin">
-
-                                        {/* Report Header */}
-                                        <header className="mb-8">
-                                            <div className="flex items-center gap-3 mb-4">
-                                                <span className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-0.5 rounded tracking-widest uppercase">
-                                                    {contentSourceLabel(contentSource(selectedDigest.event_type))}
-                                                </span>
-                                                <span className="text-[11px] text-muted-foreground font-medium">
-                                                    {formatDateTimeTz(selectedDigest.created_at, { placeholder: "--" })}
-                                                </span>
-                                                {/* Source type badges */}
-                                                {selectedDigest.source_types && selectedDigest.source_types.length > 0 && (
-                                                    <div className="flex gap-1 ml-auto">
-                                                        {selectedDigest.source_types.map((st) => (
-                                                            <span
-                                                                key={st}
-                                                                className="w-5 h-5 bg-card rounded flex items-center justify-center text-[10px] text-foreground border border-border/30"
-                                                            >
-                                                                {sourceTypeBadge(contentSource(st))}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <h1 className="text-2xl font-bold text-foreground tracking-tight leading-tight mb-4">
-                                                {extractHeadline(selectedDigest)}
-                                            </h1>
-                                            <div className="flex items-center gap-4 text-muted-foreground">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-6 h-6 rounded-full bg-card flex items-center justify-center border border-border/30">
-                                                        <span className="material-symbols-outlined text-primary text-[14px]">smart_toy</span>
-                                                    </div>
-                                                    <span className="text-xs font-medium">Intelligence System Alpha</span>
-                                                </div>
-                                                <span className="text-[10px] uppercase tracking-widest">
-                                                    Confidence Score: 98%
-                                                </span>
-                                            </div>
-                                        </header>
-
-                                        {/* Report Body — Markdown Renderer */}
-                                        {selectedDigest.full_report_md ? (
-                                            <div className="prose prose-invert prose-sm max-w-none font-display
-                                                prose-headings:text-foreground prose-headings:font-semibold
-                                                prose-h2:text-[16px] prose-h2:border-b prose-h2:border-border/20 prose-h2:pb-2 prose-h2:mb-3 prose-h2:mt-5
-                                                prose-h3:text-[14px] prose-h3:text-primary/80 prose-h3:mb-2 prose-h3:mt-4
-                                                prose-p:text-muted-foreground prose-p:text-[13px] prose-p:leading-[1.6] prose-p:my-2
-                                                prose-li:text-muted-foreground prose-li:text-[13px] prose-li:leading-[1.6] prose-li:my-0.5
-                                                prose-ul:space-y-1 prose-ul:mb-3
-                                                prose-strong:text-foreground prose-strong:font-semibold
-                                                prose-a:text-primary prose-a:no-underline hover:prose-a:underline
-                                                prose-code:text-primary/90 prose-code:bg-primary/10 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs
-                                                prose-pre:bg-[hsl(136,28%,7%)] prose-pre:border prose-pre:border-border prose-pre:rounded-lg
-                                                prose-blockquote:border-l-2 prose-blockquote:border-l-primary prose-blockquote:bg-primary/5 prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:italic
-                                                prose-table:text-sm prose-th:text-muted-foreground prose-th:text-[11px] prose-th:uppercase prose-th:tracking-wider prose-th:font-semibold
-                                                prose-td:text-foreground/70
-                                                prose-hr:border-border"
-                                            >
-                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                    {selectedDigest.full_report_md}
-                                                </ReactMarkdown>
-                                            </div>
-                                        ) : selectedDigest.summary ? (
-                                            <div className="prose prose-invert prose-sm max-w-none font-display prose-p:text-muted-foreground prose-p:text-[13px] prose-p:leading-[1.6]">
-                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                    {selectedDigest.summary}
-                                                </ReactMarkdown>
-                                            </div>
-                                        ) : (
-                                            <p className="text-sm text-muted-foreground italic">No report content available.</p>
-                                        )}
-
-                                        {/* Bottom padding for action bar */}
-                                        <div className="h-20" />
-                                    </div>
-
-                                    {/* Pinned Bottom Action Bar */}
-                                    <footer className="absolute bottom-0 left-0 right-0 h-14 bg-background/95 backdrop-blur-md border-t border-border/30 px-6 flex items-center gap-4 z-10">
-                                        <div className="flex-1 bg-card/30 border border-border/50 rounded-lg px-4 h-9 flex items-center focus-within:border-primary/50 transition-all">
-                                            <span className="material-symbols-outlined text-muted-foreground text-[18px] mr-2">edit_note</span>
-                                            <input
-                                                type="text"
-                                                value={sendComment}
-                                                onChange={(e) => setSendComment(e.target.value)}
-                                                placeholder="Add a note for Simone (optional)..."
-                                                className="bg-transparent border-none focus:ring-0 focus:outline-none text-xs w-full text-foreground placeholder:text-muted-foreground/40"
-                                            />
+                                            )}
                                         </div>
-                                        <button
-                                            onClick={() => void sendToSimone(selectedDigest)}
-                                            disabled={sendBusy}
-                                            className="bg-accent hover:bg-accent/90 transition-all text-primary-foreground px-4 h-9 rounded-lg text-xs font-bold flex items-center gap-2 shadow-[0_0_20px_rgba(212,160,86,0.2)] disabled:opacity-60"
+                                        <h1
+                                            style={{
+                                                fontSize: 22,
+                                                fontWeight: 700,
+                                                color: T.textPrimary,
+                                                letterSpacing: "-0.02em",
+                                                lineHeight: 1.25,
+                                                marginBottom: 16,
+                                            }}
                                         >
-                                            <span className="material-symbols-outlined text-[18px]">send</span>
-                                            {sendBusy ? "Sending…" : "Send to Simone"}
-                                        </button>
-                                    </footer>
-
-                                    {/* Send status */}
-                                    {sendStatus && (
-                                        <div className={`absolute bottom-16 left-6 right-6 text-xs z-10 ${sendStatus.startsWith("✓") ? "text-primary" : "text-secondary"}`}>
-                                            {sendStatus}
+                                            {extractHeadline(selectedDigest)}
+                                        </h1>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                                <Image
+                                                    src="/assets/avatars/simone.png"
+                                                    alt="Simone"
+                                                    width={24}
+                                                    height={24}
+                                                    style={{ borderRadius: 0, objectFit: "cover" }}
+                                                />
+                                                <span style={{ fontFamily: T.fontMono, fontSize: 11, color: T.textSecondary }}>
+                                                    Intelligence System Alpha
+                                                </span>
+                                            </div>
+                                            <span
+                                                style={{
+                                                    fontFamily: T.fontMono,
+                                                    fontSize: 10,
+                                                    letterSpacing: "0.1em",
+                                                    color: T.textMuted,
+                                                }}
+                                            >
+                                                CONFIDENCE: 98%
+                                            </span>
                                         </div>
-                                    )}
-                                </>
-                            )}
-                        </section>
+                                    </header>
 
-                    </div>
+                                    {/* Report Body — Markdown */}
+                                    {selectedDigest.full_report_md ? (
+                                        <div
+                                            className="prose prose-invert prose-sm max-w-none"
+                                            style={{
+                                                fontFamily: T.fontUi,
+                                                color: T.textSecondary,
+                                                fontSize: 13,
+                                                lineHeight: 1.7,
+                                                /* Stitch overrides via CSS variables */
+                                                ["--tw-prose-body" as string]: T.textSecondary,
+                                                ["--tw-prose-headings" as string]: T.textPrimary,
+                                                ["--tw-prose-links" as string]: T.cyan,
+                                                ["--tw-prose-bold" as string]: T.textPrimary,
+                                                ["--tw-prose-code" as string]: T.cyan,
+                                                ["--tw-prose-quotes" as string]: T.textSecondary,
+                                                ["--tw-prose-quote-borders" as string]: T.cyan,
+                                                ["--tw-prose-hr" as string]: T.ghostBorder,
+                                                ["--tw-prose-th-borders" as string]: T.ghostBorder,
+                                                ["--tw-prose-td-borders" as string]: T.ghostBorder,
+                                            }}
+                                        >
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {selectedDigest.full_report_md}
+                                            </ReactMarkdown>
+                                        </div>
+                                    ) : selectedDigest.summary ? (
+                                        <div
+                                            className="prose prose-invert prose-sm max-w-none"
+                                            style={{ fontFamily: T.fontUi, color: T.textSecondary, fontSize: 13, lineHeight: 1.7 }}
+                                        >
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {selectedDigest.summary}
+                                            </ReactMarkdown>
+                                        </div>
+                                    ) : (
+                                        <p style={{ fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+                                            No report content available.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Pinned Bottom Action Bar */}
+                                <footer
+                                    style={{
+                                        position: "absolute",
+                                        bottom: 0,
+                                        left: 0,
+                                        right: 0,
+                                        height: 56,
+                                        background: `${T.surfaceDim}f0`,
+                                        backdropFilter: "blur(12px)",
+                                        borderTop: `1px solid ${T.ghostBorder}`,
+                                        padding: "0 24px",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 12,
+                                        zIndex: 10,
+                                    }}
+                                >
+                                    <div
+                                        style={{
+                                            flex: 1,
+                                            background: T.surfaceLow,
+                                            padding: "0 12px",
+                                            height: 36,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                        }}
+                                    >
+                                        <span className="material-symbols-outlined" style={{ fontSize: 16, color: T.textMuted }}>
+                                            edit_note
+                                        </span>
+                                        <input
+                                            type="text"
+                                            value={sendComment}
+                                            onChange={(e) => setSendComment(e.target.value)}
+                                            placeholder="Add a note for Simone (optional)..."
+                                            style={{
+                                                background: "transparent",
+                                                border: "none",
+                                                outline: "none",
+                                                fontFamily: T.fontUi,
+                                                fontSize: 12,
+                                                color: T.textPrimary,
+                                                width: "100%",
+                                            }}
+                                        />
+                                    </div>
+                                    <button
+                                        onClick={() => void sendToSimone(selectedDigest)}
+                                        disabled={sendBusy}
+                                        style={{
+                                            background: sendBusy ? T.amberDim : T.amber,
+                                            color: sendBusy ? T.amber : T.bg,
+                                            border: "none",
+                                            padding: "0 16px",
+                                            height: 36,
+                                            fontFamily: T.fontMono,
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            letterSpacing: "0.05em",
+                                            cursor: sendBusy ? "wait" : "pointer",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                        }}
+                                    >
+                                        <Image
+                                            src="/assets/avatars/simone.png"
+                                            alt="Simone"
+                                            width={20}
+                                            height={20}
+                                            style={{ borderRadius: 0, objectFit: "cover" }}
+                                        />
+                                        {sendBusy ? "SENDING…" : "SEND TO SIMONE"}
+                                    </button>
+                                </footer>
+
+                                {/* Send status */}
+                                {sendStatus && (
+                                    <div
+                                        style={{
+                                            position: "absolute",
+                                            bottom: 60,
+                                            left: 24,
+                                            right: 24,
+                                            fontFamily: T.fontMono,
+                                            fontSize: 11,
+                                            color: sendStatus.startsWith("✓") ? T.cyan : T.amber,
+                                            zIndex: 10,
+                                        }}
+                                    >
+                                        {sendStatus}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </section>
                 </main>
             )}
         </div>
+    );
+}
+
+/* ── Sub-components ────────────────────────────────────────────────── */
+
+function HeaderBtn({ label, onClick, disabled, accent }: { label: string; onClick: () => void; disabled?: boolean; accent?: boolean }) {
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            style={{
+                background: accent ? T.amberDim : "transparent",
+                color: accent ? T.amber : T.textMuted,
+                border: "none",
+                padding: "6px 12px",
+                fontFamily: T.fontMono,
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                cursor: disabled ? "default" : "pointer",
+                opacity: disabled ? 0.4 : 1,
+                transition: "all 0.15s",
+            }}
+        >
+            {label}
+        </button>
+    );
+}
+
+function NavIcon({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
+    return (
+        <span
+            className="material-symbols-outlined"
+            onClick={onClick}
+            title={title}
+            style={{
+                fontSize: 20,
+                color: T.textMuted,
+                cursor: "pointer",
+                padding: 4,
+                transition: "color 0.15s",
+            }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.color = T.cyan; }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.color = T.textMuted; }}
+        >
+            {icon}
+        </span>
+    );
+}
+
+function FilterTab({
+    label,
+    active,
+    onClick,
+    count,
+    icon,
+}: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+    count: number;
+    icon?: React.ReactNode;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            style={{
+                background: active ? T.cyanDim : "transparent",
+                color: active ? T.cyan : T.textMuted,
+                border: "none",
+                borderBottom: active ? `2px solid ${T.cyan}` : "2px solid transparent",
+                padding: "10px 16px",
+                fontFamily: T.fontMono,
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.05em",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                transition: "all 0.15s",
+            }}
+        >
+            {icon}
+            {label}
+            <span
+                style={{
+                    background: active ? T.cyan : T.ghostBorder,
+                    color: active ? T.bg : T.textMuted,
+                    fontSize: 9,
+                    fontWeight: 700,
+                    padding: "1px 5px",
+                    minWidth: 16,
+                    textAlign: "center",
+                }}
+            >
+                {count}
+            </span>
+        </button>
+    );
+}
+
+function ReportCard({
+    digest,
+    summary,
+    isSelected,
+    isExpanded,
+    onSelect,
+    onToggleExpand,
+    onDismiss,
+}: {
+    digest: CSIDigest;
+    summary: string;
+    isSelected: boolean;
+    isExpanded: boolean;
+    onSelect: () => void;
+    onToggleExpand: (e: React.MouseEvent) => void;
+    onDismiss: (e: React.MouseEvent) => void;
+}) {
+    const [hovered, setHovered] = useState(false);
+    return (
+        <article
+            onClick={onSelect}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            style={{
+                padding: "14px 16px",
+                cursor: "pointer",
+                borderLeft: isSelected ? `3px solid ${T.cyan}` : "3px solid transparent",
+                background: isSelected ? T.cyanDim : hovered ? T.surfaceLow : "transparent",
+                transition: "all 0.12s",
+                position: "relative",
+                display: "flex",
+                gap: 10,
+            }}
+        >
+            {/* Source Icon */}
+            <span style={{ marginTop: 2, flexShrink: 0 }}>
+                <SourceIcon source={digest.event_type} size={22} />
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
+                    <h3
+                        style={{
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: T.textPrimary,
+                            lineHeight: 1.3,
+                            margin: 0,
+                            overflow: "hidden",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                        }}
+                    >
+                        {extractHeadline(digest)}
+                    </h3>
+                    <span
+                        style={{
+                            fontFamily: T.fontMono,
+                            fontSize: 10,
+                            color: isSelected ? T.cyan : T.textMuted,
+                            flexShrink: 0,
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        {timeAgo(digest.created_at)}
+                    </span>
+                </div>
+                {summary && (
+                    <>
+                        <p
+                            style={{
+                                fontSize: 12,
+                                color: T.textMuted,
+                                lineHeight: 1.6,
+                                margin: 0,
+                                overflow: isExpanded ? "visible" : "hidden",
+                                display: isExpanded ? "block" : "-webkit-box",
+                                WebkitLineClamp: isExpanded ? undefined : 3,
+                                WebkitBoxOrient: "vertical",
+                            }}
+                        >
+                            {summary}
+                        </p>
+                        {summary.length > 100 && (
+                            <button
+                                onClick={onToggleExpand}
+                                style={{
+                                    background: "none",
+                                    border: "none",
+                                    fontFamily: T.fontMono,
+                                    fontSize: 10,
+                                    color: T.textMuted,
+                                    cursor: "pointer",
+                                    padding: 0,
+                                    marginTop: 4,
+                                }}
+                            >
+                                {isExpanded ? "Show less ▲" : "Show more ▼"}
+                            </button>
+                        )}
+                    </>
+                )}
+            </div>
+            {/* Trash icon on hover */}
+            {hovered && (
+                <button
+                    onClick={onDismiss}
+                    title="Delete report"
+                    style={{
+                        position: "absolute",
+                        bottom: 8,
+                        right: 8,
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        padding: 2,
+                    }}
+                >
+                    <Image
+                        src="/assets/icons/system/trash.png"
+                        alt="Delete"
+                        width={16}
+                        height={16}
+                        style={{ opacity: 0.7 }}
+                    />
+                </button>
+            )}
+        </article>
     );
 }

@@ -27,6 +27,7 @@ import {
   X,
   LogOut,
   ChevronDown,
+  Mail,
   type LucideIcon,
 } from "lucide-react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
@@ -66,6 +67,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: "Agent",
     items: [
+      { href: "/dashboard/mail", label: "Mail", icon: Mail },
       { href: "/dashboard/telegram", label: "Telegram", icon: Send },
       { href: "/dashboard/calendar", label: "Calendar", icon: CalendarDays },
     ],

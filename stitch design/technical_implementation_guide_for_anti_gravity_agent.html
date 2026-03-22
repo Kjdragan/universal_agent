@@ -1,0 +1,63 @@
+# Technical Implementation Guide: AgentMail "Glass-Minimal" Tab
+
+This document serves as the bridge between the **Stitch UI Design** and the **Anti-Gravity Backend Agent**. It outlines how the "Glass-Minimal" interface maps to the AgentMail API and the required data structures for a functional implementation.
+
+---
+
+## 1. UI-to-API Data Mapping
+
+The following table maps the visual components in the "Glass-Minimal Stack" design to specific API endpoints and fields.
+
+| UI Component | Backend Data Source | Key Fields for Rendering |
+| :--- | :--- | :--- |
+| **Inbox Filter Tabs** | `client.inboxes.list()` | `id`, `name`, `email_address`, `active_threads_count` |
+| **Thread List (Left Pane)** | `client.threads.list()` | `subject`, `preview`, `inbox_id`, `labels[]`, `timestamp`, `message_count` |
+| **Message History (Center Pane)** | `client.inboxes.messages.get(thread_id)` | `from_`, `to[]`, `subject`, `text`, `html`, `timestamp`, `attachments[]` |
+| **Draft Approval Queue** | `client.drafts.list()` | `id`, `to[]`, `subject`, `preview`, `send_status`, `send_at` |
+| **Operational Stats** | `AgentMailService.status()` | `messages_sent`, `messages_received`, `connected (bool)`, `ws_enabled` |
+
+---
+
+## 2. Functional Logic & Handlers
+
+### A. "Approve & Send" (Draft Queue)
+- **UI Trigger:** User clicks the primary action button on a draft card.
+- **Backend Action:** Call `client.drafts.send(draft_id)`.
+- **UI State Update:** On success, remove the draft from the queue and increment the `messages_sent` stat. Display a "Success" toast notification.
+
+### B. "Delete Item" (Live Feed / Live Threads)
+- **UI Trigger:** User hovers over a list item and clicks the garbage can icon.
+- **Backend Action:** Call `client.threads.delete(thread_id)` or `client.threads.archive(thread_id)`.
+- **UI State Update:** Apply an exit animation (e.g., slide-out) to the item and remove it from the local state.
+
+### C. "Clear All" (Live Feed)
+- **UI Trigger:** User clicks `[ CLEAR_ALL ]` in the feed header.
+- **Backend Action:** Call a batch archive/delete endpoint (e.g., `client.threads.batch_delete(all_visible_ids)`).
+- **UI State Update:** Clear the entire list array and show the "Awaiting New Data" empty state.
+
+---
+
+## 3. Real-Time Connectivity (WebSocket)
+The "Glass-Minimal" UI includes a `WS: Connected` status indicator.
+- **Backend Requirement:** Maintain a persistent WebSocket connection to the AgentMail service.
+- **Events to Listen For:**
+    - `NEW_MESSAGE`: Automatically prepend the new thread to the list.
+    - `DRAFT_CREATED`: Add the new draft to the approval queue.
+    - `STATUS_UPDATE`: Refresh global stats counters.
+
+---
+
+## 4. UI Layout & Design Tokens (Tailwind)
+The visual style is built using the **Tactical Core** design system:
+- **Base Background:** `#0b1326` (Midnight Slate)
+- **Primary Accent:** `#22D3EE` (Cyan Precision)
+- **Surface Style:** `backdrop-blur-xl` + `bg-white/5` (Glassmorphism)
+- **Typography:** `Inter` for headers, `JetBrains Mono` for tactical metrics and code snippets.
+
+---
+
+## 5. Deployment Instructions for Anti-Gravity
+1. **Scaffold the Component:** Use the HTML/Tailwind code from `{{DATA:SCREEN:SCREEN_7}}` as the base template.
+2. **Wire the State:** Implement a state management store (e.g., Pinia, Redux, or simple React hooks) to hold the thread and draft lists.
+3. **Connect API Wrappers:** Replace the placeholder static content with real data fetched via the `AgentMailService` methods described in the Design Brief (`{{DATA:TEXT:TEXT_3}}`).
+4. **Implement Collapsible Sidebar:** Ensure the `group-hover` logic for the sidebar correctly updates the layout grid for the center and right panels.

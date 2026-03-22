@@ -17657,6 +17657,54 @@ async def ops_agentmail_send_draft(request: Request, draft_id: str):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+@app.get("/api/v1/ops/agentmail/threads")
+async def ops_agentmail_threads(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        inbox_id = request.query_params.get("inbox_id")
+        label = request.query_params.get("label")
+        limit = min(100, max(1, int(request.query_params.get("limit", "50"))))
+        if inbox_id:
+            threads = await _agentmail_service.list_threads(inbox_id=inbox_id, label=label, limit=limit)
+        else:
+            threads = await _agentmail_service.list_all_threads(label=label, limit=limit)
+        inboxes = _agentmail_service.get_inbox_ids()
+        return {"ok": True, "threads": threads, "count": len(threads), "inboxes": inboxes}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/api/v1/ops/agentmail/threads/{thread_id}/messages")
+async def ops_agentmail_thread_messages(request: Request, thread_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        inbox_id = request.query_params.get("inbox_id")
+        messages = await _agentmail_service.list_messages(inbox_id=inbox_id, limit=50)
+        # Filter messages belonging to this thread
+        thread_messages = [m for m in messages if m.get("thread_id") == thread_id]
+        return {"ok": True, "messages": thread_messages, "count": len(thread_messages), "thread_id": thread_id}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/api/v1/ops/agentmail/drafts")
+async def ops_agentmail_drafts(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        inbox_id = request.query_params.get("inbox_id")
+        limit = min(50, max(1, int(request.query_params.get("limit", "20"))))
+        drafts = await _agentmail_service.list_drafts(inbox_id=inbox_id, limit=limit)
+        return {"ok": True, "drafts": drafts, "count": len(drafts)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @app.get("/api/v1/ops/telemetry/briefing")
 async def ops_telemetry_briefing_get(request: Request):
     _require_ops_auth(request)

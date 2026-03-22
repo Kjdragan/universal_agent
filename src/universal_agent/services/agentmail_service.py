@@ -608,6 +608,40 @@ class AgentMailService:
         logger.info("📧 Draft sent draft_id=%s", draft_id)
         return {"status": "sent", "draft_id": draft_id}
 
+    async def list_drafts(
+        self,
+        *,
+        inbox_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List drafts across one or all inboxes."""
+        self._assert_ready()
+        target_ids = [inbox_id] if inbox_id else (self._inbox_ids or [self._inbox_id])
+        results: list[dict[str, Any]] = []
+        for iid in target_ids:
+            if not iid:
+                continue
+            try:
+                drafts = await self._client.inboxes.drafts.list(inbox_id=iid)
+                draft_list: list[Any] = list(
+                    drafts.drafts if hasattr(drafts, "drafts") else drafts
+                )
+                for d in draft_list:
+                    results.append({
+                        "draft_id": getattr(d, "draft_id", ""),
+                        "inbox_id": iid,
+                        "to": getattr(d, "to", ""),
+                        "subject": getattr(d, "subject", ""),
+                        "text_preview": (getattr(d, "text", "") or "")[:200],
+                        "send_status": getattr(d, "send_status", None),
+                        "send_at": str(getattr(d, "send_at", "") or ""),
+                        "created_at": str(getattr(d, "created_at", "")),
+                    })
+            except Exception as exc:
+                logger.warning("📧 Failed to list drafts for inbox %s: %s", iid, exc)
+        results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return results[:limit]
+
     async def reply(
         self,
         *,
@@ -637,12 +671,13 @@ class AgentMailService:
     async def list_messages(
         self,
         *,
+        inbox_id: Optional[str] = None,
         label: Optional[str] = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         """List recent messages in the inbox."""
         self._assert_ready()
-        kwargs: dict[str, Any] = {"inbox_id": self._inbox_id}
+        kwargs: dict[str, Any] = {"inbox_id": inbox_id or self._inbox_id}
         if label:
             kwargs["labels"] = [label]
 
@@ -685,12 +720,13 @@ class AgentMailService:
     async def list_threads(
         self,
         *,
+        inbox_id: Optional[str] = None,
         label: Optional[str] = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """List threads in the inbox."""
+        """List threads in a specific inbox (or primary inbox)."""
         self._assert_ready()
-        kwargs: dict[str, Any] = {"inbox_id": self._inbox_id}
+        kwargs: dict[str, Any] = {"inbox_id": inbox_id or self._inbox_id}
         if label:
             kwargs["labels"] = [label]
 
@@ -700,12 +736,44 @@ class AgentMailService:
         for thd in thd_list[:limit]:
             results.append({
                 "thread_id": getattr(thd, "thread_id", ""),
+                "inbox_id": inbox_id or self._inbox_id,
                 "subject": getattr(thd, "subject", ""),
+                "preview": (getattr(thd, "preview", "") or "")[:200],
                 "labels": getattr(thd, "labels", []),
                 "message_count": getattr(thd, "message_count", 0),
                 "created_at": str(getattr(thd, "created_at", "")),
+                "updated_at": str(getattr(thd, "updated_at", "") or ""),
             })
         return results
+
+    async def list_all_threads(
+        self,
+        *,
+        label: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List threads across all configured inboxes, merged and sorted by recency."""
+        self._assert_ready()
+        target_ids = self._inbox_ids or [self._inbox_id]
+        all_threads: list[dict[str, Any]] = []
+        for iid in target_ids:
+            if not iid:
+                continue
+            try:
+                threads = await self.list_threads(inbox_id=iid, label=label, limit=limit)
+                all_threads.extend(threads)
+            except Exception as exc:
+                logger.warning("📧 Failed to list threads for inbox %s: %s", iid, exc)
+        # Sort by updated_at (most recent first), fallback to created_at
+        all_threads.sort(
+            key=lambda t: t.get("updated_at") or t.get("created_at", ""),
+            reverse=True,
+        )
+        return all_threads[:limit]
+
+    def get_inbox_ids(self) -> list[str]:
+        """Return all configured inbox IDs."""
+        return list(self._inbox_ids) if self._inbox_ids else ([self._inbox_id] if self._inbox_id else [])
 
     # ------------------------------------------------------------------
     # WebSocket Listener (inbound email → hook dispatch)
