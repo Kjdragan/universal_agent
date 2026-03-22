@@ -348,6 +348,17 @@ export default function CSIDashboard() {
                     </button>
                     <div className="w-px h-4 bg-border/30 mx-2" />
                     <span
+                        onClick={() => {
+                            const url = "/?new_session=1&focus_input=1";
+                            const w = window.open(url, "ua-chat-window");
+                            if (w) w.focus();
+                        }}
+                        className="material-symbols-outlined text-muted-foreground cursor-pointer hover:text-primary transition-colors text-[20px]"
+                        title="Chat"
+                    >
+                        chat
+                    </span>
+                    <span
                         onClick={() => router.push("/dashboard")}
                         className="material-symbols-outlined text-muted-foreground cursor-pointer hover:text-primary transition-colors text-[20px]"
                         title="Home"

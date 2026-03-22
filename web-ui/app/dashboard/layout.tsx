@@ -294,44 +294,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <span>⚠️</span>
         </div>
       )}
-      {/* Top bar — desktop + mobile */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border/40 bg-card/10 px-4 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-card/30 hover:text-foreground md:hidden"
-          >
-            {isMobileSidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-          <span className="text-sm font-semibold tracking-tight text-foreground/80">Operations</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              const url = "/?new_session=1&focus_input=1";
-              const w = window.open(url, "ua-chat-window");
-              if (w) w.focus();
-            }}
-            className="flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/20 px-3 py-1.5 text-xs font-medium text-foreground/80 transition hover:bg-card/30 hover:text-foreground"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Chat</span>
-          </button>
-          {session.auth_required && (
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="flex items-center gap-1.5 rounded-lg p-1.5 text-muted-foreground transition hover:bg-card/30 hover:text-foreground"
-              title="Sign Out"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </header>
 
       <div className="flex flex-1 overflow-hidden relative">
+        {/* Mobile hamburger — fixed button on left edge (visible only on mobile) */}
+        <button
+          onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+          className="fixed top-2 left-2 z-50 rounded-lg p-1.5 text-muted-foreground transition hover:bg-card/30 hover:text-foreground md:hidden bg-background/80 backdrop-blur border border-border/40"
+        >
+          {isMobileSidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        </button>
         {/* Sidebar Overlay (Mobile) */}
         {isMobileSidebarOpen && (
           <div
@@ -342,7 +313,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Desktop hover trigger strip — invisible 16px zone on left edge */}
         <div
-          className="hidden md:block fixed inset-y-12 left-0 w-4 z-50"
+          className="hidden md:block fixed inset-y-0 left-0 w-4 z-50"
           onMouseEnter={() => {
             if (sidebarTimeoutRef.current) clearTimeout(sidebarTimeoutRef.current);
             setSidebarHovered(true);
@@ -352,7 +323,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         {/* Sidebar — auto-hides on desktop, slides in on hover */}
         <aside
           className={[
-            "fixed inset-y-12 left-0 z-50 flex w-64 flex-col border-r border-border/40 bg-background shadow-2xl transition-transform duration-200",
+            "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border/40 bg-background shadow-2xl transition-transform duration-200",
             // Mobile: toggle via hamburger
             isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
             // Desktop: hover-reveal overlay
