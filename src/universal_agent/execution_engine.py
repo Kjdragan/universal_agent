@@ -458,6 +458,11 @@ class ProcessTurnAdapter:
         """Lazily initialize and enter the persistent SDK client."""
         if self._client is None:
             from claude_agent_sdk.client import ClaudeSDKClient
+            # Guard against E2BIG: the SDK passes **os.environ to the child
+            # process.  With 190+ Infisical secrets and an ~85 KB system prompt
+            # CLI arg, the combined argv+envp can exceed Linux ARG_MAX (2 MB).
+            # Strip non-essential bloat vars BEFORE the subprocess is spawned.
+            sanitize_env_for_subprocess()
             self._client = ClaudeSDKClient(self._options)
             # Enter the context manager manually
             await self._client.__aenter__()
