@@ -80,6 +80,7 @@ dependencies = [
     "typer>=0.12",
     "infisical-python==2.3.5",
     "pyjwt>=2.12.1",
+    "langsmith[claude-agent-sdk,otel]>=0.7.22",
 ]
 
 [tool.ruff]

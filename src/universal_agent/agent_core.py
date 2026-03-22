@@ -38,6 +38,7 @@ from claude_agent_sdk.types import (
     UserMessage,
     HookMatcher,
 )
+
 if TYPE_CHECKING:
     from composio import Composio
 from universal_agent.durable.tool_gateway import (
@@ -191,7 +192,10 @@ def _is_sdk_compact_boundary_message(msg: Any) -> bool:
         data = getattr(msg, "data", None)
         if isinstance(data, dict):
             raw_subtype = data.get("subtype")
-            if isinstance(raw_subtype, str) and raw_subtype.lower() == "compact_boundary":
+            if (
+                isinstance(raw_subtype, str)
+                and raw_subtype.lower() == "compact_boundary"
+            ):
                 return True
         return False
     except Exception:
@@ -294,8 +298,10 @@ def _extract_result_message_telemetry(msg: Any) -> dict[str, Any]:
 # LOGGING & CAPTURE UTILS
 # =============================================================================
 
+
 class QueueLogHandler(logging.Handler):
     """Logging handler that pushes records to an asyncio Queue."""
+
     def __init__(self, queue: asyncio.Queue):
         super().__init__()
         self.queue = queue
@@ -311,16 +317,25 @@ class QueueLogHandler(logging.Handler):
                     "level": record.levelname,
                     "prefix": f"[{record.name}]",
                     "is_log": True,
-                }
+                },
             )
             # Use call_soon_threadsafe to basic-safety across threads if needed
             self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
         except Exception:
             self.handleError(record)
 
+
 class StreamCapture:
     """Captures stdout/stderr and mirrors to a queue while keeping original output."""
-    def __init__(self, queue: asyncio.Queue, stream, level="INFO", prefix="[STDOUT]", log_handler: Optional[logging.Handler] = None):
+
+    def __init__(
+        self,
+        queue: asyncio.Queue,
+        stream,
+        level="INFO",
+        prefix="[STDOUT]",
+        log_handler: Optional[logging.Handler] = None,
+    ):
         self.queue = queue
         self.stream = stream
         self.level = level
@@ -331,23 +346,44 @@ class StreamCapture:
     def write(self, text: str):
         # Mirror to original stream
         self.stream.write(text)
-        
+
         # Determine if we should send to queue (filter empty newlines if desired)
         if text.strip():
             # Heuristic: Detect log level from content
             computed_level = self.level
-            
+
             clean_text = text.strip()
             # Auto-detect ERRORs if level is INFO (upgrade strategy)
             # This allows STDERR to be INFO by default (neutral color) but turn RED on actual errors
             if self.level == "INFO":
-                if any(x in clean_text for x in ["Traceback (most recent call last)", "Error:", "Exception:", "CRITICAL", "FATAL"]):
+                if any(
+                    x in clean_text
+                    for x in [
+                        "Traceback (most recent call last)",
+                        "Error:",
+                        "Exception:",
+                        "CRITICAL",
+                        "FATAL",
+                    ]
+                ):
                     computed_level = "ERROR"
-            
+
             # If default is ERROR (legacy usage), try to downgrade if it looks like a status message
             elif self.level == "ERROR":
                 # Common indicators of non-error status messages
-                if any(x in clean_text for x in ["🚀", "✅", "⏳", "INFO", "DEBUG", "Starting", "Success", "Completed"]):
+                if any(
+                    x in clean_text
+                    for x in [
+                        "🚀",
+                        "✅",
+                        "⏳",
+                        "INFO",
+                        "DEBUG",
+                        "Starting",
+                        "Success",
+                        "Completed",
+                    ]
+                ):
                     computed_level = "INFO"
                 # Check for explicit log level prefixes like "[INFO]" or "INFO:"
                 elif "[INFO]" in clean_text or clean_text.startswith("INFO"):
@@ -363,13 +399,13 @@ class StreamCapture:
                     "level": computed_level,
                     "prefix": self.prefix,
                     "is_log": True,
-                }
+                },
             )
             try:
                 self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
             except Exception:
                 pass
-            
+
             # 2. Emit to Log File (for run.log persistence)
             if self.log_handler:
                 try:
@@ -377,16 +413,18 @@ class StreamCapture:
                     level_int = getattr(logging, computed_level, logging.INFO)
                     # Create a LogRecord manually to format matches other logs
                     record = logging.LogRecord(
-                        name=self.prefix.strip("[]"), # Use prefix as logger name e.g. "STDOUT"
+                        name=self.prefix.strip(
+                            "[]"
+                        ),  # Use prefix as logger name e.g. "STDOUT"
                         level=level_int,
                         pathname="agent_core.py",
                         lineno=0,
                         msg=text.strip(),
                         args=(),
-                        exc_info=None
+                        exc_info=None,
                     )
                     # Using call_soon_threadsafe is tricky for handlers, but FileHandler is thread-safe usually.
-                    # We'll just emit directly as we are likely in a thread or async context 
+                    # We'll just emit directly as we are likely in a thread or async context
                     # where file I/O is acceptable for logging.
                     self.log_handler.emit(record)
                 except Exception:
@@ -405,7 +443,7 @@ class StreamCapture:
 def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
     """
     Check if any sub-agent definitions have explicit hooks configured.
-    
+
     NOTE: As of SDK 0.1.3+, hooks from the MAIN agent's ClaudeAgentOptions
     automatically apply to all sub-agents. The hook system is "agent-agnostic"
     and operates at the CLI level.
@@ -515,7 +553,6 @@ async def malformed_tool_guardrail_hook(
                 "systemMessage": (
                     "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                     "**USE MCP TOOLS INSTEAD:**\n"
-                    
                     "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                     "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool (EXCEPT X/Twitter).\n"
                     "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
@@ -589,7 +626,7 @@ async def malformed_tool_guardrail_hook(
     if tool_name == "Write":
         file_path = tool_input.get("file_path")
         content = tool_input.get("content")
-        
+
         # CRITICAL CASE: Both params missing = complete context overflow (truncated tool call)
         if file_path is None and content is None:
             logfire.error(
@@ -615,7 +652,7 @@ async def malformed_tool_guardrail_hook(
                     "permissionDecisionReason": "Blocked zero-param Write (critical context overflow).",
                 },
             }
-        
+
         # STANDARD CASE: Content is None or empty/whitespace
         if content is None or (isinstance(content, str) and not content.strip()):
             logfire.warning(
@@ -730,23 +767,23 @@ async def pre_compact_context_capture_hook(
 ) -> dict:
     """
     PreCompact hook that captures context state before Claude compacts.
-    
+
     This helps us:
     1. Log when compaction occurs (auto vs manual)
     2. Capture state for later comparison
     3. Optionally inject our own summary
-    
+
     NOTE: This hook is called BEFORE compaction happens.
     We cannot prevent compaction, but we can observe and supplement.
     """
     global _COMPACTION_COUNT
     _COMPACTION_COUNT += 1
-    
+
     context = context if isinstance(context, dict) else {}
     trigger = input_data.get("trigger", "unknown")  # "auto" or "manual"
     session_id = input_data.get("session_id", "unknown")
     transcript_path = input_data.get("transcript_path", "")
-    
+
     # Log the compaction event
     compaction_event = {
         "count": _COMPACTION_COUNT,
@@ -756,25 +793,26 @@ async def pre_compact_context_capture_hook(
         "timestamp": datetime.now().isoformat(),
     }
     _COMPACTION_LOG.append(compaction_event)
-    
-    print(f"\n{'='*60}")
+
+    print(f"\n{'=' * 60}")
     print(f"📦 COMPACTION TRIGGERED (#{_COMPACTION_COUNT})")
     print(f"   Trigger: {trigger}")
     print(f"   Session: {session_id}")
     print(f"   Transcript: {transcript_path}")
-    print(f"{'='*60}\n")
-    
+    print(f"{'=' * 60}\n")
+
     logfire.info(
         "pre_compact_triggered",
         compaction_count=_COMPACTION_COUNT,
         trigger=trigger,
         session_id=session_id,
     )
-    
+
     # Try to capture transcript size before compaction
     if transcript_path:
         try:
             import os
+
             if os.path.exists(transcript_path):
                 size = os.path.getsize(transcript_path)
                 print(f"   Transcript size: {size:,} bytes")
@@ -785,6 +823,7 @@ async def pre_compact_context_capture_hook(
     # Flush memory snapshot before compaction (best-effort)
     try:
         from universal_agent.feature_flags import memory_enabled
+
         if memory_enabled():
             from universal_agent.execution_context import get_current_workspace
             from universal_agent.memory.memory_flush import flush_pre_compact_memory
@@ -808,7 +847,7 @@ async def pre_compact_context_capture_hook(
                 )
     except Exception as e:
         print(f"⚠️ Memory flush failed: {e}")
-    
+
     # Return continue signal - let compaction proceed
     # We could inject a systemMessage here if we wanted to influence
     # Claude's compaction with our own context summary
@@ -821,8 +860,6 @@ def get_compaction_stats() -> dict:
         "total_compactions": _COMPACTION_COUNT,
         "compaction_log": _COMPACTION_LOG.copy(),
     }
-
-
 
 
 def configure_logfire():
@@ -868,6 +905,24 @@ def configure_logfire():
     try:
         logfire.instrument_httpx(capture_headers=True)
     except Exception:
+        pass
+
+    try:
+        logfire.instrument_sqlite3()
+    except Exception:
+        pass
+
+    # Configure Claude SDK tracking via Langsmith OTel
+    try:
+        import os
+
+        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+        os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+        os.environ["LANGSMITH_TRACING"] = "true"
+        from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
+
+        configure_claude_agent_sdk()
+    except Exception as e:
         pass
 
     return True
@@ -1201,7 +1256,7 @@ class UniversalAgent:
         # Async queue for merging events from multiple sources (SDK + tool logs)
         self._event_queue: Optional[asyncio.Queue] = None
         self._hooks = hooks
-        
+
         # Initialize History
         self.history = MessageHistory(system_prompt_tokens=2000)
 
@@ -1228,7 +1283,11 @@ class UniversalAgent:
 
         bootstrap_runtime_environment()
         global LOGFIRE_DISABLED, LOGFIRE_TOKEN
-        LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {"1", "true", "yes"}
+        LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         LOGFIRE_TOKEN = None
         if not LOGFIRE_DISABLED:
             LOGFIRE_TOKEN = (
@@ -1238,7 +1297,7 @@ class UniversalAgent:
             )
 
         from universal_agent.agent_setup import AgentSetup
-        
+
         # Use AgentSetup for unified initialization
         self._setup = AgentSetup(
             workspace_dir=self.workspace_dir,
@@ -1250,7 +1309,7 @@ class UniversalAgent:
         if self._hooks:
             self._setup.set_hooks(self._hooks)
         await self._setup.initialize()
-        
+
         # Copy references from setup
         self.composio = self._setup.composio
         self.session = self._setup.session
@@ -1285,7 +1344,7 @@ class UniversalAgent:
 
         # Initialize MessageHistory for context management (Anthropic pattern)
         self.history = MessageHistory(system_prompt_tokens=2000)
-        
+
         # [FIX] Hydrate history from transcript if resuming a session
         try:
             self._try_load_history_from_transcript()
@@ -1298,32 +1357,38 @@ class UniversalAgent:
         # [NEW] Centralized Logging: Create run.log in workspace
         try:
             log_path = os.path.join(self.workspace_dir, "run.log")
-            
+
             # Create file handler
-            self.file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-            self.file_handler.setFormatter(logging.Formatter(
-                '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
-                datefmt='%H:%M:%S'
-            ))
-            
+            self.file_handler = logging.FileHandler(
+                log_path, mode="a", encoding="utf-8"
+            )
+            self.file_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+                    datefmt="%H:%M:%S",
+                )
+            )
+
             # Add to root logger to capture all libraries (composio, etc)
             root_logger = logging.getLogger()
             root_logger.addHandler(self.file_handler)
-            
+
             # Also ensure our specific logger has it
             logger = logging.getLogger("universal_agent")
             if logger.propagate is False:
                 logger.addHandler(self.file_handler)
-                
+
             # FORCE capture of httpx/httpcore logs
             for lib in ["httpx", "httpcore"]:
                 lib_logger = logging.getLogger(lib)
                 lib_logger.setLevel(logging.INFO)
                 lib_logger.addHandler(self.file_handler)
-                lib_logger.propagate = True # Ensure it bubbles to root too for QueueHandler
-                
+                lib_logger.propagate = (
+                    True  # Ensure it bubbles to root too for QueueHandler
+                )
+
             logging.info(f"📝 Centralized logging initialized: {log_path}")
-            
+
         except Exception as e:
             print(f"Failed to setup run.log: {e}")
 
@@ -1334,18 +1399,18 @@ class UniversalAgent:
 
         # 1. Clean up logging to prevent 'Event loop is closed' errors during shutdown
         try:
-            if hasattr(self, 'file_handler') and self.file_handler:
+            if hasattr(self, "file_handler") and self.file_handler:
                 root_logger = logging.getLogger()
                 root_logger.removeHandler(self.file_handler)
-                
+
                 # Also remove from specific loggers where it might have been added
                 logger = logging.getLogger("universal_agent")
                 logger.removeHandler(self.file_handler)
-                
+
                 for lib in ["httpx", "httpcore"]:
                     lib_logger = logging.getLogger(lib)
                     lib_logger.removeHandler(self.file_handler)
-                
+
                 self.file_handler.close()
                 self.file_handler = None
         except Exception as e:
@@ -1372,7 +1437,7 @@ class UniversalAgent:
             content = f.read()
 
         import re
-        
+
         # Split by major sections
         # Format:
         # ### 👤 User Request
@@ -1380,64 +1445,68 @@ class UniversalAgent:
         # ---
         # ### 🔄 Iteration X
         # ...
-        
+
         # 1. capture User Request
         # The transcript stores the ORIGINAL user request.
-        # Ideally, we should parse the entire conversation, but the transcript format 
-        # is optimized for reading, not parsing. 
+        # Ideally, we should parse the entire conversation, but the transcript format
+        # is optimized for reading, not parsing.
         # A robust implementation would be to save/load `history.json` alongside transcript.
-        
-        # STRATEGY: For now, we will try to extract the INITIAL PROMPT and any subsequent 
-        # turns if possible. But since `message_history.py` tracks tokens, naively pushing text 
+
+        # STRATEGY: For now, we will try to extract the INITIAL PROMPT and any subsequent
+        # turns if possible. But since `message_history.py` tracks tokens, naively pushing text
         # might be inaccurate.
-        
+
         # BETTER STRATEGY: The transcript contains the User Request. Use that as the starting point.
         # If there are multiple turns, they might be listed as "User Request" blocks?
         # Looking at transcript.md, it seems `render_agent_events` appends.
-        
+
         # Regex to find all User Requests
-        user_requests = re.findall(r"### 👤 User Request\n>(.*?)(?=\n\n|\n-|$)", content, re.DOTALL)
-        
+        user_requests = re.findall(
+            r"### 👤 User Request\n>(.*?)(?=\n\n|\n-|$)", content, re.DOTALL
+        )
+
         if user_requests:
             # We found history!
-            # Since we can't easily reconstruct the *exact* tool outputs/states from markdown 
-            # (it truncates big outputs), we will treat previous iterations as a summarized context 
+            # Since we can't easily reconstruct the *exact* tool outputs/states from markdown
+            # (it truncates big outputs), we will treat previous iterations as a summarized context
             # or just load the user inputs to least prompt the model with "Here is what I asked before".
             # BUT, to truly fix amnesia, we need the model's RESPONSES too.
-            
+
             # Parsing the 'result' from the transcript is hard because it's markdown-formatted.
             # HOWEVER, we can see "### 🔄 Iteration 1" ... "End of Transcript"
-            
+
             # Simple Fix for "Follow-up" Amnesia:
             # Load the LAST User Request? No, we need the context.
-            
-            # Parsing is risky. 
-            # Plan B: Look for `history.json`? It doesn't exist yet. 
+
+            # Parsing is risky.
+            # Plan B: Look for `history.json`? It doesn't exist yet.
             # We should START saving `history.json` to avoid this mess in future.
-            
-            # For THIS fix: We will scrape the text of the transcript and feed it as 
+
+            # For THIS fix: We will scrape the text of the transcript and feed it as
             # a "summary of prior interaction" if it's substantial.
             pass
-            
-        # [CRITICAL] To properly fix this without parsing complex markdown, 
+
+        # [CRITICAL] To properly fix this without parsing complex markdown,
         # we should implement `history.json` persistence in `save_checkpoint`.
         # But we need to recover the CURRENT session.
         # Let's try to extract the user query and the final result.
-        
+
         for req in user_requests:
             cleaned_req = req.strip()
             if cleaned_req:
                 self.history.add_message("user", cleaned_req)
                 print(f"   + Restored User Message: {cleaned_req[:50]}...")
-                
+
                 # Heuristic: Add a dummy assistant response to represent the work done.
                 # This prevents the model from thinking it hasn't answered yet.
-                self.history.add_message("assistant", "(Prior turn completed. See transcript for details.)")
+                self.history.add_message(
+                    "assistant", "(Prior turn completed. See transcript for details.)"
+                )
 
     def bind_workspace(self, new_workspace: str) -> None:
         """Update workspace for URW phase transitions."""
         self.workspace_dir = new_workspace
-        if hasattr(self, '_setup') and self._setup:
+        if hasattr(self, "_setup") and self._setup:
             self._setup.bind_workspace(new_workspace)
             self.options = self._setup.options
 
@@ -1450,7 +1519,7 @@ class UniversalAgent:
         agent.session = setup.session
         agent.options = setup.options
         agent.run_id = setup.run_id
-        
+
         agent.trace = {
             "run_id": agent.run_id,
             "session_info": {
@@ -1475,17 +1544,19 @@ class UniversalAgent:
         }
         agent._initialized = True
         agent.history = MessageHistory(system_prompt_tokens=2000)
-        
+
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=agent.run_id)
-        
+
         return agent
 
-    def _build_system_prompt(self, workspace_path: str, agents: Optional[dict] = None) -> str:
+    def _build_system_prompt(
+        self, workspace_path: str, agents: Optional[dict] = None
+    ) -> str:
         """Build the main system prompt."""
-        
+
         temporal_line = self._get_temporal_context_line()
-        
+
         # Base prompt structure
         prompt = (
             f"{temporal_line}\n"
@@ -1511,7 +1582,6 @@ class UniversalAgent:
             "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
             "**Tool Namespaces:**\n"
             "- `mcp__composio__*` - Remote tools (Slack, Search, etc.) -> Call directly\n"
-            
             "- `mcp__internal__*` - Local tools (File I/O, Memory) -> Call directly\n"
             "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
             "## 🚀 EXECUTION STRATEGY (THE COORDINATOR LOOP)\n"
@@ -1549,7 +1619,7 @@ class UniversalAgent:
             "- Keep email bodies concise.\n\n"
             f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
-        
+
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"
@@ -1638,16 +1708,18 @@ class UniversalAgent:
         tool_knowledge = get_tool_knowledge_block()
         skills = discover_skills()
         skills_xml = generate_skills_xml(skills)
-        
+
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"
         if skills_xml:
             prompt += f"\n\n{skills_xml}"
         return prompt
 
-    def _build_report_writer_prompt(self, workspace_path: str, cached_corpus: str = None) -> str:
+    def _build_report_writer_prompt(
+        self, workspace_path: str, cached_corpus: str = None
+    ) -> str:
         """Build the report-writer sub-agent prompt.
-        
+
         Args:
             workspace_path: Path to the session workspace
             cached_corpus: Optional pre-loaded corpus text from checkpoint cache
@@ -1663,12 +1735,12 @@ class UniversalAgent:
             "# 📝 REPORT WRITER AGENT\n\n"
             "You create professional HTML research reports using a deterministic 5-phase workflow.\n\n"
         )
-        
+
         # Inject Skill Knowledge for subagents
         tool_knowledge = get_tool_knowledge_block()
         skills = discover_skills()
         skills_xml = generate_skills_xml(skills)
-        
+
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"
         if skills_xml:
@@ -1677,16 +1749,14 @@ class UniversalAgent:
         # If we have cached corpus, inject it directly to skip tool calls
         if cached_corpus:
             prompt += (
-                "## RESEARCH DATA (Pre-loaded)\n\n"
-                f"```\n{cached_corpus}\n```\n\n"
-                "---\n\n"
+                f"## RESEARCH DATA (Pre-loaded)\n\n```\n{cached_corpus}\n```\n\n---\n\n"
             )
         else:
             prompt += (
                 "## RESEARCH DATA\n\n"
                 f"Read the corpus: `{workspace_path}/tasks/[task_name]/refined_corpus.md`\n\n"
             )
-        
+
         prompt += (
             "## 🔄 MANDATORY WORKFLOW\n\n"
             "Execute these phases **in order**. Each phase has a specific MCP tool.\n\n"
@@ -1725,7 +1795,7 @@ class UniversalAgent:
             "### Phase 4: ASSEMBLY\n"
             "After cleanup completes, call:\n"
             "```\n"
-            "mcp__internal__compile_report(theme=\"modern\")\n"
+            'mcp__internal__compile_report(theme="modern")\n'
             "```\n"
             "- Tool compiles all sections into final HTML\n"
             "- Output: `work_products/report.html`\n"
@@ -1733,7 +1803,7 @@ class UniversalAgent:
             "### Phase 5: PDF CONVERSION\n"
             "After HTML is compiled, convert to PDF:\n"
             "```\n"
-            "mcp__internal__html_to_pdf(html_path=\"work_products/report.html\", output_path=\"work_products/report.pdf\")\n"
+            'mcp__internal__html_to_pdf(html_path="work_products/report.html", output_path="work_products/report.pdf")\n'
             "```\n"
             "- Tool converts the HTML report to a styled PDF\n"
             "- Output: `work_products/report.pdf`\n\n"
@@ -1749,7 +1819,7 @@ class UniversalAgent:
             "6. The tools handle all file I/O - you focus on planning and coordination\n\n"
             "**👉 START NOW: Read corpus → Create outline → draft_report_parallel → cleanup_report → compile_report → html_to_pdf**\n"
         )
-        
+
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"
@@ -1773,14 +1843,16 @@ class UniversalAgent:
         self._event_queue = asyncio.Queue()
 
         # Emit session info
-        await self._event_queue.put(AgentEvent(
-            type=EventType.SESSION_INFO,
-            data={
-                "session_url": self.session.mcp.url,  # type: ignore
-                "workspace": self.workspace_dir,
-                "user_id": self.user_id,
-            },
-        ))
+        await self._event_queue.put(
+            AgentEvent(
+                type=EventType.SESSION_INFO,
+                data={
+                    "session_url": self.session.mcp.url,  # type: ignore
+                    "workspace": self.workspace_dir,
+                    "user_id": self.user_id,
+                },
+            )
+        )
 
         # Setup log bridging from mcp_server (Deprecated/No-op for subprocess, but kept for structure)
         # Instead, we attach our own handlers to capture root logging + stdout/stderr
@@ -1790,26 +1862,31 @@ class UniversalAgent:
         # 1. Attach QueueLogHandler to root logger
         # 1. Attach QueueLogHandler to root logger
         queue_handler = QueueLogHandler(self._event_queue)
-        # queue_handler.setLevel(logging.INFO) 
+        # queue_handler.setLevel(logging.INFO)
         root_logger = logging.getLogger()
         root_logger.addHandler(queue_handler)
 
         # Attach to mcp_server.mcp_log for in-process tool logging (Critical for UI visibility)
         try:
             from mcp_server import set_mcp_log_callback
-            
+
             def mcp_bridge_sync(msg, level, prefix=""):
                 if self._event_queue:
                     try:
                         loop = asyncio.get_running_loop()
                         event = AgentEvent(
-                            type=EventType.STATUS, 
-                            data={"status": msg, "level": level, "prefix": prefix, "is_log": True}
+                            type=EventType.STATUS,
+                            data={
+                                "status": msg,
+                                "level": level,
+                                "prefix": prefix,
+                                "is_log": True,
+                            },
                         )
                         loop.call_soon_threadsafe(self._event_queue.put_nowait, event)
                     except Exception:
                         pass
-            
+
             set_mcp_log_callback(mcp_bridge_sync)
         except ImportError:
             print("DEBUG CORE: Could not import mcp_server for log hooking.")
@@ -1820,28 +1897,34 @@ class UniversalAgent:
         # capturing strictly to file avoids buffer deadlocks.
         original_stdout_fd = os.dup(1)
         original_stderr_fd = os.dup(2)
-        
+
         run_log_path = os.path.join(self.workspace_dir, "run.log")
         journal_path = os.path.join(self.workspace_dir, "activity_journal.log")
-        
-        # Open in append mode, unbuffered (0) or line buffered (1) not supported for binary, 
+
+        # Open in append mode, unbuffered (0) or line buffered (1) not supported for binary,
         # so we use default key and flush often.
         run_log_file = open(run_log_path, "a")
         journal_file = open(journal_path, "a", encoding="utf-8")
-        
+
         def log_to_journal(event: AgentEvent):
             """Helper to log high-level activity to the journal."""
             try:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                etype = event.type.value if hasattr(event.type, "value") else str(event.type)
+                etype = (
+                    event.type.value
+                    if hasattr(event.type, "value")
+                    else str(event.type)
+                )
                 data = event.data or {}
-                
+
                 # Dynamic author determined by context or explicit event data
                 # Default to current_agent_name if not provided in data
-                current_author = data.get("author") or getattr(self, "current_agent_name", DEFAULT_AGENT_NAME)
-                
+                current_author = data.get("author") or getattr(
+                    self, "current_agent_name", DEFAULT_AGENT_NAME
+                )
+
                 entry = f"[{timestamp}] [{etype.upper()}]"
-                
+
                 if etype == "text":
                     author = data.get("author", current_author)
                     text = data.get("text", "").strip()
@@ -1852,7 +1935,9 @@ class UniversalAgent:
                     if thinking:
                         entry += f" Reasoning: {thinking}"
                 elif etype == "tool_call":
-                    entry += f" Calling {data.get('name')} with input: {data.get('input')}"
+                    entry += (
+                        f" Calling {data.get('name')} with input: {data.get('input')}"
+                    )
                 elif etype == "tool_result":
                     entry += f" {data.get('tool_name')} result: {data.get('content_preview', '(no preview)')}"
                 elif etype == "status":
@@ -1863,23 +1948,27 @@ class UniversalAgent:
                         entry += f" {data.get('status')}"
                 elif etype == "error":
                     entry += f" ERROR: {data.get('error')}"
-                
+
                 if entry.strip():
                     journal_file.write(entry + "\n")
                     journal_file.flush()
             except Exception as e:
                 print(f"DEBUG CORE: Journal logging failed: {e}", flush=True)
+
         # Flush python buffers before redirecting
         sys.stdout.flush()
         sys.stderr.flush()
-        
+
         # Redirect stdout/stderr to the file descriptor of run.log
         os.dup2(run_log_file.fileno(), 1)
         os.dup2(run_log_file.fileno(), 2)
 
         async def sdk_worker():
             """Worker to consume SDK events and push to queue."""
-            print("DEBUG CORE: sdk_worker started. Calling _run_conversation...", flush=True)
+            print(
+                "DEBUG CORE: sdk_worker started. Calling _run_conversation...",
+                flush=True,
+            )
             try:
                 # Use _run_conversation_loop for soft restart capability
                 async for event in self._run_conversation_loop(query):
@@ -1890,34 +1979,40 @@ class UniversalAgent:
             except Exception as e:
                 # Log traceback explicitly to capture it
                 import traceback
+
                 traceback.print_exc()
                 if self._event_queue:
-                    await self._event_queue.put(AgentEvent(type=EventType.ERROR, data={"error": str(e)}))
+                    await self._event_queue.put(
+                        AgentEvent(type=EventType.ERROR, data={"error": str(e)})
+                    )
                     await self._event_queue.put(None)
 
-        print("DEBUG CORE: About to start sdk_worker task (Client lifecycle managed by loop)...", flush=True)
+        print(
+            "DEBUG CORE: About to start sdk_worker task (Client lifecycle managed by loop)...",
+            flush=True,
+        )
         # Create worker task directly, no outer client context
         worker_task = asyncio.create_task(sdk_worker())
-        
+
         try:
             # Consume from the merged queue
             while True:
                 event = await self._event_queue.get()
                 if event is None:
                     break
-                
+
                 # Journal EVERY event that passes through the UI queue
                 log_to_journal(event)
 
                 if event.type == EventType.ITERATION_END:
                     self._save_trace()
-                
+
                 yield event
         finally:
             # Cleanup Hooks
             try:
                 root_logger.removeHandler(queue_handler)
-                
+
                 # Flush and restore stdout/stderr
                 try:
                     sys.stdout.flush()
@@ -1927,18 +2022,19 @@ class UniversalAgent:
 
                 os.dup2(original_stdout_fd, 1)
                 os.dup2(original_stderr_fd, 2)
-                
+
                 os.close(original_stdout_fd)
                 os.close(original_stderr_fd)
                 run_log_file.close()
             except Exception:
                 pass
-            
+
             if not worker_task.done():
                 worker_task.cancel()
             # Cleanup Legacy Hook
             try:
                 from universal_agent.mcp_server import set_mcp_log_callback
+
                 set_mcp_log_callback(None)
             except (ImportError, Exception):
                 pass
@@ -1950,52 +2046,53 @@ class UniversalAgent:
         """Inner loop for handling soft restarts."""
         # Initialize Context Manager
         from universal_agent.memory.context_manager import ContextManager
+
         context_manager = ContextManager()
-        
+
         iteration = 1
         initial_history_prompt = None
-        
+
         while True:
             # Check context limit before connecting?
-            # Actually we prune AFTER iterations usually, but if we are restarting, 
+            # Actually we prune AFTER iterations usually, but if we are restarting,
             # we need to supply the pruned history as the 'prompt' to the new connection.
-            
+
             # If we have a restart prompt, use it. Otherwise use the user query for the FIRST run.
             # But wait: 'prompt' in connect() establishes the INITIAL state.
             # If we are restarting, 'query' has already been asked.
             # So the 'prompt' passed to connect() should be the ENTIRE pruned history including the original query.
             # And then we do NOT call client.query() again immediately unless we have a pending user input?
             # Actually, `client.query` sends a message. `client.connect(prompt=...)` essentially pre-fills the chat.
-            
+
             # Strategy:
             # 1. Start Client.
             # 2. If valid history exists (restart), pass it to connect().
             # 3. If first run, pass None to connect(), then call query().
-            
+
             current_prompt_stream = initial_history_prompt
-            
+
             print(f"DEBUG CORE: Starting Client Session (Iteration {iteration})...")
             async with ClaudeSDKClient(self.options) as client:
                 self.client = client
                 await client.connect(prompt=current_prompt_stream)
-                
+
                 # If this is the FIRST iteration, we need to send the user query manually
                 # UNLESS it was already part of initial_history_prompt (which is None for first run)
                 if iteration == 1 and not initial_history_prompt:
-                     # Send the initial query
-                     self.history.add_message("user", query)
-                     await self.client.query(query)
+                    # Send the initial query
+                    self.history.add_message("user", query)
+                    await self.client.query(query)
 
                 # Event Loop
                 # We need to yield events from the conversation
                 # process_events yields AgentEvent
                 async for event in self._process_events(query, iteration):
                     yield event
-                    
+
                     # Logic to detect if we need to restart?
                     # The message loop breaks if ResultMessage is found (end of turn).
                     # But we might need to check token usage periodically or AFTER the turn.
-                    
+
                 # End of Turn or Error or Restart Trigger
                 # Check metrics
                 pressure_state = _get_context_pressure_state(self.trace)
@@ -2025,28 +2122,36 @@ class UniversalAgent:
                     context_tokens_for_reset > TRUNCATION_THRESHOLD
                     and high_turns_without_compaction > compaction_grace_turns
                 ):
-                     print("DEBUG CORE: Context pressure persisted without compaction. Triggering compaction...")
-                     # 1. Get current history from client (client doesn't expose it easily, we track in self.history)
-                     # 2. Prune self.history
-                     # 3. Convert to dicts
-                     # 4. Set initial_history_prompt
-                     # 5. Continue loop -> Reconnects with new history
-                     
-                     full_history = self.history.get_messages()
-                     pruned_history, stats = context_manager.prune_history(full_history)
-                     
-                     print(f"DEBUG CORE: Pruned tokens: {stats.original_tokens} -> {stats.pruned_tokens}")
-                     
-                     # Prepare for next iteration
-                     initial_history_prompt = context_manager.convert_to_dicts(pruned_history)
-                     self.trace["context_pressure"] = _default_context_pressure_state()
-                     iteration += 1
-                     continue # Loop back to start new client
-                
+                    print(
+                        "DEBUG CORE: Context pressure persisted without compaction. Triggering compaction..."
+                    )
+                    # 1. Get current history from client (client doesn't expose it easily, we track in self.history)
+                    # 2. Prune self.history
+                    # 3. Convert to dicts
+                    # 4. Set initial_history_prompt
+                    # 5. Continue loop -> Reconnects with new history
+
+                    full_history = self.history.get_messages()
+                    pruned_history, stats = context_manager.prune_history(full_history)
+
+                    print(
+                        f"DEBUG CORE: Pruned tokens: {stats.original_tokens} -> {stats.pruned_tokens}"
+                    )
+
+                    # Prepare for next iteration
+                    initial_history_prompt = context_manager.convert_to_dicts(
+                        pruned_history
+                    )
+                    self.trace["context_pressure"] = _default_context_pressure_state()
+                    iteration += 1
+                    continue  # Loop back to start new client
+
                 # If we get here without continue, we are done
                 break
-                
-    async def _process_events(self, query: str, iteration: int) -> AsyncGenerator[AgentEvent, None]:
+
+    async def _process_events(
+        self, query: str, iteration: int
+    ) -> AsyncGenerator[AgentEvent, None]:
         """Process events from the client's response stream."""
         self.tool_name_map = getattr(self, "tool_name_map", {})
         step_id = str(uuid.uuid4())
@@ -2057,7 +2162,7 @@ class UniversalAgent:
         )
 
         # Note: client.query() is handled by the caller (_run_conversation_loop)
-        
+
         tool_calls_this_iter = []
         auth_link = None
         current_agent_name = getattr(self, "current_agent_name", DEFAULT_AGENT_NAME)
@@ -2068,7 +2173,9 @@ class UniversalAgent:
             async for msg in self.client.receive_response():  # type: ignore
                 if _is_sdk_compact_boundary_message(msg):
                     compact_payload = _extract_sdk_compact_boundary_payload(msg)
-                    self.trace.setdefault("compact_boundary_events", []).append(compact_payload)
+                    self.trace.setdefault("compact_boundary_events", []).append(
+                        compact_payload
+                    )
                     notice = _format_compact_boundary_notice(compact_payload)
                     pressure_state = _get_context_pressure_state(self.trace)
                     pressure_state["compaction_seen_iteration"] = iteration
@@ -2098,10 +2205,14 @@ class UniversalAgent:
                     continue
 
                 typed_task_payload = (
-                    extract_typed_task_payload(msg) if typed_task_events_active else None
+                    extract_typed_task_payload(msg)
+                    if typed_task_events_active
+                    else None
                 )
                 if typed_task_payload is not None:
-                    self.trace.setdefault("typed_task_messages", []).append(typed_task_payload)
+                    self.trace.setdefault("typed_task_messages", []).append(
+                        typed_task_payload
+                    )
                     lifecycle = str(typed_task_payload.get("task_lifecycle") or "event")
                     summary = str(
                         typed_task_payload.get("summary")
@@ -2128,34 +2239,42 @@ class UniversalAgent:
                     # TRACK SUB-AGENT CONTEXT
                     parent_tool_use_id = getattr(msg, "parent_tool_use_id", None)
                     if not parent_tool_use_id:
-                         # Compatibility check
-                         parent_tool_use_id = msg.__dict__.get("parent_tool_use_id")
-                    
+                        # Compatibility check
+                        parent_tool_use_id = msg.__dict__.get("parent_tool_use_id")
+
                     msg_author = DEFAULT_AGENT_NAME
                     if parent_tool_use_id:
-                        raw_name = self.tool_name_map.get(parent_tool_use_id, "Subagent")
-                        if any(x in raw_name for x in ["Specialist", "Author", "Agent"]):
+                        raw_name = self.tool_name_map.get(
+                            parent_tool_use_id, "Subagent"
+                        )
+                        if any(
+                            x in raw_name for x in ["Specialist", "Author", "Agent"]
+                        ):
                             msg_author = raw_name
                         else:
                             msg_author = f"Subagent: {raw_name}"
-                    
+
                     self.current_agent_name = msg_author
 
                     # Track token usage
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
+
                         def get_val(obj, key):
-                            if isinstance(obj, dict): return obj.get(key, 0)
+                            if isinstance(obj, dict):
+                                return obj.get(key, 0)
                             return getattr(obj, key, 0)
-                        
+
                         inp = get_val(usage_source, "input_tokens") or 0
                         out = get_val(usage_source, "output_tokens") or 0
-                        
+
                         msg_id = getattr(msg, "id", None)
-                        if (msg_id and msg_id not in self._processed_msg_ids) or not msg_id:
+                        if (
+                            msg_id and msg_id not in self._processed_msg_ids
+                        ) or not msg_id:
                             if msg_id:
                                 self._processed_msg_ids.add(msg_id)
-                            
+
                             self.trace["token_usage"]["input"] += inp
                             self.trace["token_usage"]["output"] += out
                             self.trace["token_usage"]["total"] += inp + out
@@ -2171,7 +2290,7 @@ class UniversalAgent:
                                 sub_type = block.input.get("subagent_type")
                                 if sub_type:
                                     resolved_name = f"Subagent: {sub_type}"
-                            
+
                             self.tool_name_map[block.id] = resolved_name
                             self.current_agent_name = resolved_name
 
@@ -2189,8 +2308,12 @@ class UniversalAgent:
                                 "iteration": iteration,
                                 "name": block.name,
                                 "id": block.id,
-                                "time_offset_seconds": round(time.time() - self.start_ts, 3),
-                                "input": block.input if hasattr(block, "input") else None,
+                                "time_offset_seconds": round(
+                                    time.time() - self.start_ts, 3
+                                ),
+                                "input": block.input
+                                if hasattr(block, "input")
+                                else None,
                             }
                             self.trace["tool_calls"].append(tool_record)
                             tool_calls_this_iter.append(tool_record)
@@ -2207,17 +2330,25 @@ class UniversalAgent:
 
                         elif isinstance(block, TextBlock):
                             if "connect.composio.dev/link" in block.text:
-                                links = re.findall(r"https://connect\.composio\.dev/link/[^\s\)]+", block.text)
+                                links = re.findall(
+                                    r"https://connect\.composio\.dev/link/[^\s\)]+",
+                                    block.text,
+                                )
                                 if links:
-                                    yield AgentEvent(type=EventType.AUTH_REQUIRED, data={"auth_link": links[0]})
+                                    yield AgentEvent(
+                                        type=EventType.AUTH_REQUIRED,
+                                        data={"auth_link": links[0]},
+                                    )
 
                             yield AgentEvent(
-                                type=EventType.TEXT, 
+                                type=EventType.TEXT,
                                 data={
-                                    "text": block.text, 
+                                    "text": block.text,
                                     "author": msg_author,
-                                    "time_offset": round(time.time() - self.start_ts, 3)
-                                }
+                                    "time_offset": round(
+                                        time.time() - self.start_ts, 3
+                                    ),
+                                },
                             )
 
                         elif isinstance(block, ThinkingBlock):
@@ -2225,34 +2356,42 @@ class UniversalAgent:
                                 type=EventType.THINKING,
                                 data={"thinking": block.thinking[:1000]},
                             )
-                        
+
                         elif isinstance(block, ToolResultBlock):
-                             # (Omitted complex sub-agent speech extraction for brevity to fit in tool call)
-                             pass
+                            # (Omitted complex sub-agent speech extraction for brevity to fit in tool call)
+                            pass
 
                 elif isinstance(msg, ResultMessage):
                     result_telemetry = _extract_result_message_telemetry(msg)
                     latest_result_telemetry = result_telemetry
-                    self.trace.setdefault("sdk_result_messages", []).append(result_telemetry)
+                    self.trace.setdefault("sdk_result_messages", []).append(
+                        result_telemetry
+                    )
                     if msg.session_id:
                         self.trace["provider_session_id"] = msg.session_id
-                    
+
                     turn_input_tokens = 0
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
+
                         def get_val(obj, key):
-                             if isinstance(obj, dict): return obj.get(key, 0)
-                             return getattr(obj, key, 0)
+                            if isinstance(obj, dict):
+                                return obj.get(key, 0)
+                            return getattr(obj, key, 0)
+
                         inp = get_val(usage_source, "input_tokens") or 0
                         out = get_val(usage_source, "output_tokens") or 0
                         turn_input_tokens = int(inp)
-                        
+
                         msg_id = getattr(msg, "id", None)
-                        if (msg_id and msg_id not in self._processed_msg_ids) or not msg_id:
-                             if msg_id: self._processed_msg_ids.add(msg_id)
-                             self.trace["token_usage"]["input"] += inp
-                             self.trace["token_usage"]["output"] += out
-                             self.trace["token_usage"]["total"] += inp + out
+                        if (
+                            msg_id and msg_id not in self._processed_msg_ids
+                        ) or not msg_id:
+                            if msg_id:
+                                self._processed_msg_ids.add(msg_id)
+                            self.trace["token_usage"]["input"] += inp
+                            self.trace["token_usage"]["output"] += out
+                            self.trace["token_usage"]["total"] += inp + out
 
                     pressure_state = _get_context_pressure_state(self.trace)
                     if turn_input_tokens > 0:
@@ -2270,9 +2409,13 @@ class UniversalAgent:
                         pressure_state["high_turns_without_compaction"] = 0
                         pressure_state["last_compaction_iteration"] = iteration
                     elif context_tokens_for_reset > TRUNCATION_THRESHOLD:
-                        pressure_state["high_turns_without_compaction"] = int(
-                            pressure_state.get("high_turns_without_compaction", 0) or 0
-                        ) + 1
+                        pressure_state["high_turns_without_compaction"] = (
+                            int(
+                                pressure_state.get("high_turns_without_compaction", 0)
+                                or 0
+                            )
+                            + 1
+                        )
                     else:
                         pressure_state["high_turns_without_compaction"] = 0
 
@@ -2294,26 +2437,30 @@ class UniversalAgent:
                             "high_turns_without_compaction"
                         ),
                     )
-                    
+
                     # Update History
-                    self.history.add_message("assistant", "response", usage_source) 
+                    self.history.add_message("assistant", "response", usage_source)
                     # Note: We rely on ContextManager for actual pruning handling now
 
                 elif isinstance(msg, (UserMessage, ToolResultBlock)):
                     blocks = msg.content if isinstance(msg, UserMessage) else [msg]
                     for block in blocks:
-                        is_result = isinstance(block, ToolResultBlock) or hasattr(block, "tool_use_id")
+                        is_result = isinstance(block, ToolResultBlock) or hasattr(
+                            block, "tool_use_id"
+                        )
                         if is_result:
                             tool_use_id = getattr(block, "tool_use_id", None)
                             is_error = getattr(block, "is_error", False)
                             block_content = getattr(block, "content", "")
                             content_str = str(block_content)
-                            
+
                             result_record = {
                                 "run_id": self.run_id,
                                 "step_id": step_id,
                                 "tool_use_id": tool_use_id,
-                                "time_offset_seconds": round(time.time() - self.start_ts, 3),
+                                "time_offset_seconds": round(
+                                    time.time() - self.start_ts, 3
+                                ),
                                 "is_error": is_error,
                             }
                             self.trace["tool_results"].append(result_record)
@@ -2388,11 +2535,11 @@ class UniversalAgent:
         try:
             with open(trace_path, "w", encoding="utf-8") as f:
                 json.dump(self.trace, f, indent=2, default=str)
-                
+
             # Generate Transcript
             transcript_path = os.path.join(self.workspace_dir, "transcript.md")
             transcript_builder.generate_transcript(self.trace, transcript_path)
-            
+
         except Exception as e:
             print(f"DEBUG CORE: Failed to save trace/transcript: {e}")
 

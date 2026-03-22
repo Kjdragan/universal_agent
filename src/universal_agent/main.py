@@ -44,7 +44,12 @@ from universal_agent.utils.message_history import (
 )
 import glob
 from universal_agent.harness.verifier import TaskVerifier
-from universal_agent.agent_core import UniversalAgent, AgentEvent, EventType, HarnessError
+from universal_agent.agent_core import (
+    UniversalAgent,
+    AgentEvent,
+    EventType,
+    HarnessError,
+)
 from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
 from claude_agent_sdk.types import ToolUseBlock
 from universal_agent.tools.research_bridge import (
@@ -74,6 +79,7 @@ from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapp
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 from universal_agent import hooks as hook_events
 from universal_agent.hooks import AgentHookSet
+
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -115,8 +121,6 @@ class ExecutionResult:
         default_factory=list
     )  # Extracted follow-up options
     reset_session: bool = False  # Whether the caller should reset/clear the client
-
-
 
 
 import sys
@@ -305,7 +309,9 @@ def _looks_like_copy_only_prompt(prompt: str) -> bool:
     return any(marker in text for marker in _COPY_ONLY_PROMPT_MARKERS)
 
 
-def _tool_signature_for_circuit(tool_name: str, tool_input: Any) -> tuple[str, dict[str, Any]]:
+def _tool_signature_for_circuit(
+    tool_name: str, tool_input: Any
+) -> tuple[str, dict[str, Any]]:
     """
     Produce a stable signature for detecting non-converging tool loops.
 
@@ -323,7 +329,9 @@ def _tool_signature_for_circuit(tool_name: str, tool_input: Any) -> tuple[str, d
                 "tool": tool_name,
                 "model_name": tool_input.get("model_name"),
                 "output_filename": tool_input.get("output_filename"),
-                "prompt": "<copy_only>" if copy_only else _normalize_prompt_for_circuit(prompt),
+                "prompt": "<copy_only>"
+                if copy_only
+                else _normalize_prompt_for_circuit(prompt),
             }
             if not copy_only:
                 payload_obj["input_image_path"] = tool_input.get("input_image_path")
@@ -344,7 +352,9 @@ def _tool_signature_for_circuit(tool_name: str, tool_input: Any) -> tuple[str, d
     else:
         payload_obj = {"tool": tool_name, "input": str(tool_input)}
 
-    payload = json.dumps(payload_obj, sort_keys=True, default=str, separators=(",", ":"))
+    payload = json.dumps(
+        payload_obj, sort_keys=True, default=str, separators=(",", ":")
+    )
     sig = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return sig, debug_payload
 
@@ -373,8 +383,12 @@ def _maybe_trip_tool_loop_circuit_breaker(
         return
 
     # These thresholds are separate from budgets: they guard against "same move forever".
-    max_consecutive_same_sig = _get_env_int("UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_SAME_SIGNATURE", 8)
-    max_generate_image_copy_only = _get_env_int("UA_CIRCUIT_BREAKER_MAX_GENERATE_IMAGE_COPY_ONLY_CALLS", 4)
+    max_consecutive_same_sig = _get_env_int(
+        "UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_SAME_SIGNATURE", 8
+    )
+    max_generate_image_copy_only = _get_env_int(
+        "UA_CIRCUIT_BREAKER_MAX_GENERATE_IMAGE_COPY_ONLY_CALLS", 4
+    )
 
     # Polling / status-check tools are EXPECTED to be called repeatedly with
     # identical params while waiting for an async backend operation to finish.
@@ -408,7 +422,9 @@ def _maybe_trip_tool_loop_circuit_breaker(
     if tool_name.endswith("generate_image") and isinstance(tool_input, dict):
         prompt = str(tool_input.get("prompt") or "")
         if _looks_like_copy_only_prompt(prompt):
-            state["generate_image_copy_only_calls"] = int(state.get("generate_image_copy_only_calls", 0)) + 1
+            state["generate_image_copy_only_calls"] = (
+                int(state.get("generate_image_copy_only_calls", 0)) + 1
+            )
             if state["generate_image_copy_only_calls"] > max_generate_image_copy_only:
                 raise CircuitBreakerTriggered(
                     "generate_image_copy_only_loop",
@@ -432,7 +448,13 @@ def _maybe_trip_tool_loop_circuit_breaker(
         state["consecutive"] = 1
 
     state["recent"] = (state.get("recent") or [])[-19:] + [
-        {"tool": tool_name, "sig": sig, "iteration": iteration, "step_id": step_id, "debug": dbg}
+        {
+            "tool": tool_name,
+            "sig": sig,
+            "iteration": iteration,
+            "step_id": step_id,
+            "debug": dbg,
+        }
     ]
 
     if int(state.get("consecutive", 0)) > max_consecutive_same_sig:
@@ -509,7 +531,6 @@ def _get_gateway_tool_call_id(raw_id: object) -> str:
     return tool_call_id
 
 
-
 def safe_clear_history(client: Any) -> bool:
     """
     Safely clear message history for many client types (ClaudeSDKClient, UniversalAgent, etc).
@@ -517,10 +538,10 @@ def safe_clear_history(client: Any) -> bool:
     """
     if not client or not hasattr(client, "history"):
         return False
-        
+
     cleared = False
     hist = client.history
-    
+
     # 1. Try explicit clear_history() (SDK Hook pattern)
     if hasattr(hist, "clear_history") and callable(hist.clear_history):
         try:
@@ -528,7 +549,7 @@ def safe_clear_history(client: Any) -> bool:
             cleared = True
         except Exception:
             pass
-            
+
     # 2. Try reset() (MessageHistory pattern)
     if not cleared and hasattr(hist, "reset") and callable(hist.reset):
         try:
@@ -536,7 +557,7 @@ def safe_clear_history(client: Any) -> bool:
             cleared = True
         except Exception:
             pass
-            
+
     # 3. Try to set to empty list (Native history / generic pattern)
     if not cleared:
         try:
@@ -544,7 +565,7 @@ def safe_clear_history(client: Any) -> bool:
             cleared = True
         except Exception:
             pass
-            
+
     return cleared
 
 
@@ -556,7 +577,10 @@ def _normalize_gateway_file_path(path_value: Any) -> Any:
         return path_value
     if not OBSERVER_WORKSPACE_DIR:
         return path_value
-    if "/.claude/sessions/" not in path_value and f"{os.sep}sessions{os.sep}" not in path_value:
+    if (
+        "/.claude/sessions/" not in path_value
+        and f"{os.sep}sessions{os.sep}" not in path_value
+    ):
         return path_value
     for marker in (
         "work_products",
@@ -569,7 +593,9 @@ def _normalize_gateway_file_path(path_value: Any) -> Any:
         if marker_token in path_value:
             suffix = path_value.split(marker_token, 1)[1].lstrip(os.sep)
             return os.path.join(OBSERVER_WORKSPACE_DIR, marker, suffix)
-    return os.path.join(OBSERVER_WORKSPACE_DIR, "work_products", os.path.basename(path_value))
+    return os.path.join(
+        OBSERVER_WORKSPACE_DIR, "work_products", os.path.basename(path_value)
+    )
 
 
 def _ensure_gateway_step() -> str:
@@ -588,7 +614,9 @@ def _ensure_gateway_step() -> str:
     if not row:
         try:
             step_index = _next_step_index(_ctx.runtime_db_conn, _ctx.run_id)
-            start_step(_ctx.runtime_db_conn, _ctx.run_id, _ctx.current_step_id, step_index)
+            start_step(
+                _ctx.runtime_db_conn, _ctx.run_id, _ctx.current_step_id, step_index
+            )
             logfire.info(
                 "durable_step_started_gateway_hook",
                 run_id=_ctx.run_id,
@@ -624,6 +652,7 @@ _LOGFIRE_CONFIGURED_TOKEN: str = ""
 # We set to 60 minutes (3600000ms) to allow "Deep Thinking" and long tool loops.
 if "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT" not in os.environ:
     os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "3600000"
+
 
 def _configure_logfire_runtime_if_available() -> bool:
     global _LOGFIRE_CONFIGURED_TOKEN
@@ -677,9 +706,22 @@ def _configure_logfire_runtime_if_available() -> bool:
     except Exception:
         pass
     try:
-        logfire.instrument_anthropic()
+        logfire.instrument_sqlite3()
     except Exception:
         pass
+
+    # Configure Claude SDK tracking via Langsmith OTel
+    try:
+        import os
+
+        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+        os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+        os.environ["LANGSMITH_TRACING"] = "true"
+        from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
+
+        configure_claude_agent_sdk()
+    except Exception as e:
+        print(f"⚠️ Failed to instrument Claude SDK for Logfire: {e}")
 
     _LOGFIRE_CONFIGURED_TOKEN = LOGFIRE_TOKEN
     return True
@@ -693,7 +735,11 @@ elif not LOGFIRE_DISABLED:
 
 def _refresh_logfire_runtime_flags() -> None:
     global LOGFIRE_DISABLED, LOGFIRE_TOKEN
-    LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {"1", "true", "yes"}
+    LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     LOGFIRE_TOKEN = None
     if not LOGFIRE_DISABLED:
         LOGFIRE_TOKEN = (
@@ -702,6 +748,7 @@ def _refresh_logfire_runtime_flags() -> None:
             or os.getenv("LOGFIRE_API_KEY")
         )
     _configure_logfire_runtime_if_available()
+
 
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
@@ -734,23 +781,24 @@ def setup_log_bridge(agent: UniversalAgent):
     """Attach log bridge to capturing loggers and intercept stdout/stderr."""
     if not agent:
         return
-        
+
     bridge = LogBridgeHandler(agent.send_agent_event)
     bridge.setLevel(logging.INFO)
-    
+
     # Attach to httpx
     httpx_logger = logging.getLogger("httpx")
     httpx_logger.addHandler(bridge)
     httpx_logger.setLevel(logging.INFO)
-    
+
     # Attach to composio if needed
     # logging.getLogger("composio").addHandler(bridge)
-    
+
     # Intercept stdout/stderr for rich terminal output (e.g. from local tools)
     sys.stdout = StdoutInterceptor(agent.send_agent_event, sys.stdout, prefix="Console")
     sys.stderr = StdoutInterceptor(agent.send_agent_event, sys.stderr, prefix="System")
-    
+
     return bridge
+
 
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import (
@@ -784,7 +832,11 @@ from universal_agent.durable.state import (
     increment_iteration_count,
     get_iteration_info,
 )
-from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint, load_corpus_cache
+from universal_agent.durable.checkpointing import (
+    save_checkpoint,
+    load_last_checkpoint,
+    load_corpus_cache,
+)
 # Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.\n# Note: File Read/Write now uses native Claude SDK tools
 
 # Composio client - will be initialized in main() with file_download_dir
@@ -806,7 +858,6 @@ from universal_agent.harness import ask_user_questions, present_plan_summary
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection
 # MEMORY_MANAGER = None
-
 
 
 # =============================================================================
@@ -876,9 +927,10 @@ def _resolve_letta_model() -> str:
         return model
     return f"anthropic/{model}"
 
+
 try:
     from agentic_learning import learning, AgenticLearning, AsyncAgenticLearning
-    
+
     # Only attempt initialization if explicitly enabled or if we want soft degradation
     if _LETTA_SUBAGENT_ENABLED:
         try:
@@ -900,12 +952,15 @@ try:
             _letta_client = None
             _letta_async_client = None
 
-    
     # Log subagent memory status
     if _LETTA_SUBAGENT_ENABLED:
-        print("🧠 Letta subagent memory: ENABLED (set UA_LETTA_SUBAGENT_MEMORY=0 to disable)")
+        print(
+            "🧠 Letta subagent memory: ENABLED (set UA_LETTA_SUBAGENT_MEMORY=0 to disable)"
+        )
     else:
-        print("🧠 Letta subagent memory: DISABLED (set UA_LETTA_SUBAGENT_MEMORY=1 to enable)")
+        print(
+            "🧠 Letta subagent memory: DISABLED (set UA_LETTA_SUBAGENT_MEMORY=1 to enable)"
+        )
 
 except ImportError:
     LETTA_ENABLED = False
@@ -923,7 +978,11 @@ async def _ensure_letta_context() -> None:
     if _letta_async_client is None:
         return
 
-    capture_only = os.getenv("UA_LETTA_CAPTURE_ONLY", "0").lower() in {"1", "true", "yes"}
+    capture_only = os.getenv("UA_LETTA_CAPTURE_ONLY", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     if capture_only:
         print("🧠 Letta mode: LEARNING ONLY (Injection disabled)")
 
@@ -1178,6 +1237,7 @@ _TASK_STOP_PLACEHOLDER_IDS = {
     "cancel-all",
 }
 
+
 def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
     for key in ("task_id", "id", "target_task_id"):
         value = tool_input.get(key)
@@ -1189,7 +1249,7 @@ def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
 
 def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
     """Return rejection reason if the task_id is fabricated, or None if valid.
-    
+
     Uses an ALLOWLIST approach: only SDK-emitted opaque tokens (ULIDs, UUIDs,
     or similarly long random alphanumeric strings) are accepted. Everything
     else — human-readable names, short IDs, descriptive names — is rejected.
@@ -1211,16 +1271,16 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
         return f"Invalid session/run identifier used as task_id ({clean_id!r})."
 
     # ALLOWLIST: Real SDK task IDs are opaque tokens with high entropy.
-    # They follow patterns like: "task_01HZYQ7QF1ABCDE" (ULID-based) or 
+    # They follow patterns like: "task_01HZYQ7QF1ABCDE" (ULID-based) or
     # full UUIDs. They do NOT contain human-readable English words.
-    
+
     # Strip known SDK prefixes to examine the token body
     body = clean_id
     for prefix in ("task_", "bg_", "background_"):
         if lowered.startswith(prefix):
-            body = clean_id[len(prefix):]
+            body = clean_id[len(prefix) :]
             break
-    
+
     # Real SDK tokens are long (16+ chars) and mostly non-word characters
     # Reject short IDs (< 12 chars in body) — SDK never emits these
     if len(body) < 12:
@@ -1228,14 +1288,16 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
             f"Untrusted short `task_id` ({clean_id!r}). Real SDK task IDs are long "
             "opaque tokens. Begin productive work instead."
         )
-    
+
     # Reject IDs containing English-looking word segments (3+ consecutive lowercase letters)
     # Real SDK IDs use base32/hex which rarely forms English words
-    english_words = re.findall(r'[a-z]{3,}', body.lower())
+    english_words = re.findall(r"[a-z]{3,}", body.lower())
     if english_words:
         # Check if any segment looks like an English word (not hex/base32)
-        hex_base32_chars = set('0123456789abcdef')
-        non_hex_words = [w for w in english_words if not set(w).issubset(hex_base32_chars)]
+        hex_base32_chars = set("0123456789abcdef")
+        non_hex_words = [
+            w for w in english_words if not set(w).issubset(hex_base32_chars)
+        ]
         if non_hex_words:
             return (
                 f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
@@ -1243,7 +1305,6 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
             )
 
     return None  # Looks like a real SDK token
-
 
 
 def _format_tool_display_name(tool_name: str, tool_input: Any) -> str:
@@ -1297,7 +1358,9 @@ def _should_block_read_binary(file_path: str) -> tuple[bool, dict]:
     except Exception:
         max_bytes = 0
     max_bytes = max(0, min(max_bytes, 5_000_000))
-    enabled = str(os.getenv("UA_BLOCK_LARGE_IMAGE_READS", "1") or "1").strip().lower() not in {
+    enabled = str(
+        os.getenv("UA_BLOCK_LARGE_IMAGE_READS", "1") or "1"
+    ).strip().lower() not in {
         "0",
         "false",
         "no",
@@ -1315,7 +1378,12 @@ def _should_block_read_binary(file_path: str) -> tuple[bool, dict]:
         if os.path.exists(abs_path):
             size = os.path.getsize(abs_path)
             if size > max_bytes:
-                return True, {"abs_path": abs_path, "size_bytes": size, "max_bytes": max_bytes, "ext": ext}
+                return True, {
+                    "abs_path": abs_path,
+                    "size_bytes": size,
+                    "max_bytes": max_bytes,
+                    "ext": ext,
+                }
     except Exception:
         # If we can't stat it, don't block; let the tool fail naturally.
         return False, {}
@@ -1333,9 +1401,10 @@ async def on_pre_tool_use_ledger(
     # Prefer the ledger's connection for run state checks; this avoids cross-thread
     # SQLite usage issues in tests and keeps the hook self-contained.
     conn_for_run = (
-        (getattr(_ctx.tool_ledger, "conn", None) if _ctx.tool_ledger is not None else None)
-        or _ctx.runtime_db_conn
-    )
+        getattr(_ctx.tool_ledger, "conn", None)
+        if _ctx.tool_ledger is not None
+        else None
+    ) or _ctx.runtime_db_conn
     if conn_for_run and _ctx.run_id and is_cancel_requested(conn_for_run, _ctx.run_id):
         return {
             "systemMessage": (
@@ -1385,17 +1454,16 @@ async def on_pre_tool_use_ledger(
             except Exception:
                 transcript_hint = ""
 
-        workspace_hint = str(transcript_hint or _ctx.observer_workspace_dir or _get_ws() or "").strip()
+        workspace_hint = str(
+            transcript_hint or _ctx.observer_workspace_dir or _get_ws() or ""
+        ).strip()
         looks_like_session_ws = False
         if workspace_hint:
             try:
                 ws_path = Path(workspace_hint).resolve()
-                looks_like_session_ws = (
-                    ws_path.name.startswith("session_")
-                    or (
-                        (ws_path / "session_policy.json").exists()
-                        and (ws_path / "work_products").exists()
-                    )
+                looks_like_session_ws = ws_path.name.startswith("session_") or (
+                    (ws_path / "session_policy.json").exists()
+                    and (ws_path / "work_products").exists()
                 )
             except Exception:
                 looks_like_session_ws = False
@@ -1439,7 +1507,10 @@ async def on_pre_tool_use_ledger(
         if transcript_path not in _ctx.seen_transcript_paths:
             _ctx.seen_transcript_paths.add(transcript_path)
             transcript_role = "primary"
-            if _ctx.primary_transcript_path and transcript_path != _ctx.primary_transcript_path:
+            if (
+                _ctx.primary_transcript_path
+                and transcript_path != _ctx.primary_transcript_path
+            ):
                 transcript_role = "secondary"
                 print(f"🧭 Hook fired for secondary transcript: {tool_name}")
             logfire.info(
@@ -1489,16 +1560,16 @@ async def on_pre_tool_use_ledger(
         parent_tool_use_id = input_data.get("parent_tool_use_id")
         transcript_path_chk = input_data.get("transcript_path", "")
         primary_path = globals().get("_primary_transcript_path")
-        
+
         is_subagent_context = bool(parent_tool_use_id) or (
-            primary_path is not None 
-            and transcript_path_chk 
+            primary_path is not None
+            and transcript_path_chk
             and transcript_path_chk != primary_path
         )
-        
+
         # If in sub-agent, ALLOW the tool (Specialists need access to tools blocked for Primary)
         if is_subagent_context:
-             pass
+            pass
         else:
             return {
                 "systemMessage": (
@@ -1518,24 +1589,26 @@ async def on_pre_tool_use_ledger(
         tool_input = input_data.get("tool_input", {}) or {}
         file_path = tool_input.get("file_path", "")
         content = tool_input.get("content", "")
-        
+
         # Detect sub-agent context using multiple signals
         # 1. parent_tool_use_id is set when running inside a sub-agent
         parent_tool_use_id = input_data.get("parent_tool_use_id")
         # 2. Secondary transcript path (different from first seen)
         transcript_path = input_data.get("transcript_path", "")
         is_secondary_transcript = (
-            _ctx.primary_transcript_path is not None 
-            and transcript_path 
+            _ctx.primary_transcript_path is not None
+            and transcript_path
             and transcript_path != _ctx.primary_transcript_path
         )
         # Combined detection: either signal indicates sub-agent context
         is_subagent_context = bool(parent_tool_use_id) or is_secondary_transcript
-        
+
         content_len = len(content) if content else 0
-        
+
         # Log all Write hook invocations for debugging
-        print(f"🔧 Write Hook: file_path={bool(file_path)}, content_len={content_len}, subagent={is_subagent_context}, parent_id={parent_tool_use_id}")
+        print(
+            f"🔧 Write Hook: file_path={bool(file_path)}, content_len={content_len}, subagent={is_subagent_context}, parent_id={parent_tool_use_id}"
+        )
         logfire.info(
             "write_hook_fired",
             tool_name=tool_name,
@@ -1554,7 +1627,9 @@ async def on_pre_tool_use_ledger(
 
         if missing_params:
             # Print to console for immediate visibility
-            print(f"🛡️ HOOK BLOCKED Write: missing {missing_params} (subagent={is_subagent_context}, parent_id={parent_tool_use_id})")
+            print(
+                f"🛡️ HOOK BLOCKED Write: missing {missing_params} (subagent={is_subagent_context}, parent_id={parent_tool_use_id})"
+            )
             logfire.warning(
                 "empty_write_params_blocked",
                 tool_name=tool_name,
@@ -1690,7 +1765,9 @@ async def on_pre_tool_use_ledger(
             changed = False
             for key in ("file_path", "path", "old_path", "new_path"):
                 if key in normalized_input:
-                    normalized_value = _normalize_gateway_file_path(normalized_input.get(key))
+                    normalized_value = _normalize_gateway_file_path(
+                        normalized_input.get(key)
+                    )
                     if normalized_value != normalized_input.get(key):
                         normalized_input[key] = normalized_value
                         changed = True
@@ -1716,8 +1793,8 @@ async def on_pre_tool_use_ledger(
                         f"Path: {abs_path}\n\n"
                         "Use one of these instead (no base64 in context):\n"
                         "1) Vision (preferred): use the external vision MCP server `zai_vision` to analyze the image\n"
-                        f"2) Vision (fallback): `describe_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
-                        f"3) Human viewer: `preview_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                        f'2) Vision (fallback): `describe_image` with `{{"image_path": "{abs_path}"}}`\n'
+                        f'3) Human viewer: `preview_image` with `{{"image_path": "{abs_path}"}}`\n'
                         "4) Shell metadata: `Bash` `ls -lh` / `file`\n"
                         "5) For edits: `generate_image` with `input_image_path` (do not Read the bytes)\n"
                     ),
@@ -1733,6 +1810,7 @@ async def on_pre_tool_use_ledger(
     # prevent accidental repo-root artifacts.
     if tool_name == "Bash" and isinstance(tool_input, dict):
         from universal_agent.execution_context import get_current_workspace as _get_ws
+
         bash_workspace = _ctx.observer_workspace_dir or _get_ws()
         if bash_workspace:
             cmd = tool_input.get("command") or tool_input.get("cmd")
@@ -1765,7 +1843,11 @@ async def on_pre_tool_use_ledger(
 
                 cmd_stripped = cmd.lstrip()
                 has_cd_prefix = cmd_stripped.startswith(("cd ", "pushd ", "popd "))
-                auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
+                auto_cd_env = (
+                    str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1")
+                    .strip()
+                    .lower()
+                )
                 auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
                 if auto_cd_enabled and not has_cd_prefix:
                     updated_tool_input = dict(tool_input)
@@ -2102,7 +2184,10 @@ async def on_pre_tool_use_ledger(
             },
         }
 
-    if _ctx.gateway_mode_active and _ctx.tool_ledger.get_tool_call(tool_call_id) is None:
+    if (
+        _ctx.gateway_mode_active
+        and _ctx.tool_ledger.get_tool_call(tool_call_id) is None
+    ):
         try:
             identity = parse_tool_identity(tool_name)
             _ctx.tool_ledger.prepare_tool_call(
@@ -2151,12 +2236,12 @@ async def on_pre_tool_use_ledger(
             # and the agent wants to try again with the exact same arguments.
             cached_response = decision.receipt.response_ref or ""
             is_valid_cache = (
-                cached_response 
-                and str(cached_response).strip() 
+                cached_response
+                and str(cached_response).strip()
                 and str(cached_response).strip().lower() != "none"
                 and "error" not in str(cached_response).lower()[:50]
             )
-            
+
             if is_valid_cache:
                 logfire.warning(
                     "tool_deduped",
@@ -2180,9 +2265,9 @@ async def on_pre_tool_use_ledger(
                 }
             else:
                 logfire.info(
-                    "idempotency_bypass_retry", 
+                    "idempotency_bypass_retry",
                     tool_name=tool_name,
-                    reason="Cached result was empty/error - allowing retry"
+                    reason="Cached result was empty/error - allowing retry",
                 )
         try:
             duplicate_decision = prepare_tool_call(
@@ -2280,14 +2365,18 @@ async def on_pre_tool_use_ledger(
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(audit_file, "a", encoding="utf-8") as af:
                 af.write(f"[{ts}] {cmd}\n")
-            
+
             # [PDF Rendering Instrumentation] Log PDF render start
             cmd_lower = cmd.lower()
-            if "print-to-pdf" in cmd_lower or ("pdf" in cmd_lower and ("chrome" in cmd_lower or "chromium" in cmd_lower)):
+            if "print-to-pdf" in cmd_lower or (
+                "pdf" in cmd_lower
+                and ("chrome" in cmd_lower or "chromium" in cmd_lower)
+            ):
                 # Extract output path from command (e.g., --print-to-pdf="output.pdf")
                 import re
+
                 pdf_match = re.search(r'print-to-pdf[="\s]+([^\s"]+)', cmd)
-                pdf_output = pdf_match.group(1).strip('"\'') if pdf_match else "unknown"
+                pdf_output = pdf_match.group(1).strip("\"'") if pdf_match else "unknown"
                 logfire.info(
                     "pdf_render_started",
                     tool_call_id=tool_call_id,
@@ -2317,7 +2406,9 @@ async def on_post_tool_use_ledger(
     if not tool_call_id:
         return {}
 
-    ledger_entry = _ctx.tool_ledger.get_tool_call(tool_call_id) if _ctx.tool_ledger else None
+    ledger_entry = (
+        _ctx.tool_ledger.get_tool_call(tool_call_id) if _ctx.tool_ledger else None
+    )
     raw_tool_name = (
         (ledger_entry or {}).get("raw_tool_name")
         or input_data.get("tool_name", "")
@@ -2373,7 +2464,9 @@ async def on_post_tool_use_ledger(
                 )
                 if expected.get("attempts", 0) >= FORCED_TOOL_MAX_ATTEMPTS:
                     if _ctx.runtime_db_conn and _ctx.run_id:
-                        update_run_status(_ctx.runtime_db_conn, _ctx.run_id, "waiting_for_human")
+                        update_run_status(
+                            _ctx.runtime_db_conn, _ctx.run_id, "waiting_for_human"
+                        )
                     _ctx.forced_tool_queue = []
                     logfire.warning(
                         "replay_exhausted",
@@ -2416,7 +2509,9 @@ async def on_post_tool_use_ledger(
                 )
                 if _ctx.tool_ledger:
                     _ctx.tool_ledger.clear_pending_receipt(expected["tool_call_id"])
-                _ctx.tool_ledger.mark_replay_status(expected["tool_call_id"], "succeeded")
+                _ctx.tool_ledger.mark_replay_status(
+                    expected["tool_call_id"], "succeeded"
+                )
                 _maybe_crash_after_tool(
                     raw_tool_name=expected.get("raw_tool_name") or "",
                     tool_call_id=expected["tool_call_id"],
@@ -2431,7 +2526,8 @@ async def on_post_tool_use_ledger(
                 )
                 if (
                     _ctx.forced_tool_queue
-                    and _ctx.forced_tool_queue[0]["tool_call_id"] == expected["tool_call_id"]
+                    and _ctx.forced_tool_queue[0]["tool_call_id"]
+                    == expected["tool_call_id"]
                 ):
                     _ctx.forced_tool_queue.pop(0)
                 if not _ctx.forced_tool_queue:
@@ -2519,7 +2615,9 @@ async def on_post_tool_use_ledger(
             # Log tool execution span with duration
             start_info = _ctx.tool_execution_start_times.pop(tool_call_id, None)
             if not start_info:
-                start_info = _ctx.tool_execution_stream_start_times.pop(tool_call_id, None)
+                start_info = _ctx.tool_execution_stream_start_times.pop(
+                    tool_call_id, None
+                )
             if start_info and tool_call_id not in _ctx.tool_execution_emitted_ids:
                 start_time, tool_name_recorded = start_info
                 duration_seconds = time.time() - start_time
@@ -2534,17 +2632,21 @@ async def on_post_tool_use_ledger(
                     source="post_tool_use_hook",
                 )
                 _ctx.tool_execution_emitted_ids.add(tool_call_id)
-                
+
             # [PDF Rendering Instrumentation] Log PDF render completion with output size
             if raw_tool_name and raw_tool_name.upper() == "BASH":
                 cmd = tool_input.get("command") or tool_input.get("cmd") or ""
                 cmd_lower = cmd.lower()
-                if "print-to-pdf" in cmd_lower or ("pdf" in cmd_lower and ("chrome" in cmd_lower or "chromium" in cmd_lower)):
+                if "print-to-pdf" in cmd_lower or (
+                    "pdf" in cmd_lower
+                    and ("chrome" in cmd_lower or "chromium" in cmd_lower)
+                ):
                     try:
                         import re
+
                         pdf_match = re.search(r'print-to-pdf[="\s]+([^\s"]+)', cmd)
                         if pdf_match:
-                            pdf_output = pdf_match.group(1).strip('"\'')
+                            pdf_output = pdf_match.group(1).strip("\"'")
                             # Try to get file size if path is accessible
                             pdf_size = None
                             workspace = _ctx.observer_workspace_dir or ""
@@ -2559,7 +2661,9 @@ async def on_post_tool_use_ledger(
                                 tool_call_id=tool_call_id,
                                 output_path=pdf_output,
                                 output_size_bytes=pdf_size,
-                                duration_seconds=round(duration_seconds, 3) if start_info else None,
+                                duration_seconds=round(duration_seconds, 3)
+                                if start_info
+                                else None,
                                 run_id=_ctx.run_id,
                             )
                     except Exception:
@@ -2620,39 +2724,40 @@ async def on_post_research_finalized_cache(
 ) -> dict:
     """
     PostToolUse Hook: Cache refined_corpus.md for sub-agent context restoration.
-    
+
     When finalize_research completes successfully, save the refined corpus to the
     checkpoints table. This is THE canonical research checkpoint - if the harness
     restarts after research but before report generation, this is all we need.
-    
+
     The refined_corpus.md is:
     - Token-efficient (~10K tokens vs ~50K raw)
     - Citation-preserving (sources, dates, URLs)
     - LLM-ready (extracted facts, quotes, statistics)
     """
-    
+
     _ctx = _require_ctx()
     # Only process finalize_research tool results
     tool_name = context.get("tool_name", "") or input_data.get("tool_name", "")
     if "finalize_research" not in tool_name:
         return {}
-    
+
     # Extract the result to find the refined corpus path
     result = input_data.get("tool_result", "") or input_data.get("result", "")
     if not result:
         return {}
-    
+
     # Parse the JSON result to get refined_corpus path
     refined_corpus_path = None
     try:
         import json
+
         if isinstance(result, str):
             data = json.loads(result)
         elif isinstance(result, dict):
             data = result
         else:
             return {}
-        
+
         # Extract path from the refined_corpus section
         if isinstance(data, dict):
             refined_info = data.get("refined_corpus", {})
@@ -2660,10 +2765,10 @@ async def on_post_research_finalized_cache(
                 refined_corpus_path = refined_info.get("path")
     except (json.JSONDecodeError, KeyError):
         return {}
-    
+
     if not refined_corpus_path:
         return {}
-    
+
     # Read the refined corpus content
     try:
         if os.path.exists(refined_corpus_path):
@@ -2675,12 +2780,12 @@ async def on_post_research_finalized_cache(
     except Exception as exc:
         logfire.warning("refined_corpus_read_failed", error=str(exc))
         return {}
-    
+
     # Only cache if we have substantial content
     if len(corpus_text) < 500:
         logfire.warning("refined_corpus_too_small", chars=len(corpus_text))
         return {}
-    
+
     # Save to checkpoint database - this is THE canonical research checkpoint
     try:
         if _ctx.runtime_db_conn and _ctx.run_id and _ctx.current_step_id:
@@ -2703,10 +2808,12 @@ async def on_post_research_finalized_cache(
                 corpus_chars=len(corpus_text),
                 path=refined_corpus_path,
             )
-            print(f"\n✅ Research checkpoint saved: refined_corpus.md ({len(corpus_text):,} chars)")
+            print(
+                f"\n✅ Research checkpoint saved: refined_corpus.md ({len(corpus_text):,} chars)"
+            )
     except Exception as exc:
         logfire.warning("refined_corpus_cache_failed", error=str(exc))
-    
+
     return {}
 
 
@@ -2803,7 +2910,9 @@ async def on_post_email_send_artifact(
                     "response": response,
                 }
             )
-    elif "gmail" in tool_name.lower() and ("send" in tool_name.lower() or "draft" in tool_name.lower()):
+    elif "gmail" in tool_name.lower() and (
+        "send" in tool_name.lower() or "draft" in tool_name.lower()
+    ):
         # gws MCP Gmail send/draft tool (e.g. gmail.users.messages.send, gmail.+send)
         payload = _load_json_payload(tool_response)
         response = None
@@ -2813,10 +2922,14 @@ async def on_post_email_send_artifact(
             records.append(
                 {
                     "tool": tool_name,
-                    "recipient_email": tool_input.get("to") or tool_input.get("recipient_email"),
+                    "recipient_email": tool_input.get("to")
+                    or tool_input.get("recipient_email"),
                     "subject": tool_input.get("subject"),
-                    "body_preview": (tool_input.get("body") or tool_input.get("message") or "")[:2000],
-                    "attachment": tool_input.get("attachment") or tool_input.get("attachments"),
+                    "body_preview": (
+                        tool_input.get("body") or tool_input.get("message") or ""
+                    )[:2000],
+                    "attachment": tool_input.get("attachment")
+                    or tool_input.get("attachments"),
                     "response": response,
                 }
             )
@@ -2865,7 +2978,9 @@ async def on_pre_bash_rewrite_artifacts_literal_paths(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
     """Normalize common literal UA_ARTIFACTS_DIR path mistakes in Bash commands."""
-    tool_input = input_data.get("tool_input", {}) if isinstance(input_data, dict) else {}
+    tool_input = (
+        input_data.get("tool_input", {}) if isinstance(input_data, dict) else {}
+    )
     if not isinstance(tool_input, dict):
         tool_input = {}
 
@@ -2899,7 +3014,11 @@ async def on_pre_bash_rewrite_artifacts_literal_paths(
         after_preview=updated[:200],
     )
     return {
-        **({"tool_input": {**tool_input, "command": updated}} if command_source == "tool_input" else {"command": updated}),
+        **(
+            {"tool_input": {**tool_input, "command": updated}}
+            if command_source == "tool_input"
+            else {"command": updated}
+        ),
         "systemMessage": (
             "Rewrote literal UA_ARTIFACTS_DIR path usage to resolved artifacts root. "
             "Use resolved absolute artifacts paths for durable writes."
@@ -2941,9 +3060,8 @@ async def on_pre_bash_block_composio_sdk(
         "_wrapper(",
         "asyncio.run(",
     ]
-    if (
-        "bash" in str(input_data.get("tool_name", "")).lower()
-        and all(pattern in command_lower for pattern in internal_wrapper_patterns)
+    if "bash" in str(input_data.get("tool_name", "")).lower() and all(
+        pattern in command_lower for pattern in internal_wrapper_patterns
     ):
         return {
             "systemMessage": (
@@ -2970,7 +3088,6 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
-                
                 "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                 "- For web/news search: Use `COMPOSIO_SEARCH_WEB` / `COMPOSIO_SEARCH_NEWS`.\n"
                 "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"
@@ -3232,7 +3349,10 @@ SUBAGENT_EXPECTED_SKILLS = {
     "action-coordinator": ["gmail"],  # Uses gws MCP + Composio delivery tools
     "banana-squad-expert": ["banana-squad", "image-generation"],
     "youtube-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],
-    "youtube-explainer-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],  # legacy alias
+    "youtube-explainer-expert": [
+        "youtube-transcript-metadata",
+        "youtube-tutorial-creation",
+    ],  # legacy alias
 }
 
 
@@ -3266,6 +3386,7 @@ async def on_pre_task_skill_awareness(
     # Use context-aware workspace (ContextVar) to avoid leakage between
     # concurrent sessions sharing the gateway process.
     from universal_agent.execution_context import get_current_workspace
+
     workspace_path = OBSERVER_WORKSPACE_DIR or get_current_workspace() or ""
     if workspace_path:
         combined_context = (
@@ -3321,18 +3442,18 @@ async def on_post_task_guidance(
 ) -> dict:
     """
     PostToolUse Hook for Task (sub-agent) calls.
-    
+
     1. Prevent TaskOutput usage by reinforcing relaunch-only guidance
     2. Detect sub-agent Write failures and provide recovery guidance
     """
     tool_name = str(input_data.get("tool_name", "") or "")
     if tool_name.lower() != "task":
         return {}
-    
+
     # Check if the Task result contains error indicators
     tool_result = input_data.get("tool_result", {})
     result_content = ""
-    
+
     # Extract result content (could be in various formats)
     if isinstance(tool_result, dict):
         content_list = tool_result.get("content", [])
@@ -3341,7 +3462,7 @@ async def on_post_task_guidance(
                 result_content += block.get("text", "")
     elif isinstance(tool_result, str):
         result_content = tool_result
-    
+
     # Detect sub-agent Write failures
     error_indicators = [
         "InputValidationError",
@@ -3349,12 +3470,11 @@ async def on_post_task_guidance(
         "required parameter `content` is missing",
         "0 bytes",
     ]
-    
+
     sub_agent_write_failed = any(
-        indicator.lower() in result_content.lower() 
-        for indicator in error_indicators
+        indicator.lower() in result_content.lower() for indicator in error_indicators
     )
-    
+
     if sub_agent_write_failed:
         logfire.warning(
             "subagent_write_failure_detected",
@@ -3377,7 +3497,7 @@ async def on_post_task_guidance(
                 "additionalContext": "Sub-agent Write failure - retry with chunking.",
             },
         }
-    
+
     # Graph-aware next-step guidance + prevent TaskOutput usage
     tool_input = input_data.get("tool_input", {})
     subagent_type = ""
@@ -3415,7 +3535,11 @@ async def on_post_task_guidance(
             "- Embed in report? → Delegate to `report-writer` (it reads the image manifest)\n"
             "- Deliver directly? → Use Composio email/Slack tools."
         )
-    elif subagent_type in {"claude-bowser-agent", "playwright-bowser-agent", "bowser-qa-agent"}:
+    elif subagent_type in {
+        "claude-bowser-agent",
+        "playwright-bowser-agent",
+        "bowser-qa-agent",
+    }:
         next_step_hint = (
             "Browser execution complete. Next steps:\n"
             "- Need structured findings? → Delegate to `data-analyst` for evidence synthesis\n"
@@ -3428,14 +3552,13 @@ async def on_post_task_guidance(
         "systemMessage": next_step_hint if next_step_hint else None,
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
-            "additionalContext": (
-                f"{next_step_hint}\n\n" if next_step_hint else ""
-            ) + (
+            "additionalContext": (f"{next_step_hint}\n\n" if next_step_hint else "")
+            + (
                 "TaskOutput/TaskResult are disabled and will not work. "
                 "Do NOT call them. Wait for SubagentStop guidance or relaunch the Task "
                 "with the original inputs if output is needed."
             ),
-        }
+        },
     }
 
 
@@ -3444,7 +3567,7 @@ async def on_user_prompt_skill_awareness(
 ) -> dict:
     """
     Hook called when a user prompt is submitted.
-    
+
     Responsibilities:
     1. Suggest existing skills based on prompt keywords (SKILL_PROMPT_TRIGGERS).
     2. Detect potential NEW skills by analyzing previous assistant turn for long tool chains.
@@ -3457,10 +3580,9 @@ async def on_user_prompt_skill_awareness(
     NOT systemMessage like other hooks.
     """
     try:
-
         # --- Part 1: Skill Candidate Detection (Tool Chain Analysis) ---
         threshold = int(os.environ.get("UA_SKILL_CANDIDATE_THRESHOLD", "8"))
-        
+
         resolved_context: dict = {}
         if isinstance(context, dict):
             resolved_context = context
@@ -3471,15 +3593,14 @@ async def on_user_prompt_skill_awareness(
         # Context usually contains 'agent' or 'client'
         agent = resolved_context.get("agent")
 
-        
-        # If agent is not in context, fall back to global/local scope check 
+        # If agent is not in context, fall back to global/local scope check
         # (though this hook is standalone in main.py, 'agent' variable from main() might effectively be global/closed over)
         if not agent:
-             # This assumes 'agent' is available in the module scope or closure, which might be true if defined inside main()
-             # But this function seems to be top-level in the file structure based on indentation?
-             # If top-level, it can't access 'agent' unless passed.
-             # Let's rely on 'context' first.
-             pass
+            # This assumes 'agent' is available in the module scope or closure, which might be true if defined inside main()
+            # But this function seems to be top-level in the file structure based on indentation?
+            # If top-level, it can't access 'agent' unless passed.
+            # Let's rely on 'context' first.
+            pass
 
         if agent and hasattr(agent, "history"):
             history = agent.history.messages
@@ -3490,7 +3611,7 @@ async def on_user_prompt_skill_awareness(
                     if msg.role == "assistant":
                         last_assist_msg = msg
                         break
-                
+
                 if last_assist_msg:
                     # Count tool calls
                     tool_call_count = 0
@@ -3498,9 +3619,7 @@ async def on_user_prompt_skill_awareness(
                         for block in last_assist_msg.content:
                             if isinstance(block, ToolUseBlock):
                                 tool_call_count += 1
-                    
 
-                    
                     if tool_call_count >= threshold:
                         # Log candidate
                         candidate_log = {
@@ -3508,37 +3627,45 @@ async def on_user_prompt_skill_awareness(
                             "tool_call_count": tool_call_count,
                             "threshold": threshold,
                             "tool_sequence": [
-                                b.name for b in last_assist_msg.content 
+                                b.name
+                                for b in last_assist_msg.content
                                 if isinstance(b, ToolUseBlock)
-                            ]
+                            ],
                         }
-                        
+
                         # Try to find the user prompt that triggered this
                         try:
                             assist_idx = history.index(last_assist_msg)
                             if assist_idx > 0:
                                 prev_msg = history[assist_idx - 1]
                                 if prev_msg.role == "user":
-                                    candidate_log["triggering_prompt"] = prev_msg.content[0].text if isinstance(prev_msg.content, list) else str(prev_msg.content)
+                                    candidate_log["triggering_prompt"] = (
+                                        prev_msg.content[0].text
+                                        if isinstance(prev_msg.content, list)
+                                        else str(prev_msg.content)
+                                    )
                         except Exception:
                             pass
 
                         # Determine workspace dir
                         ws_dir = getattr(agent, "workspace_dir", os.getcwd())
                         log_path = os.path.join(ws_dir, "skill_candidates.log")
-                        
+
                         try:
                             with open(log_path, "a") as f:
                                 f.write(json.dumps(candidate_log) + "\n")
-                            
+
                             # Emit notification if possible
                             if hasattr(agent, "send_agent_event"):
-                                await agent.send_agent_event(EventType.STATUS, {
-                                    "status": f"💡 Skill Candidate Detected: {tool_call_count} tools used in previous turn. Logged.",
-                                    "level": "INFO", 
-                                    "prefix": "SKILL",
-                                    "is_log": True
-                                })
+                                await agent.send_agent_event(
+                                    EventType.STATUS,
+                                    {
+                                        "status": f"💡 Skill Candidate Detected: {tool_call_count} tools used in previous turn. Logged.",
+                                        "level": "INFO",
+                                        "prefix": "SKILL",
+                                        "is_log": True,
+                                    },
+                                )
                         except Exception as e:
                             print(f"Failed to log skill candidate: {e}")
 
@@ -3730,11 +3857,11 @@ def _mark_tasks_for_retry(mission_path: str, task_ids: list) -> None:
     """
     if not os.path.exists(mission_path):
         return
-    
+
     try:
         with open(mission_path, "r") as f:
             mission = json.load(f)
-        
+
         def mark_retry(node):
             if isinstance(node, dict):
                 if node.get("id") in task_ids:
@@ -3745,12 +3872,12 @@ def _mark_tasks_for_retry(mission_path: str, task_ids: list) -> None:
             elif isinstance(node, list):
                 for item in node:
                     mark_retry(item)
-        
+
         mark_retry(mission)
-        
+
         with open(mission_path, "w") as f:
             json.dump(mission, f, indent=2)
-        
+
         print(f"📝 Marked {len(task_ids)} tasks for retry: {task_ids}")
     except Exception as e:
         print(f"⚠️ Failed to mark tasks for retry: {e}")
@@ -3759,14 +3886,14 @@ def _mark_tasks_for_retry(mission_path: str, task_ids: list) -> None:
 def _extract_promise_from_log(workspace_dir: str, tail_lines: int = 100) -> str:
     """
     Fallback: Extract recent content from run.log if response_text is empty.
-    
+
     This handles the race condition where the agent's output is printed
     but not captured in the return value (the "harness stdout bug").
-    
+
     Args:
         workspace_dir: Path to the workspace directory containing run.log
         tail_lines: Number of lines to read from the end of the log
-        
+
     Returns:
         The last N lines of run.log as a string, or empty string on failure
     """
@@ -3784,8 +3911,14 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
 
     # Resolve dependencies (Args > ContextVar > legacy module global)
     _fallback_ctx = _get_ctx()
-    use_run_id = run_id or (_fallback_ctx.run_id if _fallback_ctx else globals().get("run_id"))
-    use_db = db_conn or (_fallback_ctx.runtime_db_conn if _fallback_ctx else globals().get("runtime_db_conn"))
+    use_run_id = run_id or (
+        _fallback_ctx.run_id if _fallback_ctx else globals().get("run_id")
+    )
+    use_db = db_conn or (
+        _fallback_ctx.runtime_db_conn
+        if _fallback_ctx
+        else globals().get("runtime_db_conn")
+    )
 
     if not use_run_id or not use_db:
         return {}
@@ -3805,7 +3938,7 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
     final_output = context.output if hasattr(context, "output") else ""
     if isinstance(final_output, dict):
         final_output = str(final_output)  # fallback
-    
+
     # [FALLBACK] If output is empty, try reading from run.log
     # This handles the race condition where the agent's output is printed
     # but not captured in the return value (the "harness stdout bug")
@@ -3817,7 +3950,7 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
             if log_content:
                 final_output = log_content
                 print(f"📋 Fallback captured {len(final_output)} chars from run.log")
-    
+
     # Normalize output for logging/debugging
     if len(final_output) > 500:
         preview = final_output[:500] + "..."
@@ -3827,55 +3960,62 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
 
     # [Detection] Check for Promise Tag (Case Insensitive)
     import re
-    # Look for last occurrence if possible, or just search. 
+
+    # Look for last occurrence if possible, or just search.
     # Using case-insensitive (?i) and DOTALL.
     # We use findall to get all candidates and check the last one to avoid "I will output..." preamble issues.
     matches = re.findall(r"(?i)<promise>(.*?)</promise>", final_output, re.DOTALL)
-    
+
     extracted_promise = None
     if matches:
         # Take the last one to avoid preamble mentions
         extracted_promise = matches[-1].strip()
         # Collapse whitespace
         extracted_promise = " ".join(extracted_promise.split())
-    
+
     promise_normalized = " ".join(promise.split())
-    
+
     # Determine Intent to Complete
     # 1. Explicit <promise> tag matches
     # 2. Implicit signals (we could check for 'mission complete' but relying on the tag is safer for the protocol)
     # The agent might think it's done but forgot the tag.
-    
+
     # We run verification if the agent *claims* to be done via tag OR if we want to be proactive.
     # For now, let's trigger verification if we found *any* promise tag (even mismatch) or if this is the last iteration.
-    
+
     intent_to_complete = bool(matches)
-    
+
     if intent_to_complete:
-        print(f"🕵️ Completion Intent Detected. Candidates: {len(matches)}. Last: '{extracted_promise}'")
-        
+        print(
+            f"🕵️ Completion Intent Detected. Candidates: {len(matches)}. Last: '{extracted_promise}'"
+        )
+
         # [Step 1] Tiered Verification
         from universal_agent.harness.verifier import TaskVerifier
-        
+
         workspace_dir = globals().get("workspace_dir")
         if not workspace_dir:
             print("⚠️ Harness: No workspace_dir global, skipping verification.")
         else:
             import json as _json
             import glob as _glob
+
             mission_path = os.path.join(workspace_dir, "mission.json")
             if os.path.exists(mission_path):
                 try:
                     with open(mission_path, "r") as f:
                         mission_data = _json.load(f)
-                    
+
                     verifier = TaskVerifier(client=None)  # Tier 2 only (no LLM needed)
-                    
+
                     # Find all COMPLETED tasks with output_artifacts
                     tasks_to_verify = []
+
                     def find_completed_tasks(node):
                         if isinstance(node, dict):
-                            if node.get("status") == "COMPLETED" and node.get("output_artifacts"):
+                            if node.get("status") == "COMPLETED" and node.get(
+                                "output_artifacts"
+                            ):
                                 tasks_to_verify.append(node)
                             for v in node.values():
                                 if isinstance(v, (dict, list)):
@@ -3883,49 +4023,57 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
                         elif isinstance(node, list):
                             for item in node:
                                 find_completed_tasks(item)
-                    
+
                     find_completed_tasks(mission_data)
-                    
-                    print(f"🧪 Verifying {len(tasks_to_verify)} COMPLETED tasks (Tier 2: Binary + Format)...")
-                    
+
+                    print(
+                        f"🧪 Verifying {len(tasks_to_verify)} COMPLETED tasks (Tier 2: Binary + Format)..."
+                    )
+
                     failed_tasks = {}  # {task_id: failure_info}
-                    
+
                     for t in tasks_to_verify:
                         task_id = t.get("id", "unknown")
                         # Use tiered verification (default Tier 2 = Binary + Format)
-                        passed, msg, failure_info = verifier.verify_task(t, workspace_dir, tier=2)
+                        passed, msg, failure_info = verifier.verify_task(
+                            t, workspace_dir, tier=2
+                        )
                         if not passed:
                             failed_tasks[task_id] = {
                                 "tier": failure_info.get("tier", "UNKNOWN"),
                                 "issue": failure_info.get("issue", msg),
                                 "description": t.get("description", ""),
                             }
-                    
+
                     if failed_tasks:
                         # VERIFICATION FAILED - Inject specific feedback
                         feedback_lines = []
                         task_ids_to_retry = []
-                        
+
                         for task_id, info in failed_tasks.items():
                             tier = info.get("tier", "UNKNOWN")
                             issue = info.get("issue", "unknown issue")
                             desc = info.get("description", "")[:50]
-                            
+
                             if tier == "BINARY":
-                                feedback_lines.append(f"• {task_id} ({desc}...): MISSING FILES - {issue}")
+                                feedback_lines.append(
+                                    f"• {task_id} ({desc}...): MISSING FILES - {issue}"
+                                )
                             elif tier == "FORMAT":
-                                feedback_lines.append(f"• {task_id} ({desc}...): FORMAT ERROR - {issue}")
+                                feedback_lines.append(
+                                    f"• {task_id} ({desc}...): FORMAT ERROR - {issue}"
+                                )
                             else:
                                 feedback_lines.append(f"• {task_id}: {issue}")
-                            
+
                             task_ids_to_retry.append(task_id)
-                        
+
                         # Mark tasks for retry in mission.json
                         _mark_tasks_for_retry(mission_path, task_ids_to_retry)
-                        
+
                         feedback = "\n".join(feedback_lines)
                         print(f"❌ Verification Failed:\n{feedback}")
-                        
+
                         return {
                             "hookSpecificOutput": {
                                 "hookEventName": "AgentStop",
@@ -3937,12 +4085,12 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
                                     f"1. Re-read mission.json - tasks marked 'RETRY' need work\n"
                                     f"2. Execute ONLY the tasks marked as 'RETRY'\n"
                                     f"3. Once fixed, output <promise>{promise}</promise>"
-                                )
+                                ),
                             }
                         }
-                    
+
                     print("✅ Verification Passed (Tier 2: Binary + Format).")
-                    
+
                 except Exception as e:
                     print(f"⚠️ Harness Verification Error: {e}")
 
@@ -3962,13 +4110,13 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
             msg = f"Promise Mismatch: Expected '<promise>{promise}</promise>', Got '<promise>{extracted_promise}</promise>'"
         else:
             msg = f"The previous attempt did not include the required completion promise <promise>{promise}</promise>"
-            
+
         print(f"⚠️ {msg}")
         return {
             "hookSpecificOutput": {
                 "hookEventName": "AgentStop",
                 "action": "restart",
-                "nextPrompt": f"RESUMING: {msg}\n\n[INSTRUCTION]\nIf you have completed the objective, you MUST output the EXACT promise tag:\n<promise>{promise}</promise>\n\nEnsure all artifacts are created before doing this."
+                "nextPrompt": f"RESUMING: {msg}\n\n[INSTRUCTION]\nIf you have completed the objective, you MUST output the EXACT promise tag:\n<promise>{promise}</promise>\n\nEnsure all artifacts are created before doing this.",
             }
         }
     # If we get here, the promise was NOT met.
@@ -4086,12 +4234,16 @@ runtime_db_conn: Optional[sqlite3.Connection] = None
 current_execution_session: Optional[ExecutionSession] = None
 interrupt_requested = False
 last_sigint_ts: float | None = None
-OBSERVER_WORKSPACE_DIR = os.getcwd() # Default baseline
+OBSERVER_WORKSPACE_DIR = os.getcwd()  # Default baseline
 provider_session_forked_from: Optional[str] = None
 gateway_mode_active = False
 gateway_tool_call_map: dict[str, str] = {}
-tool_execution_start_times: dict[str, tuple[float, str]] = {}  # tool_call_id -> (start_time, tool_name)
-tool_execution_stream_start_times: dict[str, tuple[float, str]] = {}  # tool_use_id -> (start_time, tool_name)
+tool_execution_start_times: dict[
+    str, tuple[float, str]
+] = {}  # tool_call_id -> (start_time, tool_name)
+tool_execution_stream_start_times: dict[
+    str, tuple[float, str]
+] = {}  # tool_use_id -> (start_time, tool_name)
 tool_execution_emitted_ids: set[str] = set()  # tool_use_id values already emitted
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
@@ -4306,7 +4458,10 @@ def _is_sdk_compact_boundary_message(msg: Any) -> bool:
         data = getattr(msg, "data", None)
         if isinstance(data, dict):
             raw_subtype = data.get("subtype")
-            if isinstance(raw_subtype, str) and raw_subtype.lower() == "compact_boundary":
+            if (
+                isinstance(raw_subtype, str)
+                and raw_subtype.lower() == "compact_boundary"
+            ):
                 return True
         return False
     except Exception:
@@ -4941,7 +5096,7 @@ def _agent_definition_supports_hooks() -> bool:
 def _warn_if_subagent_hooks_configured(agents: Optional[dict[str, Any]]) -> None:
     """
     Check if any sub-agent definitions have explicit hooks configured.
-    
+
     NOTE: As of SDK 0.1.3+, hooks from the MAIN agent's ClaudeAgentOptions
     automatically apply to all sub-agents. The hook system is "agent-agnostic".
     """
@@ -5664,8 +5819,12 @@ async def reconcile_inflight_tools(
         return True
     _ctx.forced_tool_queue = []
     for item in inflight:
-        if _ctx.tool_ledger and _ctx.tool_ledger.promote_pending_receipt(item["tool_call_id"]):
-            _ctx.tool_ledger.mark_replay_status(item["tool_call_id"], "succeeded_pending")
+        if _ctx.tool_ledger and _ctx.tool_ledger.promote_pending_receipt(
+            item["tool_call_id"]
+        ):
+            _ctx.tool_ledger.mark_replay_status(
+                item["tool_call_id"], "succeeded_pending"
+            )
             logfire.info(
                 "pending_receipt_promoted",
                 tool_call_id=item["tool_call_id"],
@@ -5761,7 +5920,9 @@ async def reconcile_inflight_tools(
                     active_client = fallback_client
                     continue
                 print(f"⚠️ In-flight replay error: {exc}")
-                logfire.warning("inflight_replay_error", run_id=_ctx.run_id, error=str(exc))
+                logfire.warning(
+                    "inflight_replay_error", run_id=_ctx.run_id, error=str(exc)
+                )
                 break
             if _ctx.forced_tool_queue:
                 print("⚠️ In-flight replay incomplete; retrying...")
@@ -5935,6 +6096,7 @@ def update_restart_file(
     # Logic removed per user request to avoid file path errors
     pass
 
+
 async def continue_job_run(
     client: ClaudeSDKClient,
     run_id: str,
@@ -6035,7 +6197,10 @@ async def continue_job_run(
             )
             continue
 
-async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usage: int) -> None:
+
+async def _run_memory_flush_subagent(
+    client: Any, workspace_dir: str, token_usage: int
+) -> None:
     """
     Runs a specialized sub-agent to summarize and persist critical information
     before context is wiped (Auto-Flush).
@@ -6049,14 +6214,16 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
 
     try:
         from claude_agent_sdk.client import ClaudeSDKClient
-        
+
         # 1. Retrieve Options from Client
         # Try to get options from client safely
         options = getattr(client, "options", None)
         if not options:
             return
 
-        print(f"\n💾 [Auto-Flush] Initiating Memory Flush Sub-Agent (Triggered by {token_usage} tokens)...")
+        print(
+            f"\n💾 [Auto-Flush] Initiating Memory Flush Sub-Agent (Triggered by {token_usage} tokens)..."
+        )
 
         # 2. Extract Transcript from History
         history = getattr(client, "history", [])
@@ -6068,7 +6235,7 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
         for msg in history:
             role = str(getattr(msg, "role", "unknown")).upper()
             content = getattr(msg, "content", "")
-            
+
             # Handle Block content (Claude SDK specific)
             text_content = ""
             if isinstance(content, list):
@@ -6077,13 +6244,13 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
                         text_content += block.text
             elif isinstance(content, str):
                 text_content = content
-            
+
             if text_content:
                 # Basic sanitization
                 transcript_lines.append(f"{role}: {text_content}")
 
         transcript_text = "\n\n".join(transcript_lines)
-        
+
         if len(transcript_text) > 400000:
             transcript_text = transcript_text[-400000:]
             print(f"⚠️ [Auto-Flush] Transcript truncated to last 400k chars")
@@ -6105,7 +6272,7 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
 
         # 4. Execute Sub-Agent
         print(f"   ► Spawning sub-agent...")
-        
+
         # We reuse the same options (model, etc)
         # We assume options is safe to reuse or copy is not needed for simple read
         sub_client = ClaudeSDKClient(options)
@@ -6114,13 +6281,13 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
             # We treat this as a separate independent run
             # We pass a clean start_ts
             await run_conversation(
-                sub_client, 
-                prompt, 
-                start_ts=time.time(), 
-                iteration=1, 
-                max_iterations=3 # Strict limit
+                sub_client,
+                prompt,
+                start_ts=time.time(),
+                iteration=1,
+                max_iterations=3,  # Strict limit
             )
-            
+
         print("✅ [Auto-Flush] Complete.")
 
     except Exception as e:
@@ -6129,10 +6296,16 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
         # traceback.print_exc()
 
 
-
-async def run_conversation(client, query: str, start_ts: float, iteration: int = 1, max_iterations: int = 20, event_callback: Optional[Callable[["AgentEvent"], None]] = None):
+async def run_conversation(
+    client,
+    query: str,
+    start_ts: float,
+    iteration: int = 1,
+    max_iterations: int = 20,
+    event_callback: Optional[Callable[["AgentEvent"], None]] = None,
+):
     """Run a single conversation turn with full tracing.
-    
+
     Args:
         event_callback: Optional callback to receive AgentEvents in real-time for gateway streaming.
     """
@@ -6248,7 +6421,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             async for msg in client.receive_response():
                 if _is_sdk_compact_boundary_message(msg):
                     compact_payload = _extract_sdk_compact_boundary_payload(msg)
-                    _ctx.trace.setdefault("compact_boundary_events", []).append(compact_payload)
+                    _ctx.trace.setdefault("compact_boundary_events", []).append(
+                        compact_payload
+                    )
                     notice = _format_compact_boundary_notice(compact_payload)
                     compaction_observed_this_turn = True
                     pressure_state = _get_context_pressure_state(_ctx.trace)
@@ -6276,10 +6451,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     continue
 
                 typed_task_payload = (
-                    extract_typed_task_payload(msg) if typed_task_events_active else None
+                    extract_typed_task_payload(msg)
+                    if typed_task_events_active
+                    else None
                 )
                 if typed_task_payload is not None:
-                    _ctx.trace.setdefault("typed_task_messages", []).append(typed_task_payload)
+                    _ctx.trace.setdefault("typed_task_messages", []).append(
+                        typed_task_payload
+                    )
                     lifecycle = str(typed_task_payload.get("task_lifecycle") or "event")
                     summary = str(
                         typed_task_payload.get("summary")
@@ -6334,21 +6513,27 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             iteration=iteration,
                             input=inp,
                             output=out,
-                            total_so_far=_ctx.trace["token_usage"]["total"] if _ctx.trace else 0,
+                            total_so_far=_ctx.trace["token_usage"]["total"]
+                            if _ctx.trace
+                            else 0,
                         )
 
                         # Durability: Update DB with latest token count
                         if _ctx.run_id and _ctx.runtime_db_conn:
                             update_run_tokens(
-                                _ctx.runtime_db_conn, _ctx.run_id, _ctx.trace["token_usage"]["total"]
+                                _ctx.runtime_db_conn,
+                                _ctx.run_id,
+                                _ctx.trace["token_usage"]["total"],
                             )
 
                         # Emit token usage for UI consumers (CLI/harness/gateway path)
                         if event_callback:
-                            event_callback(AgentEvent(
-                                type=EventType.STATUS,
-                                data={"token_usage": _ctx.trace.get("token_usage")},
-                            ))
+                            event_callback(
+                                AgentEvent(
+                                    type=EventType.STATUS,
+                                    data={"token_usage": _ctx.trace.get("token_usage")},
+                                )
+                            )
 
                         # Fallback: Emit to legacy agent if present (for backward compat)
                         if "agent" in globals() and agent is not None:
@@ -6380,9 +6565,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         pressure_state["high_turns_without_compaction"] = 0
                         pressure_state["last_compaction_iteration"] = iteration
                     elif context_tokens_for_reset > TRUNCATION_THRESHOLD:
-                        pressure_state["high_turns_without_compaction"] = int(
-                            pressure_state.get("high_turns_without_compaction", 0) or 0
-                        ) + 1
+                        pressure_state["high_turns_without_compaction"] = (
+                            int(
+                                pressure_state.get("high_turns_without_compaction", 0)
+                                or 0
+                            )
+                            + 1
+                        )
                     else:
                         pressure_state["high_turns_without_compaction"] = 0
 
@@ -6390,16 +6579,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     if _ctx.trace and "token_usage" in _ctx.trace:
                         flags = _ctx.trace.setdefault("token_usage_flags", {})
                         if CONTEXT_WINDOW_TOKENS:
-                            utilization = context_tokens_for_reset / CONTEXT_WINDOW_TOKENS
+                            utilization = (
+                                context_tokens_for_reset / CONTEXT_WINDOW_TOKENS
+                            )
                             if utilization >= 0.7 and not flags.get("warned_70"):
                                 print(
-                                    f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                    f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization * 100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
                                     "Allowing SDK auto-compaction before hard reset."
                                 )
                                 flags["warned_70"] = True
                             if utilization >= 0.9 and not flags.get("warned_90"):
                                 print(
-                                    f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                    f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization * 100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
                                     "Expect compaction soon."
                                 )
                                 flags["warned_90"] = True
@@ -6446,9 +6637,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             current_iter = get_iteration_info(
                                 _ctx.runtime_db_conn, _ctx.run_id
                             ).get("iteration_count", 0)
-                            max_iter = get_iteration_info(_ctx.runtime_db_conn, _ctx.run_id).get(
-                                "max_iterations", 10
-                            )
+                            max_iter = get_iteration_info(
+                                _ctx.runtime_db_conn, _ctx.run_id
+                            ).get("max_iterations", 10)
 
                             if current_iter >= max_iter:
                                 print(
@@ -6456,7 +6647,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 )
                                 break
 
-                            new_iter = increment_iteration_count(_ctx.runtime_db_conn, _ctx.run_id)
+                            new_iter = increment_iteration_count(
+                                _ctx.runtime_db_conn, _ctx.run_id
+                            )
 
                             # 2. Construct Handoff Prompt (Ledger-Aware)
                             # Check for handoff.json written by build_evidence_ledger
@@ -6476,7 +6669,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         "handoff_json_read_error", error=str(e)
                                     )
 
-                            if handoff_state and handoff_state.get("phase") == "ledger_complete":
+                            if (
+                                handoff_state
+                                and handoff_state.get("phase") == "ledger_complete"
+                            ):
                                 # Ledger-aware restart: guide agent to read only the ledger
                                 ledger_path = handoff_state.get("ledger_path", "")
                                 topic = handoff_state.get("topic", "the research topic")
@@ -6515,12 +6711,20 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             if safe_clear_history(client):
                                 print("🧹 Client history cleared (Context Reset).")
                             else:
-                                print("⚠️ Could not clear history: client.history not available")
+                                print(
+                                    "⚠️ Could not clear history: client.history not available"
+                                )
 
                             # 4. Reset token counters and pressure state for new session
-                            _ctx.trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
+                            _ctx.trace["token_usage"] = {
+                                "input": 0,
+                                "output": 0,
+                                "total": 0,
+                            }
                             _ctx.trace["token_usage_flags"] = {}
-                            _ctx.trace["context_pressure"] = _default_context_pressure_state()
+                            _ctx.trace["context_pressure"] = (
+                                _default_context_pressure_state()
+                            )
                             compaction_observed_this_turn = False
 
                             continue  # Restart inner loop with new prompt
@@ -6532,7 +6736,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         parent_tool_use_id = msg.__dict__.get("parent_tool_use_id")
                     if parent_tool_use_id:
                         raw_name = _tool_name_map.get(parent_tool_use_id, "Subagent")
-                        if any(x in raw_name for x in ["Specialist", "Author", "Agent", "Writer"]):
+                        if any(
+                            x in raw_name
+                            for x in ["Specialist", "Author", "Agent", "Writer"]
+                        ):
                             _current_author = raw_name
                         else:
                             _current_author = f"Subagent: {raw_name}"
@@ -6577,8 +6784,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         "iteration": iteration,
                                         "name": block.name,
                                         "id": block.id,
-                                        "time_offset_seconds": round(time.time() - _ctx.start_ts, 3),
-                                        "input": block.input if hasattr(block, "input") else None,
+                                        "time_offset_seconds": round(
+                                            time.time() - _ctx.start_ts, 3
+                                        ),
+                                        "input": block.input
+                                        if hasattr(block, "input")
+                                        else None,
                                         "input_size_bytes": (
                                             len(json.dumps(block.input))
                                             if hasattr(block, "input") and block.input
@@ -6589,35 +6800,55 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     # Circuit breaker: detect non-converging tool loops early and stop.
                                     _maybe_trip_tool_loop_circuit_breaker(
                                         tool_name=block.name,
-                                        tool_input=block.input if hasattr(block, "input") else None,
+                                        tool_input=block.input
+                                        if hasattr(block, "input")
+                                        else None,
                                         step_id=step_id,
                                         iteration=iteration,
                                     )
 
                                     if _ctx.tool_ledger:
-                                        ledger_entry = _ctx.tool_ledger.get_tool_call(str(block.id))
+                                        ledger_entry = _ctx.tool_ledger.get_tool_call(
+                                            str(block.id)
+                                        )
                                         if ledger_entry:
-                                            tool_record["idempotency_key"] = ledger_entry.get("idempotency_key")
-                                            tool_record["side_effect_class"] = ledger_entry.get("side_effect_class")
-                                            tool_record["replay_policy"] = ledger_entry.get("replay_policy")
-                                            tool_record["ledger_status"] = ledger_entry.get("status")
+                                            tool_record["idempotency_key"] = (
+                                                ledger_entry.get("idempotency_key")
+                                            )
+                                            tool_record["side_effect_class"] = (
+                                                ledger_entry.get("side_effect_class")
+                                            )
+                                            tool_record["replay_policy"] = (
+                                                ledger_entry.get("replay_policy")
+                                            )
+                                            tool_record["ledger_status"] = (
+                                                ledger_entry.get("status")
+                                            )
 
                                     _ctx.trace["tool_calls"].append(tool_record)
                                     tool_calls_this_iter.append(tool_record)
                                     if block.id:
                                         stream_tool_id = str(block.id)
-                                        _ctx.tool_execution_stream_start_times[stream_tool_id] = (time.time(), block.name)
+                                        _ctx.tool_execution_stream_start_times[
+                                            stream_tool_id
+                                        ] = (time.time(), block.name)
                                         # Allow re-emission if this ID is reused in a later turn.
-                                        _ctx.tool_execution_emitted_ids.discard(stream_tool_id)
-                                    
+                                        _ctx.tool_execution_emitted_ids.discard(
+                                            stream_tool_id
+                                        )
+
                                     # Emit TOOL_CALL event for gateway/UI streaming (deduped)
                                     hook_events.emit_tool_call_event(
                                         tool_use_id=block.id,
                                         tool_name=block.name,
-                                        tool_input=block.input if hasattr(block, "input") else {},
-                                        time_offset=tool_record.get("time_offset_seconds", 0),
+                                        tool_input=block.input
+                                        if hasattr(block, "input")
+                                        else {},
+                                        time_offset=tool_record.get(
+                                            "time_offset_seconds", 0
+                                        ),
                                     )
-                                    
+
                                     _ctx.budget_state["tool_calls"] += 1
                                     if (
                                         _ctx.budget_config.get("max_tool_calls")
@@ -6669,13 +6900,20 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     # Sub-agent tagging logic: Entering sub-agent
                                     # Map tool_use_id to resolved agent name
                                     resolved_name = block.name
-                                    if block.name == "Task" and hasattr(block, "input") and isinstance(block.input, dict):
+                                    if (
+                                        block.name == "Task"
+                                        and hasattr(block, "input")
+                                        and isinstance(block.input, dict)
+                                    ):
                                         sub_type = block.input.get("subagent_type", "")
                                         if sub_type:
                                             resolved_name = f"Subagent: {sub_type}"
                                     elif "research" in block.name.lower():
                                         resolved_name = "Research Specialist"
-                                    elif "report" in block.name.lower() or "compile" in block.name.lower():
+                                    elif (
+                                        "report" in block.name.lower()
+                                        or "compile" in block.name.lower()
+                                    ):
                                         resolved_name = "Report Writer"
                                     _tool_name_map[block.id] = resolved_name
 
@@ -6706,7 +6944,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             "BASH",
                                         ]
                                     )
-                                    marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
+                                    marker = (
+                                        "🏭 CODE EXECUTION" if is_code_exec else "🔧"
+                                    )
 
                                     print(
                                         f"\n{marker} [{block.name}] +{tool_record['time_offset_seconds']}s"
@@ -6721,15 +6961,19 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         )
                                         max_len = 3000 if is_code_exec else 500
                                         if len(input_preview) > max_len:
-                                            input_preview = input_preview[:max_len] + "..."
+                                            input_preview = (
+                                                input_preview[:max_len] + "..."
+                                            )
                                         print(f"   Input: {input_preview}")
-                                
+
                                     # Show what we're waiting for
                                     print(f"   ⏳ Waiting for {block.name} response...")
 
                             elif isinstance(block, TextBlock):
                                 # Emit TEXT event for streaming with author attribution
-                                hook_events.emit_text_event(block.text, author=_current_author)
+                                hook_events.emit_text_event(
+                                    block.text, author=_current_author
+                                )
 
                                 if "connect.composio.dev/link" in block.text:
                                     import re
@@ -6760,8 +7004,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                             elif isinstance(block, ThinkingBlock):
                                 # Emit thinking event with author attribution
-                                hook_events.emit_thinking_event(block.thinking, block.signature, author=_current_author)
-                                
+                                hook_events.emit_thinking_event(
+                                    block.thinking,
+                                    block.signature,
+                                    author=_current_author,
+                                )
+
                                 # Log extended thinking
                                 print(
                                     f"\n🧠 Thinking (+{round(time.time() - start_ts, 1)}s)..."
@@ -6808,7 +7056,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     "run_id": _ctx.run_id,
                                     "step_id": step_id,
                                     "tool_use_id": tool_use_id,
-                                    "time_offset_seconds": round(time.time() - _ctx.start_ts, 3),
+                                    "time_offset_seconds": round(
+                                        time.time() - _ctx.start_ts, 3
+                                    ),
                                     "is_error": is_error,
                                     "content_size_bytes": len(content_str),
                                     "content_preview": content_str[:1000]
@@ -6820,11 +7070,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         str(tool_use_id)
                                     )
                                     if ledger_entry:
-                                        result_record["idempotency_key"] = ledger_entry.get(
-                                            "idempotency_key"
+                                        result_record["idempotency_key"] = (
+                                            ledger_entry.get("idempotency_key")
                                         )
-                                        result_record["ledger_status"] = ledger_entry.get(
-                                            "status"
+                                        result_record["ledger_status"] = (
+                                            ledger_entry.get("status")
                                         )
                                 _ctx.trace["tool_results"].append(result_record)
 
@@ -6851,14 +7101,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     tool_use_id=tool_use_id,
                                     is_error=is_error,
                                     tool_result=block_content,
-                                    time_offset=result_record.get("time_offset_seconds", 0),
+                                    time_offset=result_record.get(
+                                        "time_offset_seconds", 0
+                                    ),
                                 )
 
                                 print(
                                     f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
                                 )
                                 # Always show a preview of the result content
-                                preview = result_record.get("content_preview", "")[:2000]
+                                preview = result_record.get("content_preview", "")[
+                                    :2000
+                                ]
                                 if preview:
                                     print(
                                         f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 2000 else ''}"
@@ -6889,7 +7143,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         ) and inner_content.startswith("["):
                                             json_start = inner_content.find("{")
                                             if json_start != -1:
-                                                inner_content = inner_content[json_start:]
+                                                inner_content = inner_content[
+                                                    json_start:
+                                                ]
 
                                         # Parse the interview data
                                         interview_data = (
@@ -6899,14 +7155,21 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         )
 
                                         if interview_data.get("__INTERVIEW_REQUEST__"):
-                                            questions = interview_data.get("questions", [])
-                                            if questions and _ctx.observer_workspace_dir:
+                                            questions = interview_data.get(
+                                                "questions", []
+                                            )
+                                            if (
+                                                questions
+                                                and _ctx.observer_workspace_dir
+                                            ):
                                                 # Save questions to workspace for post-iteration processing
                                                 pending_interview_file = os.path.join(
                                                     _ctx.observer_workspace_dir,
                                                     "pending_interview.json",
                                                 )
-                                                with open(pending_interview_file, "w") as f:
+                                                with open(
+                                                    pending_interview_file, "w"
+                                                ) as f:
                                                     json.dump(
                                                         {"questions": questions},
                                                         f,
@@ -6936,8 +7199,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                 stream_tool_id = str(tool_use_id) if tool_use_id else ""
                                 if stream_tool_id:
-                                    stream_start_info = _ctx.tool_execution_stream_start_times.pop(
-                                        stream_tool_id, None
+                                    stream_start_info = (
+                                        _ctx.tool_execution_stream_start_times.pop(
+                                            stream_tool_id, None
+                                        )
                                     )
                                     if (
                                         stream_start_info
@@ -6960,10 +7225,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             run_id=_ctx.run_id,
                                             step_id=step_id,
                                             iteration=iteration,
-                                            status="failed" if is_error else "succeeded",
+                                            status="failed"
+                                            if is_error
+                                            else "succeeded",
                                             source="stream_tool_result",
                                         )
-                                        _ctx.tool_execution_emitted_ids.add(stream_tool_id)
+                                        _ctx.tool_execution_emitted_ids.add(
+                                            stream_tool_id
+                                        )
 
                                 # Reset sub-agent tagging if Task returned (Back to Main)
                                 if tool_name == "Task":
@@ -6975,10 +7244,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     # TextBlocks never come through receive_response().
                                     # Extract them from the ToolResultBlock and emit as TEXT.
                                     if not is_error and block_content:
-                                        subagent_type = (tool_input or {}).get("subagent_type", "")
+                                        subagent_type = (tool_input or {}).get(
+                                            "subagent_type", ""
+                                        )
                                         if "research" in subagent_type.lower():
                                             sa_author = "Research Specialist"
-                                        elif "report" in subagent_type.lower() or "writ" in subagent_type.lower():
+                                        elif (
+                                            "report" in subagent_type.lower()
+                                            or "writ" in subagent_type.lower()
+                                        ):
                                             sa_author = "Report Writer"
                                         elif subagent_type:
                                             sa_author = f"Subagent: {subagent_type}"
@@ -6986,10 +7260,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             sa_author = "Subagent"
 
                                         # block_content is list of content blocks (dicts or SDK objects)
-                                        _sa_blocks = block_content if isinstance(block_content, list) else [block_content]
+                                        _sa_blocks = (
+                                            block_content
+                                            if isinstance(block_content, list)
+                                            else [block_content]
+                                        )
                                         for _sa_blk in _sa_blocks:
                                             _sa_text = None
-                                            if isinstance(_sa_blk, dict) and _sa_blk.get("type") == "text":
+                                            if (
+                                                isinstance(_sa_blk, dict)
+                                                and _sa_blk.get("type") == "text"
+                                            ):
                                                 _sa_text = _sa_blk.get("text", "")
                                             elif hasattr(_sa_blk, "text"):
                                                 _sa_text = getattr(_sa_blk, "text", "")
@@ -6997,9 +7278,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                                 _sa_text = _sa_blk
                                             if _sa_text and _sa_text.strip():
                                                 # Skip metadata lines (agentId, etc.)
-                                                if _sa_text.strip().startswith("agentId:"):
+                                                if _sa_text.strip().startswith(
+                                                    "agentId:"
+                                                ):
                                                     continue
-                                                hook_events.emit_text_event(_sa_text, author=sa_author)
+                                                hook_events.emit_text_event(
+                                                    _sa_text, author=sa_author
+                                                )
 
                                     if not is_error and _ctx.observer_workspace_dir:
                                         paths = _persist_subagent_output(
@@ -7029,7 +7314,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     # Search results observer - pass typed content
                                     asyncio.create_task(
                                         observe_and_save_search_results(
-                                            tool_name, block_content, _ctx.observer_workspace_dir
+                                            tool_name,
+                                            block_content,
+                                            _ctx.observer_workspace_dir,
                                         )
                                     )
                                     # Workbench activity observer
@@ -7062,7 +7349,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                     # Post-subagent compliance verification (for Task results)
                                     compliance_error = verify_subagent_compliance(
-                                        tool_name, content_str, _ctx.observer_workspace_dir
+                                        tool_name,
+                                        content_str,
+                                        _ctx.observer_workspace_dir,
                                     )
                                     if compliance_error:
                                         # Log the compliance failure prominently
@@ -7074,7 +7363,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                 elif isinstance(msg, ResultMessage):
                     result_telemetry = _extract_result_message_telemetry(msg)
-                    _ctx.trace.setdefault("sdk_result_messages", []).append(result_telemetry)
+                    _ctx.trace.setdefault("sdk_result_messages", []).append(
+                        result_telemetry
+                    )
                     logfire.info(
                         "result_message",
                         duration_ms=msg.duration_ms,
@@ -7092,12 +7383,20 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     )
                     if msg.session_id:
                         _maybe_update_provider_session(
-                            msg.session_id, forked_from=_ctx.provider_session_forked_from
+                            msg.session_id,
+                            forked_from=_ctx.provider_session_forked_from,
                         )
-                    if msg.is_error and msg.result and _ctx.runtime_db_conn and _ctx.run_id:
+                    if (
+                        msg.is_error
+                        and msg.result
+                        and _ctx.runtime_db_conn
+                        and _ctx.run_id
+                    ):
                         error_text = str(msg.result).lower()
                         if "resume" in error_text or "session" in error_text:
-                            update_run_provider_session(_ctx.runtime_db_conn, _ctx.run_id, None)
+                            update_run_provider_session(
+                                _ctx.runtime_db_conn, _ctx.run_id, None
+                            )
                             logfire.warning(
                                 "provider_session_invalidated",
                                 run_id=_ctx.run_id,
@@ -7165,9 +7464,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 # ---------------------------------------------------------------------------
 # Query route types — 3-tier routing
 # ---------------------------------------------------------------------------
-ROUTE_SIMPLE = "SIMPLE"      # LLM answers from its own knowledge, no tools
+ROUTE_SIMPLE = "SIMPLE"  # LLM answers from its own knowledge, no tools
 ROUTE_STANDARD = "STANDARD"  # Normal user query → Simone's full tool loop (skills, agents, capabilities)
-ROUTE_SYSTEM = "SYSTEM"      # Specialized utility (cron, heartbeat) → system routing (stub: tool loop for now)
+ROUTE_SYSTEM = "SYSTEM"  # Specialized utility (cron, heartbeat) → system routing (stub: tool loop for now)
 
 
 def _is_system_intent(query: str) -> bool:
@@ -7177,7 +7476,16 @@ def _is_system_intent(query: str) -> bool:
     if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
         return True
     # Explicit cron / scheduled-task markers
-    if any(kw in lowered for kw in ["cron job", "scheduled task", "system task", "run cron", "cron check"]):
+    if any(
+        kw in lowered
+        for kw in [
+            "cron job",
+            "scheduled task",
+            "system task",
+            "run cron",
+            "cron check",
+        ]
+    ):
         return True
     # UA run-source env signal (set by execution engine for non-user-initiated runs)
     run_source = os.getenv("UA_RUN_SOURCE", "").strip().lower()
@@ -7221,16 +7529,53 @@ def _is_tool_required_intent(query: str) -> bool:
     """
     lowered = query.lower()
     # Attached files always need tools (image analysis, file processing, etc.)
-    if "[attached image:" in lowered or "[attached " in lowered or "--- attached:" in lowered:
+    if (
+        "[attached image:" in lowered
+        or "[attached " in lowered
+        or "--- attached:" in lowered
+    ):
         return True
     # Explicit tool/action verbs
-    if any(kw in lowered for kw in ["search for", "send email", "email it", "email me", "email this", "run ", "execute ", "create a report"]):
+    if any(
+        kw in lowered
+        for kw in [
+            "search for",
+            "send email",
+            "email it",
+            "email me",
+            "email this",
+            "run ",
+            "execute ",
+            "create a report",
+        ]
+    ):
         return True
     # YouTube/media URL fetching always needs external tools
-    if any(kw in lowered for kw in ["youtu.be", "youtube.com", "transcript", "get the transcript", "fetch transcript"]):
+    if any(
+        kw in lowered
+        for kw in [
+            "youtu.be",
+            "youtube.com",
+            "transcript",
+            "get the transcript",
+            "fetch transcript",
+        ]
+    ):
         return True
     # Any URL fetch/scrape intent needs tools
-    if any(kw in lowered for kw in ["http://", "https://"]) and any(kw in lowered for kw in ["get", "fetch", "scrape", "read", "summarize", "transcript", "content", "extract"]):
+    if any(kw in lowered for kw in ["http://", "https://"]) and any(
+        kw in lowered
+        for kw in [
+            "get",
+            "fetch",
+            "scrape",
+            "read",
+            "summarize",
+            "transcript",
+            "content",
+            "extract",
+        ]
+    ):
         return True
     return False
 
@@ -7240,8 +7585,8 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     SIMPLE   — LLM answers from its own knowledge/history, no tools needed.
     STANDARD — Normal user request; Simone handles with full tool loop (skills, agents, capabilities).
-    SYSTEM   — Automated/utility process that is NOT a user request — cron jobs, scheduled tasks, 
-    heartbeat checks, system monitoring, background maintenance 
+    SYSTEM   — Automated/utility process that is NOT a user request — cron jobs, scheduled tasks,
+    heartbeat checks, system monitoring, background maintenance
     (e.g., 'run the daily digest cron', 'check system health', 'process the scheduled task queue').
     """
     _ctx = _get_ctx()
@@ -7253,7 +7598,9 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     # --- Tier 1: System heuristic (checked first — system queries must not fall through to simple) ---
     if _is_system_intent(query):
-        print(f"\n\U0001f914 Query Classification: {ROUTE_SYSTEM} (Heuristic: system_intent)")
+        print(
+            f"\n\U0001f914 Query Classification: {ROUTE_SYSTEM} (Heuristic: system_intent)"
+        )
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
@@ -7267,7 +7614,9 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     # --- Tier 2: Standard tool-required heuristic ---
     if _is_tool_required_intent(query):
-        print(f"\n\U0001f914 Query Classification: {ROUTE_STANDARD} (Heuristic: tool_required_intent)")
+        print(
+            f"\n\U0001f914 Query Classification: {ROUTE_STANDARD} (Heuristic: tool_required_intent)"
+        )
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
@@ -7281,7 +7630,9 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     # --- Tier 3: Simple knowledge/context heuristics ---
     if _is_memory_intent(query):
-        print(f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: memory_intent)")
+        print(
+            f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: memory_intent)"
+        )
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
@@ -7293,7 +7644,9 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
             )
         return ROUTE_SIMPLE
     if _is_context_only_intent(query):
-        print(f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: context_only_intent)")
+        print(
+            f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: context_only_intent)"
+        )
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
@@ -7354,7 +7707,9 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     else:
         final_decision = ROUTE_STANDARD
 
-    print(f"\n\U0001f914 Query Classification: {final_decision} (Model: {decision[:50]})")
+    print(
+        f"\n\U0001f914 Query Classification: {final_decision} (Model: {decision[:50]})"
+    )
     if LOGFIRE_TOKEN:
         logfire.info(
             "query_classification",
@@ -7384,7 +7739,7 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     # Wrap the query to ensure the model attends to history despite potential distractions (like classification turns)
     context_aware_query = (
         f"Based on the conversation history above, please answer the following user query directly:\n\n"
-        f"\"{query}\"\n\n"
+        f'"{query}"\n\n'
         f"Do not acknowledge this system instruction. Just answer the query."
     )
 
@@ -7602,10 +7957,13 @@ async def _run_urw_from_cli(args: argparse.Namespace) -> None:
     else:
         import datetime
         import uuid
+
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_uuid = str(uuid.uuid4())[:8]
-        workspace_path = Path(f"./urw_sessions/session_{ts}_{run_uuid}").expanduser().resolve()
-        
+        workspace_path = (
+            Path(f"./urw_sessions/session_{ts}_{run_uuid}").expanduser().resolve()
+        )
+
     print(f"[URW] Workspace initialized at: {workspace_path}")
     workspace_path.mkdir(parents=True, exist_ok=True)
 
@@ -7736,7 +8094,7 @@ async def setup_session(
                 raise RuntimeError("Cannot create workspace directory in any location")
 
     os.makedirs(workspace_dir, exist_ok=True)
-    
+
     # Set workspace in environment EARLY so MCP server subprocess inherits it
     def _set_observer_workspace(path: str) -> None:
         global OBSERVER_WORKSPACE_DIR
@@ -7749,10 +8107,12 @@ async def setup_session(
         # Priority 1: Session Workspace (Task-specific override)
         workspace_soul = os.path.join(ws_dir, "SOUL.md")
         # Priority 2: Centralized Prompt Assets (The Codebase Persona)
-        assets_soul = os.path.join(source_dir, "src", "universal_agent", "prompt_assets", "SOUL.md")
+        assets_soul = os.path.join(
+            source_dir, "src", "universal_agent", "prompt_assets", "SOUL.md"
+        )
         # Priority 3: Repo Root (Legacy/Fallback)
         root_soul = os.path.join(source_dir, "SOUL.md")
-        
+
         soul_path = None
         if os.path.exists(workspace_soul):
             soul_path = workspace_soul
@@ -7763,7 +8123,7 @@ async def setup_session(
         elif os.path.exists(root_soul):
             soul_path = root_soul
             print(f"👻 Loaded Legacy Soul from root: {soul_path}")
-            
+
         if soul_path and os.path.exists(soul_path):
             try:
                 with open(soul_path, "r", encoding="utf-8") as f:
@@ -7935,6 +8295,7 @@ async def setup_session(
     else:
         try:
             from universal_agent.memory.memory_context import build_file_memory_context
+
             shared_memory_dir = resolve_shared_memory_workspace(str(workspace_dir))
             memory_context_str = build_file_memory_context(
                 shared_memory_dir,
@@ -7983,14 +8344,13 @@ async def setup_session(
         tool_ledger=tool_ledger,
         runtime_db_conn=runtime_db_conn,
         enable_skills=True,
-        active_workspace=str(workspace_dir)
+        active_workspace=str(workspace_dir),
     )
 
     capabilities_registry = get_capabilities_content(src_dir, abs_workspace_path)
 
     agent = UniversalAgent(
-        workspace_dir=workspace_dir,
-        hooks=hooks_manager.build_hooks()
+        workspace_dir=workspace_dir, hooks=hooks_manager.build_hooks()
     )
     if attach_stdio:
         setup_log_bridge(agent)
@@ -8053,7 +8413,8 @@ async def setup_session(
             "args": ["-y", "@z_ai/mcp-server"],
             "env": {
                 # Infisical stores key as ZAI_API_KEY; npm package expects Z_AI_API_KEY
-                "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY") or os.environ.get("ZAI_API_KEY", ""),
+                "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY")
+                or os.environ.get("ZAI_API_KEY", ""),
                 "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
             },
         },
@@ -8082,7 +8443,7 @@ async def setup_session(
                 memory_get_wrapper,
                 ask_user_questions_wrapper,
                 batch_tool_execute_wrapper,
-            ]
+            ],
         ),
     }
 
@@ -8097,13 +8458,19 @@ async def setup_session(
         disallowed_tools=disallowed_tools,
         # Read token limits from env vars (default 64K for good balance of capacity vs safety)
         env={
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"),
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv(
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"
+            ),
             "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
             if resolve_agent_teams_enabled(default=True)
             else "0",
-            "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"),
-            "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv("UA_ENABLE_SDK_SESSION_HISTORY", "0"),
+            "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv(
+                "UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"
+            ),
+            "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv(
+                "UA_ENABLE_SDK_SESSION_HISTORY", "0"
+            ),
             "UA_ENABLE_DYNAMIC_MCP": os.getenv("UA_ENABLE_DYNAMIC_MCP", "0"),
             "CURRENT_SESSION_WORKSPACE": abs_workspace_path,
             "UA_ARTIFACTS_DIR": os.path.abspath(
@@ -8119,7 +8486,6 @@ async def setup_session(
         # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
         # AND in-process tools (crawl_parallel, report generation, etc.)
         # Sub-agents inherit all tools via model="inherit".
-
         hooks=hooks_manager.build_hooks(),
         permission_mode="bypassPermissions",
     )
@@ -8169,7 +8535,9 @@ async def setup_session(
             return
         if isinstance(options.system_prompt, str):
             options.system_prompt = (
-                f"{options.system_prompt}\n\n{extra_text}" if options.system_prompt else extra_text
+                f"{options.system_prompt}\n\n{extra_text}"
+                if options.system_prompt
+                else extra_text
             )
             return
         if (
@@ -8194,7 +8562,6 @@ async def setup_session(
     if tool_knowledge_block:
         _append_system_prompt_text(tool_knowledge_block)
         print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
-
 
     return options, session, user_id, workspace_dir, trace, agent
 
@@ -8236,7 +8603,7 @@ async def process_turn(
     """
     Process a single user query.
     Returns: ExecutionResult with rich feedback
-    
+
     Args:
         event_callback: Optional callback to receive AgentEvents in real-time.
                        Used by gateway/adapters for event streaming.
@@ -8268,28 +8635,30 @@ async def process_turn(
     # Mutable containers are passed by reference intentionally: in-place mutations
     # (append, pop, clear) stay in sync with the module globals during the
     # incremental migration. Scalar fields will be migrated in Phase 2.
-    _set_ctx(_SessionContext(
-        run_id=run_id,
-        trace=trace,
-        runtime_db_conn=runtime_db_conn,
-        current_step_id=current_step_id,
-        tool_ledger=tool_ledger,
-        observer_workspace_dir=OBSERVER_WORKSPACE_DIR,
-        forced_tool_queue=forced_tool_queue,
-        start_ts=start_ts,
-        forced_tool_mode_active=forced_tool_mode_active,
-        budget_state=budget_state,
-        gateway_mode_active=gateway_mode_active,
-        budget_config=budget_config,
-        forced_tool_active_ids=forced_tool_active_ids,
-        tool_execution_emitted_ids=tool_execution_emitted_ids,
-        provider_session_forked_from=provider_session_forked_from,
-        primary_transcript_path=_primary_transcript_path,
-        tool_execution_stream_start_times=tool_execution_stream_start_times,
-        tool_execution_start_times=tool_execution_start_times,
-        gateway_tool_call_map=gateway_tool_call_map,
-        seen_transcript_paths=_seen_transcript_paths,
-    ))
+    _set_ctx(
+        _SessionContext(
+            run_id=run_id,
+            trace=trace,
+            runtime_db_conn=runtime_db_conn,
+            current_step_id=current_step_id,
+            tool_ledger=tool_ledger,
+            observer_workspace_dir=OBSERVER_WORKSPACE_DIR,
+            forced_tool_queue=forced_tool_queue,
+            start_ts=start_ts,
+            forced_tool_mode_active=forced_tool_mode_active,
+            budget_state=budget_state,
+            gateway_mode_active=gateway_mode_active,
+            budget_config=budget_config,
+            forced_tool_active_ids=forced_tool_active_ids,
+            tool_execution_emitted_ids=tool_execution_emitted_ids,
+            provider_session_forked_from=provider_session_forked_from,
+            primary_transcript_path=_primary_transcript_path,
+            tool_execution_stream_start_times=tool_execution_stream_start_times,
+            tool_execution_start_times=tool_execution_start_times,
+            gateway_tool_call_map=gateway_tool_call_map,
+            seen_transcript_paths=_seen_transcript_paths,
+        )
+    )
     _ctx = _require_ctx()
 
     # Ephemeral system events (cron completions, exec finishes, monitors) are
@@ -8357,7 +8726,7 @@ async def process_turn(
     # Reset per-turn circuit breaker state (prevents cross-turn contamination).
     if isinstance(_ctx.trace, dict):
         _ctx.trace.pop("_tool_loop_circuit", None)
-    
+
     # Helper to emit events via callback (defined early for all paths)
     def emit_event(event: AgentEvent) -> None:
         if event_callback:
@@ -8384,16 +8753,20 @@ async def process_turn(
             _ctx = _get_ctx()
             if _ctx is not None:
                 start_ts = _ctx.start_ts
-            emit_event(AgentEvent(
-                type=EventType.STATUS,
-                data={
-                    "status": msg,
-                    "level": level,
-                    "prefix": prefix or "[MCP Tool]",
-                    "is_log": True,
-                    "time_offset": round(time.time() - _ctx.start_ts, 1) if _ctx.start_ts else 0,
-                },
-            ))
+            emit_event(
+                AgentEvent(
+                    type=EventType.STATUS,
+                    data={
+                        "status": msg,
+                        "level": level,
+                        "prefix": prefix or "[MCP Tool]",
+                        "is_log": True,
+                        "time_offset": round(time.time() - _ctx.start_ts, 1)
+                        if _ctx.start_ts
+                        else 0,
+                    },
+                )
+            )
 
         set_mcp_log_callback(_mcp_log_bridge)
         _mcp_log_callback_set = True
@@ -8406,6 +8779,7 @@ async def process_turn(
         if _mcp_log_callback_set:
             try:
                 from mcp_server import set_mcp_log_callback as _clear_cb
+
                 _clear_cb(None)
             except ImportError:
                 pass
@@ -8426,32 +8800,39 @@ async def process_turn(
     clean_input = user_input.strip().lower()
     if clean_input in ["/reset", "/clear", "/new"]:
         if event_callback:
-            event_callback(AgentEvent(
-                type=EventType.STATUS, 
-                data={"status": "session_reset", "is_log": True, "message": "Clearing conversation history..."}
-            ))
-        
+            event_callback(
+                AgentEvent(
+                    type=EventType.STATUS,
+                    data={
+                        "status": "session_reset",
+                        "is_log": True,
+                        "message": "Clearing conversation history...",
+                    },
+                )
+            )
+
         _clear_hook_events()
         return ExecutionResult(
             response_text="🔄 Session reset! I've cleared the conversation history.",
             execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
             workspace_path=workspace_dir,
-            reset_session=True
+            reset_session=True,
         )
 
     # 1a. Check for /harness command (massive request handler)
     clean_input = user_input.strip()
     if clean_input.startswith("/harness"):
         from .urw.harness_orchestrator import run_harness
-        
+
         # Strip "/harness" and any following space
         massive_request = clean_input[8:].lstrip()
-        
+
         if not massive_request:
             from .api.input_bridge import request_user_input
+
             massive_request = await request_user_input(
                 "Please state your objective for the harness run:",
-                category="harness_init"
+                category="harness_init",
             )
             if not massive_request or massive_request.strip() == "":
                 return ExecutionResult(
@@ -8464,12 +8845,17 @@ async def process_turn(
         print("🎯 HARNESS MODE ACTIVATED")
         print(f"{'=' * 60}")
         print(f"Request: {massive_request[:100]}...")
-        
+
         # Emit status for UI Activity Log
-        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "Harness Mode Activated", "is_log": True}))
-        
+        emit_event(
+            AgentEvent(
+                type=EventType.STATUS,
+                data={"status": "Harness Mode Activated", "is_log": True},
+            )
+        )
+
         workspaces_root = Path(workspace_dir).parent
-        
+
         try:
             result = await run_harness(
                 massive_request=massive_request,
@@ -8479,7 +8865,7 @@ async def process_turn(
                 max_iterations=max_iterations,
                 event_callback=event_callback,
             )
-            
+
             summary = f"Harness complete: {result.get('phases_completed', 0)} phases completed"
             _clear_hook_events()
             return ExecutionResult(
@@ -8490,6 +8876,7 @@ async def process_turn(
         except Exception as e:
             print(f"\n❌ Harness error: {e}")
             import traceback
+
             traceback.print_exc()
             _clear_hook_events()
             return ExecutionResult(
@@ -8499,7 +8886,9 @@ async def process_turn(
             )
 
     # 2. Determine Route (3-tier: SIMPLE / STANDARD / SYSTEM)
-    route_type = ROUTE_STANDARD if force_complex else await classify_query(client, user_input)
+    route_type = (
+        ROUTE_STANDARD if force_complex else await classify_query(client, user_input)
+    )
 
     # 3. Route Decision
     is_simple = route_type == ROUTE_SIMPLE
@@ -8514,13 +8903,19 @@ async def process_turn(
         block on `input()` for auth continuation.
         """
         try:
-            return bool(sys.stdin) and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+            return (
+                bool(sys.stdin) and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+            )
         except Exception:
             return False
-    
+
     if is_simple:
         # SIMPLE path: fast path via direct LLM answer
-        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "fast"}))
+        emit_event(
+            AgentEvent(
+                type=EventType.STATUS, data={"status": "processing", "path": "fast"}
+            )
+        )
         success, fast_path_text = await handle_simple_query(client, user_input)
         if not success:
             is_simple = False  # Fallback to Standard Path
@@ -8537,12 +8932,17 @@ async def process_turn(
     if is_system and not is_simple:
         # SYSTEM path detected — log and emit; currently falls through to the tool loop.
         # Future: delegate immediately to cron/system subagent before entering tool loop.
-        emit_event(AgentEvent(type=EventType.STATUS, data={
-            "status": "system_query_detected",
-            "path": "system",
-            "route": ROUTE_SYSTEM,
-            "is_log": True,
-        }))
+        emit_event(
+            AgentEvent(
+                type=EventType.STATUS,
+                data={
+                    "status": "system_query_detected",
+                    "path": "system",
+                    "route": ROUTE_SYSTEM,
+                    "is_log": True,
+                },
+            )
+        )
         if LOGFIRE_TOKEN:
             logfire.info(
                 "system_route_detected",
@@ -8555,10 +8955,23 @@ async def process_turn(
         # STANDARD or SYSTEM path — tool loop (Simone's full capabilities)
         request_start_ts = time.time()
         iteration = 1
-        current_query = f"{system_events_block}\n\n{user_input}" if system_events_block else user_input
+        current_query = (
+            f"{system_events_block}\n\n{user_input}"
+            if system_events_block
+            else user_input
+        )
 
         path_label = "system" if is_system else "standard"
-        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": path_label, "iteration": iteration}))
+        emit_event(
+            AgentEvent(
+                type=EventType.STATUS,
+                data={
+                    "status": "processing",
+                    "path": path_label,
+                    "iteration": iteration,
+                },
+            )
+        )
 
         while True:
             try:
@@ -8578,7 +8991,11 @@ async def process_turn(
                     from universal_agent.recovery_handoff import write_recovery_handoff
                     from universal_agent import transcript_builder
 
-                    err_dict = exc.to_dict() if hasattr(exc, "to_dict") else {"error": str(exc)}
+                    err_dict = (
+                        exc.to_dict()
+                        if hasattr(exc, "to_dict")
+                        else {"error": str(exc)}
+                    )
                     reason = (
                         "circuit_breaker"
                         if isinstance(exc, CircuitBreakerTriggered)
@@ -8599,12 +9016,16 @@ async def process_turn(
                     # Best-effort transcript + trace snapshot before the client is reset upstream.
                     try:
                         _ctx.trace["end_time"] = datetime.now().isoformat()
-                        _ctx.trace["total_duration_seconds"] = round(time.time() - _ctx.start_ts, 3)
+                        _ctx.trace["total_duration_seconds"] = round(
+                            time.time() - _ctx.start_ts, 3
+                        )
                     except Exception:
                         pass
                     try:
                         transcript_path = os.path.join(workspace_dir, "transcript.md")
-                        transcript_builder.generate_transcript(_ctx.trace, transcript_path)
+                        transcript_builder.generate_transcript(
+                            _ctx.trace, transcript_path
+                        )
                     except Exception:
                         pass
                     try:
@@ -8645,7 +9066,9 @@ async def process_turn(
                         response_text=msg,
                         execution_time_seconds=round(time.time() - _ctx.start_ts, 2),
                         workspace_path=workspace_dir,
-                        trace_id=_ctx.trace.get("trace_id") if isinstance(_ctx.trace, dict) else None,
+                        trace_id=_ctx.trace.get("trace_id")
+                        if isinstance(_ctx.trace, dict)
+                        else None,
                         reset_session=True,
                     )
 
@@ -8654,10 +9077,12 @@ async def process_turn(
 
             if needs_input and auth_link:
                 # Emit auth required event for gateway/adapters
-                emit_event(AgentEvent(
-                    type=EventType.AUTH_REQUIRED,
-                    data={"auth_link": auth_link},
-                ))
+                emit_event(
+                    AgentEvent(
+                        type=EventType.AUTH_REQUIRED,
+                        data={"auth_link": auth_link},
+                    )
+                )
                 auth_msg = (
                     "Authentication required to continue.\n\n"
                     f"Open this link in your browser:\n{auth_link}\n\n"
@@ -8671,7 +9096,9 @@ async def process_turn(
                 if not final_response_text:
                     final_response_text = auth_msg
                 else:
-                    final_response_text = final_response_text.rstrip() + "\n\n" + auth_msg
+                    final_response_text = (
+                        final_response_text.rstrip() + "\n\n" + auth_msg
+                    )
 
                 # Headless execution (gateway/chron): do not block on stdin.
                 if not _stdin_is_interactive():
@@ -8782,12 +9209,17 @@ async def process_turn(
             _ctx.trace["trace_catalog_path"] = catalog_path
             wp_catalog_paths = save_trace_catalog_work_product(_catalog, workspace_dir)
             _ctx.trace["trace_catalog_work_product_path"] = wp_catalog_paths["md_path"]
-            _ctx.trace["trace_catalog_work_product_json_path"] = wp_catalog_paths["json_path"]
+            _ctx.trace["trace_catalog_work_product_json_path"] = wp_catalog_paths[
+                "json_path"
+            ]
         except Exception as cat_err:
             print(f"⚠️ Failed to refresh trace catalog: {cat_err}")
 
         # Emit execution summary to Activity Log for UI visibility
-        summary_parts = [f"⏱️ {request_duration}s", f"🔧 {len(request_tool_calls)} tools"]
+        summary_parts = [
+            f"⏱️ {request_duration}s",
+            f"🔧 {len(request_tool_calls)} tools",
+        ]
         if code_exec_used:
             summary_parts.append("🏭 code exec")
         hook_events.emit_status_event(
@@ -8846,7 +9278,8 @@ async def process_turn(
                 try:
                     sync_result = _sync_session_memory_if_enabled(
                         workspace_dir=workspace_dir,
-                        session_id=_ctx.trace.get("session_id") or _ctx.trace.get("run_id"),
+                        session_id=_ctx.trace.get("session_id")
+                        or _ctx.trace.get("run_id"),
                         transcript_path=transcript_path,
                         force=False,
                     )
@@ -8944,34 +9377,37 @@ async def main(args: argparse.Namespace):
         main_span.__exit__(None, None, None)
         return
 
-    gateway_url = getattr(args, 'gateway_url', None) or os.getenv("UA_GATEWAY_URL")
-    use_gateway = args.use_gateway or gateway_url or os.getenv("UA_USE_GATEWAY", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    } or os.getenv("UA_DEV_GATEWAY_DEFAULT", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    gateway_use_cli_workspace = (
-        args.gateway_use_cli_workspace
-        or os.getenv("UA_GATEWAY_USE_CLI_WORKSPACE", "").lower() in {"1", "true", "yes"}
+    gateway_url = getattr(args, "gateway_url", None) or os.getenv("UA_GATEWAY_URL")
+    use_gateway = (
+        args.use_gateway
+        or gateway_url
+        or os.getenv("UA_USE_GATEWAY", "").lower()
+        in {
+            "1",
+            "true",
+            "yes",
+        }
+        or os.getenv("UA_DEV_GATEWAY_DEFAULT", "").lower()
+        in {
+            "1",
+            "true",
+            "yes",
+        }
     )
+    gateway_use_cli_workspace = args.gateway_use_cli_workspace or os.getenv(
+        "UA_GATEWAY_USE_CLI_WORKSPACE", ""
+    ).lower() in {"1", "true", "yes"}
     if use_gateway and (
-        args.resume
-        or args.fork
-        or args.harness_objective
-        or args.urw_request
+        args.resume or args.fork or args.harness_objective or args.urw_request
     ):
         print(
             "⚠️ Gateway preview disabled for resume/fork/harness/URW modes; using CLI path."
         )
         use_gateway = False
         gateway_use_cli_workspace = False
-    
+
     # Handle --reset-letta: clear all Letta memory
-    if getattr(args, 'reset_letta', False) and LETTA_ENABLED and _letta_client:
+    if getattr(args, "reset_letta", False) and LETTA_ENABLED and _letta_client:
         print("🧹 Resetting Letta memory...")
         try:
             # Delete and recreate the main agent
@@ -8986,12 +9422,14 @@ async def main(args: argparse.Namespace):
                 model=_resolve_letta_model(),
             )
             print(f"   Recreated agent: {LETTA_AGENT_NAME}")
-            
+
             # List and delete any subagent agents
             try:
                 all_agents = _letta_client.agents.list()
                 for agent in all_agents:
-                    agent_name = getattr(agent, 'name', '') or getattr(agent, 'agent', '')
+                    agent_name = getattr(agent, "name", "") or getattr(
+                        agent, "agent", ""
+                    )
                     if agent_name and agent_name != LETTA_AGENT_NAME:
                         try:
                             _letta_client.agents.delete(agent_name)
@@ -9000,7 +9438,7 @@ async def main(args: argparse.Namespace):
                             pass
             except Exception:
                 pass
-            
+
             print("✅ Letta memory reset complete!")
         except Exception as e:
             print(f"⚠️ Letta reset error: {e}")
@@ -9096,7 +9534,9 @@ async def main(args: argparse.Namespace):
                     run_id=run_id,
                 )
             except RuntimeError as e:
-                print(f"⚠️ External gateway unavailable ({e}), falling back to in-process")
+                print(
+                    f"⚠️ External gateway unavailable ({e}), falling back to in-process"
+                )
                 gateway = InProcessGateway(hooks=build_cli_hooks())
                 logfire.info(
                     "gateway_mode_selected",
@@ -9114,6 +9554,7 @@ async def main(args: argparse.Namespace):
     else:
         logfire.info("gateway_mode_selected", mode="cli_direct", run_id=run_id)
     gateway_session = None
+
     async def _ensure_gateway_session() -> bool:
         nonlocal gateway_session, gateway
         if not gateway:
@@ -9125,7 +9566,9 @@ async def main(args: argparse.Namespace):
                 user_id=user_id or "user_cli",
                 workspace_dir=workspace_dir if gateway_use_cli_workspace else None,
             )
-            verbose = getattr(args, 'verbose', False) or os.getenv("UA_VERBOSE", "").lower() in {"1", "true", "yes"}
+            verbose = getattr(args, "verbose", False) or os.getenv(
+                "UA_VERBOSE", ""
+            ).lower() in {"1", "true", "yes"}
             if verbose:
                 print("🧭 Gateway preview enabled (in-process).")
                 print(f"Gateway Session: {gateway_session.session_id}")
@@ -9139,7 +9582,9 @@ async def main(args: argparse.Namespace):
                 "gateway_session_created",
                 session_id=gateway_session.session_id,
                 workspace_dir=gateway_session.workspace_dir,
-                requested_workspace=workspace_dir if gateway_use_cli_workspace else None,
+                requested_workspace=workspace_dir
+                if gateway_use_cli_workspace
+                else None,
                 run_id=run_id,
             )
 
@@ -9163,13 +9608,14 @@ async def main(args: argparse.Namespace):
     resume_source_row = run_row if args.resume else base_run_row
     if resume_source_row and "provider_session_id" in resume_source_row.keys():
         provider_session_id = resume_source_row["provider_session_id"]
-    
+
     # NEW: Checkpoint-based resume - inject prior context instead of provider session resume
     checkpoint_context = None
     if args.resume and workspace_dir:
         try:
             from pathlib import Path
             from universal_agent.session_checkpoint import SessionCheckpointGenerator
+
             ws_path = Path(workspace_dir)
             if ws_path.exists():
                 generator = SessionCheckpointGenerator(ws_path)
@@ -9177,14 +9623,18 @@ async def main(args: argparse.Namespace):
                 if checkpoint:
                     checkpoint_context = generator.to_markdown(checkpoint)
                     print(f"✅ Loaded session checkpoint from prior run")
-                    print(f"   Original request: {checkpoint.original_request[:80]}..." if len(checkpoint.original_request) > 80 else f"   Original request: {checkpoint.original_request}")
+                    print(
+                        f"   Original request: {checkpoint.original_request[:80]}..."
+                        if len(checkpoint.original_request) > 80
+                        else f"   Original request: {checkpoint.original_request}"
+                    )
                     print(f"   Tasks completed: {len(checkpoint.completed_tasks)}")
                     print(f"   Artifacts: {len(checkpoint.artifacts)}")
                 else:
                     print("ℹ️ No session checkpoint found; starting fresh")
         except Exception as ckpt_err:
             print(f"⚠️ Failed to load checkpoint: {ckpt_err}")
-    
+
     # DEPRECATED: Provider session resume (kept for --fork only)
     # For --resume, we use checkpoint injection instead for consistency with Telegram/Gateway
     if args.resume and provider_session_id and not checkpoint_context:
@@ -9403,17 +9853,21 @@ async def main(args: argparse.Namespace):
         # If we fail to connect AND we were trying to resume, assume the resume token is stale/invalid.
         # This is safer than string matching specific error messages which might change.
         should_fallback = options.resume is not None
-        
+
         if should_fallback:
-            print(f"\n❌ Provider session resume failed: {error_msg} ({type(e).__name__})")
-            print("⚠️ Falling back to NEW provider session (local workspace artifacts preserved)...")
+            print(
+                f"\n❌ Provider session resume failed: {error_msg} ({type(e).__name__})"
+            )
+            print(
+                "⚠️ Falling back to NEW provider session (local workspace artifacts preserved)..."
+            )
             # Disable provider resume but keep local resume flow
             options.resume = None
             if first_attempt_client:
                 # Cleanup if partially initialized
-                try: 
+                try:
                     await first_attempt_client.__aexit__(None, None, None)
-                except: 
+                except:
                     pass
             # Retry with clean options
             client = ClaudeSDKClient(options)
@@ -9584,18 +10038,22 @@ async def main(args: argparse.Namespace):
 
                 # [DEBUG] Skip interview and use sample plan for testing
                 if user_input.lower().strip().startswith("/harness-test"):
-                    print("\n⚙️  Activating Universal Agent Harness (TEST MODE - Skip Interview)...")
-                    
+                    print(
+                        "\n⚙️  Activating Universal Agent Harness (TEST MODE - Skip Interview)..."
+                    )
+
                     try:
                         from pathlib import Path
                         from .urw.harness_orchestrator import run_harness
-                        
+
                         workspaces_root = Path(workspace_dir).parent
-                        
+
                         # Use sample plan path
-                        sample_plan_path = Path(__file__).parent / "urw" / "sample_plan.json"
+                        sample_plan_path = (
+                            Path(__file__).parent / "urw" / "sample_plan.json"
+                        )
                         print(f"📋 Loading sample plan: {sample_plan_path}")
-                        
+
                         result = await run_harness(
                             massive_request="[TEST] Solar energy benefits report",
                             workspaces_root=workspaces_root,
@@ -9604,36 +10062,41 @@ async def main(args: argparse.Namespace):
                             skip_interview=True,
                             plan_file=sample_plan_path,
                         )
-                        
+
                         print(f"\n{'=' * 60}")
                         print("🏁 HARNESS TEST COMPLETE")
                         print(f"{'=' * 60}")
                         print(f"Status: {result.get('status', 'unknown')}")
                         print(f"Phases completed: {result.get('phases_completed', 0)}")
-                        if result.get('harness_dir'):
+                        if result.get("harness_dir"):
                             print(f"Work products: {result.get('harness_dir')}")
-                        
+
                     except Exception as e:
                         print(f"\n❌ Harness test error: {e}")
                         import traceback
+
                         traceback.print_exc()
-                    
+
                     continue
 
                 # [DEBUG] Skip interview and generate plan from template (sample_interview.json)
                 if user_input.lower().strip().startswith("/harness-template"):
-                    print("\n⚙️  Activating Universal Agent Harness (TEMPLATE MODE - Generate Plan)...")
-                    
+                    print(
+                        "\n⚙️  Activating Universal Agent Harness (TEMPLATE MODE - Generate Plan)..."
+                    )
+
                     try:
                         from pathlib import Path
                         from .urw.harness_orchestrator import run_harness
-                        
+
                         workspaces_root = Path(workspace_dir).parent
-                        
+
                         # Use sample interview transcript
-                        template_path = Path(__file__).parent / "urw" / "sample_interview.json"
+                        template_path = (
+                            Path(__file__).parent / "urw" / "sample_interview.json"
+                        )
                         print(f"📋 Loading interview template: {template_path}")
-                        
+
                         result = await run_harness(
                             massive_request="[TEMPLATE] Solar energy benefits report",
                             workspaces_root=workspaces_root,
@@ -9641,19 +10104,20 @@ async def main(args: argparse.Namespace):
                             client=client,
                             template_file=template_path,
                         )
-                        
+
                         print(f"\n{'=' * 60}")
                         print("🏁 HARNESS TEMPLATE TEST COMPLETE")
                         print(f"{'=' * 60}")
                         print(f"Status: {result.get('status', 'unknown')}")
-                        if result.get('harness_dir'):
+                        if result.get("harness_dir"):
                             print(f"Work products: {result.get('harness_dir')}")
-                        
+
                     except Exception as e:
                         print(f"\n❌ Harness template error: {e}")
                         import traceback
+
                         traceback.print_exc()
-                    
+
                     continue
 
                 if user_input.lower().strip().startswith("/harness"):
@@ -9702,34 +10166,45 @@ async def main(args: argparse.Namespace):
                     # [NEW] Configure Auto-Interview
                     if args.interview_auto:
                         from .urw import interview
-                        answers = [a.strip() for a in args.interview_auto.split(",") if a.strip()]
+
+                        answers = [
+                            a.strip()
+                            for a in args.interview_auto.split(",")
+                            if a.strip()
+                        ]
                         interview.set_auto_answers(answers)
-                        print(f"⏩ Auto-Interview Enabled: {len(answers)} pre-filled answers loaded.")
+                        print(
+                            f"⏩ Auto-Interview Enabled: {len(answers)} pre-filled answers loaded."
+                        )
 
                     # [NEW] Template Mode
                     template_file = None
                     # [NEW] Template Mode
                     template_file = None
                     if args.harness_template:
-                         # Resolve the path relative to CWD or absolute
-                         given_path = Path(args.harness_template) 
-                         if not given_path.exists():
-                             # Try relative to module if not found
-                             module_path = Path(__file__).parent / "urw" / args.harness_template
-                             if module_path.exists():
-                                 given_path = module_path
-                         
-                         template_file = given_path
-                         if not template_file.exists():
-                             print(f"❌ Template file not found: {args.harness_template}")
-                             return 
-                         
+                        # Resolve the path relative to CWD or absolute
+                        given_path = Path(args.harness_template)
+                        if not given_path.exists():
+                            # Try relative to module if not found
+                            module_path = (
+                                Path(__file__).parent / "urw" / args.harness_template
+                            )
+                            if module_path.exists():
+                                given_path = module_path
+
+                        template_file = given_path
+                        if not template_file.exists():
+                            print(
+                                f"❌ Template file not found: {args.harness_template}"
+                            )
+                            return
+
                     # Route to HarnessOrchestrator for phase-based execution
                     try:
                         from .urw.harness_orchestrator import run_harness
-                        
+
                         workspaces_root = Path(workspace_dir).parent
-                        
+
                         run_kwargs = {
                             "massive_request": target_objective,
                             "workspaces_root": workspaces_root,
@@ -9737,15 +10212,16 @@ async def main(args: argparse.Namespace):
                             "client": client,
                             "agent": None,
                         }
-                        
+
                         if harness_id_override:
                             run_kwargs["harness_id"] = harness_id_override
 
-
                         if template_file:
-                             # Pass as template_file (transcript) for generation
-                             run_kwargs["template_file"] = template_file
-                             print(f"📋 Running with interview template: {template_file}")
+                            # Pass as template_file (transcript) for generation
+                            run_kwargs["template_file"] = template_file
+                            print(
+                                f"📋 Running with interview template: {template_file}"
+                            )
 
                         # [NEW] Create Boot Log for portability
                         boot_log_lines = [
@@ -9759,30 +10235,32 @@ async def main(args: argparse.Namespace):
                         ]
                         if gateway_url:
                             boot_log_lines.append(f"Gateway URL:    {gateway_url}")
-                        
+
                         boot_log_lines.append("")
                         boot_log_lines.append("To Resume this Harness Session:")
-                        boot_log_lines.append(f"PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id {run_id}")
+                        boot_log_lines.append(
+                            f"PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id {run_id}"
+                        )
                         boot_log_lines.append("=" * 80)
-                        
+
                         run_kwargs["boot_log"] = "\n".join(boot_log_lines)
 
-
                         result = await run_harness(**run_kwargs)
-                        
+
                         print(f"\n{'=' * 60}")
                         print("🏁 HARNESS COMPLETE")
                         print(f"{'=' * 60}")
                         print(f"Status: {result.get('status', 'unknown')}")
                         print(f"Phases completed: {result.get('phases_completed', 0)}")
-                        if result.get('harness_dir'):
+                        if result.get("harness_dir"):
                             print(f"Work products: {result.get('harness_dir')}")
-                        
+
                     except Exception as e:
                         print(f"\n❌ Harness error: {e}")
                         import traceback
+
                         traceback.print_exc()
-                    
+
                     continue  # Return to prompt after harness completes
 
                 last_user_input = user_input
@@ -9800,14 +10278,18 @@ async def main(args: argparse.Namespace):
                     try:
                         # [Harness Mode] Force Standard Path to avoid Fast Path output capture bug
                         harness_info = get_iteration_info(runtime_db_conn, run_id)
-                        force_complex_for_harness = bool(harness_info.get("completion_promise"))
+                        force_complex_for_harness = bool(
+                            harness_info.get("completion_promise")
+                        )
                         if force_complex_for_harness:
                             print("📋 Harness mode active - forcing Standard Path")
 
                         if gateway:
                             gateway_used_fast_path = False
                             if not force_complex_for_harness:
-                                gateway_decision = await classify_query(client, user_input)
+                                gateway_decision = await classify_query(
+                                    client, user_input
+                                )
                                 if gateway_decision == ROUTE_SIMPLE:
                                     handled, fast_path_text = await handle_simple_query(
                                         client, user_input
@@ -9840,8 +10322,15 @@ async def main(args: argparse.Namespace):
                                     current_step_id = gateway_step_id
                                     if runtime_db_conn and run_id:
                                         try:
-                                            step_index = _next_step_index(runtime_db_conn, run_id)
-                                            start_step(runtime_db_conn, run_id, gateway_step_id, step_index)
+                                            step_index = _next_step_index(
+                                                runtime_db_conn, run_id
+                                            )
+                                            start_step(
+                                                runtime_db_conn,
+                                                run_id,
+                                                gateway_step_id,
+                                                step_index,
+                                            )
                                             logfire.info(
                                                 "durable_step_started_gateway",
                                                 run_id=run_id,
@@ -9871,14 +10360,23 @@ async def main(args: argparse.Namespace):
                                                 ),
                                                 workspace_dir=gateway_session.workspace_dir,
                                             )
-                                            final_response_text = event_result["response_text"] or ""
+                                            final_response_text = (
+                                                event_result["response_text"] or ""
+                                            )
                                             tool_calls = event_result["tool_calls"]
-                                            if event_result["auth_required"] and event_result["auth_link"]:
+                                            if (
+                                                event_result["auth_required"]
+                                                and event_result["auth_link"]
+                                            ):
                                                 print(f"\n{'=' * 80}")
                                                 print("🔐 AUTHENTICATION REQUIRED")
                                                 print(f"{'=' * 80}")
-                                                print(f"\nPlease open this link in your browser:\n")
-                                                print(f"  {event_result['auth_link']}\n")
+                                                print(
+                                                    f"\nPlease open this link in your browser:\n"
+                                                )
+                                                print(
+                                                    f"  {event_result['auth_link']}\n"
+                                                )
                                                 auth_msg = (
                                                     "Authentication required to continue.\n\n"
                                                     f"Open this link in your browser:\n{event_result['auth_link']}\n\n"
@@ -9887,20 +10385,32 @@ async def main(args: argparse.Namespace):
                                                 if not final_response_text:
                                                     final_response_text = auth_msg
                                                 else:
-                                                    final_response_text = final_response_text.rstrip() + "\n\n" + auth_msg
+                                                    final_response_text = (
+                                                        final_response_text.rstrip()
+                                                        + "\n\n"
+                                                        + auth_msg
+                                                    )
 
                                                 if not _stdin_is_interactive():
                                                     break
 
-                                                print("After completing authentication, press Enter to continue...")
+                                                print(
+                                                    "After completing authentication, press Enter to continue..."
+                                                )
                                                 input()
                                                 next_input = "I have completed the authentication. Please continue with the task."
                                                 continue
-                                            request_duration = time.time() - request_start_ts
+                                            request_duration = (
+                                                time.time() - request_start_ts
+                                            )
                                             trace_id = None
                                             try:
-                                                if gateway._bridge.current_agent and hasattr(
-                                                    gateway._bridge.current_agent, "trace"
+                                                if (
+                                                    gateway._bridge.current_agent
+                                                    and hasattr(
+                                                        gateway._bridge.current_agent,
+                                                        "trace",
+                                                    )
                                                 ):
                                                     trace_id = gateway._bridge.current_agent.trace.get(
                                                         "trace_id"
@@ -9915,7 +10425,9 @@ async def main(args: argparse.Namespace):
                                                     ),
                                                     workspace_dir=gateway_session.workspace_dir,
                                                     trace_id=trace_id,
-                                                    work_products=event_result.get("work_products"),
+                                                    work_products=event_result.get(
+                                                        "work_products"
+                                                    ),
                                                 )
                                             if run_mode == "job" and args.job_path:
                                                 print_job_completion_summary_from_events(
@@ -9925,8 +10437,12 @@ async def main(args: argparse.Namespace):
                                                     tool_call_entries=event_result.get(
                                                         "tool_call_entries", []
                                                     ),
-                                                    tool_results=event_result.get("tool_results", 0),
-                                                    work_products=event_result.get("work_products"),
+                                                    tool_results=event_result.get(
+                                                        "tool_results", 0
+                                                    ),
+                                                    work_products=event_result.get(
+                                                        "work_products"
+                                                    ),
                                                     errors=event_result.get("errors"),
                                                     trace_id=trace_id,
                                                 )
@@ -9953,27 +10469,38 @@ async def main(args: argparse.Namespace):
                                 execution_session=current_execution_session,
                                 max_iterations=args.max_iterations,
                             )
-                        
+
                         # Handle session reset request
                         if result and getattr(result, "reset_session", False):
                             if safe_clear_history(client):
                                 print("🧹 Client history cleared.")
                             else:
                                 print("⚠️ Failed to clear client history.")
-                        
+
                         # Generate session checkpoint for context continuity
                         try:
                             from pathlib import Path
-                            from universal_agent.session_checkpoint import SessionCheckpointGenerator
-                            ws_path = Path(gateway_session.workspace_dir if gateway_session else workspace_dir)
+                            from universal_agent.session_checkpoint import (
+                                SessionCheckpointGenerator,
+                            )
+
+                            ws_path = Path(
+                                gateway_session.workspace_dir
+                                if gateway_session
+                                else workspace_dir
+                            )
                             checkpoint_gen = SessionCheckpointGenerator(ws_path)
                             checkpoint = checkpoint_gen.generate_from_result(
-                                session_id=gateway_session.session_id if gateway_session else run_id,
+                                session_id=gateway_session.session_id
+                                if gateway_session
+                                else run_id,
                                 original_request=user_input,
                                 result=result,
                             )
                             checkpoint_gen.save(checkpoint)
-                            print(f"✅ Session checkpoint saved: {ws_path / 'session_checkpoint.json'}")
+                            print(
+                                f"✅ Session checkpoint saved: {ws_path / 'session_checkpoint.json'}"
+                            )
                         except Exception as ckpt_err:
                             print(f"⚠️ Failed to save checkpoint: {ckpt_err}")
                     except HarnessError as he:
@@ -10030,7 +10557,9 @@ async def main(args: argparse.Namespace):
                                         "✅ Plan approved. Transitioning to IN_PROGRESS."
                                     )
                                     # Set next prompt to kick off execution
-                                    pending_prompt = "Execute the mission.json tasks starting now."
+                                    pending_prompt = (
+                                        "Execute the mission.json tasks starting now."
+                                    )
                                 else:
                                     print(
                                         "⏸️ Plan not approved. Please edit mission.json and restart."
@@ -10039,7 +10568,9 @@ async def main(args: argparse.Namespace):
                                     pending_prompt = None
                                     continue
                         except Exception as e:
-                            print(f"⚠️ Failed to check mission.json for PLANNING status: {e}")
+                            print(
+                                f"⚠️ Failed to check mission.json for PLANNING status: {e}"
+                            )
 
                     # [Non-Blocking Interview] Check for pending interview after iteration
                     interview_prompt = _process_pending_interview(workspace_dir)
@@ -10281,21 +10812,23 @@ async def main(args: argparse.Namespace):
                             # Harness satisfied - Perform Verification
                             print("🔍 performing final verification...")
                             verifier = TaskVerifier(client=client)
-                            
+
                             mission_path = os.path.join(workspace_dir, "mission.json")
                             verification_passed = True
                             failure_reason = ""
-                            
+
                             if os.path.exists(mission_path):
                                 try:
                                     with open(mission_path, "r") as f:
                                         m_data = json.load(f)
-                                    
+
                                     # [Mission Completeness Check]
                                     # Ensure ALL tasks are COMPLETED before accepting termination
                                     incomplete_tasks = [
-                                        t.get("id") for t in m_data.get("tasks", [])
-                                        if t.get("status") not in ("COMPLETED", "SKIPPED")
+                                        t.get("id")
+                                        for t in m_data.get("tasks", [])
+                                        if t.get("status")
+                                        not in ("COMPLETED", "SKIPPED")
                                     ]
                                     if incomplete_tasks:
                                         verification_passed = False
@@ -10305,13 +10838,15 @@ async def main(args: argparse.Namespace):
                                             f"Mission Incomplete: The following tasks are still pending: {', '.join(incomplete_tasks)}.\n"
                                             f"You cannot finish until these are COMPLETED."
                                         )
-                                        
+
                                         # Smart Restart: Tell the new agent exactly what to do
                                         action = "restart"
-                                        
+
                                         # [Context Injection] Why did the previous agent think it was done?
                                         rationale_context = ""
-                                        progress_path = os.path.join(workspace_dir, "mission_progress.txt")
+                                        progress_path = os.path.join(
+                                            workspace_dir, "mission_progress.txt"
+                                        )
                                         if os.path.exists(progress_path):
                                             try:
                                                 with open(progress_path, "r") as pf:
@@ -10335,7 +10870,7 @@ async def main(args: argparse.Namespace):
                                         # Trigger restart
                                         pending_prompt = next_prompt
                                         if safe_clear_history(client):
-                                            pass # Cleared successfully
+                                            pass  # Cleared successfully
                                         continue
 
                                     # Verify all completed tasks
@@ -10343,7 +10878,9 @@ async def main(args: argparse.Namespace):
                                         for task in m_data.get("tasks", []):
                                             if task.get("status") == "COMPLETED":
                                                 # Binary Check
-                                                v_ok, v_msg = verifier.verify_artifacts(task, workspace_dir)
+                                                v_ok, v_msg = verifier.verify_artifacts(
+                                                    task, workspace_dir
+                                                )
                                                 if not v_ok:
                                                     verification_passed = False
                                                     failure_reason = f"Artifact Verification Failed for task '{task.get('id')}': {v_msg}"
@@ -10355,10 +10892,12 @@ async def main(args: argparse.Namespace):
                                 if not verification_passed:
                                     print(f"❌ VERIFICATION FAILED: {failure_reason}")
                                     action = "restart"
-                                    
+
                                     # [Context Injection] Why did the previous agent think it was done?
                                     rationale_context = ""
-                                    progress_path = os.path.join(workspace_dir, "mission_progress.txt")
+                                    progress_path = os.path.join(
+                                        workspace_dir, "mission_progress.txt"
+                                    )
                                     if os.path.exists(progress_path):
                                         try:
                                             with open(progress_path, "r") as pf:
@@ -10376,13 +10915,13 @@ async def main(args: argparse.Namespace):
                                     # Continue to restart logic (handled below)
                                     pending_prompt = next_prompt
                                     if safe_clear_history(client):
-                                        pass # Cleared successfully
+                                        pass  # Cleared successfully
                                     continue
-                                
+
                                 print("✅ Verification Passed.")
                                 print("✅ Verification Passed.")
                                 print("ℹ️  Mission complete.")
-                                
+
                                 # NOTE: Session history prompt removed - now using checkpoint injection
                                 # Checkpoints are automatically saved after each task for context continuity
                                 # Do not break here; allow loop to continue for user input.
@@ -10509,13 +11048,17 @@ async def main(args: argparse.Namespace):
 
             # Save standalone trace_catalog.md for agent discovery
             try:
-                catalog_path = save_trace_catalog_md(trace.get("trace_catalog", {}), workspace_dir)
+                catalog_path = save_trace_catalog_md(
+                    trace.get("trace_catalog", {}), workspace_dir
+                )
                 wp_catalog_paths = save_trace_catalog_work_product(
                     trace.get("trace_catalog", {}), workspace_dir
                 )
                 trace["trace_catalog_path"] = catalog_path
                 trace["trace_catalog_work_product_path"] = wp_catalog_paths["md_path"]
-                trace["trace_catalog_work_product_json_path"] = wp_catalog_paths["json_path"]
+                trace["trace_catalog_work_product_json_path"] = wp_catalog_paths[
+                    "json_path"
+                ]
                 print(f"📋 Trace catalog saved to {catalog_path}")
                 print(
                     "📋 Trace catalog work product saved to "
@@ -10553,7 +11096,9 @@ async def main(args: argparse.Namespace):
                 any(x in tc["name"].upper() for x in code_exec_tools)
                 for tc in trace["tool_calls"]
             )
-            summary_lines.append(f"Code Execution Used: {'Yes' if code_exec_used else 'No'}\n")
+            summary_lines.append(
+                f"Code Execution Used: {'Yes' if code_exec_used else 'No'}\n"
+            )
 
             # Tool call breakdown
             summary_lines.append("=" * 60)
@@ -10582,18 +11127,21 @@ async def main(args: argparse.Namespace):
 
             summary_content = "\n".join(summary_lines)
             summary_path = os.path.join(workspace_dir, "session_summary.txt")
-            
+
             with open(summary_path, "w") as f:
                 f.write(summary_content)
 
             # Emit summary to UI Logs
             try:
-                await agent.send_agent_event(EventType.STATUS, {
-                    "status": summary_content,
-                    "level": "INFO", 
-                    "prefix": "SYSTEM",
-                    "is_log": True
-                })
+                await agent.send_agent_event(
+                    EventType.STATUS,
+                    {
+                        "status": summary_content,
+                        "level": "INFO",
+                        "prefix": "SYSTEM",
+                        "is_log": True,
+                    },
+                )
             except Exception as e:
                 print(f"⚠️ Failed to emit summary to UI: {e}")
 
@@ -10644,20 +11192,20 @@ async def main(args: argparse.Namespace):
                 print(f"⚠️ Final session memory sync failed: {sync_err}")
 
         # Ensure the client is closed since we manually called __aenter__
-        if 'client' in locals() and client:
+        if "client" in locals() and client:
             try:
                 await client.__aexit__(None, None, None)
             except Exception as e:
                 print(f"⚠️ Error closing client: {e}")
         # Close gateway httpx clients before loop shutdown
-        if 'gateway' in locals() and gateway:
+        if "gateway" in locals() and gateway:
             try:
-                if hasattr(gateway, 'close'):
+                if hasattr(gateway, "close"):
                     await gateway.close()
                 # For InProcessGateway, clean up any adapter clients
-                if hasattr(gateway, '_adapters'):
+                if hasattr(gateway, "_adapters"):
                     for adapter in gateway._adapters.values():
-                        if hasattr(adapter, 'close'):
+                        if hasattr(adapter, "close"):
                             try:
                                 await adapter.close()
                             except Exception:
@@ -10671,7 +11219,7 @@ async def main(args: argparse.Namespace):
                 await _shutdown_letta()
             except Exception as e:
                 print(f"⚠️ Error shutting down Letta clients: {e}")
-        
+
         # Give async tasks (like httpx pool cleanup) a moment to settle
         await asyncio.sleep(0.25)
 
