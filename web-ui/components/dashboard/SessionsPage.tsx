@@ -60,7 +60,12 @@ const AGE_DOTS: Record<AgeTier, string> = {
   stale: "bg-red-400",
 };
 
-function isActiveSession(s: { status: string; active_runs?: number }): boolean {
+function isDaemonSession(s: { session_id: string }): boolean {
+  return (s.session_id || "").startsWith("daemon_");
+}
+
+function isActiveSession(s: { session_id: string; status: string; active_runs?: number }): boolean {
+  if (isDaemonSession(s)) return true; // daemon sessions are always considered active
   const st = (s.status || "").toLowerCase();
   return st === "running" || st === "active" || (s.active_runs ?? 0) > 0;
 }
@@ -80,6 +85,7 @@ function isNoisySession(s: {
   active_runs?: number;
   last_activity?: string;
 }): boolean {
+  if (isDaemonSession(s)) return false; // daemon sessions are never noise
   if (isActiveSession(s)) return false; // never hide active sessions
   const st = (s.status || "").toLowerCase();
   if (st !== "idle" && st !== "terminal") return false;
@@ -160,7 +166,7 @@ function SessionsPageInner() {
   const isVpSelected = /^vp_/i.test((selected || "").trim());
 
   // ── Categorized sessions ──
-  const { activeSessions, historicalSessions, noiseCount, stats } = useMemo(() => {
+  const { daemonSessions, activeSessions, historicalSessions, noiseCount, stats } = useMemo(() => {
     const sorted = [...sessions].sort((a, b) => {
       const aTs = Date.parse(a.last_activity || a.last_modified || "") || 0;
       const bTs = Date.parse(b.last_activity || b.last_modified || "") || 0;
@@ -168,12 +174,15 @@ function SessionsPageInner() {
       return String(b.session_id || "").localeCompare(String(a.session_id || ""));
     });
 
+    const daemon: typeof sessions = [];
     const active: typeof sessions = [];
     const historical: typeof sessions = [];
     let noise = 0;
 
     for (const s of sorted) {
-      if (isActiveSession(s)) {
+      if (isDaemonSession(s)) {
+        daemon.push(s);
+      } else if (isActiveSession(s)) {
         active.push(s);
       } else {
         if (hideNoise && isNoisySession(s)) {
@@ -185,17 +194,19 @@ function SessionsPageInner() {
     }
 
     const staleCount = sessions.filter(
-      (s) => !isActiveSession(s) && ageTier(s.last_activity || s.created_at) === "stale"
+      (s) => !isActiveSession(s) && !isDaemonSession(s) && ageTier(s.last_activity || s.created_at) === "stale"
     ).length;
 
     return {
+      daemonSessions: daemon,
       activeSessions: active,
       historicalSessions: historical,
       noiseCount: noise,
       stats: {
         total: sessions.length,
-        active: active.length,
-        idle: sessions.filter((s) => (s.status || "").toLowerCase() === "idle").length,
+        active: active.length + daemon.length,
+        daemon: daemon.length,
+        idle: sessions.filter((s) => !isDaemonSession(s) && (s.status || "").toLowerCase() === "idle").length,
         stale: staleCount,
       },
     };
@@ -321,6 +332,9 @@ function SessionsPageInner() {
         <div className="flex flex-wrap items-center gap-2">
           {/* Stats pills */}
           <div className="flex items-center gap-1.5">
+            {stats.daemon > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/15 text-violet-400 border border-violet-500/25">{stats.daemon} daemon</span>
+            )}
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-primary/15 text-primary border border-primary/20">{stats.active} active</span>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted-foreground/15 text-muted-foreground border border-muted-foreground/30">{stats.idle} idle</span>
             {stats.stale > 0 && (
@@ -386,6 +400,63 @@ function SessionsPageInner() {
 
       {/* ── Left Column: Session Lists ── */}
       <div className={`${hasSelectedSession ? "lg:row-span-5 lg:max-h-[82vh] lg:overflow-y-auto" : "lg:max-w-[900px]"} space-y-3 scrollbar-thin`}>
+
+        {/* ── Daemon Agent Sessions ── */}
+        {daemonSessions.length > 0 && (
+          <div className="border border-violet-500/25 rounded-lg bg-violet-500/5 overflow-hidden">
+            <div className="px-3 py-2 border-b border-violet-500/15 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-60" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-400" />
+                </span>
+                <span className="text-xs font-semibold text-violet-400 uppercase tracking-wider">Daemon Agents</span>
+                <span className="text-[10px] text-violet-400/70">({daemonSessions.length}) — always on</span>
+              </div>
+            </div>
+            <div className="p-2 space-y-1.5">
+              {daemonSessions.map((s) => {
+                const agentName = s.session_id.replace(/^daemon_/, "");
+                const isRunning = (s.active_runs ?? 0) > 0;
+                return (
+                  <button
+                    key={s.session_id}
+                    onClick={() => setSelected(s.session_id)}
+                    className={`
+                      w-full text-left px-3 py-2 rounded-lg border transition-all duration-150
+                      ${selected === s.session_id
+                        ? "border-violet-400/40 bg-violet-500/15 shadow-glow-sm"
+                        : "border-violet-500/20 bg-violet-500/5 hover:bg-violet-500/10 hover:border-violet-500/30"
+                      }
+                    `}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${isRunning ? "bg-primary animate-pulse" : "bg-violet-400"}`} />
+                        <span className="font-semibold text-sm text-foreground capitalize">{agentName}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wider ${
+                          isRunning
+                            ? "bg-primary/20 text-primary border border-primary/30"
+                            : "bg-violet-500/15 text-violet-400/80 border border-violet-500/20"
+                        }`}>
+                          {isRunning ? "working" : "standby"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                        <span>{s.source || "daemon"}</span>
+                        <span className="text-muted">·</span>
+                        <span>last activity {relativeAge(s.last_activity)} ago</span>
+                      </div>
+                    </div>
+                    {s.description && (
+                      <div className="mt-1 text-[10px] text-muted-foreground italic truncate pl-4">{s.description}</div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* ── Active Sessions ── */}
         <div className="border border-primary/25 rounded-lg bg-primary/10 overflow-hidden">
