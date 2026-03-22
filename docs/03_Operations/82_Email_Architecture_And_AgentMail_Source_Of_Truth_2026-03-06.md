@@ -214,22 +214,13 @@ It **never** acts on emails — no investigations, no delegations, no replies. S
 
 > **Important:** Kevin's "Good work" / "Thanks" emails are classified as `feedback_approval`, never dismissed. Simone must receive these for behavioral reinforcement.
 
-### Triage Helper CLI
+### AgentMail Skill
 
-Location: `scripts/agentmail_triage_helper.py`
+Location: `.claude/skills/agentmail` (or `agentmail-cli` / `agentmail-mcp`)
 
-The triage agent calls this via Bash to gather context:
-
-```bash
-# Get thread context (who said what, when)
-python scripts/agentmail_triage_helper.py thread-context <thread_id>
-
-# Get details of a specific message
-python scripts/agentmail_triage_helper.py message-detail <message_id>
-
-# List recent threads
-python scripts/agentmail_triage_helper.py recent-threads --limit 5
-```
+The triage agent uses the native AgentMail skill tools to gather context:
+- Retrieving thread context via `thread_id` and `inbox`
+- Retrieving message details via `message_id` and `inbox`
 
 ### Triage Brief Format
 
@@ -320,8 +311,8 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 - `.claude/knowledge/email_identity.md` — Identity routing knowledge
 - `.agents/skills/agentmail/SKILL.md` — AgentMail skill for Simone
 
-### Triage Helper
-- `scripts/agentmail_triage_helper.py` — CLI for thread context enrichment
+### AgentMail Skill Integration
+- Managed via standard skill installation (`npx skills add agentmail-to/agentmail-skills`)
 
 ### Tests
 - `tests/unit/test_agentmail_service.py` — 51 tests covering:

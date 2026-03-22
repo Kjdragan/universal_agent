@@ -6,6 +6,21 @@
       "sourceType": "github",
       "computedHash": "b07e11812d60685f015ceade7dd5dc261a4f909dd95e1c68de63c13385e82e70"
     },
+    "agentmail-cli": {
+      "source": "agentmail-to/agentmail-skills",
+      "sourceType": "github",
+      "computedHash": "cca93c9af576c990e4c6eb99e6933baca27fd602945c02c3cf298b7d1ada3802"
+    },
+    "agentmail-mcp": {
+      "source": "agentmail-to/agentmail-skills",
+      "sourceType": "github",
+      "computedHash": "fe72e60ef47f7c8ca4434b90cfd001ecf4504f6ab2f2f0b5e299364ba896dd46"
+    },
+    "agentmail-toolkit": {
+      "source": "agentmail-to/agentmail-skills",
+      "sourceType": "github",
+      "computedHash": "91db7b17425fffec835f995033993dd449e24eff0da07eaae86e9e8bc9d43be6"
+    },
     "defuddle": {
       "source": "git@github.com:kepano/obsidian-skills.git",
       "sourceType": "git",

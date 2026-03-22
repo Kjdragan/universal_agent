@@ -65,7 +65,18 @@ Classify every email into ONE of these categories:
 | `status_update` | Kevin is providing information/updates, not requesting action | "I deployed the gateway fix", "RAM is back to normal" |
 | `question` | Kevin is asking a question that needs an answer | "What's the status of X?", "How does Y work?" |
 | `external_inquiry` | Non-Kevin sender with a real inquiry | Professional emails from unknown senders |
+| `system_alert` | Automated alerts arriving via the system.alerts inbox | "Gateway memory allocation high", "Heartbeat failed" |
+| `freelance_demo_test` | Test emails arriving on the vp.agents inbox simulating a client scenario | Emails from "ACME Support" or internal tests from a freelance build |
 | `spam_bounce` | Spam, bounces, or automated system noise | Marketing emails, delivery failures |
+
+## Handling Multi-Inbox Routing
+
+The webhook payload includes a `receiving_inbox` property. You must use this property to categorize your triage:
+
+1. **`oddcity216@agentmail.to`**: Default conversational inbox. Process normally as Kevin's direct line.
+2. **`system.alerts@agentmail.to`**: Pure system/health alerts. Classify as `system_alert`. By default, recommend that Simone logs the event but does NOT generate heavyweight Todoist tasks or active planning unless the alert explicitly indicates critical downtime.
+3. **`vp.agents@agentmail.to`**: Automated reports from VP agents OR freelance project testing traffic.
+   - **Freelance Demo Testing**: When Kevin builds freelance projects, he tests email functionality by simulating client emails arriving at this address. If the email describes a demo scenario, or has a distinct Sender Name (e.g., "ACME Corp Support"), classify it as `freelance_demo_test`. Recommend that Simone processes it as a test of the client code without treating it as a real personal conversation.
 
 ### Classification Rules
 
@@ -77,15 +88,10 @@ Classify every email into ONE of these categories:
 
 ### Step 1: Gather Context
 
-Use the triage helper to understand the email thread:
+Use the AgentMail skill tools (via standard tools) to understand the email thread. You have the `inbox` address in the payload.
 
-```bash
-# Get thread context (who said what, when)
-python /home/kjdragan/lrepos/universal_agent/scripts/agentmail_triage_helper.py thread-context <thread_id>
-
-# Get details of a specific message if needed
-python /home/kjdragan/lrepos/universal_agent/scripts/agentmail_triage_helper.py message-detail <message_id>
-```
+- **To understand the thread context:** Retrieve the thread using the `thread_id` and the `inbox` address.
+- **To get specific message details:** Retrieve the message using the `message_id` and the `inbox` address.
 
 ### Step 2: Write Triage Brief
 
@@ -145,7 +151,7 @@ The webhook payload provides:
 - `subject` — email subject line
 - `thread_id` — conversation thread ID
 - `message_id` — unique message ID
-- `inbox` — Simone's inbox address
+- `receiving_inbox` — The exact AgentMail inbox address this arrived at (simone, vp.agents, or system.alerts)
 - `reply_extracted` — whether reply text was cleanly extracted
 - Email body follows `--- Reply (new content) ---` or `--- Email Body ---` marker
 

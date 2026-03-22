@@ -278,6 +278,7 @@ class AgentMailService:
         # SDK client (lazy init)
         self._client: Any = None
         self._inbox_id: str = ""
+        self._inbox_ids: list[str] = []
         self._inbox_address: str = ""
 
         # WebSocket listener
@@ -433,23 +434,34 @@ class AgentMailService:
     # ------------------------------------------------------------------
 
     async def _ensure_inbox(self) -> None:
-        """Resolve existing inbox or create a new one idempotently."""
+        """Resolve existing inboxes or create a new one idempotently."""
         configured_address = os.getenv("UA_AGENTMAIL_INBOX_ADDRESS", "").strip()
-
-        if configured_address:
-            # Use the configured address directly
+        configured_addresses_raw = os.getenv("UA_AGENTMAIL_INBOX_ADDRESSES", "").strip()
+        
+        self._inbox_ids = []
+        
+        if configured_addresses_raw:
+            for addr in configured_addresses_raw.split(","):
+                addr = addr.strip()
+                if addr:
+                    try:
+                        await self._client.inboxes.get(inbox_id=addr)
+                        if addr not in self._inbox_ids:
+                            self._inbox_ids.append(addr)
+                    except Exception as exc:
+                        logger.warning("📧 Configured inbox %s not found: %s", addr, exc)
+        elif configured_address:
             try:
-                inbox = await self._client.inboxes.get(inbox_id=configured_address)
-                self._inbox_id = configured_address
-                self._inbox_address = configured_address
-                logger.info("📧 Resolved existing inbox: %s", self._inbox_address)
-                return
+                await self._client.inboxes.get(inbox_id=configured_address)
+                self._inbox_ids.append(configured_address)
             except Exception as exc:
-                logger.warning(
-                    "📧 Configured inbox %s not found (%s), will create new",
-                    configured_address,
-                    exc,
-                )
+                logger.warning("📧 Configured inbox %s not found: %s", configured_address, exc)
+
+        if self._inbox_ids:
+            self._inbox_id = self._inbox_ids[0]
+            self._inbox_address = self._inbox_id
+            logger.info("📧 Resolved existing inboxes: %s (Primary: %s)", self._inbox_ids, self._inbox_address)
+            return
 
         # Create inbox idempotently
         username = os.getenv("UA_AGENTMAIL_INBOX_USERNAME", "simone").strip() or "simone"
@@ -466,6 +478,7 @@ class AgentMailService:
             logger.warning("📧 Inbox creation with username=%s failed: %s, trying auto", username, exc)
             inbox = await self._client.inboxes.create(client_id=_INBOX_CLIENT_ID)
             self._inbox_id = inbox.inbox_id
+            self._inbox_ids = [self._inbox_id]
             self._inbox_address = inbox.inbox_id
             logger.info("📧 Created auto-named inbox: %s", self._inbox_address)
 
@@ -760,14 +773,15 @@ class AgentMailService:
         """Single WebSocket connection lifecycle."""
         from agentmail import Subscribe, MessageReceivedEvent
 
-        logger.info("📧 WebSocket connecting to AgentMail for inbox=%s", self._inbox_id)
+        inbox_targets = self._inbox_ids if self._inbox_ids else [self._inbox_id]
+        logger.info("📧 WebSocket connecting to AgentMail for inboxes=%s", inbox_targets)
         async with self._client.websockets.connect() as socket:
             await socket.send_subscribe(
-                Subscribe(inbox_ids=[self._inbox_id])
+                Subscribe(inbox_ids=inbox_targets)
             )
             self._ws_connected = True
             self._last_error = ""
-            logger.info("📧 WebSocket connected and subscribed to inbox=%s", self._inbox_id)
+            logger.info("📧 WebSocket connected and subscribed to inboxes=%s", inbox_targets)
 
             async for event in socket:
                 if self._ws_stop_event.is_set():
@@ -783,6 +797,7 @@ class AgentMailService:
         claimed_message = False
         try:
             msg = event.message
+            receiving_inbox = getattr(event, "inbox_id", getattr(msg, "inbox_id", self._inbox_address))
             sender = getattr(msg, "from_", "unknown")
             sender_email = _normalize_sender_email(sender)
             sender_role = (

@@ -12,7 +12,7 @@ sources:
     playlists:
       - id: "${YT_TUTORIALS_PLAYLIST_ID}"
   youtube_channel_rss:
-    enabled: true
+    enabled: false
     poll_interval_seconds: 300
     watchlist_file: "channels_watchlist.json"
     watchlist: []
