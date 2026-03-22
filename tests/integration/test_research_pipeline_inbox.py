@@ -9,9 +9,7 @@ import mcp_server
 @pytest.mark.asyncio
 async def test_finalize_research_creates_refined_corpus(tmp_path, monkeypatch):
     workspace = tmp_path
-    marker_path = workspace / "missing_workspace_marker.txt"
-    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE_FILE", str(marker_path))
-    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+    monkeypatch.setattr(mcp_server, "_resolve_workspace", lambda *args, **kwargs: str(workspace))
     search_dir = workspace / "search_results"
     search_dir.mkdir(parents=True, exist_ok=True)
 
@@ -109,3 +107,46 @@ async def test_finalize_research_blocks_session_scope_violation(tmp_path, monkey
     )
     payload = json.loads(result)
     assert "Session scope violation" in payload.get("error", "")
+
+@pytest.mark.asyncio
+async def test_finalize_research_fails_loudly_on_crawl_error(tmp_path, monkeypatch):
+    workspace = tmp_path
+    monkeypatch.setattr(mcp_server, "_resolve_workspace", lambda *args, **kwargs: str(workspace))
+
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+
+    search_payload = {
+        "tool": "COMPOSIO_SEARCH_WEB",
+        "query": "silver market test query",
+        "results": [
+            {
+                "title": "Example Silver Market Analysis",
+                "url": "http://example.com/silver-market",
+                "snippet": "Sample snippet for testing.",
+            }
+        ],
+    }
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text(
+        json.dumps(search_payload)
+    )
+
+    async def fake_crawl_crash(urls, session_dir):
+        raise RuntimeError("Simulated crawl core crash")
+
+    monkeypatch.setattr(mcp_server, "_crawl_core", fake_crawl_crash)
+
+    result = await mcp_server.finalize_research(
+        session_dir=str(workspace),
+        task_name="test_task",
+        enable_topic_filter=False,
+    )
+
+    
+    payload = json.loads(result)
+    
+    # Verify that the crash was caught and logged in the errors
+    failed_urls = payload.get("failed_urls", [])
+    assert len(failed_urls) > 0
+    assert "CRAWL CORE FATAL ERROR: Simulated crawl core crash" in failed_urls[0]
+
