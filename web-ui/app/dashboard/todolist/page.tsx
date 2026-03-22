@@ -255,6 +255,39 @@ function taskSourceUrl(taskId: string, sourceKind?: string, explicitUrl?: string
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
+// ── KanbanCol (stable identity — must be outside the page component to
+//    prevent React from remounting on every re-render, which would reset
+//    scroll position inside each column) ───────────────────────────────────
+
+type KanbanColProps = {
+  label: string;
+  emoji: string;
+  count: number;
+  accentClass: string;
+  headerClass: string;
+  emptyText: string;
+  children: React.ReactNode;
+};
+
+function KanbanCol({ label, emoji, count, accentClass, headerClass, emptyText, children }: KanbanColProps) {
+  return (
+    <div className={`flex flex-col rounded-xl border bg-background/60 ${accentClass}`}>
+      <div className="flex items-center justify-between border-b border-border/80 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-base">{emoji}</span>
+          <h2 className={`text-sm font-semibold uppercase tracking-[0.14em] ${headerClass}`}>{label}</h2>
+        </div>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${headerClass} bg-card/60`}>{count}</span>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto p-3 max-h-[60vh]">
+        {count === 0 ? (
+          <p className="text-xs text-muted italic pt-2">{emptyText}</p>
+        ) : children}
+      </div>
+    </div>
+  );
+}
+
 export default function ToDoListDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -904,34 +937,7 @@ export default function ToDoListDashboardPage() {
     </section>
   );
 
-  // ── Kanban column ─────────────────────────────────────────────────────────────
 
-  type KanbanColProps = {
-    label: string;
-    emoji: string;
-    count: number;
-    accentClass: string;
-    headerClass: string;
-    emptyText: string;
-    children: React.ReactNode;
-  };
-
-  const KanbanCol = ({ label, emoji, count, accentClass, headerClass, emptyText, children }: KanbanColProps) => (
-    <div className={`flex flex-col rounded-xl border bg-background/60 ${accentClass}`}>
-      <div className="flex items-center justify-between border-b border-border/80 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className="text-base">{emoji}</span>
-          <h2 className={`text-sm font-semibold uppercase tracking-[0.14em] ${headerClass}`}>{label}</h2>
-        </div>
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${headerClass} bg-card/60`}>{count}</span>
-      </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-3 max-h-[60vh]">
-        {count === 0 ? (
-          <p className="text-xs text-muted italic pt-2">{emptyText}</p>
-        ) : children}
-      </div>
-    </div>
-  );
 
   // ── Main render ────────────────────────────────────────────────────────────────
 
