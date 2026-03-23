@@ -205,11 +205,14 @@ export default function MailPage() {
       setLastRefreshAt(Date.now());
     }
 
-    const warnings = results
-      .filter((result): result is PromiseFulfilledResult<{ partial?: boolean; errors?: MailFetchError[] } | void> => result.status === "fulfilled")
-      .map((result) => result.value)
-      .filter((value): value is { partial?: boolean; errors?: MailFetchError[] } => Boolean(value && value.partial))
-      .flatMap((value) => (value.errors || []).map((entry) => entry.inbox_id ? `${entry.inbox_id}: ${entry.error}` : entry.error));
+    const warnings: string[] = [];
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value && typeof r.value === "object" && "partial" in r.value && r.value.partial) {
+        const val = r.value as { partial: boolean; errors: MailFetchError[] };
+        warnings.push(...(val.errors || []).map(entry => entry.inbox_id ? `${entry.inbox_id}: ${entry.error}` : entry.error));
+      }
+    }
+    
     if (warnings.length > 0) {
       setSyncWarning(`Partial AgentMail data: ${warnings.join(" | ")}`);
     }
