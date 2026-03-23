@@ -6,6 +6,8 @@ safe threshold.
 """
 
 import os
+import sys
+import types
 
 import pytest
 
@@ -13,6 +15,8 @@ from universal_agent.execution_engine import (
     _ENV_SAFE_THRESHOLD_BYTES,
     _ENV_STRIP_CANDIDATES,
     _MAX_SYSTEM_EVENTS_ENV_BYTES,
+    EngineConfig,
+    ProcessTurnAdapter,
     sanitize_env_for_subprocess,
 )
 
@@ -27,9 +31,13 @@ class TestSanitizeEnvForSubprocess:
     """Unit tests for sanitize_env_for_subprocess()."""
 
     def test_noop_when_small_env(self):
-        """No vars should be removed when the env is well under the threshold."""
+        """Even a small env is reduced to the subprocess-safe whitelist."""
+        os.environ["TEST_NONCRITICAL"] = "trim-me"
         removed = sanitize_env_for_subprocess()
-        assert removed == [], "Should not remove anything from a normal-sized env"
+        assert "TEST_NONCRITICAL" in removed
+        assert "TEST_NONCRITICAL" not in os.environ
+        assert "PATH" in os.environ
+        assert "HOME" in os.environ
 
     def test_strips_known_bloat_first(self, monkeypatch):
         """LS_COLORS and other known-bloat vars should be stripped first."""
@@ -114,3 +122,51 @@ class TestSystemEventsSizeCap:
         """Threshold should be well under 2MB to leave room for CLI args."""
         assert _ENV_SAFE_THRESHOLD_BYTES < 2_000_000
         assert _ENV_SAFE_THRESHOLD_BYTES >= 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_process_turn_adapter_restores_parent_env_after_client_spawn(monkeypatch, tmp_path):
+    """SDK client spawn must not permanently strip runtime secrets from the gateway."""
+
+    captured_spawn_env: dict[str, str] = {}
+
+    class FakeClaudeSDKClient:
+        def __init__(self, options):
+            self.options = options
+            os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-py-client"
+
+        async def __aenter__(self):
+            captured_spawn_env.update(dict(os.environ))
+            return self
+
+    fake_pkg = types.ModuleType("claude_agent_sdk")
+    fake_client_module = types.ModuleType("claude_agent_sdk.client")
+    fake_client_module.ClaudeSDKClient = FakeClaudeSDKClient
+    fake_pkg.client = fake_client_module
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_pkg)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk.client", fake_client_module)
+
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PROXY_USERNAME", "rotatingproxyua-rotate")
+    monkeypatch.setenv("PROXY_PASSWORD", "super-secret")
+    monkeypatch.setenv("NONCRITICAL_SECRET", "should-be-restored")
+
+    adapter = ProcessTurnAdapter(
+        EngineConfig(
+            workspace_dir=str(tmp_path),
+            user_id="test-user",
+            run_id="test-run",
+        )
+    )
+    adapter._options = object()
+
+    client = await adapter._ensure_client()
+
+    assert client is adapter._client
+    assert "PROXY_USERNAME" not in captured_spawn_env
+    assert "PROXY_PASSWORD" not in captured_spawn_env
+    assert "NONCRITICAL_SECRET" not in captured_spawn_env
+    assert os.environ["PROXY_USERNAME"] == "rotatingproxyua-rotate"
+    assert os.environ["PROXY_PASSWORD"] == "super-secret"
+    assert os.environ["NONCRITICAL_SECRET"] == "should-be-restored"
