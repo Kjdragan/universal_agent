@@ -193,6 +193,37 @@ def _create_dummy_session(base_dir: Path, session_id: str, logs: list[str]):
     return session_dir
 
 
+def test_ops_debug_proxy_env_reports_presence_without_leaking_values(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "ops-token")
+    monkeypatch.setenv("PROXY_USERNAME", "rotatingproxyua-rotate")
+    monkeypatch.setenv("PROXY_PASSWORD", "super-secret")
+    monkeypatch.setenv("WEBSHARE_PROXY_HOST", "p.webshare.io")
+    monkeypatch.setenv("WEBSHARE_PROXY_PORT", "80")
+
+    response = client.get(
+        "/api/v1/ops/debug/proxy-env",
+        headers={"Authorization": "Bearer ops-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deployment_profile"] == "local_workstation"
+    assert body["proxy_mode"] in {"webshare", "module_unavailable"}
+    assert body["proxy_configured"] is (body["proxy_mode"] == "webshare")
+    assert "PROXY_USERNAME" in body["proxy_related_keys"]
+    assert body["env"]["PROXY_USERNAME"] == {
+        "present": True,
+        "nonempty": True,
+        "length": len("rotatingproxyua-rotate"),
+    }
+    assert body["env"]["PROXY_PASSWORD"] == {
+        "present": True,
+        "nonempty": True,
+        "length": len("super-secret"),
+    }
+    assert "super-secret" not in json.dumps(body)
+
+
 def _insert_specialist_loop(
     *,
     topic_key: str,
