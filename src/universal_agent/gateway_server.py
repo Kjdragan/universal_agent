@@ -22479,63 +22479,6 @@ async def ops_deployment_profile_get(request: Request):
     return {"deployment_profile": _deployment_profile_defaults()}
 
 
-@app.get("/api/v1/ops/debug/proxy-env")
-async def ops_debug_proxy_env(request: Request):
-    _require_ops_auth(request)
-    from universal_agent import infisical_loader as _infisical_loader
-    from universal_agent.youtube_ingest import _build_webshare_proxy_config
-
-    def _env_state(name: str) -> dict[str, Any]:
-        raw = os.getenv(name)
-        cleaned = str(raw or "").strip()
-        return {
-            "present": raw is not None,
-            "nonempty": bool(cleaned),
-            "length": len(cleaned),
-        }
-
-    proxy_config, proxy_mode = _build_webshare_proxy_config()
-    bootstrap = _infisical_loader._BOOTSTRAP_RESULT
-    bootstrap_payload = None
-    if bootstrap is not None:
-        bootstrap_payload = {
-            "ok": bootstrap.ok,
-            "source": bootstrap.source,
-            "strict_mode": bootstrap.strict_mode,
-            "loaded_count": bootstrap.loaded_count,
-            "fallback_used": bootstrap.fallback_used,
-            "environment": bootstrap.environment,
-            "runtime_stage": bootstrap.runtime_stage,
-            "machine_slug": bootstrap.machine_slug,
-            "deployment_profile": bootstrap.deployment_profile,
-            "errors": list(bootstrap.errors),
-        }
-
-    proxy_related_keys = sorted(
-        key
-        for key in os.environ
-        if "PROXY" in key.upper() or "WEBSHARE" in key.upper()
-    )
-
-    return {
-        "deployment_profile": _DEPLOYMENT_PROFILE,
-        "proxy_mode": proxy_mode,
-        "proxy_configured": proxy_config is not None,
-        "proxy_related_keys": proxy_related_keys,
-        "env": {
-            "PROXY_USERNAME": _env_state("PROXY_USERNAME"),
-            "PROXY_PASSWORD": _env_state("PROXY_PASSWORD"),
-            "PROXY_HOST": _env_state("PROXY_HOST"),
-            "PROXY_PORT": _env_state("PROXY_PORT"),
-            "WEBSHARE_PROXY_USER": _env_state("WEBSHARE_PROXY_USER"),
-            "WEBSHARE_PROXY_PASS": _env_state("WEBSHARE_PROXY_PASS"),
-            "WEBSHARE_PROXY_HOST": _env_state("WEBSHARE_PROXY_HOST"),
-            "WEBSHARE_PROXY_PORT": _env_state("WEBSHARE_PROXY_PORT"),
-        },
-        "bootstrap": bootstrap_payload,
-    }
-
-
 @app.post("/api/v1/ops/config")
 async def ops_config_set(request: Request, payload: OpsConfigRequest):
     _require_ops_auth(request)
