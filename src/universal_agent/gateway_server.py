@@ -242,11 +242,20 @@ _HEARTBEAT_MEDIATION_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "coverage_model": "all_non_ok_tiered",
     "cooldown_minutes": 60,
+    "classification_cooldown_minutes": 120,
+    "operator_email_cooldown_minutes": 240,
     "operator_email_channel": "agentmail",
     "notify_operator_for_unknown_findings": True,
     "notify_operator_for_known_findings": False,
 }
 _heartbeat_mediation_cooldowns: dict[str, float] = {}
+# Classification-based cooldown: prevents same root-cause class from
+# re-dispatching Simone within classification_cooldown_minutes, even when
+# the SHA-256 content signature differs (e.g. different sessions, same bug).
+_heartbeat_classification_cooldowns: dict[str, float] = {}
+# Email-level cooldown: prevents duplicate operator emails for the same
+# classification within operator_email_cooldown_minutes.
+_heartbeat_operator_email_cooldowns: dict[str, float] = {}
 
 
 def _normalize_host_label(value: str) -> str:
@@ -5800,6 +5809,51 @@ def _heartbeat_has_meaningful_activity(payload: dict, classification: dict) -> b
     return False
 
 
+def _heartbeat_classification_label(findings: dict[str, Any]) -> str:
+    """Build a normalized classification label from heartbeat findings.
+
+    The label groups logically-identical root causes across different sessions.
+    It concatenates the overall_status with a sorted set of finding_ids, so that
+    two heartbeats surfacing the same findings (e.g. 'agentmail_credentials_missing')
+    produce the same label regardless of which session they came from.
+    """
+    status = str(findings.get("overall_status") or "unknown").strip().lower()
+    items = findings.get("findings")
+    if not isinstance(items, list):
+        return status
+    ids = sorted(
+        {str(f.get("finding_id") or "").strip() for f in items if isinstance(f, dict) and f.get("finding_id")}
+    )
+    if not ids:
+        return status
+    return f"{status}:{','.join(ids)}"
+
+
+def _heartbeat_session_already_investigated(session_id: str) -> bool:
+    """Return True if a heartbeat investigation has already been completed or
+    dispatched for *session_id*, meaning further notifications would be redundant.
+    """
+    investigation_kinds = {
+        "heartbeat_investigation_completed",
+        "heartbeat_operator_review_required",
+        "heartbeat_operator_review_sent",
+    }
+    for ntf in reversed(_notifications):
+        ntf_kind = str(ntf.get("kind") or "").strip().lower()
+        if ntf_kind not in investigation_kinds:
+            continue
+        ntf_session = str(ntf.get("session_id") or "").strip()
+        if ntf_session == session_id:
+            return True
+        # Also check metadata.session_id
+        ntf_meta = ntf.get("metadata")
+        if isinstance(ntf_meta, dict):
+            meta_session = str(ntf_meta.get("session_id") or ntf_meta.get("session_key") or "").strip()
+            if meta_session == session_id:
+                return True
+    return False
+
+
 def _emit_heartbeat_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "heartbeat_event")
     _scheduling_record_event("heartbeat", event_type)
@@ -5821,10 +5875,21 @@ def _emit_heartbeat_event(payload: dict) -> None:
                 _scheduling_counter_inc("heartbeat_notification_suppressed_noop")
                 return
 
+            # ── Layer 4: skip if this session already has an investigation ──
+            if session_id and _heartbeat_session_already_investigated(session_id):
+                logger.info(
+                    "Heartbeat for %s already investigated; skipping duplicate notification.",
+                    session_id,
+                )
+                _scheduling_counter_inc("heartbeat_notification_suppressed_already_investigated")
+                return
+
             mediation_config = _heartbeat_mediation_config()
+            classification_label = _heartbeat_classification_label(findings)
             dispatch_allowed, dispatch_reason = _should_dispatch_heartbeat_mediation(
                 classification["signature"],
                 mediation_config,
+                classification_label=classification_label,
             )
             metadata = {
                 "source": "heartbeat",
@@ -8445,6 +8510,15 @@ _HEALTH_ALERT_NOTIFICATION_KINDS: frozenset[str] = frozenset({
     "hook_dispatch_queue_overflow",
 })
 
+# Heartbeat mediation notification kinds that use classification-based upsert.
+# Only one live notification is kept per heartbeat classification within the
+# classification cooldown window.  When a newer heartbeat with the same
+# classification arrives, it replaces the earlier one in-place.
+_HEARTBEAT_MEDIATION_UPSERT_KINDS: frozenset[str] = frozenset({
+    "autonomous_heartbeat_completed",
+})
+_HEARTBEAT_MEDIATION_UPSERT_WINDOW_SECONDS = 7200  # 2 hours
+
 # Tutorial pipeline stage kinds that track a single video through the pipeline.
 # Only one live notification is kept per video_id across all of these kinds.
 # When a newer stage arrives for the same video, it replaces the earlier one.
@@ -8548,6 +8622,54 @@ def _add_notification(
                 if isinstance(metadata, dict):
                     ex_meta.update(metadata_obj)
                     ex_meta["source_domain"] = _activity_source_domain(str(kind or ""), metadata_obj)
+                _replace_notification_cache_record(existing)
+                _persist_notification_activity(existing)
+                return existing
+
+    # Heartbeat mediation upsert: collapse repeated notifications for the same
+    # heartbeat classification into one live row.  This prevents multiple heartbeat
+    # cycles from creating duplicate notification entries for the same root cause.
+    if kind_norm_check in _HEARTBEAT_MEDIATION_UPSERT_KINDS:
+        incoming_classification = str(metadata_obj.get("heartbeat_mediation_classification") or "").strip()
+        incoming_status = str(metadata_obj.get("heartbeat_findings_status") or "").strip()
+        upsert_key = incoming_classification or incoming_status
+        if upsert_key:
+            now_ts = time.time()
+            for existing in reversed(_notifications):
+                ex_kind = str(existing.get("kind") or "").strip().lower()
+                if ex_kind not in _HEARTBEAT_MEDIATION_UPSERT_KINDS:
+                    continue
+                if _normalize_notification_status(existing.get("status") or "new") == "dismissed":
+                    continue
+                ex_meta = existing.get("metadata")
+                if not isinstance(ex_meta, dict):
+                    continue
+                ex_cls = str(ex_meta.get("heartbeat_mediation_classification") or "").strip()
+                ex_st = str(ex_meta.get("heartbeat_findings_status") or "").strip()
+                ex_key = ex_cls or ex_st
+                if ex_key != upsert_key:
+                    continue
+                # Check age: only upsert within the upsert window
+                ex_created = str(existing.get("created_at") or "").strip()
+                try:
+                    from datetime import datetime as _dt, timezone as _tz
+                    ex_ts = _dt.fromisoformat(ex_created.replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    ex_ts = 0.0
+                if ex_ts > 0 and (now_ts - ex_ts) > _HEARTBEAT_MEDIATION_UPSERT_WINDOW_SECONDS:
+                    continue
+                # Upsert: update existing record in-place
+                existing["title"] = title
+                existing["message"] = full_message_text
+                existing["full_message"] = full_message_text
+                existing["summary"] = summary_text if summary_text is not None else _activity_summary_text(message)
+                existing["session_id"] = session_id
+                existing["severity"] = severity
+                existing["requires_action"] = requires_action
+                existing["updated_at"] = _utc_now_iso()
+                existing["status"] = "new"
+                if isinstance(metadata, dict):
+                    ex_meta.update(metadata_obj)
                 _replace_notification_cache_record(existing)
                 _persist_notification_activity(existing)
                 return existing
@@ -18562,6 +18684,14 @@ def _heartbeat_mediation_config() -> dict[str, Any]:
         merged["cooldown_minutes"] = max(0, int(merged.get("cooldown_minutes") or 60))
     except Exception:
         merged["cooldown_minutes"] = 60
+    try:
+        merged["classification_cooldown_minutes"] = max(0, int(merged.get("classification_cooldown_minutes") or 120))
+    except Exception:
+        merged["classification_cooldown_minutes"] = 120
+    try:
+        merged["operator_email_cooldown_minutes"] = max(0, int(merged.get("operator_email_cooldown_minutes") or 240))
+    except Exception:
+        merged["operator_email_cooldown_minutes"] = 240
     merged["operator_email_channel"] = (
         str(merged.get("operator_email_channel") or "agentmail").strip().lower() or "agentmail"
     )
@@ -18822,17 +18952,36 @@ def _classify_heartbeat_mediation(findings: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _should_dispatch_heartbeat_mediation(signature: str, config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+def _should_dispatch_heartbeat_mediation(
+    signature: str,
+    config: dict[str, Any],
+    *,
+    classification_label: str = "",
+) -> tuple[bool, Optional[str]]:
     if not bool(config.get("enabled", True)):
         return False, "disabled"
     if str(config.get("coverage_model") or "all_non_ok_tiered").strip().lower() != "all_non_ok_tiered":
         return False, "unsupported_coverage_model"
-    cooldown_seconds = max(0, int(config.get("cooldown_minutes") or 60)) * 60
     now_ts = time.time()
+
+    # Layer 1a: classification-level cooldown (catches same root cause across sessions)
+    if classification_label:
+        _cls_raw = config.get("classification_cooldown_minutes")
+        cls_cooldown_seconds = max(0, int(_cls_raw if _cls_raw is not None else 120)) * 60
+        cls_last_ts = _heartbeat_classification_cooldowns.get(classification_label)
+        if cls_last_ts is not None and cls_cooldown_seconds > 0 and (now_ts - cls_last_ts) < cls_cooldown_seconds:
+            return False, "classification_cooldown_active"
+
+    # Layer 1b: exact signature cooldown (original behavior)
+    cooldown_seconds = max(0, int(config.get("cooldown_minutes") or 60)) * 60
     last_ts = _heartbeat_mediation_cooldowns.get(signature)
     if last_ts is not None and cooldown_seconds > 0 and (now_ts - last_ts) < cooldown_seconds:
         return False, "cooldown_active"
+
+    # Both checks passed — record timestamps for both keys
     _heartbeat_mediation_cooldowns[signature] = now_ts
+    if classification_label:
+        _heartbeat_classification_cooldowns[classification_label] = now_ts
     return True, None
 
 
@@ -19061,6 +19210,21 @@ async def _notify_operator_of_heartbeat_recommendation(payload: dict[str, Any]) 
         field="summary",
     )
     classification = str(metadata.get("classification") or "unknown_issue").strip()
+
+    # ── Layer 3: email-level dedup by classification ──
+    email_cooldown_seconds = max(0, int(config.get("operator_email_cooldown_minutes") or 240)) * 60
+    now_ts = time.time()
+    email_cooldown_key = f"email:{classification}"
+    last_email_ts = _heartbeat_operator_email_cooldowns.get(email_cooldown_key)
+    if last_email_ts is not None and email_cooldown_seconds > 0 and (now_ts - last_email_ts) < email_cooldown_seconds:
+        logger.info(
+            "Heartbeat operator email suppressed for classification=%s (cooldown %ds, last sent %ds ago)",
+            classification,
+            email_cooldown_seconds,
+            int(now_ts - last_email_ts),
+        )
+        return False, "email_classification_cooldown_active"
+
     subject = f"Simone heartbeat review required: {classification}"
     body = (
         "Simone completed an automatic heartbeat investigation and operator review is required.\n\n"
@@ -19077,6 +19241,7 @@ async def _notify_operator_of_heartbeat_recommendation(payload: dict[str, Any]) 
     if not to:
         return False, "missing_operator_email"
     await _agentmail_service.send_email(to=to, subject=subject, text=body, force_send=True)
+    _heartbeat_operator_email_cooldowns[email_cooldown_key] = now_ts
     return True, "sent"
 
 
