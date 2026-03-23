@@ -63,11 +63,13 @@ def _build_proxy_list() -> list[str]:
     if raw:
         return [p.strip() for p in raw.split(",") if p.strip()]
 
-    # Fall back to Webshare shared credentials
-    user = (os.getenv("PROXY_USERNAME") or os.getenv("WEBSHARE_PROXY_USER") or "").strip()
-    pw   = (os.getenv("PROXY_PASSWORD") or os.getenv("WEBSHARE_PROXY_PASS") or "").strip()
-    if user and pw:
-        return [f"http://{user}:{pw}@{_WEBSHARE_HOST}:{_WEBSHARE_PORT}"]
+    # Fall back to Webshare shared credentials if explicitly enabled
+    tgtg_fallback = os.getenv("TGTG_PROXY_FALLBACK", "false").lower() == "true"
+    if tgtg_fallback:
+        user = (os.getenv("PROXY_USERNAME") or os.getenv("WEBSHARE_PROXY_USER") or "").strip()
+        pw   = (os.getenv("PROXY_PASSWORD") or os.getenv("WEBSHARE_PROXY_PASS") or "").strip()
+        if user and pw:
+            return [f"http://{user}:{pw}@{_WEBSHARE_HOST}:{_WEBSHARE_PORT}"]
     return []
 
 TGTG_PROXIES: list[str] = _build_proxy_list()

@@ -1866,8 +1866,8 @@ class HooksService:
         non_loopback = [endpoint for endpoint in deduped if endpoint not in loopback]
         if self._deployment_profile == "vps":
             return loopback or deduped
-        if self._deployment_profile == "local_workstation" and loopback:
-            return loopback + non_loopback
+        if self._deployment_profile == "local_workstation":
+            return non_loopback + loopback if non_loopback else loopback
         return deduped
 
     def _is_youtube_local_ingest_target(self, action: HookAction) -> bool:
