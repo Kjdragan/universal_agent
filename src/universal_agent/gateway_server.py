@@ -19475,14 +19475,16 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
             metadata={"source": "heartbeat", "originating_notification_id": origin_id},
         )
     else:
+        # Cooldown suppression is expected behavior, not a failure
+        is_cooldown = "cooldown" in (reason or "")
         _add_notification(
             kind="heartbeat_operator_review_sent",
-            title="Heartbeat Review Email Failed",
+            title="Heartbeat Review Email Suppressed" if is_cooldown else "Heartbeat Review Email Failed",
             message=f"Operator review email could not be sent for heartbeat notification {origin_id}: {reason}",
             session_id=str(payload.get("session_id") or "").strip() or None,
-            severity="error",
-            requires_action=True,
-            metadata={"source": "heartbeat", "originating_notification_id": origin_id, "reason": reason},
+            severity="info" if is_cooldown else "error",
+            requires_action=not is_cooldown,
+            metadata={"source": "heartbeat", "source_domain": "heartbeat", "originating_notification_id": origin_id, "reason": reason},
         )
 
 

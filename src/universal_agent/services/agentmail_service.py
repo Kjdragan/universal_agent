@@ -722,13 +722,14 @@ class AgentMailService:
         *,
         inbox_id: Optional[str] = None,
         label: Optional[str] = None,
-        limit: int = 20,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         """List threads in a specific inbox (or primary inbox)."""
         self._assert_ready()
         kwargs: dict[str, Any] = {"inbox_id": inbox_id or self._inbox_id}
         if label:
             kwargs["labels"] = [label]
+        kwargs["limit"] = limit
 
         threads = await self._client.inboxes.threads.list(**kwargs)
         thd_list: list[Any] = list(threads.threads if hasattr(threads, "threads") else threads)
