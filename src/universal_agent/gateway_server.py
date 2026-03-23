@@ -11024,11 +11024,20 @@ def _refresh_runtime_feature_flags_from_env() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _FACTORY_POLICY, _delegation_mission_bus
+    global _FACTORY_POLICY, _delegation_mission_bus, _DEPLOYMENT_PROFILE
     process_heartbeat.start()
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info("Lifespan: Resolving bootstrap state...")
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
+    # Refresh _DEPLOYMENT_PROFILE from os.environ AFTER bootstrap, because
+    # the module-level assignment (line ~223) runs at import-time before .env
+    # is loaded.  On the VPS the .env written by deploy-prod.yml contains
+    # UA_DEPLOYMENT_PROFILE=vps, but that file is only loaded inside
+    # bootstrap_runtime_environment → _bootstrap_infisical_env → load_dotenv.
+    _refreshed_profile = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
+    if _refreshed_profile in {"local_workstation", "standalone_node", "vps"}:
+        _DEPLOYMENT_PROFILE = _refreshed_profile
+    logger.info("Lifespan: deployment profile resolved to %s", _DEPLOYMENT_PROFILE)
     _FACTORY_POLICY = bootstrap_state.policy
     _refresh_runtime_feature_flags_from_env()
     _refresh_ops_auth_config_from_env()
