@@ -15,6 +15,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Doc | Subject |
 |-----|---------| 
 | Heartbeat_Service.md | **Canonical source of truth** — heartbeat cycle, scheduling, JSON findings contract, 3-layer repair pipeline, mediation flow, implementation map |
+| Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: guard policy, Task Hub scoring, Todoist taxonomy, memory integration, dispatch lifecycle, Mermaid diagrams |
 | Memory_System.md | Tiered memory & auto-flush |
 | Durable_Execution.md | Resilience features |
 | URW_Orchestration.md | Multi-phase tasks |

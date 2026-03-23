@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from universal_agent.notebooklm_runtime import run_auth_preflight
+from universal_agent.notebooklm_runtime import run_auth_preflight, run_nlm_doctor
 
 
 def main() -> int:
@@ -22,7 +22,7 @@ def main() -> int:
         pass  # Non-fatal: preflight will proceed with whatever env vars are set
 
     result = run_auth_preflight(args.workspace, timeout_seconds=args.timeout)
-    payload = {
+    payload: dict = {
         "ok": result.ok,
         "profile": result.profile,
         "seeded": result.seeded,
@@ -32,6 +32,20 @@ def main() -> int:
         "notes": list(result.notes),
         "errors": list(result.errors),
     }
+
+    # On failure, include nlm doctor diagnostics for richer operator context.
+    if not result.ok:
+        try:
+            doctor = run_nlm_doctor(timeout_seconds=args.timeout)
+            payload["doctor_diagnostics"] = {
+                "ok": doctor.ok,
+                "auth_ok": doctor.auth_ok,
+                "browser_ok": doctor.browser_ok,
+                "errors": list(doctor.errors),
+            }
+        except Exception:
+            pass  # Non-fatal: doctor output is best-effort
+
     print(json.dumps(payload, indent=2))
     return 0 if result.ok else 1
 

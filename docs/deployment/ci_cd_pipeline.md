@@ -138,6 +138,7 @@ deploy rather than editing keys in place.
 
 - Staging and production deploys install project dependencies with `uv sync`.
 - Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
+- Staging and production deploys rebuild the MkDocs documentation site via `mkdocs build`. The generated static site is served by the `universal-agent-docs` systemd unit on `localhost:8100`, exposed to the tailnet via `tailscale serve`. See `scripts/configure_docs_server.sh` for one-time setup.
 - Staging and production deploys install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
 - The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
@@ -172,6 +173,7 @@ Every deploy pulls code, syncs dependencies, rebuilds the web UI, and then **res
 | Gateway | `universal-agent-staging-gateway` | `universal-agent-gateway` |
 | API | `universal-agent-staging-api` | `universal-agent-api` |
 | Web UI | `universal-agent-staging-webui` | `universal-agent-webui` |
+| Docs | `universal-agent-docs` | `universal-agent-docs` |
 | Telegram | — (not running in staging) | `universal-agent-telegram` |
 | VP Worker (coder) | — | `universal-agent-vp-worker@vp.coder.primary` |
 | VP Worker (general) | — | `universal-agent-vp-worker@vp.general.primary` |

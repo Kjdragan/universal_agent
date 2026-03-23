@@ -611,6 +611,29 @@ def _dispatch_skip_reason(item: dict[str, Any], *, eligible: bool, threshold: fl
     return "not_eligible"
 
 
+def _memory_relevance_bonus(task: dict[str, Any]) -> float:
+    """Boost score if memory has relevant context for this task.
+
+    Searches the memory orchestrator for past work related to the task's
+    title.  Returns +0.4 when relevant institutional memory exists so that
+    tasks the agent has context for are prioritised.  Never raises — memory
+    is advisory, not a hard dependency.
+    """
+    try:
+        title = str(task.get("title") or "").strip()
+        if len(title) < 5:
+            return 0.0
+        from universal_agent.memory.orchestrator import get_memory_orchestrator
+
+        broker = get_memory_orchestrator()
+        hits = broker.search(query=title, limit=2, direct_context=True)
+        if hits:
+            return 0.4
+    except Exception:
+        pass
+    return 0.0
+
+
 def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, float, dict[str, Any]]:
     labels = {str(v).strip().lower() for v in (task.get("labels") or [])}
     must_complete = bool(task.get("must_complete"))
@@ -677,6 +700,12 @@ def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, f
             score += s_bonus
             details["staleness_bonus"] = s_bonus
 
+    # Memory relevance bonus — tasks with institutional context get a confidence boost.
+    m_bonus = _memory_relevance_bonus(task)
+    if m_bonus > 0:
+        score += m_bonus
+        details["memory_relevance_bonus"] = m_bonus
+
     final_score = max(1.0, min(10.0, round(score, 2)))
 
     confidence = 0.58
@@ -686,6 +715,8 @@ def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, f
         confidence += 0.1
     if "blocked" in labels:
         confidence += 0.08
+    if m_bonus > 0:
+        confidence += 0.06
     confidence = max(0.35, min(0.95, round(confidence, 2)))
 
     judge_payload = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -12,6 +13,66 @@ from typing import Any
 
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Research import timeout (v0.5.0+: configurable, was hard 120s)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_RESEARCH_IMPORT_TIMEOUT = 1200  # seconds
+
+
+def notebooklm_research_import_timeout() -> int:
+    """Return the configured research-import timeout in seconds.
+
+    Reads ``UA_NOTEBOOKLM_RESEARCH_IMPORT_TIMEOUT`` from the environment,
+    defaulting to 1200 s.  The NLM CLI accepts this via ``--timeout``.
+    """
+    raw = str(os.getenv("UA_NOTEBOOKLM_RESEARCH_IMPORT_TIMEOUT", "")).strip()
+    if raw:
+        try:
+            return max(60, int(raw))
+        except (ValueError, TypeError):
+            pass
+    return _DEFAULT_RESEARCH_IMPORT_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# MCP error-hint parsing (v0.5.3+: all 27 MCP tools return hint fields)
+# ---------------------------------------------------------------------------
+
+
+def parse_nlm_error_hint(error_response: dict[str, Any] | str) -> str | None:
+    """Extract the ``hint`` field from an NLM MCP/CLI JSON error response.
+
+    v0.5.3 introduced structured error responses:
+    ``{"status": "error", "error": "...", "hint": "..."}``
+
+    Returns the hint string, or ``None`` if not present.
+    """
+    if isinstance(error_response, str):
+        try:
+            error_response = json.loads(error_response)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(error_response, dict):
+        return None
+    hint = error_response.get("hint")
+    return str(hint).strip() if hint else None
+
+
+def is_auth_hint(hint: str | None) -> bool:
+    """Return True if *hint* suggests re-authentication is needed.
+
+    Useful for agent self-correction: detect auth-related hints and
+    trigger ``nlm login`` automatically.
+    """
+    if not hint:
+        return False
+    lowered = hint.lower()
+    return any(
+        marker in lowered
+        for marker in ("nlm login", "authenticate", "auth", "expired", "re-auth")
+    )
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -141,7 +202,9 @@ def run_auth_preflight(
             errors=tuple(errors),
         )
 
-    check_args = [cli, "login", "--check", "--profile", profile]
+    # v0.5.4+: prefer 'nlm auth status' — makes a real API call to
+    # validate credentials, more reliable than the old 'login --check'.
+    check_args = [cli, "auth", "status", "--profile", profile]
     try:
         checks_attempted += 1
         check_result = _run_command(check_args, timeout_seconds)
@@ -249,3 +312,69 @@ def build_notebooklm_mcp_server_config() -> dict[str, Any] | None:
         "args": [],
         "env": env_payload,
     }
+
+
+# ---------------------------------------------------------------------------
+# nlm doctor diagnostic (v0.5.3+)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NLMDoctorResult:
+    """Structured result from ``nlm doctor``."""
+    ok: bool
+    auth_ok: bool | None = None
+    browser_ok: bool | None = None
+    raw_output: str = ""
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+def run_nlm_doctor(
+    *,
+    timeout_seconds: float = 30.0,
+) -> NLMDoctorResult:
+    """Run ``nlm doctor`` and return structured diagnostics.
+
+    Useful for healthcheck / heartbeat integration.  Falls back to
+    text-parsing if ``--json`` output is unavailable.
+    """
+    cli = notebooklm_cli_command()
+    cli_exists = bool(Path(cli).exists()) if os.path.sep in cli else bool(shutil.which(cli))
+    if not cli_exists:
+        return NLMDoctorResult(
+            ok=False,
+            errors=("nlm_cli_not_found",),
+        )
+
+    try:
+        result = _run_command([cli, "doctor"], timeout_seconds)
+        raw = (result.stdout or "") + (result.stderr or "")
+        # Parse output for key indicators
+        auth_ok = None
+        browser_ok = None
+        lowered = raw.lower()
+        if "✓ authenticated" in lowered or "authenticated" in lowered:
+            auth_ok = True
+        elif "✗ auth" in lowered or "not authenticated" in lowered:
+            auth_ok = False
+        if "✓ browser" in lowered or "browser profile" in lowered:
+            browser_ok = True
+        elif "✗ browser" in lowered:
+            browser_ok = False
+
+        return NLMDoctorResult(
+            ok=result.returncode == 0,
+            auth_ok=auth_ok,
+            browser_ok=browser_ok,
+            raw_output=raw.strip(),
+        )
+    except subprocess.TimeoutExpired:
+        return NLMDoctorResult(
+            ok=False,
+            errors=("nlm_doctor_timeout",),
+        )
+    except Exception as exc:
+        return NLMDoctorResult(
+            ok=False,
+            errors=(f"nlm_doctor_error:{_safe_error(exc)}",),
+        )

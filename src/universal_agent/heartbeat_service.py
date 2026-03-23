@@ -1527,6 +1527,28 @@ class HeartbeatService:
                     should_schedule_continuation = dispatch_claimed_count > 0
                     if should_schedule_continuation:
                         continuation_reason = "task_hub_followup"
+
+                    # Enhancement 1: Escalation Pre-Check — enrich each claimed task
+                    # with past escalation resolutions so the agent doesn't repeat mistakes.
+                    if task_hub_claimed:
+                        try:
+                            from universal_agent.services.todoist_service import TodoService
+
+                            for claimed in task_hub_claimed:
+                                title = str(claimed.get("title") or "").strip()
+                                if title:
+                                    resolutions = TodoService.check_escalation_memory(
+                                        title, db_conn=conn, limit=2,
+                                    )
+                                    if resolutions:
+                                        claimed["escalation_history"] = resolutions
+                                        logger.debug(
+                                            "Enriched claimed task %s with %d escalation resolutions",
+                                            claimed.get("task_id"), len(resolutions),
+                                        )
+                        except Exception:
+                            pass  # escalation memory is advisory
+
                     if task_hub_claimed:
                         hub_event = {
                             "type": "task_hub_dispatch",
@@ -1548,6 +1570,37 @@ class HeartbeatService:
                             int(queue.get("eligible_total") or 0),
                             session.session_id,
                         )
+
+                        # Enhancement 3: Context Injection — search memory for relevant
+                        # past work on claimed tasks and inject snippets into metadata.
+                        try:
+                            from universal_agent.memory.orchestrator import get_memory_orchestrator
+
+                            broker = get_memory_orchestrator()
+                            memory_context_snippets = []
+                            for claimed in task_hub_claimed:
+                                title = str(claimed.get("title") or "").strip()
+                                if title:
+                                    hits = broker.search(query=title, limit=2, direct_context=True)
+                                    for hit in hits:
+                                        snippet = hit.get("snippet") or hit.get("summary", "")
+                                        if snippet:
+                                            memory_context_snippets.append({
+                                                "task_title": title,
+                                                "snippet": snippet[:500],
+                                                "source": hit.get("source", ""),
+                                            })
+                            if memory_context_snippets:
+                                metadata["memory_context_for_tasks"] = memory_context_snippets
+                                logger.info(
+                                    "Injected %d memory context snippets for %d claimed tasks in %s",
+                                    len(memory_context_snippets),
+                                    len(task_hub_claimed),
+                                    session.session_id,
+                                )
+                        except Exception:
+                            pass  # memory context is advisory, never block heartbeat
+
                 finally:
                     conn.close()
             except Exception as exc:

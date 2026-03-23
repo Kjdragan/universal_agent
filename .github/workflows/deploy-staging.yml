@@ -141,6 +141,9 @@ jobs:
             echo '--> Building web-ui Next.js application (staging config — API port 9002)...'
             run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH\\\"; if [ -d \\\"\$STAGING_DIR/web-ui\\\" ] && command -v npm >/dev/null 2>&1; then cd \\\"\$STAGING_DIR/web-ui\\\" && [ -f next.config.staging.js ] && cp next.config.staging.js next.config.js; if [ package.json -nt node_modules/.package-json-mtime ] 2>/dev/null || [ ! -d node_modules ]; then echo '--> package.json changed or node_modules missing — running npm install...'; npm install && touch node_modules/.package-json-mtime; else echo '--> node_modules up to date, skipping npm install'; fi && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi\"
 
+            echo '--> Building MkDocs documentation site...'
+            run_as_ua \"export PATH=\\\"\$HOME/.local/bin:/usr/local/bin:\$PATH\\\"; cd \$STAGING_DIR && .venv/bin/mkdocs build -f mkdocs.yml --quiet\" || echo 'WARN: MkDocs build failed; docs site may be stale'
+
             echo '--> Setting deployment-window flag...'
             touch /tmp/ua-deployment-window
             (sleep 1500 && rm -f /tmp/ua-deployment-window) </dev/null >/dev/null 2>&1 &

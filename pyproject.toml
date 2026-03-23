@@ -92,6 +92,7 @@ lint.ignore = ["E402", "F401", "F811"]
 
 [dependency-groups]
 dev = [
+    "mkdocs-material>=9.7.6",
     "pexpect>=4.9.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.8",

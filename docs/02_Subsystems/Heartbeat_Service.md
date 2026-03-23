@@ -57,7 +57,7 @@ The heartbeat is highly configurable via environment variables.
 | `UA_HEARTBEAT_MIN_INTERVAL_SECONDS` | Dynamic | Minimum allowed interval; resolved after Infisical bootstrap. |
 | `UA_HEARTBEAT_ACTIVE_START` | None | Start of active hours window (e.g., "08:00"). Heartbeat skips runs outside this window. |
 | `UA_HEARTBEAT_ACTIVE_END` | None | End of active hours window (e.g., "20:00"). |
-| `UA_HEARTBEAT_EXEC_TIMEOUT` | 600 | Maximum execution time for a single heartbeat turn (in seconds). |
+| `UA_HEARTBEAT_EXEC_TIMEOUT` | 1600 | Maximum execution time for a single heartbeat turn (in seconds). |
 | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | 1 | Set to "0" to disable autonomous heartbeat actions entirely. |
 
 ### Retry & Continuation
@@ -65,7 +65,7 @@ The heartbeat is highly configurable via environment variables.
 | Environment Variable | Default | Description |
 | --- | --- | --- |
 | `UA_HEARTBEAT_RETRY_BASE_SECONDS` | 10 | Base delay for exponential backoff retries. |
-| `UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS` | 300 | Maximum retry backoff delay. |
+| `UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS` | 3600 | Maximum retry backoff delay. |
 | `UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS` | 1 | Short delay after actionable runs for quick re-check. |
 | `UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS` | 1800 | Cooldown after foreground (user) activity before heartbeat resumes. |
 

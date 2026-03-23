@@ -1,0 +1,14 @@
+[Unit]
+Description=Universal Agent Documentation Server (MkDocs)
+After=network.target
+
+[Service]
+Type=simple
+User=ua
+WorkingDirectory=/opt/universal_agent
+ExecStart=/opt/universal_agent/.venv/bin/python -m http.server 8100 --directory site
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

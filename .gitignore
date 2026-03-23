@@ -20,6 +20,9 @@ venv/
 
 # Persistent skill artifacts (durable outputs; not committed)
 /artifacts/
+
+# MkDocs build output
+/site/
 pip-log.txt
 pip-delete-this-directory.txt
 .pytest_cache/
