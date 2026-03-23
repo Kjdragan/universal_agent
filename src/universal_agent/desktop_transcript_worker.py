@@ -165,8 +165,7 @@ class WorkerConfig:
     circuit_breaker_cooldown: float = 60.0  # seconds to wait after breaker
     max_circuit_breaker_trips: int = 2  # abort batch after N trips
 
-    # Proxy fallback
-    proxy_fallback_enabled: bool = True
+    proxy_fallback_enabled: bool = False
 
     # Transcript params
     language: str = "en"
@@ -196,7 +195,7 @@ class WorkerConfig:
             max_circuit_breaker_trips=int(
                 os.getenv("DTW_MAX_CIRCUIT_BREAKER_TRIPS", "2")
             ),
-            proxy_fallback_enabled=os.getenv("DTW_PROXY_FALLBACK", "true")
+            proxy_fallback_enabled=os.getenv("DTW_PROXY_FALLBACK", "false")
             .lower()
             not in ("false", "0", "no", "off"),
             language=os.getenv("DTW_LANGUAGE", "en"),
@@ -748,7 +747,7 @@ def main() -> None:
         print("  DTW_MAX_CONSECUTIVE_FAILURES       (default: 3)")
         print("  DTW_CIRCUIT_BREAKER_COOLDOWN       (default: 60.0)")
         print("  DTW_MAX_CIRCUIT_BREAKER_TRIPS      (default: 2)")
-        print("  DTW_PROXY_FALLBACK                 (default: true)")
+        print("  DTW_PROXY_FALLBACK                 (default: false)")
         print("  DTW_LANGUAGE                       (default: en)")
         print("  DTW_VPS_HOST                       (default: root@srv1360701)")
         print("  DTW_CSI_DB_PATH                    (default: "

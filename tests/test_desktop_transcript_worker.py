@@ -48,7 +48,7 @@ class TestWorkerConfig:
         assert cfg.max_consecutive_failures == 3
         assert cfg.circuit_breaker_cooldown == 60.0
         assert cfg.max_circuit_breaker_trips == 2
-        assert cfg.proxy_fallback_enabled is True
+        assert cfg.proxy_fallback_enabled is False
         assert cfg.language == "en"
 
     def test_from_env_enabled_false(self, monkeypatch):
