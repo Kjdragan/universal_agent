@@ -220,6 +220,23 @@ TEXT_EXTENSIONS = (
     ".toml",
 )
 
+# ---------------------------------------------------------------------------
+# Early .env load — on the VPS the deploy-prod.yml writes a bootstrap .env
+# containing UA_DEPLOYMENT_PROFILE=vps, but that file is NOT loaded until
+# bootstrap_runtime_environment() runs inside the lifespan.  Module-level
+# code that reads os.getenv() therefore misses it.  We load it eagerly here
+# so _DEPLOYMENT_PROFILE (and other early environment references) are correct.
+# ---------------------------------------------------------------------------
+try:
+    from pathlib import Path as _Path
+    from dotenv import load_dotenv as _early_load_dotenv
+    _early_dotenv = _Path(__file__).resolve().parents[2] / ".env"
+    if _early_dotenv.exists():
+        _early_load_dotenv(_early_dotenv, override=False)
+except Exception:
+    pass  # best-effort; bootstrap will retry later
+# ---------------------------------------------------------------------------
+
 _DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
 if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
