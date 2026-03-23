@@ -148,40 +148,31 @@ jobs:
             touch /tmp/ua-deployment-window
             (sleep 1500 && rm -f /tmp/ua-deployment-window) </dev/null >/dev/null 2>&1 &
 
-            echo '---> Installing stack-limit drop-in for UA services....'
-            for svc in universal-agent-staging-gateway universal-agent-staging-api; do
-              if command -v sudo >/dev/null 2>&1; then
-                sudo mkdir -p /etc/systemd/system/\${svc}.service.d
-                sudo cp \$STAGING_DIR/deployment/systemd/universal-agent-stack-limit.conf /etc/systemd/system/\${svc}.service.d/stack-limit.conf
-              else
-                mkdir -p /etc/systemd/system/\${svc}.service.d
-                cp \$STAGING_DIR/deployment/systemd/universal-agent-stack-limit.conf /etc/systemd/system/\${svc}.service.d/stack-limit.conf
-              fi
-            done
+            echo '--> Installing canonical staging systemd units from repo templates...'
             if command -v sudo >/dev/null 2>&1; then
-              sudo systemctl daemon-reload
+              sudo bash "\$STAGING_DIR/scripts/install_vps_systemd_units.sh" --lane staging --app-root "\$STAGING_DIR"
             else
-              systemctl daemon-reload
+              bash "\$STAGING_DIR/scripts/install_vps_systemd_units.sh" --lane staging --app-root "\$STAGING_DIR"
             fi
 
             echo '--> Restarting staging services...'
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
                 sudo systemctl restart universal-agent-staging-gateway universal-agent-staging-api
-                sudo systemctl restart universal-agent-staging-webui || echo 'WARN: staging-webui unit not yet installed; run one-time setup on VPS'
+                sudo systemctl restart universal-agent-staging-webui
               else
                 systemctl restart universal-agent-staging-gateway universal-agent-staging-api
-                systemctl restart universal-agent-staging-webui || echo 'WARN: staging-webui unit not yet installed'
+                systemctl restart universal-agent-staging-webui
               fi
             elif command -v service >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
                 sudo service universal-agent-staging-gateway restart
                 sudo service universal-agent-staging-api restart
-                sudo service universal-agent-staging-webui restart || echo 'WARN: staging-webui service not yet installed'
+                sudo service universal-agent-staging-webui restart
               else
                 service universal-agent-staging-gateway restart
                 service universal-agent-staging-api restart
-                service universal-agent-staging-webui restart || echo 'WARN: staging-webui service not yet installed'
+                service universal-agent-staging-webui restart
               fi
             else
               echo '--> WARNING: No supported service manager found (systemctl/service); skipping restart.'

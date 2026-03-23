@@ -34,7 +34,7 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Web UI Port | `3001` | `3000` |
 | Web UI URL | `https://srv1360701.taildcc090.ts.net:9443` (Tailnet) | `https://app.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net` (Tailnet) |
 | API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net:8443` (Tailnet) |
-| Service Restart Strategy | `systemctl` or `service` fallback for staging gateway/api units | `systemctl` or `service` fallback for production gateway/api/webui/telegram units + VP workers |
+| Service Restart Strategy | Deploy installs repo-managed staging systemd units, then restarts gateway/api/webui via `systemctl` or `service` fallback | Deploy installs repo-managed production systemd units, then restarts gateway/api/webui/telegram via `systemctl` or `service` fallback plus VP workers |
 | Post-Deploy Health | See `ci_cd_pipeline.md` > Post-Deploy Health Verification | See `ci_cd_pipeline.md` > Post-Deploy Health Verification |
 | Secrets Behavior | Bootstrap `.env` for stage `staging`; webui `.env.local` rendered from Infisical by deploy | Bootstrap `.env` for stage `production`; webui `.env.local` rendered from Infisical by deploy |
 
@@ -67,6 +67,14 @@ The deployed VPS lane is also the default runtime for the YouTube tutorial pipel
 - Tutorial repo bootstrap defaults to `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT=<UA_ARTIFACTS_DIR>/tutorial_repos` on VPS.
 - Local workstation tutorial processing is supported only as an explicit development fallback and should not be treated as the normal deployed path.
 - VPS tutorial ingest should use loopback-first endpoint ordering, typically `http://127.0.0.1:8002/api/v1/youtube/ingest`.
+
+## Systemd Ownership
+
+The base systemd units for deployed application services are part of the repository and are installed on every deploy from templates under `deployment/systemd/templates/`.
+
+- Production deploy renders the canonical units for `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, and `universal-agent-telegram` against the active checkout path (`/opt/universal_agent` or fallback `/opt/universal_agent_repo`).
+- Staging deploy renders the canonical units for `universal-agent-staging-gateway`, `universal-agent-staging-api`, and `universal-agent-staging-webui` against `/opt/universal-agent-staging`.
+- This prevents host-local systemd drift from silently pinning a service to an old checkout, stale working directory, or missing `EnvironmentFile`.
 
 ## Local Runtime Contract
 

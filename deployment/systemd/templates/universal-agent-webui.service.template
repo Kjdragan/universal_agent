@@ -1,0 +1,18 @@
+[Unit]
+Description=__UNIT_DESCRIPTION__
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_ROOT__/web-ui
+Environment=NODE_ENV=production
+EnvironmentFile=-__APP_ROOT__/web-ui/.env.local
+ExecStart=/bin/bash -lc 'exec ./node_modules/.bin/next start --hostname 127.0.0.1 --port __WEBUI_PORT__'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

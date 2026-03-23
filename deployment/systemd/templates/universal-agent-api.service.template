@@ -1,0 +1,19 @@
+[Unit]
+Description=__UNIT_DESCRIPTION__
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=__APP_ROOT__/src
+EnvironmentFile=-__APP_ROOT__/.env
+ExecStart=__APP_ROOT__/.venv/bin/python -m universal_agent.api.server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -63,6 +63,18 @@ Deploy workflows must not provision machine-shaped Infisical environments during
 They also rewrite the checkout bootstrap `.env` from scratch on every deploy so
 stale historical lines cannot survive a lane migration.
 
+## Canonical Systemd Units
+
+Deploy workflows now own both the application checkout and the base systemd units that run it.
+
+- Canonical unit templates live under `deployment/systemd/templates/`.
+- `scripts/install_vps_systemd_units.sh` renders those templates against the active checkout path and installs them into `/etc/systemd/system/`.
+- Production deploy installs `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, and `universal-agent-telegram`.
+- Staging deploy installs `universal-agent-staging-gateway`, `universal-agent-staging-api`, and `universal-agent-staging-webui`.
+- Gateway/API stack-limit drop-ins are installed alongside the rendered base units during the same step.
+
+This is intentional: deploys must not rely on manually created host-only base units whose `WorkingDirectory`, `ExecStart`, or `EnvironmentFile` can drift from the checked-out release.
+
 ## Required GitHub Secrets
 
 - `OPENAI_API_KEY` (Codex PR review workflow)
@@ -185,6 +197,8 @@ Every deploy pulls code, syncs dependencies, rebuilds the web UI, and then **res
 **Production**: gateway + API + webui + telegram restarted together, then each enabled VP worker is restarted individually.
 
 VP workers are only restarted if `systemctl is-enabled` reports them as active. This allows new VPS nodes to deploy without VP worker units installed.
+
+Before those restarts, each deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files.
 
 ### Deployment-Window Flag
 

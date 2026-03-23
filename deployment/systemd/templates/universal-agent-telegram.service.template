@@ -1,0 +1,21 @@
+[Unit]
+Description=__UNIT_DESCRIPTION__
+After=network-online.target __GATEWAY_UNIT__
+Wants=network-online.target __GATEWAY_UNIT__
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=__APP_ROOT__/src
+Environment=UA_TELEGRAM_ALLOW_INPROCESS=0
+Environment=UA_TELEGRAM_PROCESS_HEARTBEAT_FILE=/var/lib/universal-agent/heartbeat/telegram.heartbeat
+EnvironmentFile=-__APP_ROOT__/.env
+ExecStart=__APP_ROOT__/.venv/bin/python -m universal_agent.bot.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -175,13 +175,8 @@ jobs:
             # Schedule automatic cleanup of the flag after 25 minutes (covers worst-case startup)
             (sleep 1500 && rm -f /tmp/ua-deployment-window) </dev/null >/dev/null 2>&1 &
 
-            echo "---> Installing stack-limit drop-in for UA services...."
-            for svc in universal-agent-gateway universal-agent-api; do
-              sudo mkdir -p /etc/systemd/system/${svc}.service.d
-              sudo cp "$PROD_DIR/deployment/systemd/universal-agent-stack-limit.conf" /etc/systemd/system/${svc}.service.d/stack-limit.conf
-              sudo cp "$PROD_DIR/deployment/systemd/universal-agent-deployment-profile.conf" /etc/systemd/system/${svc}.service.d/deployment-profile.conf
-            done
-            sudo systemctl daemon-reload
+            echo "--> Installing canonical production systemd units from repo templates..."
+            sudo bash "$PROD_DIR/scripts/install_vps_systemd_units.sh" --lane production --app-root "$PROD_DIR"
 
             echo "--> Restarting production services..."
             if command -v systemctl >/dev/null 2>&1; then

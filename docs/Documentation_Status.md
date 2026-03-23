@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-21
+**Last updated:** 2026-03-23
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -96,6 +96,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 05 | Local HQ dev vs desktop worker runtime modes |
 | 06 | Production deploy incident |
 | 07 | Stage-based Infisical and machine bootstrap migration plan |
+| 08 | VPS deployment profile stuck at `local_workstation` — systemd drift incident and deploy fix |
 
 ## Run Reviews (03_Run_Reviews/)
 
