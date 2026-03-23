@@ -741,6 +741,8 @@ class AgentMailService:
                 "subject": getattr(thd, "subject", ""),
                 "preview": (getattr(thd, "preview", "") or "")[:200],
                 "labels": getattr(thd, "labels", []),
+                "senders": getattr(thd, "senders", []),
+                "recipients": getattr(thd, "recipients", []),
                 "message_count": getattr(thd, "message_count", 0),
                 "created_at": str(getattr(thd, "created_at", "")),
                 "updated_at": str(getattr(thd, "updated_at", "") or ""),

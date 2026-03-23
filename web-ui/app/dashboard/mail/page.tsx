@@ -12,6 +12,8 @@ type Thread = {
   subject: string;
   preview: string;
   labels: string[];
+  senders: string[];
+  recipients: string[];
   message_count: number;
   created_at: string;
   updated_at: string;
@@ -130,6 +132,7 @@ export default function MailPage() {
   const [error, setError] = useState<string | null>(null);
   const [draftSending, setDraftSending] = useState<string | null>(null);
   const [deletingThread, setDeletingThread] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"inbox" | "sent">("inbox");
   const deepLinkHandled = useRef(false);
 
   /* ── Fetchers ─── */
@@ -270,6 +273,16 @@ export default function MailPage() {
       fetchThreadMessages(match);
     }
   }, [threads, loading, searchParams, fetchThreadMessages]);
+
+  /* ── Derived State ─── */
+  const filteredThreads = threads.filter((t) => {
+    // If sent view, only show threads where inbox is a sender
+    if (viewMode === "sent") {
+      return t.senders && t.senders.some((s) => s.includes(t.inbox_id));
+    }
+    // If inbox view, show threads where someone else sent it (or unknown)
+    return !t.senders || t.senders.length === 0 || t.senders.some((s) => !s.includes(t.inbox_id));
+  });
 
   /* ── Render ─── */
   return (
@@ -545,25 +558,77 @@ export default function MailPage() {
               : "none",
           }}
         >
-          <div style={{ padding: "16px 20px 8px" }}>
+          <div
+            style={{
+              padding: "16px 20px 8px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
             <SectionTitle
               icon="forum"
               label="THREADS"
-              count={threads.length}
+              count={filteredThreads.length}
             />
+            {/* View Toggle: Inbox | Sent */}
+            <div
+              style={{
+                display: "flex",
+                background: TOKENS.surfaceHigh,
+                padding: 2,
+                borderRadius: 4,
+              }}
+            >
+              <button
+                onClick={() => setViewMode("inbox")}
+                style={{
+                  background: viewMode === "inbox" ? TOKENS.surfaceDim : "transparent",
+                  color: viewMode === "inbox" ? TOKENS.textPrimary : TOKENS.textMuted,
+                  border: "none",
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  fontFamily: TOKENS.fontMono,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  borderRadius: 2,
+                  transition: "all 0.15s",
+                }}
+              >
+                INBOX
+              </button>
+              <button
+                onClick={() => setViewMode("sent")}
+                style={{
+                  background: viewMode === "sent" ? TOKENS.surfaceDim : "transparent",
+                  color: viewMode === "sent" ? TOKENS.textPrimary : TOKENS.textMuted,
+                  border: "none",
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  fontFamily: TOKENS.fontMono,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  borderRadius: 2,
+                  transition: "all 0.15s",
+                }}
+              >
+                SENT
+              </button>
+            </div>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px" }}>
-            {loading && threads.length === 0 ? (
+            {loading && filteredThreads.length === 0 ? (
               <LoadingState />
-            ) : threads.length === 0 ? (
-              <EmptyState message="No threads found" />
+            ) : filteredThreads.length === 0 ? (
+              <EmptyState message={`No ${viewMode} threads found`} />
             ) : (
-              threads.map((t) => (
+              filteredThreads.map((t) => (
                 <ThreadRow
                   key={`${t.inbox_id}-${t.thread_id}`}
                   thread={t}
                   selected={selectedThread?.thread_id === t.thread_id}
                   deleting={deletingThread === t.thread_id}
+                  viewMode={viewMode}
                   onClick={() => fetchThreadMessages(t)}
                   onDelete={() => deleteThread(t)}
                 />
@@ -757,16 +822,32 @@ function ThreadRow({
   thread,
   selected,
   deleting,
+  viewMode,
   onClick,
   onDelete,
 }: {
   thread: Thread;
   selected: boolean;
   deleting?: boolean;
+  viewMode: "inbox" | "sent";
   onClick: () => void;
   onDelete: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  const showTo = viewMode === "sent";
+
+  let partyLabel = "";
+  if (showTo) {
+    const recips = thread.recipients || [];
+    partyLabel = recips.length > 0 ? `To: ${recips.map(senderShortName).join(", ")}` : "To: (unknown)";
+  } else {
+    // Determine the primary sender (who isn't the inbox itself, if possible)
+    const senders = thread.senders || [];
+    const externalSenders = senders.filter((s) => !s.includes(thread.inbox_id));
+    const displaySenders = externalSenders.length > 0 ? externalSenders : senders;
+    partyLabel = displaySenders.length > 0 ? `From: ${displaySenders.map(senderShortName).join(", ")}` : "From: (unknown)";
+  }
+
   return (
     <div
       style={{
@@ -796,32 +877,18 @@ function ThreadRow({
           transition: "all 0.12s",
         }}
       >
-        {/* Avatar or Inbox Badge */}
-        {getAvatar(thread.inbox_id) ? (
-          <Image
-            src={getAvatar(thread.inbox_id)!.src}
-            alt={getAvatar(thread.inbox_id)!.alt}
-            width={28}
-            height={28}
-            style={{ borderRadius: 0, objectFit: "cover", flexShrink: 0, marginTop: 2 }}
-          />
-        ) : (
-          <span
-            style={{
-              fontFamily: TOKENS.fontMono,
-              fontSize: 9,
-              fontWeight: 700,
-              padding: "2px 6px",
-              background: TOKENS.surfaceHigh,
-              color: TOKENS.textSecondary,
-              whiteSpace: "nowrap",
-              marginTop: 2,
-              letterSpacing: "0.05em",
-            }}
-          >
-            {inboxShortName(thread.inbox_id).toUpperCase()}
-          </span>
-        )}
+        {/* Direction Icon or Badge */}
+        <span
+          className="material-symbols-outlined"
+          style={{
+            fontSize: 20,
+            color: showTo ? TOKENS.cyan : TOKENS.green,
+            marginTop: 2,
+            opacity: 0.8,
+          }}
+        >
+          {showTo ? "send" : "inbox"}
+        </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
@@ -835,6 +902,19 @@ function ThreadRow({
           >
             {thread.subject || "(no subject)"}
           </div>
+          <div
+            style={{
+              fontSize: 11,
+              fontFamily: TOKENS.fontMono,
+              color: showTo ? TOKENS.cyan : TOKENS.green,
+              marginTop: 4,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {partyLabel}
+          </div>
           {thread.preview && (
             <div
               style={{
@@ -843,7 +923,7 @@ function ThreadRow({
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                marginTop: 2,
+                marginTop: 4,
               }}
             >
               {thread.preview}
