@@ -750,7 +750,7 @@ class AgentMailService:
         self,
         *,
         label: Optional[str] = None,
-        limit: int = 50,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         """List threads across all configured inboxes, merged and sorted by recency."""
         self._assert_ready()
@@ -803,6 +803,13 @@ class AgentMailService:
             "updated_at": str(getattr(thd, "updated_at", "") or ""),
             "messages": messages,
         }
+
+    async def delete_thread(self, *, inbox_id: str, thread_id: str) -> dict[str, Any]:
+        """Delete a thread from an inbox via AgentMail API."""
+        self._assert_ready()
+        await self._client.inboxes.threads.delete(inbox_id=inbox_id, thread_id=thread_id)
+        logger.info("📧 Deleted thread thread_id=%s inbox_id=%s", thread_id, inbox_id)
+        return {"status": "deleted", "thread_id": thread_id, "inbox_id": inbox_id}
 
     def get_inbox_ids(self) -> list[str]:
         """Return all configured inbox IDs."""

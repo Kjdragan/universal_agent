@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useAgentStore } from "@/lib/store";
 import { getWebSocket } from "@/lib/websocket";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
@@ -162,6 +163,30 @@ function SessionsPageInner() {
   const [rehydratingId, setRehydratingId] = useState<string | null>(null);
   const [staleFilter, setStaleFilter] = useState(false);
   const [purging, setPurging] = useState(false);
+
+  // ── Deep-link from calendar / other pages via ?sid=SESSION_ID ──
+  const searchParams = useSearchParams();
+  const deepLinkSid = searchParams.get("sid");
+  const deepLinkApplied = useRef(false);
+
+  useEffect(() => {
+    if (!deepLinkSid || deepLinkApplied.current) return;
+    if (sessions.length === 0) return; // wait until sessions load
+    deepLinkApplied.current = true;
+    // Check if the session exists in the loaded sessions
+    const found = sessions.find((s) => s.session_id === deepLinkSid);
+    if (found) {
+      setSelected(deepLinkSid);
+      // If the session is historical (not active/daemon), expand the historical section
+      if (!isActiveSession(found) && !isDaemonSession(found)) {
+        setShowHistorical(true);
+      }
+    } else {
+      // Session not in current list — try to rehydrate and select anyway
+      setSelected(deepLinkSid);
+      setShowHistorical(true);
+    }
+  }, [deepLinkSid, sessions, setSelected]);
 
   const isVpSelected = /^vp_/i.test((selected || "").trim());
 

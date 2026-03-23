@@ -129,6 +129,7 @@ export default function MailPage() {
   const [msgsLoading, setMsgsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draftSending, setDraftSending] = useState<string | null>(null);
+  const [deletingThread, setDeletingThread] = useState<string | null>(null);
   const deepLinkHandled = useRef(false);
 
   /* ── Fetchers ─── */
@@ -218,6 +219,32 @@ export default function MailPage() {
       setDraftSending(null);
     }
   }, [fetchDrafts]);
+
+  const deleteThread = useCallback(async (thread: Thread) => {
+    if (!confirm(`Delete thread "${thread.subject || '(no subject)'}"?`)) return;
+    setDeletingThread(thread.thread_id);
+    try {
+      const params = new URLSearchParams();
+      params.set("inbox_id", thread.inbox_id);
+      const res = await fetch(
+        `${API_BASE}/api/v1/ops/agentmail/threads/${thread.thread_id}?${params}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`delete ${res.status}`);
+      // Remove from local state
+      setThreads((prev) => prev.filter((t) => t.thread_id !== thread.thread_id));
+      // Clear reader if we deleted the selected thread
+      if (selectedThread?.thread_id === thread.thread_id) {
+        setSelectedThread(null);
+        setThreadMessages([]);
+      }
+    } catch (e) {
+      console.error("Failed to delete thread", e);
+      alert("Failed to delete thread — see console.");
+    } finally {
+      setDeletingThread(null);
+    }
+  }, [selectedThread]);
 
   /* ── Effects ─── */
   useEffect(() => {
@@ -536,7 +563,9 @@ export default function MailPage() {
                   key={`${t.inbox_id}-${t.thread_id}`}
                   thread={t}
                   selected={selectedThread?.thread_id === t.thread_id}
+                  deleting={deletingThread === t.thread_id}
                   onClick={() => fetchThreadMessages(t)}
+                  onDelete={() => deleteThread(t)}
                 />
               ))
             )}
@@ -727,108 +756,141 @@ function SectionTitle({
 function ThreadRow({
   thread,
   selected,
+  deleting,
   onClick,
+  onDelete,
 }: {
   thread: Thread;
   selected: boolean;
+  deleting?: boolean;
   onClick: () => void;
+  onDelete: () => void;
 }) {
+  const [hovered, setHovered] = useState(false);
   return (
-    <button
-      onClick={onClick}
+    <div
       style={{
-        width: "100%",
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 12,
-        padding: "12px 14px",
-        background: selected ? TOKENS.cyanDim : "transparent",
-        border: "none",
-        borderLeft: selected
-          ? `3px solid ${TOKENS.cyan}`
-          : "3px solid transparent",
-        textAlign: "left",
-        cursor: "pointer",
-        transition: "all 0.12s",
+        position: "relative",
         marginBottom: 2,
+        opacity: deleting ? 0.4 : 1,
+        transition: "opacity 0.2s",
       }}
-      onMouseEnter={(e) => {
-        if (!selected)
-          (e.currentTarget as HTMLElement).style.background = TOKENS.surfaceLow;
-      }}
-      onMouseLeave={(e) => {
-        if (!selected)
-          (e.currentTarget as HTMLElement).style.background = "transparent";
-      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      {/* Avatar or Inbox Badge */}
-      {getAvatar(thread.inbox_id) ? (
-        <Image
-          src={getAvatar(thread.inbox_id)!.src}
-          alt={getAvatar(thread.inbox_id)!.alt}
-          width={28}
-          height={28}
-          style={{ borderRadius: 0, objectFit: "cover", flexShrink: 0, marginTop: 2 }}
-        />
-      ) : (
-        <span
-          style={{
-            fontFamily: TOKENS.fontMono,
-            fontSize: 9,
-            fontWeight: 700,
-            padding: "2px 6px",
-            background: TOKENS.surfaceHigh,
-            color: TOKENS.textSecondary,
-            whiteSpace: "nowrap",
-            marginTop: 2,
-            letterSpacing: "0.05em",
-          }}
-        >
-          {inboxShortName(thread.inbox_id).toUpperCase()}
-        </span>
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: TOKENS.textPrimary,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {thread.subject || "(no subject)"}
-        </div>
-        {thread.preview && (
+      <button
+        onClick={onClick}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 12,
+          padding: "12px 14px",
+          background: selected ? TOKENS.cyanDim : hovered ? TOKENS.surfaceLow : "transparent",
+          border: "none",
+          borderLeft: selected
+            ? `3px solid ${TOKENS.cyan}`
+            : "3px solid transparent",
+          textAlign: "left",
+          cursor: "pointer",
+          transition: "all 0.12s",
+        }}
+      >
+        {/* Avatar or Inbox Badge */}
+        {getAvatar(thread.inbox_id) ? (
+          <Image
+            src={getAvatar(thread.inbox_id)!.src}
+            alt={getAvatar(thread.inbox_id)!.alt}
+            width={28}
+            height={28}
+            style={{ borderRadius: 0, objectFit: "cover", flexShrink: 0, marginTop: 2 }}
+          />
+        ) : (
+          <span
+            style={{
+              fontFamily: TOKENS.fontMono,
+              fontSize: 9,
+              fontWeight: 700,
+              padding: "2px 6px",
+              background: TOKENS.surfaceHigh,
+              color: TOKENS.textSecondary,
+              whiteSpace: "nowrap",
+              marginTop: 2,
+              letterSpacing: "0.05em",
+            }}
+          >
+            {inboxShortName(thread.inbox_id).toUpperCase()}
+          </span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontSize: 12,
-              color: TOKENS.textMuted,
+              fontSize: 13,
+              fontWeight: 600,
+              color: TOKENS.textPrimary,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              marginTop: 2,
             }}
           >
-            {thread.preview}
+            {thread.subject || "(no subject)"}
           </div>
-        )}
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            marginTop: 4,
-            fontFamily: TOKENS.fontMono,
-            fontSize: 10,
-            color: TOKENS.textMuted,
-          }}
-        >
-          <span>{thread.message_count} msg{thread.message_count !== 1 && "s"}</span>
-          <span>{timeAgo(thread.updated_at || thread.created_at)}</span>
+          {thread.preview && (
+            <div
+              style={{
+                fontSize: 12,
+                color: TOKENS.textMuted,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                marginTop: 2,
+              }}
+            >
+              {thread.preview}
+            </div>
+          )}
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              marginTop: 4,
+              fontFamily: TOKENS.fontMono,
+              fontSize: 10,
+              color: TOKENS.textMuted,
+            }}
+          >
+            <span>{thread.message_count} msg{thread.message_count !== 1 && "s"}</span>
+            <span>{timeAgo(thread.updated_at || thread.created_at)}</span>
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+      {/* Trash icon — bottom-right on hover */}
+      {hovered && !deleting && (
+        <span
+          className="material-symbols-outlined"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete thread"
+          style={{
+            position: "absolute",
+            bottom: 8,
+            right: 10,
+            fontSize: 16,
+            color: TOKENS.textMuted,
+            cursor: "pointer",
+            padding: 2,
+            transition: "color 0.15s",
+            zIndex: 2,
+          }}
+          onMouseEnter={(e) => { (e.target as HTMLElement).style.color = TOKENS.red; }}
+          onMouseLeave={(e) => { (e.target as HTMLElement).style.color = TOKENS.textMuted; }}
+        >
+          delete
+        </span>
+      )}
+    </div>
   );
 }
 

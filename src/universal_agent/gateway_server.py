@@ -17787,7 +17787,7 @@ async def ops_agentmail_threads(request: Request):
     try:
         inbox_id = request.query_params.get("inbox_id")
         label = request.query_params.get("label")
-        limit = min(100, max(1, int(request.query_params.get("limit", "50"))))
+        limit = min(200, max(1, int(request.query_params.get("limit", "100"))))
         if inbox_id:
             threads = await _agentmail_service.list_threads(inbox_id=inbox_id, label=label, limit=limit)
         else:
@@ -17815,6 +17815,22 @@ async def ops_agentmail_thread_messages(request: Request, thread_id: str):
     except Exception as exc:
         logger.warning("ops_agentmail_thread_messages failed for thread=%s: %s", thread_id, exc)
         raise HTTPException(status_code=404, detail=f"Thread not found or API error: {exc}")
+
+
+@app.delete("/api/v1/ops/agentmail/threads/{thread_id}")
+async def ops_agentmail_delete_thread(request: Request, thread_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    inbox_id = request.query_params.get("inbox_id")
+    if not inbox_id:
+        raise HTTPException(status_code=400, detail="inbox_id query parameter is required")
+    try:
+        result = await _agentmail_service.delete_thread(inbox_id=inbox_id, thread_id=thread_id)
+        return {"ok": True, **result}
+    except Exception as exc:
+        logger.warning("ops_agentmail_delete_thread failed thread=%s inbox=%s: %s", thread_id, inbox_id, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to delete thread: {exc}")
 
 
 @app.get("/api/v1/ops/agentmail/drafts")
