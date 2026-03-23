@@ -597,6 +597,8 @@ class AgentSetup:
                     "browserbase",
                     "playwright",
                     "chrome",
+                    "live-chrome",
+                    "cdp",
                 ],
                 "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "csi-trend-analyst", "professor", "scribe"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],

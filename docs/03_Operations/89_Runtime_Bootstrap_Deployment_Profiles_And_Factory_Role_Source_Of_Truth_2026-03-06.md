@@ -135,6 +135,34 @@ Typical sources:
 - `environment`
 - `none` on strict-mode failure path
 
+### Bootstrap Success Is Not a Permanence Guarantee
+
+Runtime bootstrap establishes process state at initialization time. It does not,
+by itself, guarantee that later code will preserve that state.
+
+This matters operationally because some subsystems read secrets directly from the
+current process environment after startup. For example,
+`src/universal_agent/youtube_ingest.py` reads `PROXY_USERNAME` and
+`PROXY_PASSWORD` from `os.environ` when building the Webshare proxy
+configuration.
+
+During the 2026-03-23 tutorial-pipeline incident, the production VPS did
+bootstrap successfully, but later runtime code in
+`src/universal_agent/execution_engine.py` mutated the parent `os.environ` while
+preparing a sanitized child-process environment for Claude SDK subprocess
+spawn.
+
+The corrected contract is:
+
+1. child-process env sanitization is allowed
+2. parent-process runtime secrets must be restored immediately after child spawn
+3. long-running service code must not treat process-global `os.environ` as a
+   disposable scratch buffer
+
+When a fresh process can bootstrap secrets correctly but a live service later
+behaves as if secrets are missing, treat that as a likely post-bootstrap runtime
+mutation bug rather than a bootstrap-only problem.
+
 ## 3. Factory Role Resolution and Runtime Policy
 
 Primary implementation:

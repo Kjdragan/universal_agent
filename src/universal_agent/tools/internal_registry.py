@@ -6,6 +6,7 @@ This module provides a single source of truth for:
 2. The list of tool names (slugs) for documentation and discovery.
 """
 
+import os
 from typing import List, Callable, Any
 
 # Research Bridge Tools
@@ -76,6 +77,9 @@ from universal_agent.tools.vp_orchestration import (
     vp_wait_mission_wrapper,
 )
 
+# Live Chrome Bridge (CDP session attachment) — feature-gated
+from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
+
 
 def get_core_internal_tools() -> List[Callable]:
     """
@@ -130,6 +134,15 @@ def get_memory_tools() -> List[Callable]:
     """
     return [memory_get_wrapper, memory_search_wrapper]
 
+def get_live_chrome_tools() -> List[Callable]:
+    """
+    Return the Live Chrome CDP tools if the feature flag is enabled.
+    """
+    if os.getenv("UA_ENABLE_LIVE_CHROME", "0") == "1":
+        return list(LIVE_CHROME_TOOLS)
+    return []
+
+
 def get_all_internal_tools(enable_memory: bool = False) -> List[Callable]:
     """
     Return the complete list of internal tool wrappers based on configuration.
@@ -137,6 +150,7 @@ def get_all_internal_tools(enable_memory: bool = False) -> List[Callable]:
     tools = get_core_internal_tools()
     if enable_memory:
         tools.extend(get_memory_tools())
+    tools.extend(get_live_chrome_tools())
     return tools
 
 def get_internal_tool_slugs(enable_memory: bool = False) -> List[str]:

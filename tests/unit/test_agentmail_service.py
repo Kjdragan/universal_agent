@@ -70,10 +70,13 @@ def mock_agentmail_client():
     mock_thread.labels = []
     mock_thread.message_count = 2
     mock_thread.created_at = "2026-03-03T00:00:00Z"
+    mock_thread.updated_at = "2026-03-03T01:00:00Z"
+    mock_thread.messages = [mock_msg]
 
     mock_threads_list = MagicMock()
     mock_threads_list.threads = [mock_thread]
     client.inboxes.threads.list = AsyncMock(return_value=mock_threads_list)
+    client.threads.get = AsyncMock(return_value=mock_thread)
 
     return client
 
@@ -254,6 +257,90 @@ class TestListThreads:
         threads = await service.list_threads()
         assert len(threads) == 1
         assert threads[0]["thread_id"] == "thd_test_001"
+
+    @pytest.mark.asyncio
+    async def test_list_all_threads_returns_partial_when_one_inbox_times_out(
+        self,
+        service,
+        mock_agentmail_client,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("UA_AGENTMAIL_INBOX_ADDRESSES", "simone@testdomain.com,alert@testdomain.com")
+        monkeypatch.setenv("UA_AGENTMAIL_READ_TIMEOUT_SECONDS", "1")
+        service._inbox_ids = ["simone@testdomain.com", "alert@testdomain.com"]
+
+        good_thread = MagicMock()
+        good_thread.thread_id = "thd_fast_001"
+        good_thread.subject = "Fast Thread"
+        good_thread.preview = "ok"
+        good_thread.labels = []
+        good_thread.senders = ["kevin@example.com"]
+        good_thread.recipients = ["simone@testdomain.com"]
+        good_thread.message_count = 1
+        good_thread.created_at = "2026-03-04T00:00:00Z"
+        good_thread.updated_at = "2026-03-04T00:00:01Z"
+
+        async def _list_threads(*, inbox_id: str, **kwargs):
+            if inbox_id == "alert@testdomain.com":
+                await asyncio.sleep(2)
+            rows = MagicMock()
+            rows.threads = [good_thread]
+            return rows
+
+        mock_agentmail_client.inboxes.threads.list.side_effect = _list_threads
+
+        result = await service.list_all_threads_detailed(limit=10)
+
+        assert result["partial"] is True
+        assert result["threads"][0]["thread_id"] == "thd_fast_001"
+        assert result["errors"] == [
+            {
+                "inbox_id": "alert@testdomain.com",
+                "error": "agentmail_threads_list_timed_out (alert@testdomain.com) after 1.0s",
+            }
+        ]
+
+
+class TestListDrafts:
+    @pytest.mark.asyncio
+    async def test_list_drafts_returns_partial_when_one_inbox_times_out(
+        self,
+        service,
+        mock_agentmail_client,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("UA_AGENTMAIL_INBOX_ADDRESSES", "simone@testdomain.com,alert@testdomain.com")
+        monkeypatch.setenv("UA_AGENTMAIL_READ_TIMEOUT_SECONDS", "1")
+        service._inbox_ids = ["simone@testdomain.com", "alert@testdomain.com"]
+
+        good_draft = MagicMock()
+        good_draft.draft_id = "drf_fast_001"
+        good_draft.to = "kevin@example.com"
+        good_draft.subject = "Fast Draft"
+        good_draft.text = "Draft body"
+        good_draft.send_status = None
+        good_draft.send_at = ""
+        good_draft.created_at = "2026-03-04T00:00:00Z"
+
+        async def _list_drafts(*, inbox_id: str, **kwargs):
+            if inbox_id == "alert@testdomain.com":
+                await asyncio.sleep(2)
+            rows = MagicMock()
+            rows.drafts = [good_draft]
+            return rows
+
+        mock_agentmail_client.inboxes.drafts.list.side_effect = _list_drafts
+
+        result = await service.list_drafts_detailed(limit=10)
+
+        assert result["partial"] is True
+        assert result["drafts"][0]["draft_id"] == "drf_fast_001"
+        assert result["errors"] == [
+            {
+                "inbox_id": "alert@testdomain.com",
+                "error": "agentmail_drafts_list_timed_out (alert@testdomain.com) after 1.0s",
+            }
+        ]
 
 
 class TestStatus:
@@ -1164,5 +1251,3 @@ class TestBounceFilteringInHandleInbound:
 
         await service._handle_inbound_email(_Event())
         assert service._seen_message_id("msg_bounce_seen_001") is True
-
-

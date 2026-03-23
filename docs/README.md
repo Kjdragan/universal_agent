@@ -74,6 +74,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[OpenClaw Release Sync Pipeline (2026-03-20)](03_Operations/100_OpenClaw_Release_Sync_Pipeline.md)**: Biweekly automated pipeline — Stage 1 release scanner fetches OpenClaw releases, Stage 2 VP sync agent analyzes features for adoption. Reports saved to `Openclaw Sync Discoveries/`.
 - [VP Agent Identity & Prompt Architecture (2026-03-21)](03_Operations/101_VP_Agent_Identity_And_Prompt_Architecture_2026-03-21.md): Canonical reference for VP agent identities (CODIE & ATLAS), soul files, streamlined VP system prompt, mission briefing injection, sub-agent capability, and prompt size logging.
 - **[E2BIG Kernel Limits and Prompt Architecture (2026-03-22)](03_Operations/102_E2BIG_Kernel_Limits_And_Prompt_Architecture_2026-03-22.md)**: Architectural boundary constraints regarding kernel execution limits (`MAX_ARG_STRLEN`), prompt density formatting, and strategies to prevent subprocess prompt float.
+- **[Debugging Lessons Living Document (2026-03-23)](03_Operations/103_Debugging_Lessons_Living_Document.md)**: Living collection of reusable debugging lessons from complex incidents, including target-host verification, fresh-process versus live-service checks, and post-bootstrap env-mutation failures.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 
@@ -81,7 +82,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Local Runtime Modes](06_Deployment_And_Environments/05_Local_Runtime_Modes.md)**: Canonical split between HQ dev and the separate desktop worker lane.
 - **[Production Deploy Incident (2026-03-12)](06_Deployment_And_Environments/06_Production_Deploy_Incident_2026-03-12.md)**: Root cause, fix, verification, and prevention notes for the March 12 production `.venv` deployment regression.
 - **[Stage-Based Infisical and Machine Bootstrap Migration Plan (2026-03-12)](06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)**: Living migration record for stage environments, machine-local bootstrap identity, and CI/CD runtime validation.
-- **[VPS Deployment Profile Stuck at local_workstation (2026-03-23)](06_Deployment_And_Environments/08_VPS_Deployment_Profile_Stuck_At_Local_Workstation_2026-03-23.md)**: Incident handoff for the YouTube ingest proxy failure, root-cause analysis of unmanaged base systemd units, and the repo-managed deploy fix.
+- **[VPS Deployment Profile Stuck at local_workstation (2026-03-23)](06_Deployment_And_Environments/08_VPS_Deployment_Profile_Stuck_At_Local_Workstation_2026-03-23.md)**: Final incident record for the tutorial ingest outage — wrong-host false lead, interim infrastructure hypotheses, and the actual runtime env-sanitization fix in the gateway.
 
 ### 4B. [Deployment Canonical Docs](deployment)
 

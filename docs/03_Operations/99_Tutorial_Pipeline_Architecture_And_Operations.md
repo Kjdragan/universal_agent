@@ -246,3 +246,64 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `/api/v1/dashboard/tutorials/bootstrap-jobs` | GET | Repo bootstrap job status |
 | `/api/v1/hooks/youtube/dispatch` | POST | Manually trigger a tutorial dispatch |
 | `/api/v1/hooks/youtube/retry` | POST | Retry a failed hook |
+
+---
+
+## 10. Proxy Failure Semantics and Debugging Notes
+
+The VPS fallback path in `src/universal_agent/youtube_ingest.py` builds its
+Webshare configuration from the **current process environment** inside
+`_build_webshare_proxy_config()`.
+
+The relevant variables are:
+
+- `PROXY_USERNAME` or `WEBSHARE_PROXY_USER`
+- `PROXY_PASSWORD` or `WEBSHARE_PROXY_PASS`
+- optional host, port, and location filters
+
+### What `proxy_not_configured` Actually Means
+
+`proxy_not_configured` does **not** always mean "Infisical never had the
+secret."
+
+It specifically means `_build_webshare_proxy_config()` could not find a usable
+username/password pair in the current gateway process at request time.
+
+That can happen for multiple reasons:
+
+1. Infisical bootstrap failed or never ran
+2. the wrong deployment profile allowed degraded fallback startup
+3. secret names or aliases are inconsistent
+4. later runtime code mutated `os.environ` and removed the proxy vars from the
+   live process after bootstrap
+
+### Live Service vs Fresh Process Matters
+
+During the 2026-03-23 production incident, a fresh process on the VPS could
+bootstrap proxy secrets successfully while the long-running gateway process was
+still returning:
+
+- `error = "proxy_not_configured"`
+- `proxy_mode = "disabled"`
+
+That narrowed the fault to **post-bootstrap runtime mutation**, not secret
+storage alone.
+
+The final fix lived in `src/universal_agent/execution_engine.py`:
+
+- child-process env sanitization remains in place for Claude SDK subprocess
+  spawn
+- the parent gateway env is now restored immediately afterward
+- the main `process_turn()` path no longer strips proxy credentials from the
+  live service
+
+### Operational Rule
+
+When investigating tutorial ingest failures, compare:
+
+1. the live HTTP endpoint behavior on the target host
+2. a fresh one-off bootstrap process on that same host
+
+If those disagree, inspect runtime code that mutates `os.environ` after
+bootstrap. Do not assume a successful fresh bootstrap proves the long-running
+service still has the same environment later.

@@ -32,7 +32,7 @@ wheels = [
 
 [[package]]
 name = "agentmail"
-version = "0.4.5"
+version = "0.4.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -41,9 +41,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/b4/46b2658a713300a029537b603d69ebf8a49468debf22eb531b250ab78bdc/agentmail-0.4.5.tar.gz", hash = "sha256:71d2bfe8909f8a9c5695531ec4312f6459eb8b3a947ff32e0a4bfc20ee16202e", size = 101200, upload-time = "2026-03-10T11:35:55.057Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/73/54af0dbdc5181589bbf4f19b06c25ab89bea687b5ca14a8843f2bbd52518/agentmail-0.4.12.tar.gz", hash = "sha256:e42d1591f2b05b16b959d1a5bbbb2ee73e29199f84572079088503930b8755fe", size = 105198, upload-time = "2026-03-23T20:16:48.617Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/fe/1084f609ef8cf9eaa7009a4c0f23569f442fd43173efde4fe408db6847d1/agentmail-0.4.5-py3-none-any.whl", hash = "sha256:1993e569f20bf14d7777907438bde82d3716dc65abbdd4e9f0e8efc0779f230b", size = 223074, upload-time = "2026-03-10T11:35:53.674Z" },
+    { url = "https://files.pythonhosted.org/packages/92/14/3ac79459d57eb7063c0cd0438d14aaa8206d9340e2e39819d25776beaca5/agentmail-0.4.12-py3-none-any.whl", hash = "sha256:7cb33d962a02bcfe259f3d2f31f85950efb586e9e909f27adb14b5710443cfc9", size = 231804, upload-time = "2026-03-23T20:16:47.085Z" },
 ]
 
 [[package]]

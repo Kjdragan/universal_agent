@@ -2,291 +2,234 @@
 
 ## Purpose
 
-This note explains a production failure in the YouTube tutorial ingest path that initially appeared to be a VPS deployment-profile problem and later proved to be a proxy-credential problem on the real VPS host.
+This incident note records the full debugging arc for the YouTube tutorial
+pipeline outage that initially appeared to be a VPS deployment-profile failure
+and ultimately resolved as a runtime environment-mutation bug in the gateway.
 
-This document is intended as a handoff summary for another AI coder or operator so they can understand:
+This document exists to preserve:
 
-1. what was broken
-2. what part of the earlier diagnosis was wrong
-3. what code and deployment changes were still worth keeping
-4. what the actual remaining production issue is
-5. how to verify the real fix
+1. the false leads that consumed time
+2. the final, code-verified root cause
+3. the fix that restored production
+4. the operational lessons that should influence future debugging
 
-## Update (2026-03-23 14:09 CDT)
+## Final Status
 
-The original version of this document diagnosed the wrong machine.
+Resolved.
 
-Earlier curls were sent to `100.95.187.38:8002`, which is Kevin's Tailscale desktop host (`mint-desktop`), not the production VPS. The real production VPS is `100.106.113.93`.
+The production tutorial ingest path on the real VPS now succeeds with:
 
-That means:
+- `deployment_profile.profile = "vps"`
+- `worker_profile = "vps"`
+- `proxy_mode = "webshare"`
+- successful transcript retrieval from `/api/v1/youtube/ingest`
 
-1. `deployment_profile=local_workstation` on `100.95.187.38` was expected and correct
-2. the production VPS was already reporting `deployment_profile=vps`
-3. the earlier "VPS profile stuck at local_workstation" conclusion was based on the wrong host
+## What Actually Happened
 
-The systemd-template hardening work described below is still good and worth keeping, but it is **not** the primary fix for the current `proxy_not_configured` symptom on production.
+This incident had three distinct layers:
 
-## Correct Host Mapping
+1. an early host-targeting mistake
+2. several plausible but incomplete infrastructure hypotheses
+3. a real runtime bug in the gateway process
+
+### 1. We Initially Tested the Wrong Host
+
+The first health and ingest checks were sent to `100.95.187.38:8002`, which is
+Kevin's Tailscale desktop host (`mint-desktop`), not the production VPS.
+
+Correct mapping:
 
 | IP | Identity | Machine | Expected profile |
 |---|---|---|---|
-| `100.95.187.38` | `mint-desktop` | Kevin's local desktop | `local_workstation` |
-| `100.106.113.93` | `srv1360701` | Actual production VPS | `vps` |
+| `100.95.187.38` | `mint-desktop` | Kevin's desktop | `local_workstation` |
+| `100.106.113.93` | `srv1360701` | Production VPS | `vps` |
 
-## Current Production Symptom
+That means the original observation:
 
-On the real VPS (`100.106.113.93`), the production gateway health endpoint returns:
+- `deployment_profile.profile = "local_workstation"`
 
-- `deployment_profile.profile = "vps"`
+was true for the desktop, but irrelevant to the production VPS.
 
-The YouTube ingest endpoint returned:
+### 2. Some Interim Theories Were Directionally Useful but Not the Root Cause
 
-- `error = "proxy_not_configured"`
-- `proxy_mode = "disabled"`
-- `worker_profile = "vps"`
+During the investigation, several theories were reasonable enough to test:
 
-That means the deployment profile is now correct, but the proxy path is still failing.
+- unmanaged systemd unit drift
+- early `.env` load timing
+- deployment-profile refresh timing
+- proxy credential mismatch
 
-## What Was Verified on the Real VPS
+Some of that work was still worthwhile. In particular, the repo-managed systemd
+unit templates and deploy installer remain good deployment hardening. But they
+did not explain the final production symptom.
 
-These checks were run against `100.106.113.93`:
+### 3. The Real Production Root Cause Was Parent-Process Env Sanitization
 
-1. `systemctl cat universal-agent-gateway.service` showed:
-   - `WorkingDirectory=/opt/universal_agent`
-   - `EnvironmentFile=/opt/universal_agent/.env`
-   - `ExecStart=/opt/universal_agent/.venv/bin/python3 -m universal_agent.gateway_server`
-2. gateway startup logs showed:
-   - `Infisical runtime secret bootstrap succeeded: profile=vps env=production ... loaded=192`
-   - `Lifespan: deployment profile resolved to vps`
-3. a fresh standalone bootstrap process on the VPS successfully fetched proxy secrets from Infisical
-4. `_build_webshare_proxy_config()` succeeded in a fresh process after bootstrap
-5. `scripts/check_webshare_proxy.py --json` failed with `407 Proxy Authentication Required`
+The final root cause lived in
+`src/universal_agent/execution_engine.py`.
 
-One important debugging note:
-
-- `/proc/<pid>/environ` is **not** a reliable indicator of Python `os.environ` mutations performed after process start in this environment, so the earlier check for missing `PROXY_*` inside `/proc/.../environ` should not be treated as proof that the running process lacked them at runtime.
-
-## Why the Proxy Path Is Still Broken
-
-`src/universal_agent/youtube_ingest.py` builds the proxy config from runtime environment variables:
+The gateway bootstraps runtime secrets through Infisical, which populates
+runtime values such as:
 
 - `PROXY_USERNAME`
 - `PROXY_PASSWORD`
 
-Those values are expected to arrive through Infisical bootstrap. The runtime bootstrap behavior depends on `UA_DEPLOYMENT_PROFILE`:
+The YouTube ingest path in `src/universal_agent/youtube_ingest.py` reads those
+values directly from the current process environment in
+`_build_webshare_proxy_config()`.
 
-- `vps` -> strict mode, fail closed if Infisical cannot be loaded
-- `local_workstation` -> non-strict mode, allow degraded fallback
+The bug was that `sanitize_env_for_subprocess()` modifies `os.environ` in place,
+and that sanitization was being applied too broadly inside the long-running
+gateway process.
 
-On the real VPS, the current evidence shows that Infisical bootstrap is working in a fresh process and that the remaining failure is downstream of secret retrieval.
+Two code paths mattered:
 
-## Actual Root Cause on Production
+1. `ProcessTurnAdapter._ensure_client()`
+2. `ProcessTurnAdapter.execute()`
 
-The current production blocker is an invalid Webshare rotating username, not a broken deployment profile.
+The child Claude SDK subprocess genuinely needed a reduced environment to avoid
+`E2BIG` during spawn, but the parent gateway process needed to keep its
+Infisical-loaded runtime secrets intact after that child was created.
 
-Verified facts from a fresh VPS bootstrap process:
+Before the fix, the sanitization path could strip proxy credentials from the
+live gateway process itself. Once that happened, the ingest endpoint could no
+longer build a Webshare proxy config and returned:
 
-- `PROXY_USERNAME` is present
-- `PROXY_PASSWORD` is present
-- `WEBSHARE_PROXY_HOST` is `p.webshare.io`
-- `WEBSHARE_PROXY_PORT` is `80`
-- Webshare probe fails with `407 Proxy Authentication Required`
-- `PROXY_USERNAME` does **not** end with `-rotate`
-- `WEBSHARE_PROXY_USER` does not match `PROXY_USERNAME`
+- `error = "proxy_not_configured"`
+- `proxy_mode = "disabled"`
 
-That is consistent with the repository's Webshare documentation, which explicitly says the rotating residential username must include the `-rotate` suffix.
+even though a fresh process on the same VPS could still bootstrap secrets
+successfully.
 
-In other words:
+## Code-Verified Root Cause
 
-1. the real VPS is in `vps` mode
-2. a fresh VPS bootstrap process receives proxy secrets
-3. the secret values currently fetched from Infisical are not valid for Webshare rotating residential auth
+The relevant behavior is now:
 
-## Why `proxy_not_configured` Still Appeared
+- `sanitize_env_for_subprocess()` still strips the subprocess environment down
+  to a safe whitelist for Claude CLI spawn
+- `_temporary_sanitized_process_env()` snapshots and restores the parent
+  `os.environ`
+- `ProcessTurnAdapter._ensure_client()` uses that temporary sanitization only
+  around `SubprocessCLITransport.connect()`
+- `ProcessTurnAdapter.execute()` no longer re-sanitizes the parent environment
+  before `process_turn()`
 
-The remaining oddity is that the live HTTP endpoint still returned `proxy_mode="disabled"` while a fresh VPS bootstrap process could build a Webshare proxy config successfully.
+This preserves the `E2BIG` mitigation for child-process spawn while preventing
+the gateway from losing runtime secrets needed by other features.
 
-The most likely explanation is:
+## What Was Fixed
 
-1. the long-running gateway process is stale relative to the latest proxy-secret state
-2. a service restart is needed after correcting the proxy secrets
+### Code Fix
 
-This is an inference from the evidence, not a directly proven code path.
+Updated:
 
-## Why the Earlier Fixes Did Not Solve It
+- `src/universal_agent/execution_engine.py`
 
-Three earlier fixes targeted the Python process:
+Behavioral change:
 
-1. refreshing `_DEPLOYMENT_PROFILE` during FastAPI lifespan
-2. adding a production `Environment=` drop-in
-3. loading `.env` early at import time
+1. child-process env sanitization is now scoped to the actual SDK subprocess
+   spawn window
+2. the parent gateway environment is restored immediately afterward
+3. the main `process_turn()` execution path no longer strips runtime secrets out
+   of the live gateway process
 
-Those changes targeted deployment identity and service ownership. They did not and could not repair an invalid Webshare credential value.
+### Regression Coverage
 
-They also appeared more important than they really were because the initial health checks were sent to Kevin's desktop instead of the VPS.
+Added and updated:
 
-## What Part of the Earlier Diagnosis Still Matters
+- `tests/gateway/test_env_sanitization.py`
 
-The earlier systemd ownership diagnosis was not the root cause of the current production proxy failure, but the code changes are still worth keeping.
+The tests now verify:
 
-Why it still matters:
+1. the spawn-time child env is sanitized
+2. the parent env is restored after SDK client initialization
+3. `process_turn()` still sees proxy credentials such as `PROXY_USERNAME` and
+   `PROXY_PASSWORD`
 
-1. the repo previously did not own the base application service units
-2. repo-managed units are still the right deploy contract
-3. production can deploy to `/opt/universal_agent` or fallback `/opt/universal_agent_repo`
-4. rendering unit files from templates is still better than relying on undocumented host-local service definitions
+### Temporary Diagnostics During the Incident
 
-## What Was Changed
+A short-lived ops-authenticated debug route was added to verify proxy-env
+presence inside the running gateway process and then removed after the incident
+was resolved.
 
-The code changes made in response to the earlier diagnosis are still sound deployment hardening.
+That temporary route is no longer present in production.
 
-### 1. Added canonical systemd templates
+## What Was Kept Even Though It Was Not the Final Fix
 
-New templates were added under:
+The repo-managed systemd unit work remains valid and should stay:
 
-- `deployment/systemd/templates/universal-agent-gateway.service.template`
-- `deployment/systemd/templates/universal-agent-api.service.template`
-- `deployment/systemd/templates/universal-agent-webui.service.template`
-- `deployment/systemd/templates/universal-agent-telegram.service.template`
-
-These templates make the service definition part of versioned source control.
-
-### 2. Added a renderer/installer script
-
-New script:
-
+- base service unit templates under `deployment/systemd/templates/`
 - `scripts/install_vps_systemd_units.sh`
+- deploy workflow updates that install canonical units from the repo
 
-This script:
+Reason:
 
-1. accepts `--lane production|staging`
-2. accepts `--app-root <checkout>`
-3. renders the templates against the actual active checkout path
-4. installs the units into `/etc/systemd/system`
-5. installs the gateway/API stack-limit drop-ins
-6. runs `systemctl daemon-reload`
-7. enables the rendered units
+Even though those changes were not the root fix for this incident, they still
+reduce service-definition drift between deploy-time expectations and live host
+state.
 
-This matters because production can deploy to either:
+## Verification That Closed the Incident
 
-- `/opt/universal_agent`
-- `/opt/universal_agent_repo`
+The incident was considered resolved only after all of the following were true
+on the real VPS:
 
-and the unit definitions now follow the real checkout path instead of assuming one hardcoded host state.
+1. the service was running on `100.106.113.93`
+2. `/api/v1/health` returned `deployment_profile.profile = "vps"`
+3. the temporary debug instrumentation confirmed the live gateway still had
+   access to proxy env values after request handling began
+4. `POST /api/v1/youtube/ingest` succeeded for the failing YouTube video
+5. the response reported `proxy_mode = "webshare"`
+6. the temporary debug route was removed and the ingest endpoint still worked
 
-### 3. Updated production deploy
+## Why Earlier Checks Were Misleading
 
-`.github/workflows/deploy-prod.yml` now installs the canonical production units from repo templates before restarting services.
+### Wrong-Host Checks
 
-### 4. Updated staging deploy
+A correct response from the wrong machine is still the wrong evidence.
 
-`.github/workflows/deploy-staging.yml` now installs the canonical staging units from repo templates before restarting services.
+The desktop host correctly reported `local_workstation`, but that fact said
+nothing about the production VPS.
 
-This also removes the prior staging behavior where `universal-agent-staging-webui` might not exist and restart was best-effort only.
+### Fresh Process vs Live Service
 
-### 5. Removed the obsolete production-only drop-in
+A fresh one-off Python process on the VPS could bootstrap proxy secrets even
+while the long-running gateway process was losing them later.
 
-Deleted:
+That distinction was the clue that the problem was not only bootstrap, but also
+post-bootstrap runtime mutation.
 
-- `deployment/systemd/universal-agent-deployment-profile.conf`
+### `/proc/<pid>/environ` Has Limits
 
-That drop-in was an attempted workaround, not the root fix. Once the base unit is repo-managed and loads the checkout `.env` directly, this extra override is unnecessary and confusing.
+For this incident, `/proc/<pid>/environ` was not sufficient evidence about the
+runtime state that application code observed later. The decisive evidence came
+from in-process checks and end-to-end endpoint behavior.
 
-### 6. Updated canonical deployment docs
+## Lasting Lessons
 
-The deployment docs now explicitly state that deploy owns the base systemd units:
+1. Verify the exact target host before building a theory.
+2. Differentiate bootstrap-time state from long-running runtime state.
+3. If a fresh process and a live service disagree, look for state mutation after
+   initialization.
+4. `E2BIG` mitigation must sanitize child-process env only, not the parent
+   service runtime.
+5. Temporary diagnostics are acceptable in a production incident if they are
+   authenticated, minimal, and removed immediately after use.
 
-- `docs/deployment/architecture_overview.md`
-- `docs/deployment/ci_cd_pipeline.md`
+## Files Most Relevant to the Final Fix
 
-## Verification Performed on the Code Changes
-
-The new installer script was verified locally with targeted checks:
-
-1. `bash -n scripts/install_vps_systemd_units.sh`
-2. dry-render production units into a temp directory
-3. dry-render staging units into a temp directory
-
-The rendered units correctly pointed at the supplied checkout root and used:
-
-- checkout `.env` for gateway/API/telegram
-- `web-ui/.env.local` for webui
-
-## Important Note About the Webshare Activity Screen
-
-Seeing successful Webshare traffic in the Webshare dashboard does **not** prove that the broken VPS gateway process had a valid proxy configuration.
-
-It only proves that **some client using the same Webshare account** generated traffic.
-
-That traffic could have come from:
-
-1. a different machine
-2. a local dev process
-3. another service or script
-4. another test path that used Webshare credentials correctly
-
-The failing production symptom was process-specific:
-
-- the gateway process on port `8002`
-- under its own systemd-managed environment
-- during the YouTube ingest request path
-
-So the correct question is not "did Webshare show any traffic?" but "did the specific production gateway process start with the right env and service definition?"
-
-## Recommended Production Fix
-
-The next operator action should be to fix the Webshare credentials stored in Infisical production:
-
-1. set `PROXY_USERNAME` to the rotating username with the `-rotate` suffix
-2. set `WEBSHARE_PROXY_USER` to the same value for alias consistency
-3. confirm `PROXY_PASSWORD` and `WEBSHARE_PROXY_PASS` match the current Webshare dashboard password
-4. keep `WEBSHARE_PROXY_HOST=p.webshare.io`
-5. keep `WEBSHARE_PROXY_PORT=80`
-6. restart `universal-agent-gateway.service`
-
-Based on the repository documentation, the expected username shape is:
-
-- `rotatingproxyua-rotate`
-
-## Post-Fix Verification Checklist
-
-After fixing the secret values and restarting the gateway:
-
-1. query the production health endpoint and confirm `profile = "vps"`
-2. run `scripts/check_webshare_proxy.py --json` on the VPS
-3. confirm the Webshare probe no longer returns `407`
-4. re-run the YouTube ingest request
-5. if the proxy still fails, classify the new error:
-   - `proxy_auth_failed`
-   - `proxy_connect_failed`
-   - `request_blocked`
-   - `proxy_quota_or_billing`
-
-If `proxy_auth_failed` remains after fixing the username suffix and restarting, the remaining likely issue is the password value.
-
-## Files Changed For This Fix
-
-- `.github/workflows/deploy-prod.yml`
-- `.github/workflows/deploy-staging.yml`
-- `deployment/systemd/templates/universal-agent-gateway.service.template`
-- `deployment/systemd/templates/universal-agent-api.service.template`
-- `deployment/systemd/templates/universal-agent-webui.service.template`
-- `deployment/systemd/templates/universal-agent-telegram.service.template`
-- `scripts/install_vps_systemd_units.sh`
-- `docs/deployment/architecture_overview.md`
-- `docs/deployment/ci_cd_pipeline.md`
+- `src/universal_agent/execution_engine.py`
+- `src/universal_agent/youtube_ingest.py`
+- `tests/gateway/test_env_sanitization.py`
+- `docs/03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md`
+- `docs/03_Operations/102_E2BIG_Kernel_Limits_And_Prompt_Architecture_2026-03-22.md`
+- `docs/03_Operations/103_Debugging_Lessons_Living_Document.md`
 
 ## Bottom Line
 
-The investigation had two phases:
+The final outage was not caused by the VPS being stuck in
+`local_workstation`.
 
-1. an initial wrong-host diagnosis that led to useful deployment hardening
-2. the corrected production diagnosis that identified invalid Webshare credentials as the real blocker
-
-The current production issue is:
-
-- the real VPS is in `vps` mode
-- Infisical bootstrap works in a fresh process
-- the current rotating proxy username is wrong for Webshare auth
-
-The deployment/systemd template changes remain worth keeping, but the operator fix needed now is to correct the Webshare secrets and restart the gateway.
+The production VPS was correctly in `vps` mode. The real failure was that the
+gateway's `E2BIG` protection logic mutated the parent process environment and
+stripped away Infisical-loaded proxy secrets that the YouTube ingest path
+needed later.

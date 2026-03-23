@@ -167,6 +167,28 @@ def _ws_reconnect_max() -> float:
         return 120.0
 
 
+def _read_timeout_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("UA_AGENTMAIL_READ_TIMEOUT_SECONDS", "12") or 12))
+    except Exception:
+        return 12.0
+
+
+def _api_timeout_seconds() -> float:
+    try:
+        configured = float(os.getenv("UA_AGENTMAIL_API_TIMEOUT_SECONDS", "30") or 30)
+    except Exception:
+        configured = 30.0
+    return max(_read_timeout_seconds(), max(1.0, configured))
+
+
+def _slow_read_log_threshold_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("UA_AGENTMAIL_SLOW_READ_LOG_SECONDS", "5") or 5))
+    except Exception:
+        return 5.0
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -300,6 +322,7 @@ class AgentMailService:
         self._messages_sent: int = 0
         self._messages_received: int = 0
         self._drafts_created: int = 0
+        self._api_timeout_seconds = _api_timeout_seconds()
         ws_fail_open_statuses_raw = (
             os.getenv("UA_AGENTMAIL_WS_FAIL_OPEN_STATUS_CODES", "401,403,429")
             .strip()
@@ -365,7 +388,7 @@ class AgentMailService:
 
         try:
             from agentmail import AsyncAgentMail
-            self._client = AsyncAgentMail(api_key=api_key)
+            self._client = AsyncAgentMail(api_key=api_key, timeout=self._api_timeout_seconds)
         except Exception as exc:
             logger.error("📧 Failed to initialize AgentMail client: %s", exc)
             self._enabled = False
@@ -608,6 +631,60 @@ class AgentMailService:
         logger.info("📧 Draft sent draft_id=%s", draft_id)
         return {"status": "sent", "draft_id": draft_id}
 
+    async def _await_read(
+        self,
+        awaitable: Coroutine[Any, Any, Any],
+        *,
+        operation: str,
+        target: str = "",
+    ) -> Any:
+        timeout_seconds = _read_timeout_seconds()
+        started = time.monotonic()
+        try:
+            result = await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+            elapsed = time.monotonic() - started
+            if elapsed >= _slow_read_log_threshold_seconds():
+                target_suffix = f" target={target}" if target else ""
+                logger.warning(
+                    "📧 Slow AgentMail read op=%s%s elapsed=%.2fs",
+                    operation,
+                    target_suffix,
+                    elapsed,
+                )
+            return result
+        except asyncio.TimeoutError as exc:
+            target_suffix = f" ({target})" if target else ""
+            raise RuntimeError(
+                f"{operation}_timed_out{target_suffix} after {timeout_seconds:.1f}s"
+            ) from exc
+
+    async def _list_drafts_for_inbox(
+        self,
+        *,
+        inbox_id: str,
+    ) -> list[dict[str, Any]]:
+        drafts = await self._await_read(
+            self._client.inboxes.drafts.list(inbox_id=inbox_id),
+            operation="agentmail_drafts_list",
+            target=inbox_id,
+        )
+        draft_list: list[Any] = list(
+            drafts.drafts if hasattr(drafts, "drafts") else drafts
+        )
+        results: list[dict[str, Any]] = []
+        for d in draft_list:
+            results.append({
+                "draft_id": getattr(d, "draft_id", ""),
+                "inbox_id": inbox_id,
+                "to": getattr(d, "to", ""),
+                "subject": getattr(d, "subject", ""),
+                "text_preview": (getattr(d, "text", "") or "")[:200],
+                "send_status": getattr(d, "send_status", None),
+                "send_at": str(getattr(d, "send_at", "") or ""),
+                "created_at": str(getattr(d, "created_at", "")),
+            })
+        return results
+
     async def list_drafts(
         self,
         *,
@@ -615,32 +692,40 @@ class AgentMailService:
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         """List drafts across one or all inboxes."""
+        result = await self.list_drafts_detailed(inbox_id=inbox_id, limit=limit)
+        return result["drafts"]
+
+    async def list_drafts_detailed(
+        self,
+        *,
+        inbox_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List drafts with partial-result metadata when some inboxes fail."""
         self._assert_ready()
         target_ids = [inbox_id] if inbox_id else (self._inbox_ids or [self._inbox_id])
+        active_ids = [iid for iid in target_ids if iid]
+        if not active_ids:
+            return {"drafts": [], "partial": False, "errors": []}
+
+        inbox_results = await asyncio.gather(
+            *(self._list_drafts_for_inbox(inbox_id=iid) for iid in active_ids),
+            return_exceptions=True,
+        )
         results: list[dict[str, Any]] = []
-        for iid in target_ids:
-            if not iid:
+        errors: list[dict[str, str]] = []
+        for iid, inbox_result in zip(active_ids, inbox_results, strict=False):
+            if isinstance(inbox_result, Exception):
+                logger.warning("📧 Failed to list drafts for inbox %s: %s", iid, inbox_result)
+                errors.append({"inbox_id": iid, "error": str(inbox_result)})
                 continue
-            try:
-                drafts = await self._client.inboxes.drafts.list(inbox_id=iid)
-                draft_list: list[Any] = list(
-                    drafts.drafts if hasattr(drafts, "drafts") else drafts
-                )
-                for d in draft_list:
-                    results.append({
-                        "draft_id": getattr(d, "draft_id", ""),
-                        "inbox_id": iid,
-                        "to": getattr(d, "to", ""),
-                        "subject": getattr(d, "subject", ""),
-                        "text_preview": (getattr(d, "text", "") or "")[:200],
-                        "send_status": getattr(d, "send_status", None),
-                        "send_at": str(getattr(d, "send_at", "") or ""),
-                        "created_at": str(getattr(d, "created_at", "")),
-                    })
-            except Exception as exc:
-                logger.warning("📧 Failed to list drafts for inbox %s: %s", iid, exc)
+            results.extend(inbox_result)
         results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return results[:limit]
+        limited = results[:limit]
+        if errors and not limited:
+            failed_inboxes = ", ".join(err["inbox_id"] for err in errors)
+            raise RuntimeError(f"agentmail_drafts_unavailable: {failed_inboxes}")
+        return {"drafts": limited, "partial": bool(errors), "errors": errors}
 
     async def reply(
         self,
@@ -681,7 +766,11 @@ class AgentMailService:
         if label:
             kwargs["labels"] = [label]
 
-        messages = await self._client.inboxes.messages.list(**kwargs)
+        messages = await self._await_read(
+            self._client.inboxes.messages.list(**kwargs),
+            operation="agentmail_messages_list",
+            target=str(kwargs.get("inbox_id") or self._inbox_id),
+        )
         msg_list: list[Any] = list(messages.messages if hasattr(messages, "messages") else messages)
         results = []
         for msg in msg_list[:limit]:
@@ -700,9 +789,13 @@ class AgentMailService:
     async def get_message(self, message_id: str) -> dict[str, Any]:
         """Get a specific message by ID."""
         self._assert_ready()
-        msg = await self._client.inboxes.messages.get(
-            inbox_id=self._inbox_id,
-            message_id=message_id,
+        msg = await self._await_read(
+            self._client.inboxes.messages.get(
+                inbox_id=self._inbox_id,
+                message_id=message_id,
+            ),
+            operation="agentmail_message_get",
+            target=message_id,
         )
         return {
             "message_id": getattr(msg, "message_id", ""),
@@ -731,7 +824,11 @@ class AgentMailService:
             kwargs["labels"] = [label]
         kwargs["limit"] = limit
 
-        threads = await self._client.inboxes.threads.list(**kwargs)
+        threads = await self._await_read(
+            self._client.inboxes.threads.list(**kwargs),
+            operation="agentmail_threads_list",
+            target=str(kwargs.get("inbox_id") or self._inbox_id),
+        )
         thd_list: list[Any] = list(threads.threads if hasattr(threads, "threads") else threads)
         results = []
         for thd in thd_list[:limit]:
@@ -755,24 +852,43 @@ class AgentMailService:
         label: Optional[str] = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        result = await self.list_all_threads_detailed(label=label, limit=limit)
+        return result["threads"]
+
+    async def list_all_threads_detailed(
+        self,
+        *,
+        label: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         """List threads across all configured inboxes, merged and sorted by recency."""
         self._assert_ready()
-        target_ids = self._inbox_ids or [self._inbox_id]
+        target_ids = [iid for iid in (self._inbox_ids or [self._inbox_id]) if iid]
         all_threads: list[dict[str, Any]] = []
-        for iid in target_ids:
-            if not iid:
+        errors: list[dict[str, str]] = []
+        if not target_ids:
+            return {"threads": [], "partial": False, "errors": []}
+
+        inbox_results = await asyncio.gather(
+            *(self.list_threads(inbox_id=iid, label=label, limit=limit) for iid in target_ids),
+            return_exceptions=True,
+        )
+        for iid, inbox_result in zip(target_ids, inbox_results, strict=False):
+            if isinstance(inbox_result, Exception):
+                logger.warning("📧 Failed to list threads for inbox %s: %s", iid, inbox_result)
+                errors.append({"inbox_id": iid, "error": str(inbox_result)})
                 continue
-            try:
-                threads = await self.list_threads(inbox_id=iid, label=label, limit=limit)
-                all_threads.extend(threads)
-            except Exception as exc:
-                logger.warning("📧 Failed to list threads for inbox %s: %s", iid, exc)
+            all_threads.extend(inbox_result)
         # Sort by updated_at (most recent first), fallback to created_at
         all_threads.sort(
             key=lambda t: t.get("updated_at") or t.get("created_at", ""),
             reverse=True,
         )
-        return all_threads[:limit]
+        limited = all_threads[:limit]
+        if errors and not limited:
+            failed_inboxes = ", ".join(err["inbox_id"] for err in errors)
+            raise RuntimeError(f"agentmail_threads_unavailable: {failed_inboxes}")
+        return {"threads": limited, "partial": bool(errors), "errors": errors}
 
     async def get_thread(self, thread_id: str) -> dict[str, Any]:
         """Fetch a specific thread by ID, including all its messages.
@@ -782,7 +898,11 @@ class AgentMailService:
         recent messages globally and filtering.
         """
         self._assert_ready()
-        thd = await self._client.threads.get(thread_id=thread_id)
+        thd = await self._await_read(
+            self._client.threads.get(thread_id=thread_id),
+            operation="agentmail_thread_get",
+            target=thread_id,
+        )
         messages: list[dict[str, Any]] = []
         for msg in getattr(thd, "messages", []) or []:
             messages.append({
@@ -1772,6 +1892,8 @@ class AgentMailService:
             "messages_sent": self._messages_sent,
             "messages_received": self._messages_received,
             "drafts_created": self._drafts_created,
+            "api_timeout_seconds": self._api_timeout_seconds,
+            "read_timeout_seconds": _read_timeout_seconds(),
             "trusted_sender_count": len(self._trusted_senders),
             "trusted_senders": list(self._trusted_senders),
             "trusted_requests_queued_total": queue["queue_depth"],

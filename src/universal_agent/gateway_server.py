@@ -12205,6 +12205,49 @@ async def factory_capabilities(request: Request):
     return result
 
 
+class LiveChromeSettingsRequest(BaseModel):
+    enabled: bool
+    cdp_url: str = ""
+
+
+@app.get("/api/v1/factory/live-chrome/status")
+async def get_live_chrome_status(request: Request):
+    """Get the current Live Chrome bridge settings from environment variables."""
+    _require_ops_auth(request)
+    enabled_raw = str(os.getenv("UA_ENABLE_LIVE_CHROME", "")).strip().lower()
+    enabled = enabled_raw in {"1", "true", "yes", "on"}
+    cdp_url = str(os.getenv("LIVE_CHROME_CDP_URL", "")).strip()
+    return {
+        "enabled": enabled,
+        "cdp_url": cdp_url,
+    }
+
+
+@app.post("/api/v1/factory/live-chrome/status")
+async def update_live_chrome_status(request: Request, payload: LiveChromeSettingsRequest):
+    """Update Live Chrome settings in Infisical and local environment."""
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    
+    from universal_agent.infisical_loader import upsert_infisical_secret
+    
+    enabled_val = "1" if payload.enabled else "0"
+    cdp_url_val = payload.cdp_url.strip()
+    
+    results = {}
+    try:
+        results["UA_ENABLE_LIVE_CHROME"] = upsert_infisical_secret("UA_ENABLE_LIVE_CHROME", enabled_val)
+        
+        # Only set URL if it's changing or if it's not empty string (unless explicitly clearing it).
+        if cdp_url_val or os.getenv("LIVE_CHROME_CDP_URL"):
+            results["LIVE_CHROME_CDP_URL"] = upsert_infisical_secret("LIVE_CHROME_CDP_URL", cdp_url_val)
+            
+        return {"ok": True, "updated": results}
+    except Exception as exc:
+        logger.exception("Failed to update Live Chrome Infisical secrets: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/api/v1/factory/registrations")
 async def register_factory_presence(request: Request, payload: FactoryRegistrationRequest):
     _require_ops_auth(request)
@@ -17816,10 +17859,22 @@ async def ops_agentmail_threads(request: Request):
         limit = min(200, max(1, int(request.query_params.get("limit", "100"))))
         if inbox_id:
             threads = await _agentmail_service.list_threads(inbox_id=inbox_id, label=label, limit=limit)
+            partial = False
+            errors: list[dict[str, str]] = []
         else:
-            threads = await _agentmail_service.list_all_threads(label=label, limit=limit)
+            result = await _agentmail_service.list_all_threads_detailed(label=label, limit=limit)
+            threads = result["threads"]
+            partial = bool(result.get("partial"))
+            errors = list(result.get("errors") or [])
         inboxes = _agentmail_service.get_inbox_ids()
-        return {"ok": True, "threads": threads, "count": len(threads), "inboxes": inboxes}
+        return {
+            "ok": True,
+            "threads": threads,
+            "count": len(threads),
+            "inboxes": inboxes,
+            "partial": partial,
+            "errors": errors,
+        }
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -17867,8 +17922,15 @@ async def ops_agentmail_drafts(request: Request):
     try:
         inbox_id = request.query_params.get("inbox_id")
         limit = min(50, max(1, int(request.query_params.get("limit", "20"))))
-        drafts = await _agentmail_service.list_drafts(inbox_id=inbox_id, limit=limit)
-        return {"ok": True, "drafts": drafts, "count": len(drafts)}
+        result = await _agentmail_service.list_drafts_detailed(inbox_id=inbox_id, limit=limit)
+        drafts = result["drafts"]
+        return {
+            "ok": True,
+            "drafts": drafts,
+            "count": len(drafts),
+            "partial": bool(result.get("partial")),
+            "errors": list(result.get("errors") or []),
+        }
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 

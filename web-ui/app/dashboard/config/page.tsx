@@ -23,6 +23,10 @@ export default function DashboardConfigPage() {
   const [capabilities, setCapabilities] = useState<FactoryCapabilities | null>(null);
   const [activeSection, setActiveSection] = useState<"runtime" | "governance" | "ops">("runtime");
 
+  const [liveChromeEnabled, setLiveChromeEnabled] = useState(false);
+  const [liveChromeUrl, setLiveChromeUrl] = useState("");
+  const [isLiveChromeLoading, setIsLiveChromeLoading] = useState(false);
+
   const loadCapabilities = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/factory/capabilities`, { cache: "no-store" });
@@ -33,9 +37,41 @@ export default function DashboardConfigPage() {
     } catch {}
   }, []);
 
+  const loadLiveChromeStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/factory/live-chrome/status`, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setLiveChromeEnabled(data.enabled);
+        setLiveChromeUrl(data.cdp_url);
+      }
+    } catch (e) {
+      console.error("Failed to load Live Chrome status", e);
+    }
+  }, []);
+
   useEffect(() => {
     void loadCapabilities();
-  }, [loadCapabilities]);
+    void loadLiveChromeStatus();
+  }, [loadCapabilities, loadLiveChromeStatus]);
+
+  const handleUpdateLiveChrome = async () => {
+    setIsLiveChromeLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/factory/live-chrome/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: liveChromeEnabled, cdp_url: liveChromeUrl }),
+      });
+      if (res.ok) {
+        void loadLiveChromeStatus();
+      }
+    } catch (e) {
+      console.error("Failed to update Live Chrome info", e);
+    } finally {
+      setIsLiveChromeLoading(false);
+    }
+  };
 
   const sections = [
     { key: "runtime" as const, label: "Runtime Policy", icon: Server },
@@ -129,6 +165,53 @@ export default function DashboardConfigPage() {
               ) : (
                 <p className="text-sm text-muted-foreground">Loading...</p>
               )}
+            </section>
+
+            <section className="rounded-xl border border-border/40 bg-card/10 p-5">
+              <h2 className="mb-4 text-sm font-semibold text-foreground">Live Session Attachment (Tailscale)</h2>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <label className="text-sm font-medium leading-none">
+                      Enable Live Chrome Bridge
+                    </label>
+                    <p className="text-[13px] text-muted-foreground">
+                      Allows agents to connect to a local Chrome browser via Tailscale tunnel.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setLiveChromeEnabled(!liveChromeEnabled)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${liveChromeEnabled ? 'bg-primary' : 'bg-input'}`}
+                  >
+                    <span className={`pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${liveChromeEnabled ? 'translate-x-4' : 'translate-x-0'}`}/>
+                  </button>
+                </div>
+                
+                <div className="space-y-2 pt-2 border-t border-border/20">
+                  <label className="text-sm font-medium leading-none">
+                    Tailscale CDP URL
+                  </label>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={liveChromeUrl} 
+                      onChange={(e) => setLiveChromeUrl(e.target.value)}
+                      placeholder="e.g. http://my-desktop:9222"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    <button 
+                      onClick={handleUpdateLiveChrome} 
+                      disabled={isLiveChromeLoading}
+                      className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                    >
+                      {isLiveChromeLoading ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                  <p className="text-[13px] text-muted-foreground">
+                    Must be in the format <code className="text-[11px] bg-muted/50 px-1.5 py-0.5 rounded border border-border/50">http://&lt;tailscale-ip-or-name&gt;:9222</code>. Leave blank to default to localhost.
+                  </p>
+                </div>
+              </div>
             </section>
           </div>
         )}

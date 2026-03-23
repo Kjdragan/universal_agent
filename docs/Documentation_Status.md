@@ -96,7 +96,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 05 | Local HQ dev vs desktop worker runtime modes |
 | 06 | Production deploy incident |
 | 07 | Stage-based Infisical and machine bootstrap migration plan |
-| 08 | VPS deployment profile stuck at `local_workstation` — systemd drift incident and deploy fix |
+| 08 | VPS deployment profile stuck at `local_workstation` — final incident record covering the wrong-host false lead and the gateway env-sanitization fix |
 
 ## Run Reviews (03_Run_Reviews/)
 
@@ -193,6 +193,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 79 | Golden Run Research Report Pipeline Reference |
 | 80 | Google Workspace Integration Retrospective Memo |
 | 99 | **Tutorial Pipeline Architecture & Operations** — canonical source-of-truth |
+| 103 | Debugging Lessons Living Document — reusable debugging lessons from complex production incidents |
 
 ## Cleanup Summary
 

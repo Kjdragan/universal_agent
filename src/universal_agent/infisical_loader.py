@@ -220,6 +220,155 @@ def _fetch_infisical_secrets() -> dict[str, str]:
         )
 
 
+def _upsert_infisical_secret_via_rest(
+    *,
+    api_url: str,
+    client_id: str,
+    client_secret: str,
+    project_id: str,
+    environment: str,
+    secret_path: str,
+    key: str,
+    value: str,
+) -> None:
+    import httpx
+
+    with httpx.Client(timeout=20.0) as client:
+        auth_resp = client.post(
+            f"{api_url}/api/v1/auth/universal-auth/login",
+            json={
+                "clientId": client_id,
+                "clientSecret": client_secret,
+            },
+        )
+        auth_resp.raise_for_status()
+        auth_payload = auth_resp.json() if auth_resp.headers.get("content-type", "").startswith("application/json") else {}
+        access_token = str((auth_payload or {}).get("accessToken") or "").strip()
+        if not access_token:
+            raise RuntimeError("Infisical REST auth response missing access token")
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # Try updating first
+        update_resp = client.patch(
+            f"{api_url}/api/v3/secrets/raw/{key}",
+            json={
+                "workspaceId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "secretValue": value,
+                "type": "shared",
+            },
+            headers=headers,
+        )
+        
+        if update_resp.status_code == 404 or (update_resp.status_code >= 400 and "not found" in update_resp.text.lower()):
+            # Fallback to create
+            create_resp = client.post(
+                f"{api_url}/api/v3/secrets/raw/{key}",
+                json={
+                    "workspaceId": project_id,
+                    "environment": environment,
+                    "secretPath": secret_path,
+                    "secretValue": value,
+                    "type": "shared",
+                },
+                headers=headers,
+            )
+            create_resp.raise_for_status()
+        else:
+            update_resp.raise_for_status()
+
+
+def upsert_infisical_secret(key: str, value: str) -> bool:
+    """
+    Update or create a secret in Infisical and update the local os.environ.
+    Returns True on success.
+    """
+    _bootstrap_infisical_env()
+    client_id = str(os.getenv("INFISICAL_CLIENT_ID") or "").strip()
+    client_secret = str(os.getenv("INFISICAL_CLIENT_SECRET") or "").strip()
+    project_id = str(os.getenv("INFISICAL_PROJECT_ID") or "").strip()
+    environment = _normalize_infisical_environment(os.getenv("INFISICAL_ENVIRONMENT"))
+    secret_path = str(os.getenv("INFISICAL_SECRET_PATH") or "/").strip() or "/"
+    api_url = str(os.getenv("INFISICAL_API_URL") or "https://app.infisical.com").strip() or "https://app.infisical.com"
+    api_url = api_url.rstrip("/")
+
+    if not (client_id and client_secret and project_id):
+        # We can't write to Infisical, but we can update the local environment and .env
+        logger.warning(f"Upserting {key} to local os.environ only (missing Infisical credentials)")
+        os.environ[key] = value
+        return False
+
+    try:
+        from infisical_client import (
+            AuthenticationOptions,
+            ClientSettings,
+            InfisicalClient,
+            UniversalAuthMethod,
+        )
+        # Import the structs for creation/updating
+        from infisical_client.models.options import UpdateSecretOptions, CreateSecretOptions
+
+        client = InfisicalClient(
+            ClientSettings(
+                auth=AuthenticationOptions(
+                    universal_auth=UniversalAuthMethod(
+                        client_id=client_id,
+                        client_secret=client_secret,
+                    )
+                )
+            )
+        )
+        
+        try:
+            client.updateSecret(
+                options=UpdateSecretOptions(
+                    environment=environment,
+                    project_id=project_id,
+                    path=secret_path,
+                    secret_name=key,
+                    secret_value=value,
+                    type="shared",
+                )
+            )
+        except Exception as exc:
+            if "not found" in str(exc).lower() or "404" in str(exc):
+                client.createSecret(
+                    options=CreateSecretOptions(
+                        environment=environment,
+                        project_id=project_id,
+                        path=secret_path,
+                        secret_name=key,
+                        secret_value=value,
+                        type="shared",
+                    )
+                )
+            else:
+                raise
+                
+    except Exception as exc:
+        logger.warning("Infisical SDK upsert failed; falling back to REST bootstrap (%s)", _safe_error(exc))
+        try:
+            _upsert_infisical_secret_via_rest(
+                api_url=api_url,
+                client_id=client_id,
+                client_secret=client_secret,
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                key=key,
+                value=value,
+            )
+        except Exception as rest_exc:
+            logger.error("Infisical REST upsert failed for %s: %s", key, _safe_error(rest_exc))
+            return False
+
+    # Update current process environment so changes reflect immediately without restart
+    os.environ[key] = value
+    logger.info("Successfully upserted secret %s to Infisical (env=%s)", key, environment)
+    return True
+
 def _fetch_infisical_secrets_via_rest(
     *,
     api_url: str,

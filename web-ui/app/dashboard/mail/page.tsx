@@ -52,6 +52,11 @@ type MailStatus = {
   last_error: string;
 };
 
+type MailFetchError = {
+  inbox_id?: string;
+  error: string;
+};
+
 const API_BASE = "/api/dashboard/gateway";
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
@@ -130,6 +135,8 @@ export default function MailPage() {
   const [loading, setLoading] = useState(true);
   const [msgsLoading, setMsgsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(null);
   const [draftSending, setDraftSending] = useState<string | null>(null);
   const [deletingThread, setDeletingThread] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"inbox" | "sent">("inbox");
@@ -137,55 +144,76 @@ export default function MailPage() {
 
   /* ── Fetchers ─── */
   const fetchThreads = useCallback(async (inboxId?: string) => {
-    try {
-      const params = new URLSearchParams();
-      if (inboxId) params.set("inbox_id", inboxId);
-      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/threads?${params}`);
-      if (!res.ok) throw new Error(`threads ${res.status}`);
-      const data = await res.json();
-      setThreads(data.threads || []);
-      setInboxes(data.inboxes || []);
-    } catch (e: unknown) {
-      console.error("Failed to fetch threads", e);
+    const params = new URLSearchParams();
+    if (inboxId) params.set("inbox_id", inboxId);
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/threads?${params}`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`threads ${res.status}${detail ? `: ${detail}` : ""}`);
     }
+    const data = await res.json();
+    setThreads(data.threads || []);
+    setInboxes(data.inboxes || []);
+    return {
+      partial: Boolean(data.partial),
+      errors: Array.isArray(data.errors) ? (data.errors as MailFetchError[]) : [],
+    };
   }, []);
 
   const fetchDrafts = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setDrafts(data.drafts || []);
-    } catch {
-      /* non-critical */
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`drafts ${res.status}${detail ? `: ${detail}` : ""}`);
     }
+    const data = await res.json();
+    setDrafts(data.drafts || []);
+    return {
+      partial: Boolean(data.partial),
+      errors: Array.isArray(data.errors) ? (data.errors as MailFetchError[]) : [],
+    };
   }, []);
 
   const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setStatus(data);
-    } catch {
-      /* non-critical */
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`status ${res.status}${detail ? `: ${detail}` : ""}`);
     }
+    const data = await res.json();
+    setStatus(data);
   }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      await Promise.all([
-        fetchThreads(selectedInbox || undefined),
-        fetchDrafts(),
-        fetchStatus(),
-      ]);
-    } catch (e: unknown) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
+    setSyncWarning(null);
+    const results = await Promise.allSettled([
+      fetchThreads(selectedInbox || undefined),
+      fetchDrafts(),
+      fetchStatus(),
+    ]);
+
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => String(result.reason));
+    if (failures.length > 0) {
+      setError(
+        `Mail refresh incomplete. Showing last successful snapshot. ${failures.join(" | ")}`
+      );
+    } else {
+      setLastRefreshAt(Date.now());
     }
+
+    const warnings = results
+      .filter((result): result is PromiseFulfilledResult<{ partial?: boolean; errors?: MailFetchError[] } | void> => result.status === "fulfilled")
+      .map((result) => result.value)
+      .filter((value): value is { partial?: boolean; errors?: MailFetchError[] } => Boolean(value && value.partial))
+      .flatMap((value) => (value.errors || []).map((entry) => entry.inbox_id ? `${entry.inbox_id}: ${entry.error}` : entry.error));
+    if (warnings.length > 0) {
+      setSyncWarning(`Partial AgentMail data: ${warnings.join(" | ")}`);
+    }
+    setLoading(false);
   }, [fetchThreads, fetchDrafts, fetchStatus, selectedInbox]);
 
   const fetchThreadMessages = useCallback(async (thread: Thread) => {
@@ -218,6 +246,7 @@ export default function MailPage() {
       await fetchDrafts();
     } catch (e) {
       console.error("Failed to send draft", e);
+      setError(`Failed to send draft ${draftId}: ${String(e)}`);
     } finally {
       setDraftSending(null);
     }
@@ -258,7 +287,10 @@ export default function MailPage() {
 
   useEffect(() => {
     if (selectedInbox !== undefined) {
-      fetchThreads(selectedInbox || undefined);
+      fetchThreads(selectedInbox || undefined).catch((e: unknown) => {
+        console.error("Failed to fetch filtered threads", e);
+        setError(`Mail refresh incomplete. Showing last successful snapshot. ${String(e)}`);
+      });
     }
   }, [selectedInbox, fetchThreads]);
 
@@ -358,6 +390,9 @@ export default function MailPage() {
               >
                 {status.ws_connected ? "● WS LIVE" : "○ WS OFF"}
               </span>
+              <span>
+                {lastRefreshAt ? `↻ ${timeAgo(new Date(lastRefreshAt).toISOString())}` : "↻ pending"}
+              </span>
             </div>
           )}
         </div>
@@ -455,6 +490,19 @@ export default function MailPage() {
           }}
         >
           ⚠ {error}
+        </div>
+      )}
+      {syncWarning && (
+        <div
+          style={{
+            background: TOKENS.amberDim,
+            color: TOKENS.amber,
+            padding: "8px 24px",
+            fontFamily: TOKENS.fontMono,
+            fontSize: 12,
+          }}
+        >
+          ⚠ {syncWarning}
         </div>
       )}
 
