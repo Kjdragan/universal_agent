@@ -29,12 +29,12 @@ Public URLs:
 
 ## Login
 ```bash
-ssh root@srv1360701.taildcc090.ts.net
+ssh root@uaonvps
 cd /opt/universal_agent
 ```
 
 Tailscale note:
-1. Use `root@srv1360701.taildcc090.ts.net` for all operator SSH commands.
+1. Use `root@uaonvps` for all operator SSH commands.
 2. Treat legacy public IP examples as historical only.
 3. SSH mode switch is available via `UA_SSH_AUTH_MODE=keys|tailscale_ssh`.
 
@@ -198,7 +198,7 @@ Default toggle state is OFF when unset.
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
 scripts/sync_remote_workspaces.sh --once \
-  --host root@srv1360701.taildcc090.ts.net \
+  --host root@uaonvps \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
@@ -210,7 +210,7 @@ Automate every 30s with user systemd timer:
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@srv1360701.taildcc090.ts.net \
+  --host root@uaonvps \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \

@@ -106,7 +106,7 @@ This document is a prioritized, self-contained cleanup plan derived from a compr
 
 ### 6. Converge Tailscale Host Defaults Across Scripts
 
-**Problem:** Some helper scripts still reference the older IP `100.106.113.93` instead of the MagicDNS host `srv1360701.taildcc090.ts.net`. This isn't broken (Tailscale routes both), but it creates drift.
+**Problem:** Some helper scripts still reference the older IP `100.106.113.93` instead of the MagicDNS host `uaonvps`. This isn't broken (Tailscale routes both), but it creates drift.
 
 **Canonical doc:** `03_Operations/87_Tailscale_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md`
 

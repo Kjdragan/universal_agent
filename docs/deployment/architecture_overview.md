@@ -7,7 +7,7 @@ This document defines the current supported deployment model for Universal Agent
 >
 > | Environment | URL | Notes |
 > |---|---|---|
-> | **Staging** | `https://srv1360701.taildcc090.ts.net:9443/dashboard` | Tailscale required — yellow staging banner visible |
+> | **Staging** | `https://uaonvps:9443/dashboard` | Tailscale required — yellow staging banner visible |
 > | **Production** | `https://app.clearspringcg.com/dashboard` | Public — no VPN needed |
 >
 > Staging deploys from `develop` automatically. Production deploys via manual SHA promotion from `main`.
@@ -32,8 +32,8 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Fallback Checkout | n/a | `/opt/universal_agent_repo` |
 | Gateway/API Ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, `UA_GATEWAY_URL=http://127.0.0.1:9002` | `8002` / `8001` |
 | Web UI Port | `3001` | `3000` |
-| Web UI URL | `https://srv1360701.taildcc090.ts.net:9443` (Tailnet) | `https://app.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net` (Tailnet) |
-| API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public) <br> `https://srv1360701.taildcc090.ts.net:8443` (Tailnet) |
+| Web UI URL | `https://uaonvps:9443` (Tailnet) | `https://app.clearspringcg.com` (Public) <br> `https://uaonvps` (Tailnet) |
+| API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public) <br> `https://uaonvps:8443` (Tailnet) |
 | Service Restart Strategy | Deploy installs repo-managed staging systemd units, then restarts gateway/api/webui via `systemctl` or `service` fallback | Deploy installs repo-managed production systemd units, then restarts gateway/api/webui/telegram via `systemctl` or `service` fallback plus VP workers |
 | Post-Deploy Health | See `ci_cd_pipeline.md` > Post-Deploy Health Verification | See `ci_cd_pipeline.md` > Post-Deploy Health Verification |
 | Secrets Behavior | Bootstrap `.env` for stage `staging`; webui `.env.local` rendered from Infisical by deploy | Bootstrap `.env` for stage `production`; webui `.env.local` rendered from Infisical by deploy |

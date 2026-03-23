@@ -145,7 +145,7 @@ def _loud_log(failure_type: FailureType, message: str, **kwargs: Any) -> None:
 # ── Configuration ─────────────────────────────────────────────────────────
 
 
-VPS_HOST = "root@srv1360701"
+VPS_HOST = "root@uaonvps"
 CSI_DB_PATH = "/var/lib/universal-agent/csi/csi.db"
 
 
@@ -749,7 +749,7 @@ def main() -> None:
         print("  DTW_MAX_CIRCUIT_BREAKER_TRIPS      (default: 2)")
         print("  DTW_PROXY_FALLBACK                 (default: false)")
         print("  DTW_LANGUAGE                       (default: en)")
-        print("  DTW_VPS_HOST                       (default: root@srv1360701)")
+        print("  DTW_VPS_HOST                       (default: root@uaonvps)")
         print("  DTW_CSI_DB_PATH                    (default: "
               "/var/lib/universal-agent/csi/csi.db)")
         sys.exit(0)

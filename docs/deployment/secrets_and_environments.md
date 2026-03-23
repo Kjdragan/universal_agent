@@ -10,7 +10,7 @@
 | Environment | Infisical Env | VPS Checkout | Gateway Port | Web UI Port | Web UI URL |
 |---|---|---|---|---|---|
 | Development | `development` | (desktop) | `8002` | `3000` | `http://localhost:3000` |
-| Staging | `staging` | `/opt/universal-agent-staging` | `9002` | `3001` | `https://srv1360701.taildcc090.ts.net:9443` |
+| Staging | `staging` | `/opt/universal-agent-staging` | `9002` | `3001` | `https://uaonvps:9443` |
 | Production | `production` | `/opt/universal_agent` | `8002` | `3000` | `https://app.clearspringcg.com` |
 
 ### Key Infisical Commands

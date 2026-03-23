@@ -39,8 +39,8 @@ This is the only supported app deployment path in this repository.
 | VPS checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
 | Gateway/API ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, and `UA_GATEWAY_URL=http://127.0.0.1:9002` in staging `.env` | `8002` / `8001` |
 | Web UI port | `3001` | `3000` |
-| Web UI URL | `https://srv1360701.taildcc090.ts.net:9443` (Tailnet) | `https://app.clearspringcg.com` (Public)<br>`https://srv1360701.taildcc090.ts.net` (Tailnet) |
-| API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public)<br>`https://srv1360701.taildcc090.ts.net:8443` (Tailnet) |
+| Web UI URL | `https://uaonvps:9443` (Tailnet) | `https://app.clearspringcg.com` (Public)<br>`https://uaonvps` (Tailnet) |
+| API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public)<br>`https://uaonvps:8443` (Tailnet) |
 | Legacy/fallback checkout | n/a | `/opt/universal_agent_repo` if `/opt/universal_agent` is occupied by a non-git legacy directory |
 | Runtime secrets | `staging` via explicit bootstrap `.env` plus stage secret validation | `production` via explicit bootstrap `.env` plus stage secret validation |
 

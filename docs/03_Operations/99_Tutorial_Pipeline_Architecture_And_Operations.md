@@ -212,7 +212,7 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `DTW_MAX_CONSECUTIVE_FAILURES` | `3` | Circuit breaker threshold |
 | `DTW_CIRCUIT_BREAKER_COOLDOWN` | `60.0` | Pause after breaker trips (seconds) |
 | `DTW_MAX_CIRCUIT_BREAKER_TRIPS` | `2` | Abort batch after N trips |
-| `DTW_VPS_HOST` | `root@srv1360701` | SSH target for VPS CSI database |
+| `DTW_VPS_HOST` | `root@uaonvps` | SSH target for VPS CSI database |
 | `DTW_CSI_DB_PATH` | `/var/lib/universal-agent/csi/csi.db` | CSI database path on VPS |
 
 ---

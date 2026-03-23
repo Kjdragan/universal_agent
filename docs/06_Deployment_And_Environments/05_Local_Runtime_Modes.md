@@ -107,7 +107,7 @@ The desktop transcript worker is a **standalone program** that runs independentl
 of both the HQ Dev Lane and the Desktop Worker Lane. It does not require any
 gateway, factory, or Infisical bootstrap — it only needs:
 
-1. SSH access to the VPS (`root@srv1360701`)
+1. SSH access to the VPS (`root@uaonvps`)
 2. `youtube-transcript-api` installed (via `uv`)
 3. Network access to YouTube (residential IP)
 

@@ -730,7 +730,7 @@ async def _run_vps_sync_status_probe() -> dict[str, Any]:
             "error": f"Sync script missing: {VPS_SYNC_SCRIPT}",
         }
 
-    remote_host = os.getenv("UA_REMOTE_SSH_HOST", "root@srv1360701.taildcc090.ts.net")
+    remote_host = os.getenv("UA_REMOTE_SSH_HOST", "root@uaonvps")
     remote_dir = os.getenv("UA_REMOTE_WORKSPACES_DIR", "/opt/universal_agent/AGENT_RUN_WORKSPACES")
     local_dir = str(VPS_WORKSPACES_MIRROR_DIR)
     remote_artifacts_dir = os.getenv("UA_REMOTE_ARTIFACTS_DIR", "/opt/universal_agent/artifacts")

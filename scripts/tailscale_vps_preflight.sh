@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPS_HOST="${1:-${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}}"
+VPS_HOST="${1:-${UA_VPS_HOST:-root@uaonvps}}"
 SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 

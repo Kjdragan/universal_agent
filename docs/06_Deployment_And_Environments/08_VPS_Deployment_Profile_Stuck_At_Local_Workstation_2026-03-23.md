@@ -42,7 +42,7 @@ Correct mapping:
 | IP | Identity | Machine | Expected profile |
 |---|---|---|---|
 | `100.95.187.38` | `mint-desktop` | Kevin's desktop | `local_workstation` |
-| `100.106.113.93` | `srv1360701` | Production VPS | `vps` |
+| `100.106.113.93` | `uaonvps` | Production VPS | `vps` |
 
 That means the original observation:
 

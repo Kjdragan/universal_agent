@@ -49,7 +49,7 @@ The canonical current node-role split is:
 
 The practical consequence is:
 - `mint-desktop` should be tagged `tag:operator-workstation`
-- `srv1360701` should be tagged `tag:vps`
+- `uaonvps` should be tagged `tag:vps`
 - operator workstation access to VPS nodes should be granted explicitly through Tailscale SSH policy rather than by tagging a workstation as a VPS
 
 This role model is now tracked in repo-managed files:
@@ -66,7 +66,7 @@ Their current control-plane credential source is Infisical path `prod:/tailscale
 ## Canonical Remote Host Standard
 
 Preferred canonical remote host:
-- `root@srv1360701.taildcc090.ts.net`
+- `root@uaonvps`
 
 This is the MagicDNS standard adopted by the tailnet-first DevOps work.
 
@@ -75,8 +75,8 @@ This is the MagicDNS standard adopted by the tailnet-first DevOps work.
 Not every script has fully converged on the MagicDNS host yet.
 
 Current split:
-- `scripts/deploy_vps.sh` defaults to `root@srv1360701.taildcc090.ts.net`
-- `scripts/vpsctl.sh` defaults to `root@srv1360701.taildcc090.ts.net`
+- `scripts/deploy_vps.sh` defaults to `root@uaonvps`
+- `scripts/vpsctl.sh` defaults to `root@uaonvps`
 - some remote sync helpers still default to `root@100.106.113.93`
 
 This means the implemented Tailscale story is **mostly standardized**, but host-default cleanup is not fully complete across all helper scripts.

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS_HOST="${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}"
+VPS_HOST="${UA_VPS_HOST:-root@uaonvps}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"

@@ -14,7 +14,7 @@ set -euo pipefail
 # - Your local UA gateway must be running on ${LOCAL_GATEWAY_PORT}.
 # - This script must stay running to keep the tunnel alive.
 
-VPS_HOST="${VPS_HOST:-${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}}"
+VPS_HOST="${VPS_HOST:-${UA_VPS_HOST:-root@uaonvps}}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 REMOTE_PORT="${REMOTE_PORT:-18002}"
 LOCAL_GATEWAY_PORT="${LOCAL_GATEWAY_PORT:-8012}"

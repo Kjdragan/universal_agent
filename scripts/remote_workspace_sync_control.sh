@@ -8,7 +8,7 @@ INSTALL_SCRIPT="${REPO_ROOT}/scripts/install_remote_workspace_sync_timer.sh"
 SYNC_SCRIPT="${REPO_ROOT}/scripts/sync_remote_workspaces.sh"
 
 DEFAULT_SERVICE_NAME="ua-remote-workspace-sync"
-DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@srv1360701.taildcc090.ts.net}"
+DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@uaonvps}"
 DEFAULT_REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
 DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES/remote_vps_workspaces}"
 DEFAULT_REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"

@@ -171,7 +171,7 @@ scripts/tailscale_vps_preflight.sh
 Or target explicit host:
 
 ```bash
-scripts/tailscale_vps_preflight.sh root@srv1360701.taildcc090.ts.net
+scripts/tailscale_vps_preflight.sh root@uaonvps
 ```
 
 ### What preflight checks

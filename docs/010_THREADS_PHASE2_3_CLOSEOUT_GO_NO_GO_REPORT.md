@@ -3,7 +3,7 @@
 ## Date
 
 - Generated: 2026-03-06 (America/Chicago)
-- Runtime checks executed on VPS host `srv1360701`
+- Runtime checks executed on VPS host `uaonvps`
 
 ## Scope
 

@@ -16,13 +16,13 @@ set -euo pipefail
 #   scripts/vpsctl.sh logs gateway
 #
 # Config via env:
-#   UA_VPS_HOST=root@srv1360701.taildcc090.ts.net
+#   UA_VPS_HOST=root@uaonvps
 #   UA_SSH_AUTH_MODE=keys|tailscale_ssh
 #   UA_VPS_SSH_KEY=~/.ssh/id_ed25519
 #   UA_VPS_APP_DIR=/opt/universal_agent
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS_HOST="${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}"
+VPS_HOST="${UA_VPS_HOST:-root@uaonvps}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"

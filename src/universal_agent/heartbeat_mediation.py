@@ -16,7 +16,7 @@ _DO_FIREWALL_RE = re.compile(r"\bDO firewall\b", re.IGNORECASE)
 
 _CANONICAL_SSH_BLOCKED_NEXT_STEP = (
     "Update Tailscale ACL/SSH policy to permit operator workstation access from "
-    "mint-desktop to srv1360701, OR allowlist the workstation public IP in the "
+    "mint-desktop to uaonvps, OR allowlist the workstation public IP in the "
     "VPS host firewall if you are using a public fallback path, OR manually run "
     "DLQ replay from the VPS console."
 )

@@ -19209,7 +19209,7 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
         "  version, source_notification_id, session_key, classification, operator_review_required,\n"
         "  recommended_next_step, proposed_changes, email_summary.\n\n"
         "provider_context:\n"
-        "- VPS provider: Hostinger (`srv1360701.hstgr.cloud`, accessed via Tailscale as `srv1360701.taildcc090.ts.net`).\n"
+        "- VPS provider: Hostinger (`uaonvps`, accessed via Tailscale as `uaonvps`).\n"
         "- When referencing the VPS provider, always use 'Hostinger VPS'.\n"
         "- If firewall fallback is relevant, say 'VPS host firewall' or 'public-IP allowlist path'.\n"
         "- If tailscale ping works but SSH is denied, prefer Tailscale ACL/SSH remediation wording.\n\n"
