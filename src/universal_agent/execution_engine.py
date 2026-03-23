@@ -690,10 +690,6 @@ class ProcessTurnAdapter:
                     env_overrides["UA_SYSTEM_EVENTS_PROMPT"] = None
 
                 with _temporary_env(env_overrides):
-                    # Guard against E2BIG: strip bloat env vars if env is too large.
-                    # This runs inside _temporary_env so removals revert automatically.
-                    sanitize_env_for_subprocess()
-
                     if USE_PROCESS_STDIO_REDIRECT:
                         with _redirect_stdio_to_run_log(self.config.workspace_dir) as log_handle:
                             # Log user input
