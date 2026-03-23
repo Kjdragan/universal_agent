@@ -18809,11 +18809,11 @@ def _heartbeat_fallback_findings(
                 "metric_key": "heartbeat_parse_failed",
                 "observed_value": 1,
                 "threshold_text": "structured artifact parse required",
-                "known_rule_match": bool(runbook_command),
+                "known_rule_match": True,
                 "confidence": "low",
                 "title": summary,
                 "recommendation": recommendation,
-                "runbook_command": runbook_command,
+                "runbook_command": runbook_command or "run_heartbeat_checks",
                 "metadata": {
                     "parse_error": parse_error,
                     "artifact_count": len(artifact_links),
