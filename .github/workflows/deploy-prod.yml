@@ -179,6 +179,7 @@ jobs:
             for svc in universal-agent-gateway universal-agent-api; do
               sudo mkdir -p /etc/systemd/system/${svc}.service.d
               sudo cp "$PROD_DIR/deployment/systemd/universal-agent-stack-limit.conf" /etc/systemd/system/${svc}.service.d/stack-limit.conf
+              sudo cp "$PROD_DIR/deployment/systemd/universal-agent-deployment-profile.conf" /etc/systemd/system/${svc}.service.d/deployment-profile.conf
             done
             sudo systemctl daemon-reload
 
