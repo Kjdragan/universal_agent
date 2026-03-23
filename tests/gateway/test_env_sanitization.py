@@ -129,22 +129,38 @@ async def test_process_turn_adapter_restores_parent_env_after_client_spawn(monke
     """SDK client spawn must not permanently strip runtime secrets from the gateway."""
 
     captured_spawn_env: dict[str, str] = {}
+    captured_client_enter_env: dict[str, str] = {}
 
     class FakeClaudeSDKClient:
-        def __init__(self, options):
+        def __init__(self, options, transport=None):
             self.options = options
-            os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-py-client"
+            self.transport = transport
 
         async def __aenter__(self):
-            captured_spawn_env.update(dict(os.environ))
+            captured_client_enter_env.update(dict(os.environ))
             return self
+
+    class FakeSubprocessCLITransport:
+        def __init__(self, prompt, options):
+            self.prompt = prompt
+            self.options = options
+
+        async def connect(self):
+            captured_spawn_env.update(dict(os.environ))
 
     fake_pkg = types.ModuleType("claude_agent_sdk")
     fake_client_module = types.ModuleType("claude_agent_sdk.client")
+    fake_transport_module = types.ModuleType("claude_agent_sdk._internal.transport.subprocess_cli")
     fake_client_module.ClaudeSDKClient = FakeClaudeSDKClient
+    fake_transport_module.SubprocessCLITransport = FakeSubprocessCLITransport
     fake_pkg.client = fake_client_module
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_pkg)
     monkeypatch.setitem(sys.modules, "claude_agent_sdk.client", fake_client_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "claude_agent_sdk._internal.transport.subprocess_cli",
+        fake_transport_module,
+    )
 
     monkeypatch.setenv("PATH", "/usr/bin")
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -167,6 +183,8 @@ async def test_process_turn_adapter_restores_parent_env_after_client_spawn(monke
     assert "PROXY_USERNAME" not in captured_spawn_env
     assert "PROXY_PASSWORD" not in captured_spawn_env
     assert "NONCRITICAL_SECRET" not in captured_spawn_env
+    assert captured_client_enter_env["PROXY_USERNAME"] == "rotatingproxyua-rotate"
+    assert captured_client_enter_env["PROXY_PASSWORD"] == "super-secret"
     assert os.environ["PROXY_USERNAME"] == "rotatingproxyua-rotate"
     assert os.environ["PROXY_PASSWORD"] == "super-secret"
     assert os.environ["NONCRITICAL_SECRET"] == "should-be-restored"
