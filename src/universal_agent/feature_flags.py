@@ -29,8 +29,8 @@ def _read_env_bool(name: str) -> bool | None:
     return None
 
 
-def heartbeat_enabled(default: bool = False) -> bool:
-    """Return True only when heartbeat is explicitly enabled."""
+def heartbeat_enabled(default: bool = True) -> bool:
+    """Return True when heartbeat is enabled (default: ON)."""
     if _is_truthy(os.getenv("UA_DISABLE_HEARTBEAT")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_HEARTBEAT")):
@@ -43,8 +43,8 @@ def memory_index_enabled(default: bool = True) -> bool:
     return memory_enabled(default=default)
 
 
-def cron_enabled(default: bool = False) -> bool:
-    """Return True only when cron is explicitly enabled."""
+def cron_enabled(default: bool = True) -> bool:
+    """Return True when cron is enabled (default: ON)."""
     if _is_truthy(os.getenv("UA_DISABLE_CRON")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_CRON")):

@@ -135,7 +135,9 @@ async def test_heartbeat_injects_todoist_summary_only_when_actionable(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_skips_agent_run_when_todoist_has_no_actionable(monkeypatch, tmp_path):
+async def test_heartbeat_runs_when_heartbeat_md_has_content_despite_no_todoist(monkeypatch, tmp_path):
+    """When HEARTBEAT.md has active content, agents should execute even with zero
+    Todoist actionable items — standing instructions ARE work."""
     import universal_agent.heartbeat_service as hb
     from universal_agent.gateway import GatewaySession
 
@@ -171,9 +173,10 @@ async def test_heartbeat_skips_agent_run_when_todoist_has_no_actionable(monkeypa
     service = hb.HeartbeatService(gateway, DummyCM())
     service.system_event_provider = lambda _sid: []
 
+    # Case 1: HEARTBEAT.md has real content → agent SHOULD execute
     workspace = tmp_path / "ws2"
     workspace.mkdir()
-    (workspace / "HEARTBEAT.md").write_text("UA_HEARTBEAT_OK", encoding="utf-8")
+    (workspace / "HEARTBEAT.md").write_text("- [ ] Run VPS health check\n", encoding="utf-8")
 
     session = GatewaySession(session_id="s2", user_id="u", workspace_dir=str(workspace), metadata={})
     state = hb.HeartbeatState()
@@ -183,13 +186,37 @@ async def test_heartbeat_skips_agent_run_when_todoist_has_no_actionable(monkeypa
         session,
         state,
         state_path,
-        "UA_HEARTBEAT_OK",
+        "- [ ] Run VPS health check\n",
         service.default_schedule,
         service.default_delivery,
         service.default_visibility,
     )
 
-    assert gateway.execute_calls == 0
+    assert gateway.execute_calls == 1, "Agent should execute when HEARTBEAT.md has standing tasks"
+
+    # Case 2: Empty HEARTBEAT.md content → guard skips
+    gateway2 = DummyGateway()
+    service2 = hb.HeartbeatService(gateway2, DummyCM())
+    service2.system_event_provider = lambda _sid: []
+
+    workspace2 = tmp_path / "ws2b"
+    workspace2.mkdir()
+
+    session2 = GatewaySession(session_id="s2b", user_id="u", workspace_dir=str(workspace2), metadata={})
+    state2 = hb.HeartbeatState()
+    state_path2 = Path(workspace2) / hb.HEARTBEAT_STATE_FILE
+
+    await service2._run_heartbeat(
+        session2,
+        state2,
+        state_path2,
+        "",  # Empty heartbeat content
+        service2.default_schedule,
+        service2.default_delivery,
+        service2.default_visibility,
+    )
+
+    assert gateway2.execute_calls == 0, "Agent should skip when HEARTBEAT.md is empty and no other work"
 
 
 @pytest.mark.asyncio

@@ -566,17 +566,19 @@ def test_system_schedule_review_task_is_dispatch_eligible() -> None:
         conn.close()
 
 
-def test_dispatch_queue_reports_below_threshold_reason() -> None:
+def test_dispatch_queue_low_priority_task_is_eligible_at_default_threshold() -> None:
+    """With the default threshold of 3, even a priority-1 agent-ready task (base
+    score 4.2) is eligible for dispatch — thresholds influence ORDER, not ELIGIBILITY."""
     conn = _conn()
     try:
         task_hub.upsert_item(
             conn,
             {
-                "task_id": "task:below-threshold",
+                "task_id": "task:low-pri-eligible",
                 "source_kind": "internal",
                 "source_ref": "ops",
-                "title": "Low score task",
-                "description": "Should be deferred",
+                "title": "Low priority task",
+                "description": "Should be eligible at default threshold",
                 "project_key": "immediate",
                 "priority": 1,
                 "labels": ["agent-ready"],
@@ -587,10 +589,10 @@ def test_dispatch_queue_reports_below_threshold_reason() -> None:
         )
         task_hub.rebuild_dispatch_queue(conn)
         queue = task_hub.get_dispatch_queue(conn, limit=20)
-        rows = [row for row in (queue.get("items") or []) if row.get("task_id") == "task:below-threshold"]
+        rows = [row for row in (queue.get("items") or []) if row.get("task_id") == "task:low-pri-eligible"]
         assert len(rows) == 1
-        assert rows[0]["eligible"] is False
-        assert rows[0]["skip_reason"] == "below_threshold"
+        assert rows[0]["eligible"] is True
+        assert rows[0]["skip_reason"] is None
     finally:
         conn.close()
 

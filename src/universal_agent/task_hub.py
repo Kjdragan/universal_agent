@@ -162,7 +162,7 @@ def _parse_iso(raw: Any) -> Optional[datetime]:
 
 def current_policy() -> TaskHubPolicy:
     return TaskHubPolicy(
-        agent_threshold=max(1, min(10, _safe_int(os.getenv("UA_TASK_AGENT_THRESHOLD"), 8))),
+        agent_threshold=max(1, min(10, _safe_int(os.getenv("UA_TASK_AGENT_THRESHOLD"), 3))),
         stale_enabled=str(os.getenv("UA_TASK_STALE_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"},
         stale_min_cycles=max(1, _safe_int(os.getenv("UA_TASK_STALE_MIN_CYCLES"), 4)),
         stale_min_age_minutes=max(10, _safe_int(os.getenv("UA_TASK_STALE_MIN_AGE_MINUTES"), 180)),
@@ -659,6 +659,23 @@ def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, f
     if not bool(task.get("agent_ready")):
         score -= 2.0
         details["not_agent_ready_penalty"] = -2.0
+
+    # Staleness bonus — tasks waiting longer naturally rise in priority.
+    # This ensures no task languishes indefinitely at the bottom of the queue.
+    created_dt = _parse_iso(task.get("created_at"))
+    if created_dt is not None:
+        age_hours = max(0.0, (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600.0)
+        if age_hours >= 24:
+            s_bonus = 2.0
+        elif age_hours >= 6:
+            s_bonus = 1.0
+        elif age_hours >= 2:
+            s_bonus = 0.5
+        else:
+            s_bonus = 0.0
+        if s_bonus > 0:
+            score += s_bonus
+            details["staleness_bonus"] = s_bonus
 
     final_score = max(1.0, min(10.0, round(score, 2)))
 

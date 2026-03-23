@@ -68,13 +68,13 @@ DEFAULT_HEARTBEAT_RETRY_BASE_SECONDS = max(
 )
 DEFAULT_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS = max(
     DEFAULT_HEARTBEAT_RETRY_BASE_SECONDS,
-    int(os.getenv("UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS", "300") or 300),
+    int(os.getenv("UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS", "3600") or 3600),
 )
 DEFAULT_HEARTBEAT_CONTINUATION_DELAY_SECONDS = max(
     1,
     int(os.getenv("UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS", "1") or 1),
 )
-DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 600
+DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 1600
 MIN_HEARTBEAT_EXEC_TIMEOUT = 600
 DEFAULT_ACK_MAX_CHARS = 300
 DEFAULT_OK_TOKENS = ["UA_HEARTBEAT_OK", "HEARTBEAT_OK"]
@@ -470,6 +470,7 @@ def _heartbeat_guard_policy(
     brainstorm_candidate_count: int,
     system_event_count: int,
     has_exec_completion: bool,
+    has_heartbeat_content: bool = False,
 ) -> dict[str, object]:
     autonomous_enabled = _parse_bool(
         os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED"),
@@ -508,6 +509,7 @@ def _heartbeat_guard_policy(
         and brainstorm_candidate_count <= 0
         and system_event_count <= 0
         and not has_exec_completion
+        and not has_heartbeat_content
     ):
         skip_reason = "no_actionable_work"
 
@@ -1488,6 +1490,7 @@ class HeartbeatService:
                 brainstorm_candidate_count=len(todoist_brainstorm_candidates),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
+                has_heartbeat_content=bool(heartbeat_content.strip()),
             )
             max_proactive_per_cycle = int(guard_policy.get("max_proactive_per_cycle") or 1)
             max_system_events = int(guard_policy.get("max_system_events") or 1)
@@ -1559,6 +1562,7 @@ class HeartbeatService:
                 brainstorm_candidate_count=int(dispatch_claimed_count or 0) + len(todoist_brainstorm_candidates),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
+                has_heartbeat_content=bool(heartbeat_content.strip()),
             )
             guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
             metadata["heartbeat_guard"] = {
