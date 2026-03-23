@@ -53,6 +53,16 @@ from universal_agent.prompt_assets import (
     generate_skills_xml,
 )
 from universal_agent.utils.message_history import MessageHistory, TRUNCATION_THRESHOLD
+
+def _get_history_instance(system_prompt_tokens=2000, session_id=None):
+    if os.getenv("UA_ENABLE_LOSSLESS_MEMORY", "1") == "1":
+        try:
+            from universal_agent.lossless_memory.history_adapter import LosslessMessageHistory
+            return LosslessMessageHistory(system_prompt_tokens=system_prompt_tokens, session_id=session_id)
+        except ImportError:
+            pass
+    return MessageHistory(system_prompt_tokens=system_prompt_tokens)
+
 from universal_agent import transcript_builder
 
 DEFAULT_AGENT_NAME = "Primary Agent"
@@ -1258,7 +1268,7 @@ class UniversalAgent:
         self._hooks = hooks
 
         # Initialize History
-        self.history = MessageHistory(system_prompt_tokens=2000)
+        self.history = _get_history_instance(system_prompt_tokens=2000, session_id=self.run_id)
 
     async def send_agent_event(self, event_type: EventType, data: dict) -> None:
         """
@@ -1343,7 +1353,7 @@ class UniversalAgent:
         self._initialized = True
 
         # Initialize MessageHistory for context management (Anthropic pattern)
-        self.history = MessageHistory(system_prompt_tokens=2000)
+        self.history = _get_history_instance(system_prompt_tokens=2000, session_id=self.run_id)
 
         # [FIX] Hydrate history from transcript if resuming a session
         try:
@@ -1543,7 +1553,7 @@ class UniversalAgent:
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
         agent._initialized = True
-        agent.history = MessageHistory(system_prompt_tokens=2000)
+        agent.history = _get_history_instance(system_prompt_tokens=2000, session_id=setup.run_id)
 
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=agent.run_id)
@@ -2439,7 +2449,8 @@ class UniversalAgent:
                     )
 
                     # Update History
-                    self.history.add_message("assistant", "response", usage_source)
+                    raw_blocks = getattr(msg, "content_blocks", []) if hasattr(msg, "content_blocks") else "response"
+                    self.history.add_message("assistant", raw_blocks, usage_source)
                     # Note: We rely on ContextManager for actual pruning handling now
 
                 elif isinstance(msg, (UserMessage, ToolResultBlock)):
