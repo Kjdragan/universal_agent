@@ -188,3 +188,49 @@ async def test_process_turn_adapter_restores_parent_env_after_client_spawn(monke
     assert os.environ["PROXY_USERNAME"] == "rotatingproxyua-rotate"
     assert os.environ["PROXY_PASSWORD"] == "super-secret"
     assert os.environ["NONCRITICAL_SECRET"] == "should-be-restored"
+
+
+@pytest.mark.asyncio
+async def test_execute_keeps_proxy_env_visible_to_process_turn(monkeypatch, tmp_path):
+    """process_turn should run with the parent gateway env intact."""
+
+    import universal_agent.main as main_module
+
+    observed_env: dict[str, str] = {}
+
+    async def _fake_ensure_client():
+        return object()
+
+    async def _fake_process_turn(**kwargs):
+        observed_env["PROXY_USERNAME"] = os.environ.get("PROXY_USERNAME", "")
+        observed_env["PROXY_PASSWORD"] = os.environ.get("PROXY_PASSWORD", "")
+        return types.SimpleNamespace(
+            reset_session=False,
+            tool_calls=0,
+            response_text="",
+            workspace_path=None,
+            trace_id=None,
+        )
+
+    monkeypatch.setattr(main_module, "process_turn", _fake_process_turn)
+    monkeypatch.setattr(main_module, "budget_state", {"start_ts": 0.0, "steps": 0, "tool_calls": 0})
+    monkeypatch.setenv("PROXY_USERNAME", "rotatingproxyua-rotate")
+    monkeypatch.setenv("PROXY_PASSWORD", "super-secret")
+
+    adapter = ProcessTurnAdapter(
+        EngineConfig(
+            workspace_dir=str(tmp_path),
+            user_id="test-user",
+            run_id="test-run",
+        )
+    )
+    adapter._options = types.SimpleNamespace(stderr=None, extra_args={})
+    monkeypatch.setattr(adapter, "_ensure_client", _fake_ensure_client)
+
+    async for _event in adapter.execute("check proxy env"):
+        pass
+
+    assert observed_env == {
+        "PROXY_USERNAME": "rotatingproxyua-rotate",
+        "PROXY_PASSWORD": "super-secret",
+    }
