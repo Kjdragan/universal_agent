@@ -263,6 +263,7 @@ export default function DashboardEventsPage() {
   const [actionableOnly, setActionableOnly] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [hideTransient, setHideTransient] = useState(false);
+  const [hideSystemNoise, setHideSystemNoise] = useState(true);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -402,16 +403,24 @@ export default function DashboardEventsPage() {
     /transient/i,
   ], []);
 
+  const _SYSTEM_NOISE_SOURCES = useMemo(() => new Set(["continuity", "system"]), []);
+
   const filteredItems = useMemo(() => {
-    if (!hideTransient) return items;
-    return items.filter((item) => {
-      const fc = String(item.metadata?.failure_class || "");
-      if (fc.startsWith("transient_") || fc === "maintenance_mode") return false;
-      const msg = (item.full_message || item.summary || "").toLowerCase();
-      if (_TRANSIENT_PATTERNS.some((re) => re.test(msg))) return false;
-      return true;
-    });
-  }, [items, hideTransient, _TRANSIENT_PATTERNS]);
+    let result = items;
+    if (hideSystemNoise) {
+      result = result.filter((item) => !_SYSTEM_NOISE_SOURCES.has(item.source_domain));
+    }
+    if (hideTransient) {
+      result = result.filter((item) => {
+        const fc = String(item.metadata?.failure_class || "");
+        if (fc.startsWith("transient_") || fc === "maintenance_mode") return false;
+        const msg = (item.full_message || item.summary || "").toLowerCase();
+        if (_TRANSIENT_PATTERNS.some((re) => re.test(msg))) return false;
+        return true;
+      });
+    }
+    return result;
+  }, [items, hideTransient, hideSystemNoise, _TRANSIENT_PATTERNS, _SYSTEM_NOISE_SOURCES]);
 
   const [copyBusy, setCopyBusy] = useState(false);
 
@@ -1149,6 +1158,14 @@ export default function DashboardEventsPage() {
             />
             Hide transient
           </label>
+          <label className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[12px] text-primary/80">
+            <input
+              type="checkbox"
+              checked={hideSystemNoise}
+              onChange={(event) => setHideSystemNoise(event.target.checked)}
+            />
+            Hide system
+          </label>
         </div>
 
         <div className="mt-2 flex flex-wrap gap-2">
@@ -1205,7 +1222,7 @@ export default function DashboardEventsPage() {
         <div className="space-y-1 overflow-y-auto pr-1 scrollbar-thin">
           {filteredItems.length === 0 && (
             <div className="rounded border border-border bg-background/40 px-3 py-4 text-sm text-muted-foreground">
-              {hideTransient && items.length > 0 ? `${items.length} event(s) hidden by transient filter.` : "No notifications/events found."}
+              {(hideTransient || hideSystemNoise) && items.length > 0 ? `${items.length - filteredItems.length} event(s) hidden by active filters.` : "No notifications/events found."}
             </div>
           )}
           {filteredItems.map((item) => {
@@ -1453,14 +1470,38 @@ export default function DashboardEventsPage() {
                   </div>
                 )}
 
-                {selected.entity_ref && Object.keys(selected.entity_ref).length > 0 && (
-                  <div className="space-y-1">
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Entity Ref</div>
-                    <pre className="rounded border border-border bg-background/50 p-3 text-[10px] text-foreground/80 overflow-x-auto whitespace-pre-wrap">
-                      {JSON.stringify(selected.entity_ref, null, 2)}
-                    </pre>
-                  </div>
-                )}
+                {selected.entity_ref && Object.keys(selected.entity_ref).length > 0 && (() => {
+                  const ref = selected.entity_ref as Record<string, unknown>;
+                  const links: { label: string; href: string }[] = [];
+                  if (typeof ref.route === "string" && ref.route) links.push({ label: `Go to ${String(ref.tab || "tab").charAt(0).toUpperCase() + String(ref.tab || "tab").slice(1)}`, href: ref.route });
+                  if (typeof ref.session_href === "string" && ref.session_href) links.push({ label: "Open Session", href: ref.session_href });
+                  if (typeof ref.report_href === "string" && ref.report_href) links.push({ label: "Open Report", href: ref.report_href });
+                  if (typeof ref.artifact_href === "string" && ref.artifact_href) links.push({ label: "Open Artifact", href: ref.artifact_href });
+                  const remaining = Object.fromEntries(Object.entries(ref).filter(([k]) => !["route", "tab", "session_href", "report_href", "artifact_href"].includes(k)));
+                  return (
+                    <div className="space-y-1">
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Entity Ref</div>
+                      {links.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {links.map((link) => (
+                            <a
+                              key={link.href}
+                              href={link.href}
+                              className="rounded border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20 no-underline transition-colors"
+                            >
+                              {link.label}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      {Object.keys(remaining).length > 0 && (
+                        <pre className="rounded border border-border bg-background/50 p-3 text-[10px] text-foreground/80 overflow-x-auto whitespace-pre-wrap">
+                          {JSON.stringify(remaining, null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {selected.metadata && Object.keys(selected.metadata).length > 0 && (
                   <div className="space-y-1">

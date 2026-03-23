@@ -2425,7 +2425,7 @@ CONTINUITY_RESUME_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_RESUME_SUCCESS_MI
 CONTINUITY_ATTACH_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_ATTACH_SUCCESS_MIN", "0.90") or 0.90)
 CONTINUITY_FAILURE_WARN_THRESHOLD = int(os.getenv("UA_CONTINUITY_FAILURE_WARN_THRESHOLD", "3") or 3)
 CONTINUITY_WINDOW_SECONDS = max(60, int(os.getenv("UA_CONTINUITY_WINDOW_SECONDS", "900") or 900))
-CONTINUITY_RATE_MIN_ATTEMPTS = max(1, int(os.getenv("UA_CONTINUITY_RATE_MIN_ATTEMPTS", "3") or 3))
+CONTINUITY_RATE_MIN_ATTEMPTS = max(1, int(os.getenv("UA_CONTINUITY_RATE_MIN_ATTEMPTS", "10") or 10))
 CONTINUITY_EVENT_RETENTION_SECONDS = max(
     CONTINUITY_WINDOW_SECONDS * 4,
     int(os.getenv("UA_CONTINUITY_EVENT_RETENTION_SECONDS", "3600") or 3600),
@@ -18869,7 +18869,13 @@ def _heartbeat_findings_from_artifacts(
     raw_findings = findings.get("findings")
     normalized_findings = raw_findings if isinstance(raw_findings, list) else []
     findings["findings"] = [row for row in normalized_findings if isinstance(row, dict)]
-    if not findings["findings"]:
+    # When overall_status is "ok" and findings is empty, that means the system
+    # is healthy — no findings is correct.  Only fall back to synthetic
+    # parse-failed findings when (a) there's an actual parse error, or
+    # (b) status is warn/critical with an empty findings array.
+    _overall = str(findings.get("overall_status") or "").strip().lower()
+    _ok_with_no_findings = _overall in {"ok", ""} and not parse_error
+    if not findings["findings"] and not _ok_with_no_findings:
         findings["findings"] = _heartbeat_fallback_findings(
             artifact_links=artifact_links,
             markdown_path=markdown_path,
@@ -19249,6 +19255,100 @@ async def _notify_operator_of_heartbeat_recommendation(payload: dict[str, Any]) 
     return True, "sent"
 
 
+_HEARTBEAT_AUTO_REMEDIATION_ENABLED = str(
+    os.getenv("UA_HEARTBEAT_AUTO_REMEDIATION_ENABLED", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _create_heartbeat_remediation_task(
+    *,
+    origin_id: str,
+    classification: str,
+    recommended_next_step: str,
+    proposed_changes: Any,
+    email_summary: str,
+    session_id: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Create a Task Hub item for autonomous remediation of a heartbeat finding.
+
+    Returns the upserted task dict, or None if creation was skipped/failed.
+    The task_id is deterministic based on classification so repeated heartbeat
+    cycles for the same root cause upsert rather than duplicate.
+    """
+    if not _HEARTBEAT_AUTO_REMEDIATION_ENABLED:
+        return None
+
+    classification_slug = re.sub(r"[^a-z0-9_]+", "_", classification.lower()).strip("_") or "unknown"
+    task_id = f"heartbeat_fix:{classification_slug}"
+
+    description_parts = []
+    if email_summary:
+        description_parts.append(f"**Summary**: {email_summary}")
+    if recommended_next_step:
+        description_parts.append(f"**Recommended Fix**: {recommended_next_step}")
+    if isinstance(proposed_changes, list) and proposed_changes:
+        changes_text = "\n".join(
+            f"- {str(c).strip()}" for c in proposed_changes if str(c).strip()
+        )
+        if changes_text:
+            description_parts.append(f"**Proposed Changes**:\n{changes_text}")
+    description_parts.append(f"\nSource notification: {origin_id}")
+    description_parts.append(
+        "This task was auto-created from a heartbeat investigation. "
+        "Apply the recommended fix and verify the issue is resolved."
+    )
+    description = "\n\n".join(description_parts)
+
+    title = f"Heartbeat Remediation: {classification.replace('_', ' ').title()}"
+    if len(title) > 120:
+        title = title[:117] + "..."
+
+    conn = None
+    try:
+        conn = connect_runtime_db(get_activity_db_path())
+        conn.row_factory = sqlite3.Row
+        task_hub.ensure_schema(conn)
+        result = task_hub.upsert_item(conn, {
+            "task_id": task_id,
+            "source_kind": "heartbeat_remediation",
+            "source_ref": origin_id,
+            "title": title,
+            "description": description,
+            "project_key": "proactive",
+            "priority": 2,
+            "labels": ["heartbeat-fix", "agent-ready", "auto-created"],
+            "status": "open",
+            "agent_ready": True,
+            "score": 7.0,
+            "score_confidence": 0.72,
+            "metadata": {
+                "classification": classification,
+                "origin_notification_id": origin_id,
+                "recommended_next_step": recommended_next_step,
+                "proposed_changes": proposed_changes if isinstance(proposed_changes, list) else [],
+                "auto_remediation": True,
+                "session_id": session_id,
+            },
+        })
+        logger.info(
+            "Created heartbeat remediation Task Hub item task_id=%s classification=%s origin=%s",
+            task_id,
+            classification,
+            origin_id,
+        )
+        return result
+    except Exception as exc:
+        logger.warning(
+            "Failed to create heartbeat remediation task for %s: %s",
+            origin_id,
+            exc,
+        )
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 async def _process_heartbeat_investigation_notification(payload: dict[str, Any]) -> None:
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     origin_id = str(metadata.get("source_notification_id") or "").strip()
@@ -19294,6 +19394,23 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
     )
 
     should_notify = operator_review_required or bool(metadata.get("unknown_rule_count"))
+
+    # --- Autonomous remediation: create a Task Hub item for actionable fixes ---
+    # When the investigation found an actionable fix but doesn't need operator
+    # review, inject a Task Hub task so the proactive pipeline picks it up.
+    has_actionable_fix = bool(recommended_next_step) or bool(
+        metadata.get("proposed_changes")
+    )
+    if has_actionable_fix and not operator_review_required:
+        _create_heartbeat_remediation_task(
+            origin_id=origin_id,
+            classification=str(metadata.get("classification") or "unknown_issue").strip(),
+            recommended_next_step=recommended_next_step,
+            proposed_changes=metadata.get("proposed_changes"),
+            email_summary=email_summary,
+            session_id=str(payload.get("session_id") or "").strip() or None,
+        )
+
     if not should_notify:
         return
     merged_notify_metadata = {
