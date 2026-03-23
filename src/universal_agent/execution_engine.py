@@ -23,7 +23,7 @@ import logging
 import uuid
 import traceback
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional
@@ -466,15 +466,38 @@ class ProcessTurnAdapter:
         """Lazily initialize and enter the persistent SDK client."""
         if self._client is None:
             from claude_agent_sdk.client import ClaudeSDKClient
-            # Guard against E2BIG: the SDK passes **os.environ to the child
-            # process.  With 190+ Infisical secrets and an ~85 KB system prompt
-            # CLI arg, the combined argv+envp can exceed Linux ARG_MAX (2 MB).
-            # Strip non-essential bloat vars only during subprocess spawn; the
-            # parent gateway process must retain its runtime secrets afterward.
+            from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+
+            # Guard against E2BIG: the SDK transport builds the child process
+            # env from process-global os.environ. Narrow sanitization to the
+            # actual subprocess spawn only; the parent gateway process must
+            # retain its runtime secrets before the SDK initialize handshake.
+            async def _empty_stream() -> AsyncIterator[dict[str, Any]]:
+                return
+                yield {}  # type: ignore[unreachable]
+
+            transport_options = self._options
+            if getattr(self._options, "can_use_tool", None):
+                if getattr(self._options, "permission_prompt_tool_name", None):
+                    raise ValueError(
+                        "can_use_tool callback cannot be used with permission_prompt_tool_name. "
+                        "Please use one or the other."
+                    )
+                transport_options = replace(
+                    self._options,
+                    permission_prompt_tool_name="stdio",
+                )
+
+            transport = SubprocessCLITransport(
+                prompt=_empty_stream(),
+                options=transport_options,
+            )
             with _temporary_sanitized_process_env():
-                self._client = ClaudeSDKClient(self._options)
-                # Enter the context manager manually
-                await self._client.__aenter__()
+                await transport.connect()
+
+            self._client = ClaudeSDKClient(self._options, transport=transport)
+            # Enter the context manager manually
+            await self._client.__aenter__()
         return self._client
     
     async def execute(self, user_input: str) -> AsyncIterator[AgentEvent]:
