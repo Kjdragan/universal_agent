@@ -169,6 +169,23 @@ def _temporary_env(overrides: dict[str, Optional[str]]) -> Any:
                 os.environ[key] = previous
 
 
+@contextmanager
+def _temporary_sanitized_process_env() -> Any:
+    """Temporarily sanitize the process env for child-process spawn only.
+
+    Some SDK transports build the child env directly from ``os.environ`` and do
+    not accept a replacement mapping. We still need to protect the parent
+    gateway process from losing runtime secrets after the child is spawned.
+    """
+    original = dict(os.environ)
+    try:
+        sanitize_env_for_subprocess()
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(original)
+
+
 # ---------------------------------------------------------------------------
 # Environment sanitisation guard – prevent E2BIG on subprocess spawn
 # ---------------------------------------------------------------------------
@@ -452,11 +469,12 @@ class ProcessTurnAdapter:
             # Guard against E2BIG: the SDK passes **os.environ to the child
             # process.  With 190+ Infisical secrets and an ~85 KB system prompt
             # CLI arg, the combined argv+envp can exceed Linux ARG_MAX (2 MB).
-            # Strip non-essential bloat vars BEFORE the subprocess is spawned.
-            sanitize_env_for_subprocess()
-            self._client = ClaudeSDKClient(self._options)
-            # Enter the context manager manually
-            await self._client.__aenter__()
+            # Strip non-essential bloat vars only during subprocess spawn; the
+            # parent gateway process must retain its runtime secrets afterward.
+            with _temporary_sanitized_process_env():
+                self._client = ClaudeSDKClient(self._options)
+                # Enter the context manager manually
+                await self._client.__aenter__()
         return self._client
     
     async def execute(self, user_input: str) -> AsyncIterator[AgentEvent]:
