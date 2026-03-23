@@ -25,6 +25,7 @@ type AgentQueueItem = {
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
+  source_ref?: string;
   url?: string;
 };
 
@@ -126,6 +127,7 @@ type CompletedTaskItem = {
   updated_at?: string;
   completed_at?: string;
   source_kind?: string;
+  source_ref?: string;
   last_assignment?: {
     assignment_id?: string;
     agent_id?: string;
@@ -224,6 +226,7 @@ function sourceKindPill(kind?: string) {
     todoist: "border-teal-700/60 bg-teal-900/25 text-teal-200",
     internal: "border-sky-700/60 bg-sky-900/25 text-sky-200",
     approval: "border-amber-700/60 bg-amber-900/25 text-amber-200",
+    email: "border-indigo-700/60 bg-indigo-900/25 text-indigo-200",
     csi: "border-border/60 bg-card/40 text-muted-foreground",
   };
   const style = styles[k] ?? "border-border/60 bg-card/40 text-muted-foreground";
@@ -239,7 +242,7 @@ function isGatewayUpstreamUnavailable(status: number, detail: string): boolean {
 }
 
 /** Derive the external/internal reference URL for a task based on its source. */
-function taskSourceUrl(taskId: string, sourceKind?: string, explicitUrl?: string): string | null {
+function taskSourceUrl(taskId: string, sourceKind?: string, explicitUrl?: string, sourceRef?: string): string | null {
   if (explicitUrl) return explicitUrl;
   const k = String(sourceKind || "").toLowerCase();
   if (k === "todoist") {
@@ -248,6 +251,13 @@ function taskSourceUrl(taskId: string, sourceKind?: string, explicitUrl?: string
   }
   if (k === "approval") {
     return "/dashboard/approvals";
+  }
+  if (k === "email" && sourceRef) {
+    // source_ref format: "agentmail_thread:{thread_id}"
+    const threadId = sourceRef.startsWith("agentmail_thread:") ? sourceRef.slice(17) : sourceRef;
+    if (threadId) {
+      return `/dashboard/mail?thread=${encodeURIComponent(threadId)}`;
+    }
   }
   // internal / system_command / csi / etc. — no external reference
   return null;
@@ -306,6 +316,8 @@ export default function ToDoListDashboardPage() {
   const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
   const [taskHistoryLoadingId, setTaskHistoryLoadingId] = useState("");
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
+  const [selectedSessionDetail, setSelectedSessionDetail] = useState<any | null>(null);
+  const [sessionDetailLoading, setSessionDetailLoading] = useState("");
   const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(() => {
     try {
       const stored = localStorage.getItem("ua.deleted_completed_tasks.v1");
@@ -501,6 +513,27 @@ export default function ToDoListDashboardPage() {
     }
   }, [completedTasks, load]);
 
+  const handleOpenSession = useCallback(async (sessionId: string) => {
+    setSessionDetailLoading(sessionId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sessionId)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(String(payload?.detail || `Session fetch failed (${res.status})`));
+      }
+      const payload = await res.json();
+      setSelectedSessionDetail(payload?.session || payload);
+      setError("");
+    } catch (err: any) {
+      setError(err?.message || "Failed to load session details.");
+    } finally {
+      setSessionDetailLoading("");
+    }
+  }, []);
+
   // ── Derived data ────────────────────────────────────────────────────────────
 
   const allQueueItems = useMemo(() => Array.isArray(agentQueue?.items) ? agentQueue!.items : [], [agentQueue]);
@@ -612,7 +645,7 @@ export default function ToDoListDashboardPage() {
             </div>
             <h3 className="font-semibold text-foreground text-sm leading-snug">
               {(() => {
-                const href = taskSourceUrl(item.task_id, item.source_kind, item.url);
+                const href = taskSourceUrl(item.task_id, item.source_kind, item.url, item.source_ref);
                 if (href) {
                   const isExternal = href.startsWith("http");
                   return isExternal ? (
@@ -743,7 +776,7 @@ export default function ToDoListDashboardPage() {
             {(() => {
               // Prefer session link, then Todoist/source URL
               const sessionHref = item.links?.session_href;
-              const sourceHref = taskSourceUrl(item.task_id, item.source_kind);
+              const sourceHref = taskSourceUrl(item.task_id, item.source_kind, undefined, item.source_ref);
               const href = sessionHref || sourceHref;
               if (href) {
                 const isExternal = href.startsWith("http");
@@ -789,13 +822,14 @@ export default function ToDoListDashboardPage() {
         >
           Inspect
         </button>
-        {item.links?.session_href ? (
-          <Link
-            href={String(item.links.session_href)}
-            className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35"
+        {item.links?.session_id ? (
+          <button
+            onClick={() => void handleOpenSession(String(item.links!.session_id))}
+            disabled={sessionDetailLoading === String(item.links!.session_id)}
+            className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
           >
-            Session
-          </Link>
+            {sessionDetailLoading === String(item.links!.session_id) ? "Loading…" : "Session"}
+          </button>
         ) : null}
         {item.links?.run_log_href ? (
           <a
@@ -836,6 +870,84 @@ export default function ToDoListDashboardPage() {
           <div className="flex-none flex justify-end border-t border-border bg-background/50 p-4">
             <button
               onClick={() => setSelectedTaskDetails(null)}
+              className="rounded border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-card/50"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Session detail modal ──────────────────────────────────────────────────────
+
+  const renderSessionDetailModal = () => {
+    if (!selectedSessionDetail) return null;
+    const s = selectedSessionDetail;
+    const rows: Array<{ label: string; value: React.ReactNode }> = [
+      { label: "Session ID", value: s.session_id || "—" },
+      { label: "Status", value: s.status || "—" },
+      { label: "Source", value: s.source || s.channel || "—" },
+      { label: "Owner", value: s.owner || "—" },
+      { label: "Description", value: s.description || "—" },
+      { label: "Created", value: formatTs(s.created_at) || "—" },
+      { label: "Last Activity", value: formatTs(s.last_activity) || "—" },
+      { label: "Active Runs", value: String(s.active_runs ?? 0) },
+      { label: "Active Connections", value: String(s.active_connections ?? 0) },
+      { label: "Has Run Log", value: s.has_run_log ? "Yes" : "No" },
+      { label: "Has Memory", value: s.has_memory ? "Yes" : "No" },
+      { label: "Checkpoint", value: s.has_checkpoint ? "Available" : "None" },
+    ];
+    if (s.checkpoint_original_request) {
+      rows.push({ label: "Original Request", value: s.checkpoint_original_request });
+    }
+    if (s.heartbeat_summary) {
+      rows.push({ label: "Heartbeat", value: s.heartbeat_summary });
+    }
+    if (s.last_run_source) {
+      rows.push({ label: "Last Run Source", value: s.last_run_source });
+    }
+    if (s.terminal_reason) {
+      rows.push({ label: "Terminal Reason", value: s.terminal_reason });
+    }
+
+    const sessionTabHref = `/dashboard/sessions?session_id=${encodeURIComponent(s.session_id || "")}`;
+
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="flex max-h-full w-full max-w-2xl flex-col rounded-xl border border-border bg-background shadow-2xl">
+          <div className="flex items-center justify-between border-b border-border bg-background/50 p-4">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Session Details</h2>
+              <p className="text-xs text-muted-foreground">{s.session_id || ""}</p>
+            </div>
+            <button
+              onClick={() => setSelectedSessionDetail(null)}
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="overflow-y-auto p-4 text-sm">
+            <div className="space-y-2">
+              {rows.map((row, idx) => (
+                <div key={idx} className="flex items-start gap-3 rounded border border-border/50 bg-background/40 px-3 py-2">
+                  <span className="w-36 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{row.label}</span>
+                  <span className="text-foreground/80 break-all text-[13px]">{row.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex-none flex items-center justify-between border-t border-border bg-background/50 p-4">
+            <Link
+              href={sessionTabHref}
+              className="text-xs text-sky-300 hover:text-sky-200 hover:underline transition-colors"
+            >
+              Open in Sessions Tab →
+            </Link>
+            <button
+              onClick={() => setSelectedSessionDetail(null)}
               className="rounded border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-card/50"
             >
               Close
@@ -889,13 +1001,14 @@ export default function ToDoListDashboardPage() {
                       started {formatTs(row.started_at)} · ended {formatTs(row.ended_at)}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      {row.links?.session_href ? (
-                        <Link
-                          href={String(row.links.session_href)}
-                          className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35"
+                      {(row.links?.session_id || row.session_id) ? (
+                        <button
+                          onClick={() => void handleOpenSession(String(row.links?.session_id || row.session_id))}
+                          disabled={sessionDetailLoading === String(row.links?.session_id || row.session_id)}
+                          className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
                         >
-                          Session
-                        </Link>
+                          {sessionDetailLoading === String(row.links?.session_id || row.session_id) ? "Loading…" : "Session"}
+                        </button>
                       ) : null}
                       {row.links?.run_log_href ? (
                         <a
@@ -944,6 +1057,7 @@ export default function ToDoListDashboardPage() {
   return (
     <div className="relative flex h-full flex-col gap-4 pb-6" onClick={() => setOpenActionMenuId(null)}>
       {renderTaskDetailsModal()}
+      {renderSessionDetailModal()}
 
       {/* ── Header ── */}
       <div className="flex flex-wrap items-start justify-between gap-2">

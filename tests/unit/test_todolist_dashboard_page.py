@@ -46,3 +46,16 @@ def test_todolist_dashboard_mission_focused_layout():
     assert "Human Intervention Required" not in content
     assert "CSI Escalation" not in content
     assert "/dashboard/csi#notifications" not in content
+
+
+def test_todolist_session_button_surfaces_inline():
+    """The Session button should fetch session details inline, not navigate to the Sessions tab."""
+    content = _PAGE.read_text(encoding="utf-8")
+    # Should use the ops session detail API for inline fetching
+    assert "api/v1/ops/sessions/" in content
+    assert "handleOpenSession" in content
+    assert "selectedSessionDetail" in content
+    assert "renderSessionDetailModal" in content
+    # Should include a fallback link to open full sessions tab
+    assert "Open in Sessions Tab" in content
+

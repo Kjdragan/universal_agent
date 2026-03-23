@@ -771,6 +771,39 @@ class AgentMailService:
         )
         return all_threads[:limit]
 
+    async def get_thread(self, thread_id: str) -> dict[str, Any]:
+        """Fetch a specific thread by ID, including all its messages.
+
+        Uses the top-level threads.get() API which returns a Thread object
+        with an embedded ``messages`` list — much more reliable than listing
+        recent messages globally and filtering.
+        """
+        self._assert_ready()
+        thd = await self._client.threads.get(thread_id=thread_id)
+        messages: list[dict[str, Any]] = []
+        for msg in getattr(thd, "messages", []) or []:
+            messages.append({
+                "message_id": getattr(msg, "message_id", ""),
+                "thread_id": getattr(msg, "thread_id", ""),
+                "from": getattr(msg, "from_", ""),
+                "to": getattr(msg, "to", ""),
+                "subject": getattr(msg, "subject", ""),
+                "text": (getattr(msg, "text", "") or "")[:2000],
+                "labels": getattr(msg, "labels", []),
+                "created_at": str(getattr(msg, "created_at", "")),
+            })
+        return {
+            "thread_id": getattr(thd, "thread_id", ""),
+            "inbox_id": getattr(thd, "inbox_id", ""),
+            "subject": getattr(thd, "subject", ""),
+            "preview": (getattr(thd, "preview", "") or "")[:200],
+            "labels": getattr(thd, "labels", []),
+            "message_count": getattr(thd, "message_count", 0),
+            "created_at": str(getattr(thd, "created_at", "")),
+            "updated_at": str(getattr(thd, "updated_at", "") or ""),
+            "messages": messages,
+        }
+
     def get_inbox_ids(self) -> list[str]:
         """Return all configured inbox IDs."""
         return list(self._inbox_ids) if self._inbox_ids else ([self._inbox_id] if self._inbox_id else [])

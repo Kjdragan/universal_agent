@@ -17804,13 +17804,17 @@ async def ops_agentmail_thread_messages(request: Request, thread_id: str):
     if _agentmail_service is None:
         raise HTTPException(status_code=503, detail="AgentMail service not initialized")
     try:
-        inbox_id = request.query_params.get("inbox_id")
-        messages = await _agentmail_service.list_messages(inbox_id=inbox_id, limit=50)
-        # Filter messages belonging to this thread
-        thread_messages = [m for m in messages if m.get("thread_id") == thread_id]
+        # Use get_thread() — returns the thread with all its messages directly,
+        # rather than filtering from a capped global messages list (which missed
+        # older threads and returned empty results).
+        thread_data = await _agentmail_service.get_thread(thread_id)
+        thread_messages = thread_data.get("messages", [])
         return {"ok": True, "messages": thread_messages, "count": len(thread_messages), "thread_id": thread_id}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.warning("ops_agentmail_thread_messages failed for thread=%s: %s", thread_id, exc)
+        raise HTTPException(status_code=404, detail=f"Thread not found or API error: {exc}")
 
 
 @app.get("/api/v1/ops/agentmail/drafts")
