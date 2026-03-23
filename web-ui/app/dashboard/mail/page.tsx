@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -116,6 +116,7 @@ const TOKENS = {
 
 export default function MailPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   /* ── State ─── */
   const [threads, setThreads] = useState<Thread[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -128,6 +129,7 @@ export default function MailPage() {
   const [msgsLoading, setMsgsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draftSending, setDraftSending] = useState<string | null>(null);
+  const deepLinkHandled = useRef(false);
 
   /* ── Fetchers ─── */
   const fetchThreads = useCallback(async (inboxId?: string) => {
@@ -229,6 +231,18 @@ export default function MailPage() {
       fetchThreads(selectedInbox || undefined);
     }
   }, [selectedInbox, fetchThreads]);
+
+  /* Deep-link: auto-select thread from ?thread= query param */
+  useEffect(() => {
+    if (deepLinkHandled.current || loading || threads.length === 0) return;
+    const threadId = searchParams.get("thread");
+    if (!threadId) return;
+    const match = threads.find((t) => t.thread_id === threadId);
+    if (match) {
+      deepLinkHandled.current = true;
+      fetchThreadMessages(match);
+    }
+  }, [threads, loading, searchParams, fetchThreadMessages]);
 
   /* ── Render ─── */
   return (
