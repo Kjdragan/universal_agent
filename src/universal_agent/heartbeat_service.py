@@ -47,6 +47,9 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Do not infer or repeat old tasks from prior chats. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
+_GLOBAL_HEARTBEAT_SESSION_PREFIXES = (
+    "session_hook_simone_heartbeat_",
+)
 INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS = (
     "Investigation-only mode: do not modify repository source files or run mutating shell commands. "
     "If you draft code, write artifacts under work_products/ or UA_ARTIFACTS_DIR only."
@@ -193,6 +196,32 @@ def _parse_duration_seconds(raw: str | None, default: int) -> int:
     if unit == "d":
         return amount * 86400
     return default
+
+
+def _session_prefers_global_heartbeat(session: GatewaySession) -> bool:
+    session_id = str(getattr(session, "session_id", "") or "").strip()
+    if any(session_id.startswith(prefix) for prefix in _GLOBAL_HEARTBEAT_SESSION_PREFIXES):
+        return True
+    metadata = getattr(session, "metadata", {}) or {}
+    if isinstance(metadata, dict):
+        source = str(metadata.get("source") or metadata.get("run_source") or "").strip().lower()
+        if source == "heartbeat":
+            return True
+    return False
+
+
+def _sync_heartbeat_file(target_path: Path, source_path: Path) -> bool:
+    if not source_path.exists():
+        return False
+    source_text = source_path.read_text(encoding="utf-8")
+    current_text = None
+    if target_path.exists():
+        current_text = target_path.read_text(encoding="utf-8")
+    if current_text == source_text:
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(source_text, encoding="utf-8")
+    return True
 
 
 def _resolve_heartbeat_interval_env(
@@ -1198,14 +1227,25 @@ class HeartbeatService:
 
         # Check HEARTBEAT.md (optional)
         hb_file = workspace / HEARTBEAT_FILE
-        
-        # Seed HEARTBEAT.md if missing
-        if not hb_file.exists() and GLOBAL_HEARTBEAT_PATH.exists():
+        prefer_global_heartbeat = _session_prefers_global_heartbeat(session)
+
+        # Seed or refresh HEARTBEAT.md from global memory for managed heartbeat
+        # sessions so operational instruction changes propagate immediately.
+        if GLOBAL_HEARTBEAT_PATH.exists():
             try:
-                shutil.copy(GLOBAL_HEARTBEAT_PATH, hb_file)
-                logger.info("Seeded %s from global memory for session %s", HEARTBEAT_FILE, session.session_id)
+                if prefer_global_heartbeat:
+                    changed = _sync_heartbeat_file(hb_file, GLOBAL_HEARTBEAT_PATH)
+                    if changed:
+                        logger.info(
+                            "Refreshed %s from global memory for session %s",
+                            HEARTBEAT_FILE,
+                            session.session_id,
+                        )
+                elif not hb_file.exists():
+                    shutil.copy(GLOBAL_HEARTBEAT_PATH, hb_file)
+                    logger.info("Seeded %s from global memory for session %s", HEARTBEAT_FILE, session.session_id)
             except Exception as e:
-                logger.warning("Failed to seed HEARTBEAT.md for %s: %s", session.session_id, e)
+                logger.warning("Failed to prepare HEARTBEAT.md for %s: %s", session.session_id, e)
 
         # Some agent/tooling conventions look for memory files under
         # <workspace>/memory/. Seed there too (without overwriting) so heartbeat
@@ -1214,7 +1254,9 @@ class HeartbeatService:
             mem_dir = workspace / "memory"
             mem_dir.mkdir(exist_ok=True)
             mem_hb_file = mem_dir / HEARTBEAT_FILE
-            if not mem_hb_file.exists():
+            if prefer_global_heartbeat and GLOBAL_HEARTBEAT_PATH.exists():
+                _sync_heartbeat_file(mem_hb_file, GLOBAL_HEARTBEAT_PATH)
+            elif not mem_hb_file.exists():
                 if hb_file.exists():
                     shutil.copy(hb_file, mem_hb_file)
                 elif GLOBAL_HEARTBEAT_PATH.exists():

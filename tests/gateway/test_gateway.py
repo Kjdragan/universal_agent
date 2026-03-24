@@ -197,19 +197,22 @@ class TestGatewayExecution:
             workspace_dir=str(tmp_path),
         )
         request = GatewayRequest(user_input="Test query")
-        
+
+        class _FakeAdapter:
+            def __init__(self) -> None:
+                self.config = MagicMock()
+
+            async def execute(self, _user_input):
+                yield MagicMock(type="status", data={"status": "processing"})
+                yield MagicMock(type="iteration_end", data={"trace_id": "test-trace"})
+
+        gateway._adapters[session.session_id] = _FakeAdapter()
+
         events = []
-        try:
-            async for event in gateway.execute(session, request):
-                events.append(event)
-                # Limit to avoid long-running test
-                if len(events) >= 5:
-                    break
-        except Exception:
-            # May fail without actual LLM, but structure should work
-            pass
-        
-        # At minimum, should not crash
+        async for event in gateway.execute(session, request):
+            events.append(event)
+
+        assert len(events) == 2
 
     @pytest.mark.asyncio
     async def test_run_query_returns_result(self, gateway, tmp_path):
@@ -234,3 +237,44 @@ class TestGatewayExecution:
             except Exception:
                 # Expected if mocking isn't complete
                 pass
+
+    @pytest.mark.asyncio
+    async def test_run_query_persists_automation_source_for_reaper(self, gateway, tmp_path):
+        session = await gateway.create_session(
+            user_id="webhook",
+            workspace_dir=str(tmp_path / "webhook_session"),
+        )
+        request = GatewayRequest(user_input="Test query", metadata={"source": "webhook"})
+
+        with patch.object(gateway, "execute") as mock_execute:
+            async def mock_events():
+                if False:
+                    yield
+
+            mock_execute.return_value = mock_events()
+            await gateway.run_query(session, request)
+
+        assert session.metadata["source"] == "webhook"
+        assert session.metadata["last_run_source"] == "webhook"
+        assert session.metadata["last_activity_at"]
+        assert gateway._reaper_ttl_seconds(session) == 600
+
+    @pytest.mark.asyncio
+    async def test_run_query_keeps_interactive_session_classification(self, gateway, tmp_path):
+        session = await gateway.create_session(
+            user_id="test_user",
+            workspace_dir=str(tmp_path / "interactive_session"),
+        )
+        session.metadata["source"] = "user"
+        request = GatewayRequest(user_input="Heartbeat check", metadata={"source": "heartbeat"})
+
+        with patch.object(gateway, "execute") as mock_execute:
+            async def mock_events():
+                if False:
+                    yield
+
+            mock_execute.return_value = mock_events()
+            await gateway.run_query(session, request)
+
+        assert session.metadata["source"] == "user"
+        assert session.metadata["last_run_source"] == "heartbeat"

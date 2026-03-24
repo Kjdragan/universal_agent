@@ -16,7 +16,7 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
 - Night execution window: run at least one mission-progress task
 ## Active Monitors and Tasks
 <!-- scope:hq -->
-- [ ] VPS System Health Check (run every heartbeat cycle — target: `srv1360701.taildcc090.ts.net` via Tailscale SSH as user `ua`, hosted on Hostinger VPS `srv1360701.hstgr.cloud`) - Collect and report system resource utilization. Run the following checks:
+- [ ] VPS System Health Check (run every heartbeat cycle — target: `uaonvps` via Tailscale SSH as user `ua`, hosted on Hostinger VPS `srv1360701.hstgr.cloud`) - Collect and report system resource utilization. Run the following checks:
     1. **CPU**: `uptime` (load averages vs core count from `nproc`)
     2. **RAM**: `free -h` (used vs total, swap usage)
     3. **Disk**: `df -h /` and `du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES/`

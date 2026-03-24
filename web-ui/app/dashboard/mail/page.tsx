@@ -84,6 +84,15 @@ function senderShortName(from: string): string {
   return at > 0 ? from.substring(0, at) : from;
 }
 
+async function readErrorDetail(res: Response, label: string): Promise<string> {
+  const raw = (await res.text().catch(() => "")).trim();
+  if (!raw) return `${label} ${res.status}`;
+  if (raw.includes("<html") || raw.includes("<!DOCTYPE html")) {
+    return `${label} ${res.status}: upstream timeout`;
+  }
+  return `${label} ${res.status}: ${raw}`;
+}
+
 /** Map known email patterns to avatar image paths */
 function getAvatar(emailOrName: string): { src: string; alt: string } | null {
   const lower = (emailOrName || "").toLowerCase();
@@ -141,61 +150,98 @@ export default function MailPage() {
   const [deletingThread, setDeletingThread] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"inbox" | "sent">("inbox");
   const deepLinkHandled = useRef(false);
+  const refreshAbortRef = useRef<AbortController | null>(null);
+  const refreshSeqRef = useRef(0);
 
   /* ── Fetchers ─── */
-  const fetchThreads = useCallback(async (inboxId?: string) => {
+  const fetchThreads = useCallback(async (inboxId?: string, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (inboxId) params.set("inbox_id", inboxId);
-    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/threads?${params}`);
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/threads?${params}`, {
+      cache: "no-store",
+      signal,
+    });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`threads ${res.status}${detail ? `: ${detail}` : ""}`);
+      throw new Error(await readErrorDetail(res, "threads"));
     }
     const data = await res.json();
-    setThreads(data.threads || []);
-    setInboxes(data.inboxes || []);
     return {
+      threads: data.threads || [],
+      inboxes: data.inboxes || [],
       partial: Boolean(data.partial),
       errors: Array.isArray(data.errors) ? (data.errors as MailFetchError[]) : [],
     };
   }, []);
 
-  const fetchDrafts = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts`);
+  const fetchDrafts = useCallback(async (signal?: AbortSignal) => {
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts`, {
+      cache: "no-store",
+      signal,
+    });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`drafts ${res.status}${detail ? `: ${detail}` : ""}`);
+      throw new Error(await readErrorDetail(res, "drafts"));
     }
     const data = await res.json();
-    setDrafts(data.drafts || []);
     return {
+      drafts: data.drafts || [],
       partial: Boolean(data.partial),
       errors: Array.isArray(data.errors) ? (data.errors as MailFetchError[]) : [],
     };
   }, []);
 
-  const fetchStatus = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail`);
+  const fetchStatus = useCallback(async (signal?: AbortSignal) => {
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail`, {
+      cache: "no-store",
+      signal,
+    });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`status ${res.status}${detail ? `: ${detail}` : ""}`);
+      throw new Error(await readErrorDetail(res, "status"));
     }
-    const data = await res.json();
-    setStatus(data);
+    return await res.json();
   }, []);
 
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
+  const fetchAll = useCallback(async (mode: "initial" | "manual" | "poll" = "manual") => {
+    const fetchId = refreshSeqRef.current + 1;
+    refreshSeqRef.current = fetchId;
+    refreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
+    const foreground = mode !== "poll";
+
+    if (foreground) {
+      setLoading(true);
+    }
     setError(null);
     setSyncWarning(null);
     const results = await Promise.allSettled([
-      fetchThreads(selectedInbox || undefined),
-      fetchDrafts(),
-      fetchStatus(),
+      fetchThreads(selectedInbox || undefined, controller.signal),
+      fetchDrafts(controller.signal),
+      fetchStatus(controller.signal),
     ]);
+
+    if (controller.signal.aborted || refreshSeqRef.current !== fetchId) {
+      return;
+    }
+
+    const threadsResult = results[0];
+    if (threadsResult.status === "fulfilled") {
+      setThreads(threadsResult.value.threads);
+      setInboxes(threadsResult.value.inboxes);
+    }
+
+    const draftsResult = results[1];
+    if (draftsResult.status === "fulfilled") {
+      setDrafts(draftsResult.value.drafts);
+    }
+
+    const statusResult = results[2];
+    if (statusResult.status === "fulfilled") {
+      setStatus(statusResult.value as MailStatus);
+    }
 
     const failures = results
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .filter((result) => !String(result.reason || "").includes("AbortError"))
       .map((result) => String(result.reason));
     if (failures.length > 0) {
       setError(
@@ -216,7 +262,9 @@ export default function MailPage() {
     if (warnings.length > 0) {
       setSyncWarning(`Partial AgentMail data: ${warnings.join(" | ")}`);
     }
-    setLoading(false);
+    if (foreground && refreshSeqRef.current === fetchId) {
+      setLoading(false);
+    }
   }, [fetchThreads, fetchDrafts, fetchStatus, selectedInbox]);
 
   const fetchThreadMessages = useCallback(async (thread: Thread) => {
@@ -226,7 +274,8 @@ export default function MailPage() {
       const params = new URLSearchParams();
       if (thread.inbox_id) params.set("inbox_id", thread.inbox_id);
       const res = await fetch(
-        `${API_BASE}/api/v1/ops/agentmail/threads/${thread.thread_id}/messages?${params}`
+        `${API_BASE}/api/v1/ops/agentmail/threads/${thread.thread_id}/messages?${params}`,
+        { cache: "no-store" }
       );
       if (!res.ok) throw new Error(`messages ${res.status}`);
       const data = await res.json();
@@ -246,7 +295,8 @@ export default function MailPage() {
         method: "POST",
       });
       if (!res.ok) throw new Error(`send draft ${res.status}`);
-      await fetchDrafts();
+      const data = await fetchDrafts();
+      setDrafts(data.drafts);
     } catch (e) {
       console.error("Failed to send draft", e);
       setError(`Failed to send draft ${draftId}: ${String(e)}`);
@@ -283,19 +333,15 @@ export default function MailPage() {
 
   /* ── Effects ─── */
   useEffect(() => {
-    fetchAll();
-    const interval = setInterval(fetchAll, 15_000);
-    return () => clearInterval(interval);
+    void fetchAll("initial");
+    const interval = setInterval(() => {
+      void fetchAll("poll");
+    }, 15_000);
+    return () => {
+      clearInterval(interval);
+      refreshAbortRef.current?.abort();
+    };
   }, [fetchAll]);
-
-  useEffect(() => {
-    if (selectedInbox !== undefined) {
-      fetchThreads(selectedInbox || undefined).catch((e: unknown) => {
-        console.error("Failed to fetch filtered threads", e);
-        setError(`Mail refresh incomplete. Showing last successful snapshot. ${String(e)}`);
-      });
-    }
-  }, [selectedInbox, fetchThreads]);
 
   /* Deep-link: auto-select thread from ?thread= query param */
   useEffect(() => {
@@ -402,7 +448,7 @@ export default function MailPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span
             className="material-symbols-outlined"
-            onClick={() => fetchAll()}
+            onClick={() => void fetchAll("manual")}
             title="Refresh"
             style={{
               fontSize: 22,

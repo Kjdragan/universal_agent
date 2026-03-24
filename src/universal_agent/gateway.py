@@ -1299,6 +1299,25 @@ class InProcessGateway(Gateway):
             (os.getenv("UA_RUNTIME_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"
         )
         workspace_root = Path(session.workspace_dir).resolve()
+        request_metadata = request.metadata or {}
+        run_source = str(request_metadata.get("source") or "user").strip().lower() or "user"
+
+        # Persist the canonical source onto automation-owned sessions so the
+        # inactivity reaper can apply the correct TTL. Interactive sessions keep
+        # their long-lived source classification even if they later receive a
+        # background heartbeat or system event.
+        try:
+            if not isinstance(session.metadata, dict):
+                session.metadata = {}
+            session.metadata["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+            session.metadata["last_run_source"] = run_source
+            existing_source = str(session.metadata.get("source") or "").strip().lower()
+            if run_source != "user" and existing_source not in {"user", "interactive"}:
+                session.metadata["source"] = run_source
+            elif not existing_source:
+                session.metadata["source"] = run_source
+        except Exception:
+            pass
 
         def _write_sync_ready_marker(
             *,
@@ -1316,7 +1335,7 @@ class InProcessGateway(Gateway):
                 "session_id": session.session_id,
                 "state": str(state or "").strip().lower(),
                 "ready": bool(ready),
-                "run_source": str((request.metadata or {}).get("source") or "unknown"),
+                "run_source": run_source,
                 "updated_at_epoch": time.time(),
             }
             if started_at_epoch is not None:
@@ -1423,9 +1442,11 @@ class InProcessGateway(Gateway):
             execution_summary={"tool_calls": tool_calls, "duration_seconds": round(duration, 3)},
         )
 
-        # Stamp last_activity_at so the session reaper can measure inactivity.
+        # Stamp activity on completion so the session reaper measures from the
+        # end of the most recent turn rather than the beginning.
         try:
             session.metadata["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+            session.metadata["last_run_source"] = run_source
         except Exception:
             pass
 
@@ -1491,7 +1512,9 @@ class InProcessGateway(Gateway):
     # Session Reaper — activity-based TTL cleanup
     # ---------------------------------------------------------------------------
 
-    _ADMIN_SOURCES: frozenset[str] = frozenset({"cron", "heartbeat"})
+    _ADMIN_SOURCES: frozenset[str] = frozenset(
+        {"cron", "heartbeat", "hooks", "webhook", "ops", "system"}
+    )
     _VP_SOURCES: frozenset[str] = frozenset({"vp_mission", "vp.coder", "vp.general"})
 
     def _session_inactivity_seconds(self, session: GatewaySession) -> Optional[float]:
@@ -1511,7 +1534,8 @@ class InProcessGateway(Gateway):
         """Return inactivity TTL for this session, or None to never auto-close.
 
         TTL classes (all inactivity-based — sessions still executing are safe):
-          - source=cron / source=heartbeat  → UA_SESSION_ADMIN_TTL_SECONDS (default 600 s / 10 min)
+          - source=cron / heartbeat / webhook / hooks / ops / system
+                                               → UA_SESSION_ADMIN_TTL_SECONDS (default 600 s / 10 min)
           - source=vp_mission / vp.coder …  → UA_SESSION_VP_INACTIVITY_TTL_SECONDS (default 900 s / 15 min)
           - source=user (interactive)        → None (never auto-close)
         """

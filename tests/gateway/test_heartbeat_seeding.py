@@ -109,6 +109,43 @@ async def test_heartbeat_does_not_overwrite(tmp_path, mock_gateway, mock_connect
 
 
 @pytest.mark.asyncio
+async def test_managed_heartbeat_session_refreshes_from_global(tmp_path, mock_gateway, mock_connection_manager):
+    """Managed Simone heartbeat sessions should track the current global file."""
+
+    session_id = "session_hook_simone_heartbeat_ntf_test"
+    workspace = tmp_path / session_id
+    workspace.mkdir()
+
+    stale_hb = workspace / "HEARTBEAT.md"
+    stale_hb.write_text("# Old Instructions", encoding="utf-8")
+    mem_dir = workspace / "memory"
+    mem_dir.mkdir()
+    (mem_dir / "HEARTBEAT.md").write_text("# Older Instructions", encoding="utf-8")
+
+    global_memory = tmp_path / "memory_global"
+    global_memory.mkdir()
+    global_hb = global_memory / "HEARTBEAT.md"
+    global_hb.write_text("# Current Global Instructions", encoding="utf-8")
+
+    with patch("universal_agent.heartbeat_service.GLOBAL_HEARTBEAT_PATH", global_hb):
+        service = HeartbeatService(mock_gateway, mock_connection_manager)
+        session = GatewaySession(
+            session_id=session_id,
+            user_id="u1",
+            workspace_dir=str(workspace),
+            metadata={},
+        )
+
+        service.wake_sessions.add(session_id)
+        service.last_wake_reason[session_id] = "test"
+        with patch.object(service, "_run_heartbeat", new_callable=MagicMock):
+            await service._process_session(session)
+
+        assert stale_hb.read_text(encoding="utf-8") == "# Current Global Instructions"
+        assert (mem_dir / "HEARTBEAT.md").read_text(encoding="utf-8") == "# Current Global Instructions"
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_empty_content_records_skip_marker(tmp_path, mock_gateway, mock_connection_manager):
     """Empty HEARTBEAT.md should persist an explicit skip marker for UI visibility."""
     session_id = "test_session_empty_hb"
