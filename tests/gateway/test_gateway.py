@@ -239,6 +239,42 @@ class TestGatewayExecution:
                 pass
 
     @pytest.mark.asyncio
+    async def test_execute_initializes_adapter_for_registered_external_session(self, tmp_path, monkeypatch):
+        import universal_agent.gateway as gateway_module
+
+        class _FakeAdapter:
+            def __init__(self, config) -> None:
+                self.config = config
+
+            async def initialize(self):
+                return None
+
+            async def execute(self, _user_input):
+                yield MagicMock(type="status", data={"status": "processing"})
+                yield MagicMock(type="iteration_end", data={"trace_id": "daemon-trace"})
+
+        monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", _FakeAdapter)
+        monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+
+        gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+        workspace = tmp_path / "workspaces" / "daemon_simone_20260324_000000_deadbeef"
+        workspace.mkdir(parents=True)
+        session = GatewaySession(
+            session_id="daemon_simone",
+            user_id="daemon",
+            workspace_dir=str(workspace),
+            metadata={"source": "daemon"},
+        )
+        gateway.register_existing_session(session)
+
+        request = GatewayRequest(user_input="Heartbeat work")
+        events = [event async for event in gateway.execute(session, request)]
+
+        assert len(events) == 2
+        assert "daemon_simone" in gateway._adapters
+        assert gateway._sessions["daemon_simone"].workspace_dir == str(workspace.resolve())
+
+    @pytest.mark.asyncio
     async def test_run_query_persists_automation_source_for_reaper(self, gateway, tmp_path):
         session = await gateway.create_session(
             user_id="webhook",

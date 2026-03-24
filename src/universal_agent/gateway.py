@@ -310,6 +310,16 @@ class InProcessGateway(Gateway):
         if self._use_legacy:
             self._bridge = AgentBridge(hooks=hooks)
 
+    def register_existing_session(self, session: GatewaySession) -> GatewaySession:
+        """Register an externally provisioned session with the gateway.
+
+        Daemon sessions are created outside the normal gateway create/resume flow,
+        but they still need to participate in execution, listing, and adapter
+        lifecycle management.
+        """
+        self._sessions[session.session_id] = session
+        return session
+
     def _get_session_exec_lock(self, session_id: str) -> asyncio.Lock:
         """Return (creating if needed) the per-session execution lock."""
         if session_id not in self._session_exec_locks:
@@ -509,39 +519,46 @@ class InProcessGateway(Gateway):
     async def _resume_session_new(self, session_id: str) -> GatewaySession:
         """Resume a session on the unified engine path. Caller must hold _execution_lock."""
         # === NEW UNIFIED PATH ===
-        # Check if session exists in memory
-        if session_id in self._sessions:
-            return self._sessions[session_id]
+        from universal_agent.identity import resolve_user_id
 
-        # Try to find workspace on disk
-        workspace_path = self._workspace_base / session_id
+        session = self._sessions.get(session_id)
+        if session is None:
+            # Try to find workspace on disk using the legacy "workspace dir ==
+            # session_id" convention used by ordinary interactive sessions.
+            workspace_path = self._workspace_base / session_id
+            if not workspace_path.exists():
+                raise ValueError(f"Unknown session_id: {session_id}")
+            session = GatewaySession(
+                session_id=session_id,
+                user_id=resolve_user_id(),
+                workspace_dir=str(workspace_path),
+                metadata={},
+            )
+
+        if session_id in self._adapters:
+            self._sessions[session_id] = session
+            return session
+
+        workspace_path = Path(str(session.workspace_dir or "")).resolve()
         if not workspace_path.exists():
             raise ValueError(f"Unknown session_id: {session_id}")
 
-        # Recreate adapter for existing workspace
-        from universal_agent.identity import resolve_user_id
-
         config = EngineConfig(
             workspace_dir=str(workspace_path),
-            user_id=resolve_user_id(),
+            user_id=str(session.user_id or resolve_user_id() or "unknown"),
         )
         adapter = ProcessTurnAdapter(config)
         await adapter.initialize()
 
         self._adapters[session_id] = adapter
 
-        token_usage = self._read_token_usage_from_trace(workspace_path)
-        
-        session = GatewaySession(
-            session_id=session_id,
-            user_id=config.user_id or "unknown",
-            workspace_dir=str(workspace_path),
-            metadata={
-                "engine": "process_turn",
-                "resumed": True,
-                "usage": token_usage,
-            },
-        )
+        metadata = dict(session.metadata or {})
+        metadata.setdefault("engine", "process_turn")
+        metadata["resumed"] = True
+        metadata["usage"] = self._read_token_usage_from_trace(workspace_path)
+        session.user_id = config.user_id or session.user_id or "unknown"
+        session.workspace_dir = str(workspace_path)
+        session.metadata = metadata
         self._sessions[session_id] = session
 
         return session

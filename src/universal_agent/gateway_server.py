@@ -11205,6 +11205,9 @@ async def lifespan(app: FastAPI):
                     heartbeat_service=_heartbeat_service,
                 )
                 _daemon_ids = _daemon_session_manager.ensure_daemon_sessions()
+                for daemon_session in _daemon_session_manager.sessions.values():
+                    get_gateway().register_existing_session(daemon_session)
+                    store_session(daemon_session)
                 # Clean up old archived daemon workspaces (>48h)
                 _daemon_session_manager.cleanup_old_archives(max_age_hours=48)
             else:
