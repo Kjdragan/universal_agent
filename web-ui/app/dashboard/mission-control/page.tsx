@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, Download, Loader2, RefreshCw, Timer, TrendingUp, Cpu, XCircle } from "lucide-react";
+import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, DollarSign, Download, Loader2, RefreshCw, Timer, TrendingUp, Cpu, XCircle } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -983,6 +983,192 @@ function HeartbeatChip() {
   );
 }
 
+
+// Freelance Pipeline types
+type FreelanceOpportunity = {
+  id: string;
+  title: string;
+  platform: string;
+  rate?: string;
+  fit_score?: number;
+  status: string;
+  created_at: string;
+};
+
+type FreelanceApplication = {
+  id: string;
+  position_title: string;
+  platform: string;
+  company?: string;
+  status: string;
+  created_at: string;
+};
+
+type FreelancePipelineSummary = {
+  opportunities: FreelanceOpportunity[];
+  applications: FreelanceApplication[];
+  stats: {
+    total_opportunities: number;
+    active_applications: number;
+    draft_applications: number;
+    submitted_applications: number;
+    responses: number;
+    interviews: number;
+    success_rate: number;
+  };
+};
+
+// Freelance Pipeline Panel
+function FreelancePipelinePanel() {
+  const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<FreelancePipelineSummary | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/freelance/pipeline`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to load: ${res.status}`);
+      }
+      const json = await res.json();
+      setData(json as FreelancePipelineSummary);
+    } catch (err: any) {
+      setError(err.message || "Failed to load freelance pipeline");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load, refreshKey]);
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-border bg-background/70 p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Briefcase className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
+        </div>
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-border bg-background/70 p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Briefcase className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
+        </div>
+        <div className="flex flex-col items-center justify-center py-6 text-center">
+          <XCircle className="mb-2 h-8 w-8 text-red-400" />
+          <p className="text-sm text-muted-foreground">{error}</p>
+          <button
+            onClick={load}
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const { opportunities, applications, stats } = data || {
+    opportunities: [],
+    applications: [],
+    stats: { total_opportunities: 0, active_applications: 0, draft_applications: 0, submitted_applications: 0, responses: 0, interviews: 0, success_rate: 0 }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <Link href="/dashboard/todolist" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <Briefcase className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
+        </Link>
+        <span className="text-xs text-muted-foreground">
+          {stats.total_opportunities} opps · {stats.active_applications} apps
+        </span>
+      </div>
+
+      {/* Stats Row */}
+      <div className="mb-3 grid grid-cols-5 gap-2 text-center">
+        <div className="rounded-lg bg-card/30 p-2">
+          <p className="text-lg font-bold text-foreground">{stats.draft_applications}</p>
+          <p className="text-xs text-muted-foreground">Drafts</p>
+        </div>
+        <div className="rounded-lg bg-card/30 p-2">
+          <p className="text-lg font-bold text-foreground">{stats.submitted_applications}</p>
+          <p className="text-xs text-muted-foreground">Sent</p>
+        </div>
+        <div className="rounded-lg bg-card/30 p-2">
+          <p className="text-lg font-bold text-accent">{stats.responses}</p>
+          <p className="text-xs text-muted-foreground">Replies</p>
+        </div>
+        <div className="rounded-lg bg-card/30 p-2">
+          <p className="text-lg font-bold text-accent">{stats.interviews}</p>
+          <p className="text-xs text-muted-foreground">Calls</p>
+        </div>
+        <div className="rounded-lg bg-card/30 p-2">
+          <p className="text-lg font-bold text-primary">{stats.success_rate.toFixed(0)}%</p>
+          <p className="text-xs text-muted-foreground">Win %</p>
+        </div>
+      </div>
+
+      {/* Applications List */}
+      {applications.length > 0 && (
+        <div className="max-h-40 space-y-1.5 overflow-y-auto">
+          {applications.slice(0, 4).map((app) => (
+            <div
+              key={app.id}
+              className="rounded-lg border border-border/50 bg-card/30 p-2"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-medium text-foreground leading-snug line-clamp-1">
+                  {app.position_title}
+                </p>
+                <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${statusColor(app.status)}`}>
+                  {app.status}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
+                  {app.platform}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {formatTs(app.created_at)}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {applications.length === 0 && (
+        <div className="flex flex-1 items-center justify-center py-4">
+          <p className="text-sm text-muted-foreground">No active applications</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Mission Control Dashboard
  *
@@ -1110,9 +1296,10 @@ export default function MissionControlPage() {
           <SystemStatusPanel />
           <SystemResourcesPanel />
         </div>
-        <div className="grid flex-1 gap-4 md:grid-cols-2">
+        <div className="grid flex-1 gap-4 md:grid-cols-3">
           <RecentEventsPanel />
           <CSISignalsPanel />
+          <FreelancePipelinePanel />
         </div>
       </div>
     </RefreshContext.Provider>

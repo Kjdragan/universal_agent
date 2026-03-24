@@ -12090,6 +12090,138 @@ async def dashboard_csi_purge():
     return {"ok": True, "total_purged": total, "detail": counts}
 
 
+# ---------------------------------------------------------------------------
+# Freelance Pipeline Dashboard Endpoints
+# ---------------------------------------------------------------------------
+
+_FREELANCE_ARTIFACTS_DIR = Path(__file__).parent.parent.parent / "artifacts" / "freelance"
+
+
+def _scan_freelance_opportunities() -> list[dict]:
+    """Scan freelance opportunities from artifacts directory."""
+    opportunities = []
+    opps_dir = _FREELANCE_ARTIFACTS_DIR / "opportunities"
+    if not opps_dir.exists():
+        opps_dir.mkdir(parents=True, exist_ok=True)
+        return opportunities
+
+    for fname in os.listdir(opps_dir):
+        if fname.endswith(".md"):
+            filepath = opps_dir / fname
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    lines = content.split("\n")
+                    title = lines[0].replace("# ", "").strip() if lines[0].startswith("# ") else "Untitled"
+                    platform = "Unknown"
+                    rate = None
+                    fit_score = 0
+                    status = "active"
+                    created_at = ""
+                    for line in lines[1:10]:
+                        line_lower = line.lower()
+                        if line_lower.startswith("platform:"):
+                            platform = line.split(":", 1)[-1].strip()
+                        elif line_lower.startswith("rate:"):
+                            rate = line.split(":", 1)[-1].strip()
+                        elif line_lower.startswith("fit score:"):
+                            try:
+                                fit_score = int(line.split(":", 1)[-1].strip().split("/")[0])
+                            except (ValueError, IndexError):
+                                pass
+                        elif line_lower.startswith("status:"):
+                            status = line.split(":", 1)[-1].strip().lower()
+                        elif line_lower.startswith("created:"):
+                            created_at = line.split(":", 1)[-1].strip()
+                    opportunities.append({
+                        "id": fname.replace(".md", ""),
+                        "title": title,
+                        "platform": platform,
+                        "rate": rate,
+                        "fit_score": fit_score,
+                        "status": status,
+                        "created_at": created_at,
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to parse opportunity file {filepath}: {e}")
+    return opportunities
+
+
+def _scan_freelance_applications() -> list[dict]:
+    """Scan freelance applications from artifacts directory."""
+    applications = []
+    apps_dir = _FREELANCE_ARTIFACTS_DIR / "applications"
+    if not apps_dir.exists():
+        apps_dir.mkdir(parents=True, exist_ok=True)
+        return applications
+
+    for fname in os.listdir(apps_dir):
+        if fname.endswith(".md"):
+            filepath = apps_dir / fname
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    lines = content.split("\n")
+                    position_title = lines[0].replace("# ", "").strip() if lines[0].startswith("# ") else "Untitled"
+                    platform = "Unknown"
+                    status = "drafted"
+                    company = None
+                    created_at = ""
+                    for line in lines[1:15]:
+                        line_lower = line.lower()
+                        if line_lower.startswith("platform:"):
+                            platform = line.split(":", 1)[-1].strip()
+                        elif line_lower.startswith("company:"):
+                            company = line.split(":", 1)[-1].strip()
+                        elif line_lower.startswith("status:"):
+                            status = line.split(":", 1)[-1].strip().lower()
+                        elif line_lower.startswith("created:"):
+                            created_at = line.split(":", 1)[-1].strip()
+                    applications.append({
+                        "id": fname.replace(".md", ""),
+                        "position_title": position_title,
+                        "platform": platform,
+                        "company": company,
+                        "status": status,
+                        "created_at": created_at,
+                        "artifact_path": str(filepath),
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to parse application file {filepath}: {e}")
+    return applications
+
+
+@app.get("/api/v1/dashboard/freelance/pipeline")
+async def dashboard_freelance_pipeline():
+    """Return freelance pipeline summary for Mission Control dashboard."""
+    opportunities = _scan_freelance_opportunities()
+    applications = _scan_freelance_applications()
+
+    total_opportunities = len(opportunities)
+    active_applications = len([a for a in applications if a["status"] not in ["rejected", "withdrawn"]])
+    draft_applications = len([a for a in applications if a["status"] == "drafted"])
+    submitted_applications = len([a for a in applications if a["status"] == "submitted"])
+    responses = len([a for a in applications if a["status"] in ["responded", "interview"]])
+    interviews = len([a for a in applications if a["status"] == "interview"])
+    accepted = len([a for a in applications if a["status"] == "accepted"])
+    success_rate = (accepted / max(1, len(applications)) * 100) if applications else 0
+
+    return {
+        "opportunities": opportunities[:10],
+        "applications": applications[:10],
+        "stats": {
+            "total_opportunities": total_opportunities,
+            "active_applications": active_applications,
+            "draft_applications": draft_applications,
+            "submitted_applications": submitted_applications,
+            "responses": responses,
+            "interviews": interviews,
+            "success_rate": round(success_rate, 1),
+        }
+    }
+
+
+
 
 @app.post("/api/v1/youtube/ingest")
 async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
