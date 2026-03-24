@@ -10,6 +10,7 @@
 | **Durable Execution** | The system's ability to survive restarts and crashes by persisting state and resuming from checkpoints. |
 | **Gateway** | A communication adapter that mediates between an interface (Telegram, CLI, Web) and the agent. |
 | **Heartbeat** | An autonomic loop that triggers periodic agent "thinking" turns without user input. |
+| **Heartbeat Environment Context** | A factory-aware context string injected into heartbeat prompts that tells the agent: (1) which machine/factory it's running on (`UA_MACHINE_SLUG`, `FACTORY_ROLE`), (2) the session workspace path, (3) to run commands locally (not SSH), (4) to use `mcp__internal__write_text_file` for file writes, and (5) to consolidate health checks into single compound commands. |
 | **MCP (Model Context Protocol)** | The protocol used to expose local and remote tools to the Claude Agent SDK. |
 | **OK Token** | A special string (e.g., `HEARTBEAT_OK`) used by the agent to indicate it has completed its background work. |
 | **Sub-agent** | A specialized agent instance created by the Primary Agent to handle a specific task (e.g., a "Research Specialist"). |
