@@ -60,7 +60,6 @@ graph LR
     MEM --> VEC
 ```
 
-![Proactive Pipeline Component Overview](diagrams/01_component_overview.png)
 
 ## 2. End-to-End Flow — Sequence Diagram
 
@@ -108,7 +107,6 @@ sequenceDiagram
     end
 ```
 
-![End-to-End Sequence Diagram](diagrams/02_sequence.png)
 
 ## 3. Guard Policy — Decision Flowchart
 
@@ -146,7 +144,6 @@ flowchart TD
     style Execute fill:#2d7d46,color:#fff
 ```
 
-![Guard Policy Decision Flowchart](diagrams/03_guard_policy.png)
 
 > [!NOTE]
 > **Key fix (2026-03-22):** Before this date, `HEARTBEAT.md` content was NOT
@@ -200,7 +197,6 @@ flowchart LR
     style Deferred fill:#b33,color:#fff
 ```
 
-![Task Hub Scoring & Dispatch](diagrams/04_scoring.png)
 
 > A standard `agent-ready` task scores 4.2 (base) and is always eligible at the
 > default threshold of 3. Scoring influences **dispatch order**, not eligibility.
@@ -244,7 +240,6 @@ graph TB
     end
 ```
 
-![Todoist 5-Project Taxonomy](diagrams/05_todoist_taxonomy.png)
 
 ### Task Lifecycle Labels
 
@@ -262,7 +257,6 @@ stateDiagram-v2
     human_only --> agent_ready: Released
 ```
 
-![Task Lifecycle State Diagram](diagrams/06_task_lifecycle.png)
 
 ## 6. Memory Integration (Implemented)
 
@@ -301,7 +295,6 @@ flowchart TD
     end
 ```
 
-![Memory-Enhanced Pipeline](diagrams/07_memory_enhanced.png)
 
 1. **Escalation Pre-Check** (`heartbeat_service.py` L1535–1553) — After task claim, queries `check_escalation_memory()` for each task's title. Past failure resolutions are attached as `escalation_history` on the claim so the agent doesn't repeat mistakes.
 
