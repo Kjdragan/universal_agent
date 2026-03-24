@@ -145,8 +145,7 @@ const NOTIFICATION_CATEGORIES = {
     match: (n: DashboardNotification) =>
       n.severity === "error" || n.severity === "critical" ||
       Boolean(n.requires_action) ||
-      n.kind === "continuity_alert" || n.kind === "system_error" ||
-      n.kind.startsWith("simone_") || n.kind.startsWith("agentmail_"),
+      n.kind === "continuity_alert" || n.kind === "system_error",
   },
   heartbeat: {
     label: "Heartbeat",
@@ -174,16 +173,10 @@ const NOTIFICATION_CATEGORIES = {
       n.kind === "cancelled" || n.kind === "calendar_missed" ||
       n.kind === "hook_event",
   },
-  simone: {
-    label: "Simone",
-    icon: "🤖",
-    match: (n: DashboardNotification) =>
-      n.kind.startsWith("simone_") || n.kind.startsWith("agentmail_"),
-  },
 } as const;
 type NotificationCategoryKey = keyof typeof NOTIFICATION_CATEGORIES | "all";
 const NOTIF_CATEGORY_KEYS: NotificationCategoryKey[] = [
-  "important", "heartbeat", "csi", "tutorials", "system", "simone", "all",
+  "important", "heartbeat", "csi", "tutorials", "system", "all",
 ];
 const SEVERITY_OPTIONS = ["all", "info", "warning", "error", "critical"] as const;
 

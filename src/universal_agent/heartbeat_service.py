@@ -268,16 +268,54 @@ def _resolve_heartbeat_investigation_only(default: bool = False) -> bool:
     return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
 
 
+def _build_heartbeat_environment_context(workspace_dir: str) -> str:
+    """Build environment context so heartbeat agents know where they are and how to write files.
+
+    This is factory-aware: when multiple factories exist (VPS HQ, desktop workers,
+    standalone nodes), the agent sees its own machine identity rather than a
+    hardcoded "you are on the VPS" instruction.
+    """
+    from universal_agent.runtime_role import resolve_machine_slug, resolve_factory_role
+    import socket
+
+    machine_slug = resolve_machine_slug()
+    factory_role = resolve_factory_role().value
+    hostname = socket.gethostname()
+
+    lines = [
+        "## Heartbeat Environment Context",
+        f"- Factory: {machine_slug} (role={factory_role}, host={hostname})",
+        f"- Session workspace: {workspace_dir}",
+        "- You are running LOCALLY on this machine. Do NOT SSH to it — run shell commands directly.",
+        "",
+        "### File Write Rules (MANDATORY)",
+        f"- Write all output files to `{workspace_dir}/work_products/` using `mcp__internal__write_text_file`.",
+        "- Do NOT use the native `Write` tool for new files (it requires a prior Read and will fail).",
+        "- Do NOT write to paths outside the session workspace (they will be blocked by workspace guards).",
+        "- Issue file write calls SEQUENTIALLY, not in parallel — sibling failures cascade and waste tool budget.",
+        "",
+        "### Health Check Efficiency",
+        "- Combine multiple shell health checks into a single compound Bash command where possible.",
+        "- Example: `uptime && echo '---' && free -h && echo '---' && df -h /`",
+    ]
+    return "\n".join(lines)
+
+
 def _compose_heartbeat_prompt(
     base_prompt: str,
     *,
     investigation_only: bool,
     task_hub_claims: list[dict[str, Any]],
+    workspace_dir: str = "",
 ) -> str:
     prompt = (base_prompt or DEFAULT_HEARTBEAT_PROMPT).strip()
     if "{ok_token}" in prompt:
         # Placeholder replacement happens separately where schedule.ok_tokens is available.
         pass
+    # Inject environment context so agents know where they run and how to write files.
+    if workspace_dir:
+        env_context = _build_heartbeat_environment_context(workspace_dir)
+        prompt = f"{prompt}\n\n{env_context}"
     if investigation_only and "investigation-only mode" not in prompt.lower():
         prompt = f"{prompt} {INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS}".strip()
     if task_hub_claims:
@@ -1687,6 +1725,7 @@ class HeartbeatService:
                 base_prompt,
                 investigation_only=heartbeat_investigation_only,
                 task_hub_claims=task_hub_claimed,
+                workspace_dir=str(session.workspace_dir),
             )
             
             full_response = ""

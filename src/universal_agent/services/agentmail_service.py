@@ -571,18 +571,7 @@ class AgentMailService:
         msg = await self._client.inboxes.messages.send(**kwargs)
         self._messages_sent += 1
         logger.info("📧 Sent email to=%s subject=%r message_id=%s", to, subject, msg.message_id)
-        self._emit_notification(
-            kind="agentmail_sent",
-            title="Simone Sent Email",
-            message=f"To: {to} | Subject: {subject}",
-            severity="info",
-            metadata={
-                "message_id": msg.message_id,
-                "to": to,
-                "subject": subject,
-                "inbox": self._inbox_address,
-            },
-        )
+        # Email notifications suppressed — dedicated Mail page provides visibility.
         return {"status": "sent", "message_id": msg.message_id, "inbox": self._inbox_address}
 
     async def _create_draft(
@@ -606,18 +595,7 @@ class AgentMailService:
             "📧 Draft created to=%s subject=%r draft_id=%s (awaiting approval)",
             to, subject, draft.draft_id,
         )
-        self._emit_notification(
-            kind="agentmail_draft_created",
-            title="Email Draft Created",
-            message=f"To: {to} | Subject: {subject} — approve or discard",
-            severity="info",
-            metadata={
-                "draft_id": draft.draft_id,
-                "to": to,
-                "subject": subject,
-                "inbox": self._inbox_address,
-            },
-        )
+        # Email notifications suppressed — dedicated Mail page provides visibility.
         return {"status": "draft", "draft_id": draft.draft_id, "inbox": self._inbox_address}
 
     async def send_draft(self, draft_id: str) -> dict[str, Any]:
@@ -1106,23 +1084,7 @@ class AgentMailService:
                         exc,
                     )
 
-            # Emit notification
-            self._emit_notification(
-                kind="agentmail_received",
-                title="New Email Received",
-                message=f"From: {sender} | Subject: {subject}",
-                severity="info",
-                metadata={
-                    "message_id": message_id,
-                    "thread_id": thread_id,
-                    "from": sender,
-                    "sender_email": sender_email,
-                    "sender_role": sender_role,
-                    "sender_trusted": sender_trusted,
-                    "subject": subject,
-                    "inbox": self._inbox_address,
-                },
-            )
+            # Email notifications suppressed — dedicated Mail page provides visibility.
 
             if sender_trusted and message_id and self._dispatch_with_admission_fn:
                 self._last_trusted_inbound_at = _iso_now()
@@ -1165,20 +1127,7 @@ class AgentMailService:
 
                 # No automatic ack reply — Kevin trusts Simone is working
                 # on the email and only expects a meaningful reply when done.
-                self._emit_notification(
-                    kind="agentmail_trusted_queued",
-                    title="Trusted Email Queued",
-                    message=f"Queued trusted inbound email from {sender_email}",
-                    severity="info",
-                    metadata={
-                        "message_id": message_id,
-                        "thread_id": thread_id,
-                        "queue_id": queue_id,
-                        "sender_email": sender_email,
-                        "subject": subject,
-                        "email_task_id": bridge_result.get("task_id", "") if bridge_result else "",
-                    },
-                )
+                # Email notifications suppressed — dedicated Mail page provides visibility.
                 self._queue_wakeup.set()
                 return
 
