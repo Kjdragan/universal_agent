@@ -154,9 +154,13 @@ export default function MailPage() {
   const refreshSeqRef = useRef(0);
 
   /* ── Fetchers ─── */
-  const fetchThreads = useCallback(async (inboxId?: string, signal?: AbortSignal) => {
+  const fetchThreads = useCallback(async (
+    options?: { inboxId?: string; label?: string },
+    signal?: AbortSignal,
+  ) => {
     const params = new URLSearchParams();
-    if (inboxId) params.set("inbox_id", inboxId);
+    if (options?.inboxId) params.set("inbox_id", options.inboxId);
+    if (options?.label) params.set("label", options.label);
     const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/threads?${params}`, {
       cache: "no-store",
       signal,
@@ -213,8 +217,15 @@ export default function MailPage() {
     }
     setError(null);
     setSyncWarning(null);
+    const activeLabel = viewMode === "sent" ? "sent" : undefined;
     const results = await Promise.allSettled([
-      fetchThreads(selectedInbox || undefined, controller.signal),
+      fetchThreads(
+        {
+          inboxId: selectedInbox || undefined,
+          label: activeLabel,
+        },
+        controller.signal,
+      ),
       fetchDrafts(controller.signal),
       fetchStatus(controller.signal),
     ]);
@@ -265,7 +276,7 @@ export default function MailPage() {
     if (foreground && refreshSeqRef.current === fetchId) {
       setLoading(false);
     }
-  }, [fetchThreads, fetchDrafts, fetchStatus, selectedInbox]);
+  }, [fetchThreads, fetchDrafts, fetchStatus, selectedInbox, viewMode]);
 
   const fetchThreadMessages = useCallback(async (thread: Thread) => {
     setSelectedThread(thread);
@@ -357,9 +368,9 @@ export default function MailPage() {
 
   /* ── Derived State ─── */
   const filteredThreads = threads.filter((t) => {
-    // If sent view, only show threads where inbox is a sender
+    // Sent view is already fetched from AgentMail's sent label.
     if (viewMode === "sent") {
-      return t.senders && t.senders.some((s) => s.includes(t.inbox_id));
+      return true;
     }
     // If inbox view, show threads where someone else sent it (or unknown)
     return !t.senders || t.senders.length === 0 || t.senders.some((s) => !s.includes(t.inbox_id));
