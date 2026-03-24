@@ -219,6 +219,9 @@ Key contents:
 | `src/universal_agent/heartbeat_mediation.py` | `sanitize_heartbeat_recommendation_text()`: rewrite stale provider-specific language in mediation output |
 | `src/universal_agent/process_heartbeat.py` | OS-level liveness writer (daemon thread, separate from this service) |
 | `src/universal_agent/hooks_service.py` | Hook completion handling for Simone heartbeat investigations |
+| `src/universal_agent/heartbeat_scope_filter.py` | `filter_heartbeat_by_scope()`: filters HEARTBEAT.md sections by factory role (HQ vs local worker) |
+| `src/universal_agent/delegation/heartbeat.py` | Factory heartbeat sender: periodic registration refresh with HQ for Corporation View stale detection |
+| `src/universal_agent/bot/heartbeat_adapter.py` | `BotConnectionAdapter`: adapts Telegram Bot for HeartbeatService broadcast interface |
 | `memory/HEARTBEAT.md` | Agent-facing operating instructions and active monitors |
 | `src/universal_agent/main.py` | Bootstraps the service during agent initialization |
 
