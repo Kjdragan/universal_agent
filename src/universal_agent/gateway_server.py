@@ -7475,6 +7475,71 @@ _SUPERSEDED_FAILURE_KINDS = frozenset({
 })
 
 
+def _notification_video_id(metadata: Any) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    return str(
+        metadata.get("video_id")
+        or metadata.get("video_key")
+        or metadata.get("youtube_video_id")
+        or ""
+    ).strip()
+
+
+def _notification_created_timestamp_value(item: dict[str, Any]) -> float:
+    raw = (
+        item.get("created_at_utc")
+        or item.get("created_at")
+        or item.get("updated_at_utc")
+        or item.get("updated_at")
+        or ""
+    )
+    parsed = _parse_iso_timestamp(str(raw or "").strip())
+    if parsed is None:
+        return 0.0
+    try:
+        return float(parsed.timestamp())
+    except Exception:
+        return 0.0
+
+
+def _filter_superseded_tutorial_notifications(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    latest_trigger_ts_by_video: dict[str, float] = {}
+    for item in items:
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in _SUPERSEDE_TRIGGER_KINDS:
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        video_id = _notification_video_id(metadata)
+        if not video_id:
+            continue
+        created_ts = _notification_created_timestamp_value(item)
+        if created_ts <= 0:
+            continue
+        previous = latest_trigger_ts_by_video.get(video_id, 0.0)
+        if created_ts > previous:
+            latest_trigger_ts_by_video[video_id] = created_ts
+
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind in _SUPERSEDED_FAILURE_KINDS:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            video_id = _notification_video_id(metadata)
+            trigger_ts = latest_trigger_ts_by_video.get(video_id, 0.0)
+            if trigger_ts > 0 and _notification_created_timestamp_value(item) <= trigger_ts:
+                continue
+        filtered.append(item)
+    return filtered
+
+
+def _notification_hidden_by_default(status: Any) -> bool:
+    normalized = _normalize_notification_status(status)
+    return normalized in {"dismissed", "resolved"}
+
+
 def _auto_resolve_superseded_failures(record: dict[str, Any]) -> None:
     """Soft-resolve prior failure notifications when a video succeeds or is recovered."""
     kind = str(record.get("kind") or "").strip().lower()
@@ -7545,6 +7610,19 @@ def _auto_resolve_superseded_failures(record: dict[str, Any]) -> None:
                         "Auto-resolved %d superseded failure notification(s) for video_id=%s (trigger=%s)",
                         len(resolved_ids), video_id, kind,
                     )
+                    resolved_set = set(resolved_ids)
+                    for existing in _notifications:
+                        if str(existing.get("id") or "") not in resolved_set:
+                            continue
+                        existing["status"] = "resolved"
+                        existing["requires_action"] = False
+                        existing["updated_at"] = _utc_now_iso()
+                        existing_meta = existing.get("metadata")
+                        if not isinstance(existing_meta, dict):
+                            existing_meta = {}
+                            existing["metadata"] = existing_meta
+                        existing_meta["resolved_reason"] = "auto_recovery"
+                        existing_meta["resolved_by_trigger"] = kind
             finally:
                 conn.close()
     except Exception:
@@ -16540,15 +16618,24 @@ async def dashboard_notifications(
                     "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
                 }
             )
+        notifications = _filter_superseded_tutorial_notifications(notifications)
+        if status is None:
+            notifications = [
+                item for item in notifications
+                if not _notification_hidden_by_default(item.get("status"))
+            ]
         if notifications:
             return {"notifications": notifications}
     except Exception as exc:
         logger.debug("Falling back to in-memory notifications: %s", exc)
 
     items = list(_notifications)
+    items = _filter_superseded_tutorial_notifications(items)
     if status:
         status_norm = status.strip().lower()
         items = [item for item in items if str(item.get("status", "")).lower() == status_norm]
+    else:
+        items = [item for item in items if not _notification_hidden_by_default(item.get("status"))]
     if safe_session_id:
         items = [item for item in items if item.get("session_id") == safe_session_id]
     if kind:
@@ -17808,7 +17895,7 @@ async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: b
             if kind not in _TUTORIAL_NOTIFICATION_KINDS:
                 continue
             status = str(row.get("status") or "new")
-            if not include_dismissed and _normalize_notification_status(status) == "dismissed":
+            if not include_dismissed and _notification_hidden_by_default(status):
                 continue
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
             created_at = str(row.get("created_at_utc") or _utc_now_iso())
@@ -17833,8 +17920,7 @@ async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: b
                     "metadata": metadata,
                 }
             )
-            if len(matching) >= clamped:
-                break
+        matching = _filter_superseded_tutorial_notifications(matching)[:clamped]
         if matching:
             return {"notifications": matching}
     except Exception as exc:
@@ -17845,9 +17931,10 @@ async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: b
         if n.get("kind") in _TUTORIAL_NOTIFICATION_KINDS
         and (
             include_dismissed
-            or _normalize_notification_status(n.get("status") or "new") != "dismissed"
+            or not _notification_hidden_by_default(n.get("status") or "new")
         )
-    ][:clamped]
+    ]
+    matching = _filter_superseded_tutorial_notifications(matching)[:clamped]
     return {"notifications": matching}
 
 

@@ -8,3 +8,4 @@ class ExecutionSession:
     run_id: Optional[str] = None
     trace: Optional[dict] = None
     runtime_db_conn: Optional[Any] = None
+    current_run_attempt_id: Optional[str] = None

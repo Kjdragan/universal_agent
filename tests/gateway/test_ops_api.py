@@ -2475,6 +2475,114 @@ def test_dashboard_tutorial_notifications_include_interrupted_kind(client):
     assert str((interrupted or {}).get("id") or "") in ids
 
 
+def test_dashboard_notifications_suppress_superseded_youtube_failure_rows(client):
+    gateway_server._notifications.clear()
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_stale_youtube_failure",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_failed",
+            "title": "YouTube Tutorial Processing Failed",
+            "summary": "Ox5cUHuVQgM: hook_dispatch_failed",
+            "full_message": "Ox5cUHuVQgM: hook_dispatch_failed",
+            "severity": "error",
+            "status": "new",
+            "requires_action": True,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T05:00:00+00:00",
+            "updated_at": "2026-03-25T05:00:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "Ox5cUHuVQgM"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_youtube_ready",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_ready",
+            "title": "YouTube Tutorial Artifacts Ready",
+            "summary": "Ox5cUHuVQgM artifacts are ready for review.",
+            "full_message": "Ox5cUHuVQgM artifacts are ready for review.",
+            "severity": "success",
+            "status": "new",
+            "requires_action": False,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T05:10:00+00:00",
+            "updated_at": "2026-03-25T05:10:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "Ox5cUHuVQgM"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+
+    resp = client.get("/api/v1/dashboard/notifications?limit=20")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    assert "ntf_youtube_ready" in ids
+    assert "ntf_stale_youtube_failure" not in ids
+
+
+def test_dashboard_tutorial_notifications_suppress_superseded_youtube_failure_rows(client):
+    gateway_server._notifications.clear()
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_stale_tutorial_failure",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_interrupted",
+            "title": "YouTube Tutorial Interrupted",
+            "summary": "Ox5cUHuVQgM: hook_dispatch_failed; retry queued.",
+            "full_message": "Ox5cUHuVQgM: hook_dispatch_failed; retry queued.",
+            "severity": "warning",
+            "status": "new",
+            "requires_action": True,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T05:00:00+00:00",
+            "updated_at": "2026-03-25T05:00:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "Ox5cUHuVQgM"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_tutorial_ready",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_ready",
+            "title": "YouTube Tutorial Artifacts Ready",
+            "summary": "Ox5cUHuVQgM artifacts are ready for review.",
+            "full_message": "Ox5cUHuVQgM artifacts are ready for review.",
+            "severity": "success",
+            "status": "new",
+            "requires_action": False,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T05:10:00+00:00",
+            "updated_at": "2026-03-25T05:10:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "Ox5cUHuVQgM"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=20&include_dismissed=true")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    assert "ntf_tutorial_ready" in ids
+    assert "ntf_stale_tutorial_failure" not in ids
+
+
 def test_dashboard_tutorial_active_runs_include_degraded_stage(client):
     gateway_server._add_notification(
         kind="youtube_playlist_new_video",
@@ -2523,7 +2631,7 @@ def test_ops_telegram_status_includes_pipeline_slices(client):
         title="New Tutorial Video Detected",
         message="Demo video queued",
         severity="info",
-        metadata={"video_id": "demo123"},
+        metadata={"video_id": "demo-interrupted"},
     )
     gateway_server._add_notification(
         kind="youtube_tutorial_ready",
@@ -2532,7 +2640,7 @@ def test_ops_telegram_status_includes_pipeline_slices(client):
         severity="success",
         requires_action=True,
         metadata={
-            "video_id": "demo123",
+            "video_id": "demo-ready",
             "tutorial_run_path": "youtube-tutorial-creation/demo-run",
             "repo_storage_href": "/storage?tab=explorer&scope=artifacts&path=tutorial_repos/demo_repo",
         },
@@ -2543,7 +2651,7 @@ def test_ops_telegram_status_includes_pipeline_slices(client):
         message="Run interrupted and queued for recovery.",
         severity="warning",
         requires_action=True,
-        metadata={"video_id": "demo123", "reason": "hook_dispatch_interrupted"},
+        metadata={"video_id": "demo-interrupted", "reason": "hook_dispatch_interrupted"},
     )
     gateway_server._add_notification(
         kind="youtube_hook_recovery_queued",

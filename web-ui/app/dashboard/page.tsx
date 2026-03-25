@@ -418,7 +418,7 @@ export default function DashboardPage() {
       setNotifications(
         Array.isArray(notificationsData.notifications)
           ? notificationsData.notifications.filter(
-            (item: DashboardNotification) => item.status !== "dismissed",
+            (item: DashboardNotification) => item.status !== "dismissed" && item.status !== "resolved",
           )
           : [],
       );

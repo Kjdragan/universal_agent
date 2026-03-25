@@ -67,6 +67,7 @@ type PipelineNotification = {
   severity: string;
   created_at: string;
   metadata?: Record<string, unknown>;
+  status?: string;
 };
 
 type WatcherStatus = {
@@ -273,7 +274,9 @@ export default function DashboardTutorialsPage() {
       );
       setNotifications(
         Array.isArray(notifPayload.notifications)
-          ? (notifPayload.notifications as PipelineNotification[])
+          ? (notifPayload.notifications as PipelineNotification[]).filter(
+            (item) => item.status !== "dismissed" && item.status !== "resolved",
+          )
           : [],
       );
     } catch (err: any) {
