@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 DAEMON_SESSION_PREFIX = "daemon_"
-DEFAULT_DAEMON_AGENTS = ("simone", "atlas", "cody")
+DEFAULT_DAEMON_AGENTS = ("simone",)  # Atlas & Cody are on-demand only; no proactive heartbeat polling
 
 _TRUTHY = {"1", "true", "yes", "on"}
 

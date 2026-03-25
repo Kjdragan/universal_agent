@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -19,6 +20,8 @@ from universal_agent.durable.state import (
 )
 from universal_agent.run_workspace import ensure_run_workspace_scaffold
 
+logger = logging.getLogger(__name__)
+
 _ACTIVE_RUN_STATUSES = {
     "queued",
     "running",
@@ -29,8 +32,9 @@ _ACTIVE_RUN_STATUSES = {
 }
 _SUCCESS_RUN_STATUSES = {"completed", "succeeded", "success"}
 _FAILED_RUN_STATUSES = {"failed"}
-_SQLITE_LOCK_RETRY_ATTEMPTS = 8
 _SQLITE_LOCK_RETRY_BASE_SECONDS = 0.5
+_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS = 30.0
+_SQLITE_LOCK_RETRY_CEILING_SECONDS = 600.0  # 10 min — never give up before this
 _T = TypeVar("_T")
 
 
@@ -78,10 +82,14 @@ class WorkflowAdmissionService:
         return conn
 
     def _run_with_retry(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
-        attempts = max(1, int(_SQLITE_LOCK_RETRY_ATTEMPTS))
-        base_delay = max(0.0, float(_SQLITE_LOCK_RETRY_BASE_SECONDS))
+        base_delay = max(0.1, float(_SQLITE_LOCK_RETRY_BASE_SECONDS))
+        max_delay = max(base_delay, float(_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS))
+        ceiling = max(1.0, float(_SQLITE_LOCK_RETRY_CEILING_SECONDS))
         last_exc: Optional[sqlite3.OperationalError] = None
-        for attempt in range(1, attempts + 1):
+        attempt = 0
+        elapsed = 0.0
+        while elapsed < ceiling:
+            attempt += 1
             conn = self._connect()
             try:
                 return operation(conn)
@@ -91,9 +99,21 @@ class WorkflowAdmissionService:
                     conn.rollback()
                 except Exception:
                     pass
-                if not _is_sqlite_lock_error(exc) or attempt >= attempts:
+                if not _is_sqlite_lock_error(exc):
                     raise
-                time.sleep(base_delay * attempt)
+                delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                if attempt <= 3:
+                    logger.debug(
+                        "Workflow admission DB locked (attempt %d, %.1fs elapsed), retrying in %.1fs",
+                        attempt, elapsed, delay,
+                    )
+                else:
+                    logger.warning(
+                        "Workflow admission DB locked (attempt %d, %.1fs elapsed), retrying in %.1fs",
+                        attempt, elapsed, delay,
+                    )
+                time.sleep(delay)
+                elapsed += delay
             finally:
                 conn.close()
         if last_exc is not None:

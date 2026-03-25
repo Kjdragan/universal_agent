@@ -2725,9 +2725,13 @@ class HooksService:
 
         workflow_service = self._workflow_admission_service()
         workflow_workspace_dir = str(workflow_profile.get("workspace_dir") or "")
-        _HOOK_ADMIT_RETRIES = 3
-        _HOOK_ADMIT_RETRY_DELAY = 5.0
-        for _admit_attempt in range(1, _HOOK_ADMIT_RETRIES + 1):
+        _HOOK_ADMIT_BASE_DELAY = 5.0
+        _HOOK_ADMIT_MAX_DELAY = 30.0
+        _HOOK_ADMIT_CEILING = 300.0  # 5 min — never give up before this
+        _admit_attempt = 0
+        _admit_elapsed = 0.0
+        while _admit_elapsed < _HOOK_ADMIT_CEILING:
+            _admit_attempt += 1
             try:
                 workflow_decision = workflow_service.admit(
                     workflow_profile["trigger"],
@@ -2751,30 +2755,33 @@ class HooksService:
             except sqlite3.OperationalError as exc:
                 if not _is_sqlite_lock_error(exc):
                     raise
-                if _admit_attempt < _HOOK_ADMIT_RETRIES:
-                    logger.warning(
-                        "Hook admission DB contention (attempt %d/%d) action=%s session_key=%s: %s — retrying in %.0fs",
-                        _admit_attempt,
-                        _HOOK_ADMIT_RETRIES,
-                        str(action.name or action.to or action.kind or "unknown").strip(),
-                        session_key,
-                        exc,
-                        _HOOK_ADMIT_RETRY_DELAY,
-                    )
-                    await asyncio.sleep(_HOOK_ADMIT_RETRY_DELAY)
-                    continue
+                delay = min(_HOOK_ADMIT_BASE_DELAY * (2 ** (_admit_attempt - 1)), _HOOK_ADMIT_MAX_DELAY)
                 logger.warning(
-                    "Hook admission runtime DB contention action=%s session_key=%s: %s",
+                    "Hook admission DB contention (attempt %d, %.0fs elapsed) action=%s session_key=%s: %s — retrying in %.0fs",
+                    _admit_attempt,
+                    _admit_elapsed,
                     str(action.name or action.to or action.kind or "unknown").strip(),
                     session_key,
                     exc,
+                    delay,
                 )
-                return {
-                    "decision": "failed",
-                    "reason": "runtime_db_locked",
-                    "retryable": True,
-                    "session_id": session_id,
-                }
+                await asyncio.sleep(delay)
+                _admit_elapsed += delay
+                continue
+        else:
+            # Exhausted 5-min ceiling — truly stuck
+            logger.error(
+                "Hook admission DB locked after %.0fs, action=%s session_key=%s",
+                _admit_elapsed,
+                str(action.name or action.to or action.kind or "unknown").strip(),
+                session_key,
+            )
+            return {
+                "decision": "failed",
+                "reason": "runtime_db_locked",
+                "retryable": True,
+                "session_id": session_id,
+            }
 
         if workflow_decision.action in {"attach_to_existing_run", "defer", "skip_duplicate"}:
             return {
