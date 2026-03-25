@@ -27,6 +27,7 @@ from typing import Any, Callable, Coroutine, Optional
 from xml.etree import ElementTree as ET
 
 import httpx
+from universal_agent.artifacts import resolve_artifacts_dir
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,16 @@ _NON_CODE_HINT_KEYWORDS = {
     "song",
     "workout",
     "fitness",
+}
+_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
+_TUTORIAL_NOT_READY_STATUSES = {
+    "",
+    "unknown",
+    "failed",
+    "dispatch_failed",
+    "failed_local_ingest",
+    "pending_local_ingest",
+    "timed_out",
 }
 
 
@@ -135,6 +146,50 @@ def _infer_youtube_mode(*parts: Any) -> str:
     if has_non_code and not has_code:
         return MODE_EXPLAINER_ONLY
     return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
+
+
+def _tutorial_manifest_video_id(manifest_payload: dict[str, Any]) -> str:
+    if not isinstance(manifest_payload, dict):
+        return ""
+    top_level = str(manifest_payload.get("video_id") or "").strip()
+    if top_level:
+        return top_level
+    video_block = manifest_payload.get("video")
+    if isinstance(video_block, dict):
+        nested = str(video_block.get("video_id") or "").strip()
+        if nested:
+            return nested
+    return ""
+
+
+def _tutorial_manifest_is_processed(manifest_payload: dict[str, Any]) -> bool:
+    status = str(manifest_payload.get("status") or "").strip().lower()
+    return status not in _TUTORIAL_NOT_READY_STATUSES
+
+
+def _video_has_processed_tutorial_artifacts(video_id: str) -> bool:
+    vid = str(video_id or "").strip()
+    if not vid:
+        return False
+    try:
+        tutorials_root = resolve_artifacts_dir() / _TUTORIAL_ARTIFACT_DIR_CANONICAL
+    except Exception:
+        return False
+    if not tutorials_root.exists():
+        return False
+    for manifest_path in tutorials_root.rglob("manifest.json"):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if _tutorial_manifest_video_id(payload) != vid:
+            continue
+        if not _tutorial_manifest_is_processed(payload):
+            continue
+        run_dir = manifest_path.parent
+        if (run_dir / "README.md").is_file() and (run_dir / "CONCEPT.md").is_file():
+            return True
+    return False
 
 
 DispatchResult = tuple[bool, str] | dict[str, Any]
@@ -663,10 +718,21 @@ class YouTubePlaylistWatcher:
         in-memory _pending_dispatch_items for silent retry on the next poll.
         """
         vid = item["video_id"]
+        already_processed = _video_has_processed_tutorial_artifacts(vid)
         async with self._dispatch_lock:
             if vid in seen:
                 return False
             if vid in self._inflight_dispatches:
+                return False
+            if already_processed:
+                seen.add(vid)
+                self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                self._pending_dispatch_items.pop(vid, None)
+                self._notified_delayed_videos.discard(vid)
+                logger.info(
+                    "📺 Skipping redispatch for already-processed tutorial video_id=%s",
+                    vid,
+                )
                 return False
             self._inflight_dispatches.add(vid)
             # ── Persist to seen immediately so restarts/manual polls

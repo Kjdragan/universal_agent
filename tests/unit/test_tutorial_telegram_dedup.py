@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import patch
 
 import pytest
@@ -25,20 +24,31 @@ def _make_ready_payload(video_id: str, *, title: str = "Test Video") -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _reset_telegram_state(monkeypatch, tmp_path):
+    tutorial_telegram_notifier._video_ready_last_sent.clear()
+    tutorial_telegram_notifier._video_new_last_sent.clear()
+    tutorial_telegram_notifier._video_failed_last_sent.clear()
+    tutorial_telegram_notifier._health_alert_last_sent.clear()
+    tutorial_telegram_notifier._video_message_state_cache = None
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+    state_path = tutorial_telegram_notifier._state_path()
+    if state_path.exists():
+        state_path.unlink()
+    yield
+
+
 def test_duplicate_youtube_tutorial_ready_suppressed(monkeypatch):
     """Second youtube_tutorial_ready for same video_id within cooldown is suppressed."""
     monkeypatch.setattr(tutorial_telegram_notifier, "VIDEO_READY_DEDUP_SECONDS", 60.0)
-    # Clear module-level state
-    tutorial_telegram_notifier._video_ready_last_sent.clear()
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
-
     sent_messages: list[str] = []
 
     with patch.object(
         tutorial_telegram_notifier,
-        "_send",
-        side_effect=lambda text: (sent_messages.append(text), True)[-1],
+        "_send_with_message_id",
+        side_effect=lambda text: (sent_messages.append(text), (True, len(sent_messages)))[1],
     ):
         payload = _make_ready_payload("vid123")
         result1 = tutorial_telegram_notifier.maybe_send(payload)
@@ -54,16 +64,12 @@ def test_duplicate_youtube_tutorial_ready_suppressed(monkeypatch):
 def test_different_video_ids_are_not_suppressed(monkeypatch):
     """Different video IDs should each get their own notification."""
     monkeypatch.setattr(tutorial_telegram_notifier, "VIDEO_READY_DEDUP_SECONDS", 60.0)
-    tutorial_telegram_notifier._video_ready_last_sent.clear()
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
-
     sent_messages: list[str] = []
 
     with patch.object(
         tutorial_telegram_notifier,
-        "_send",
-        side_effect=lambda text: (sent_messages.append(text), True)[-1],
+        "_send_with_message_id",
+        side_effect=lambda text: (sent_messages.append(text), (True, len(sent_messages)))[1],
     ):
         result1 = tutorial_telegram_notifier.maybe_send(_make_ready_payload("vid_a"))
         assert result1 is True
@@ -75,23 +81,23 @@ def test_different_video_ids_are_not_suppressed(monkeypatch):
 
 
 def test_dedup_expires_after_cooldown(monkeypatch):
-    """After cooldown expires, a second notification for the same video should succeed."""
+    """If lifecycle state is unavailable, cooldown expiry allows a resend."""
     monkeypatch.setattr(tutorial_telegram_notifier, "VIDEO_READY_DEDUP_SECONDS", 0.0)
-    tutorial_telegram_notifier._video_ready_last_sent.clear()
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
-
     sent_messages: list[str] = []
 
     with patch.object(
         tutorial_telegram_notifier,
-        "_send",
-        side_effect=lambda text: (sent_messages.append(text), True)[-1],
+        "_send_with_message_id",
+        side_effect=lambda text: (sent_messages.append(text), (True, len(sent_messages)))[1],
     ):
         result1 = tutorial_telegram_notifier.maybe_send(_make_ready_payload("vid_c"))
         assert result1 is True
 
-        # With 0s cooldown, the dedup should have expired immediately
+        tutorial_telegram_notifier._video_message_state_cache = {}
+        state_path = tutorial_telegram_notifier._state_path()
+        if state_path.exists():
+            state_path.unlink()
+
         result2 = tutorial_telegram_notifier.maybe_send(_make_ready_payload("vid_c"))
         assert result2 is True
 
@@ -100,17 +106,13 @@ def test_dedup_expires_after_cooldown(monkeypatch):
 
 def test_new_video_kind_is_deduped(monkeypatch):
     """youtube_playlist_new_video should also be deduped per video_id."""
-    tutorial_telegram_notifier._video_new_last_sent.clear()
     monkeypatch.setattr(tutorial_telegram_notifier, "VIDEO_NEW_DEDUP_SECONDS", 60.0)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
-
     sent_messages: list[str] = []
 
     with patch.object(
         tutorial_telegram_notifier,
-        "_send",
-        side_effect=lambda text: (sent_messages.append(text), True)[-1],
+        "_send_with_message_id",
+        side_effect=lambda text: (sent_messages.append(text), (True, len(sent_messages)))[1],
     ):
         payload = {
             "kind": "youtube_playlist_new_video",
@@ -128,9 +130,6 @@ def test_new_video_kind_is_deduped(monkeypatch):
 
 def test_non_deduped_kinds_not_affected(monkeypatch):
     """Kinds without per-video dedup should not be affected."""
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
-    monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
-
     sent_messages: list[str] = []
 
     with patch.object(
@@ -150,4 +149,3 @@ def test_non_deduped_kinds_not_affected(monkeypatch):
         assert result2 is True
 
     assert len(sent_messages) == 2
-

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,7 +12,10 @@ from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.hooks_service import HookAction, HooksService
-from universal_agent.workflow_admission import WorkflowAdmissionService
+from universal_agent.workflow_admission import (
+    WorkflowAdmissionDecision,
+    WorkflowAdmissionService,
+)
 
 
 class _FakeGateway:
@@ -260,15 +264,17 @@ async def test_dispatch_internal_action_background_with_admission_returns_retrya
 
     monkeypatch.setattr(hs, "load_ops_config", lambda: {})
     gateway = _FakeGateway()
-    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
     service = HooksService(gateway)
     service.config.enabled = True
-    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
 
-    def _locked_context(*, run_id=None, attempt_id=None):
-        raise sqlite3.OperationalError("database is locked")
+    class _LockedAdmissionService:
+        def admit(self, *args, **kwargs):
+            raise sqlite3.OperationalError("database is locked")
 
-    service._workflow_attempt_context = _locked_context
+    service._workflow_admission_service = lambda: _LockedAdmissionService()
+    service._workflow_admission_retry_base_seconds = 0.01
+    service._workflow_admission_retry_max_delay_seconds = 0.02
+    service._workflow_admission_retry_ceiling_seconds = 0.03
 
     result = await service.dispatch_internal_action_background_with_admission(
         {
@@ -282,3 +288,63 @@ async def test_dispatch_internal_action_background_with_admission_returns_retrya
     assert result["decision"] == "failed"
     assert result["reason"] == "runtime_db_locked"
     assert result["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_background_admission_serializes_concurrent_workflow_admissions(monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+    service = HooksService(gateway)
+    service.config.enabled = True
+    service._dispatch_action = AsyncMock(return_value={"decision": "accepted"})
+    service._workflow_attempt_context = lambda **_: {"attempt_number": 1, "workspace_dir": "/tmp/workflow"}
+
+    class _SerialAdmissionService:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.calls = 0
+
+        def admit(self, *args, **kwargs):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.calls += 1
+            try:
+                time.sleep(0.05)
+                return WorkflowAdmissionDecision(
+                    "start_new_run",
+                    f"run_{self.calls}",
+                    f"attempt_{self.calls}",
+                    "new_run_created",
+                )
+            finally:
+                self.active -= 1
+
+    admission_service = _SerialAdmissionService()
+    service._workflow_admission_service = lambda: admission_service
+
+    first_payload = {
+        "kind": "agent",
+        "name": "AutoHeartbeatInvestigation",
+        "session_key": "simone_heartbeat_ntf_serial_1",
+        "message": "activity_id: ntf_serial_1\nPlease investigate heartbeat findings.",
+    }
+    second_payload = {
+        "kind": "agent",
+        "name": "AutoHeartbeatInvestigation",
+        "session_key": "simone_heartbeat_ntf_serial_2",
+        "message": "activity_id: ntf_serial_2\nPlease investigate heartbeat findings.",
+    }
+
+    first, second = await asyncio.gather(
+        service.dispatch_internal_action_background_with_admission(first_payload),
+        service.dispatch_internal_action_background_with_admission(second_payload),
+    )
+    await asyncio.sleep(0)
+
+    assert first["decision"] == "accepted"
+    assert second["decision"] == "accepted"
+    assert admission_service.max_active == 1
+    assert service._dispatch_action.await_count == 2

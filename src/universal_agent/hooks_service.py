@@ -1,6 +1,7 @@
 
 import asyncio
 import base64
+import functools
 import hashlib
 import hmac
 import importlib.util
@@ -29,7 +30,11 @@ from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 from universal_agent.run_catalog import RunCatalogService
-from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
+from universal_agent.workflow_admission import (
+    WorkflowAdmissionDecision,
+    WorkflowAdmissionService,
+    WorkflowTrigger,
+)
 from universal_agent.youtube_ingest import normalize_video_target
 
 logger = logging.getLogger(__name__)
@@ -416,6 +421,117 @@ class HooksService:
     def _workflow_admission_service() -> WorkflowAdmissionService:
         return WorkflowAdmissionService()
 
+    def _admit_workflow_once(
+        self,
+        *,
+        workflow_service: WorkflowAdmissionService,
+        trigger: WorkflowTrigger,
+        entrypoint: str,
+        workspace_dir: str,
+        retryable_failure: bool,
+        max_attempts: int,
+    ) -> tuple[WorkflowAdmissionDecision, Optional[str], Optional[str], Optional[int], str]:
+        workflow_decision = workflow_service.admit(
+            trigger,
+            entrypoint=entrypoint,
+            workspace_dir=workspace_dir,
+            retryable_failure=retryable_failure,
+            max_attempts=max_attempts,
+        )
+        workflow_run_id = workflow_decision.run_id
+        workflow_attempt_id = workflow_decision.attempt_id
+        workflow_attempt_number: Optional[int] = None
+        effective_workspace_dir = workspace_dir
+        attempt_context = self._workflow_attempt_context_safe(
+            run_id=workflow_run_id,
+            attempt_id=workflow_attempt_id,
+        )
+        workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
+        effective_workspace_dir = str(
+            attempt_context.get("workspace_dir") or effective_workspace_dir or ""
+        ) or effective_workspace_dir
+        return (
+            workflow_decision,
+            workflow_run_id,
+            workflow_attempt_id,
+            workflow_attempt_number,
+            effective_workspace_dir,
+        )
+
+    async def _admit_workflow_with_retry(
+        self,
+        *,
+        action: HookAction,
+        session_key: str,
+        workflow_profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        workflow_service = self._workflow_admission_service()
+        workflow_workspace_dir = str(workflow_profile.get("workspace_dir") or "")
+        base_delay = float(self._workflow_admission_retry_base_seconds)
+        max_delay = float(self._workflow_admission_retry_max_delay_seconds)
+        ceiling = float(self._workflow_admission_retry_ceiling_seconds)
+        admit_attempt = 0
+        admit_elapsed = 0.0
+        action_name = str(action.name or action.to or action.kind or "unknown").strip()
+        async with self._workflow_admission_lock:
+            while admit_elapsed < ceiling:
+                admit_attempt += 1
+                try:
+                    admit_fn = functools.partial(
+                        self._admit_workflow_once,
+                        workflow_service=workflow_service,
+                        trigger=workflow_profile["trigger"],
+                        entrypoint=str(
+                            workflow_profile.get("entrypoint") or "hooks_service.generic_hook"
+                        ),
+                        workspace_dir=workflow_workspace_dir,
+                        retryable_failure=bool(workflow_profile.get("retryable_failure")),
+                        max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
+                    )
+                    loop = asyncio.get_running_loop()
+                    (
+                        workflow_decision,
+                        workflow_run_id,
+                        workflow_attempt_id,
+                        workflow_attempt_number,
+                        workflow_workspace_dir,
+                    ) = await loop.run_in_executor(None, admit_fn)
+                    return {
+                        "decision": "admitted",
+                        "workflow_decision": workflow_decision,
+                        "run_id": workflow_run_id,
+                        "attempt_id": workflow_attempt_id,
+                        "attempt_number": workflow_attempt_number,
+                        "workspace_dir": workflow_workspace_dir,
+                    }
+                except sqlite3.OperationalError as exc:
+                    if not _is_sqlite_lock_error(exc):
+                        raise
+                    delay = min(base_delay * (2 ** (admit_attempt - 1)), max_delay)
+                    logger.warning(
+                        "Hook admission DB contention (attempt %d, %.0fs elapsed) action=%s session_key=%s: %s — retrying in %.0fs",
+                        admit_attempt,
+                        admit_elapsed,
+                        action_name,
+                        session_key,
+                        exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    admit_elapsed += delay
+                    continue
+        logger.error(
+            "Hook admission DB locked after %.0fs, action=%s session_key=%s",
+            admit_elapsed,
+            action_name,
+            session_key,
+        )
+        return {
+            "decision": "failed",
+            "reason": "runtime_db_locked",
+            "retryable": True,
+        }
+
     def __init__(
         self,
         gateway: InProcessGateway,
@@ -435,6 +551,19 @@ class HooksService:
         self._run_counter_finish = run_counter_finish
         self._notification_sink = notification_sink
         self._agent_dispatch_state_lock = asyncio.Lock()
+        self._workflow_admission_lock = asyncio.Lock()
+        self._workflow_admission_retry_base_seconds = max(
+            0.1,
+            self._safe_float_env("UA_HOOKS_WORKFLOW_ADMISSION_RETRY_BASE_SECONDS", 5.0),
+        )
+        self._workflow_admission_retry_max_delay_seconds = max(
+            self._workflow_admission_retry_base_seconds,
+            self._safe_float_env("UA_HOOKS_WORKFLOW_ADMISSION_RETRY_MAX_DELAY_SECONDS", 30.0),
+        )
+        self._workflow_admission_retry_ceiling_seconds = max(
+            self._workflow_admission_retry_base_seconds,
+            self._safe_float_env("UA_HOOKS_WORKFLOW_ADMISSION_RETRY_CEILING_SECONDS", 300.0),
+        )
         configured_dispatch_concurrency = max(
             1,
             self._safe_int_env("UA_HOOKS_AGENT_DISPATCH_CONCURRENCY", 1),
@@ -1271,6 +1400,28 @@ class HooksService:
             return context
         return self._run_with_runtime_db_retry(_operation)
 
+    def _workflow_attempt_context_safe(
+        self,
+        *,
+        run_id: Optional[str],
+        attempt_id: Optional[str],
+    ) -> dict[str, Any]:
+        try:
+            return self._workflow_attempt_context(
+                run_id=run_id,
+                attempt_id=attempt_id,
+            )
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_lock_error(exc):
+                raise
+            logger.warning(
+                "Workflow attempt context lookup locked run_id=%s attempt_id=%s: %s",
+                run_id,
+                attempt_id,
+                exc,
+            )
+            return {}
+
     @staticmethod
     def _merge_workflow_metadata(
         metadata: dict[str, Any],
@@ -1457,7 +1608,7 @@ class HooksService:
                 max_attempts=max_attempts,
             )
             if retry_decision.action == "start_new_attempt" and retry_decision.attempt_id:
-                retry_context = self._workflow_attempt_context(
+                retry_context = self._workflow_attempt_context_safe(
                     run_id=workflow_run_id,
                     attempt_id=retry_decision.attempt_id,
                 )
@@ -2723,69 +2874,23 @@ class HooksService:
                 "session_id": session_id,
             }
 
-        workflow_service = self._workflow_admission_service()
-        workflow_workspace_dir = str(workflow_profile.get("workspace_dir") or "")
-        _HOOK_ADMIT_BASE_DELAY = 5.0
-        _HOOK_ADMIT_MAX_DELAY = 30.0
-        _HOOK_ADMIT_CEILING = 300.0  # 5 min — never give up before this
-        _admit_attempt = 0
-        _admit_elapsed = 0.0
-        while _admit_elapsed < _HOOK_ADMIT_CEILING:
-            _admit_attempt += 1
-            try:
-                import functools
-                _admit_fn = functools.partial(
-                    workflow_service.admit,
-                    workflow_profile["trigger"],
-                    entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
-                    workspace_dir=workflow_workspace_dir,
-                    retryable_failure=bool(workflow_profile.get("retryable_failure")),
-                    max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
-                )
-                loop = asyncio.get_event_loop()
-                workflow_decision = await loop.run_in_executor(None, _admit_fn)
-                workflow_run_id = workflow_decision.run_id
-                workflow_attempt_id = workflow_decision.attempt_id
-                workflow_attempt_number: Optional[int] = None
-                attempt_context = self._workflow_attempt_context(
-                    run_id=workflow_run_id,
-                    attempt_id=workflow_attempt_id,
-                )
-                workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
-                workflow_workspace_dir = str(
-                    attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
-                ) or workflow_workspace_dir
-                break  # success — exit retry loop
-            except sqlite3.OperationalError as exc:
-                if not _is_sqlite_lock_error(exc):
-                    raise
-                delay = min(_HOOK_ADMIT_BASE_DELAY * (2 ** (_admit_attempt - 1)), _HOOK_ADMIT_MAX_DELAY)
-                logger.warning(
-                    "Hook admission DB contention (attempt %d, %.0fs elapsed) action=%s session_key=%s: %s — retrying in %.0fs",
-                    _admit_attempt,
-                    _admit_elapsed,
-                    str(action.name or action.to or action.kind or "unknown").strip(),
-                    session_key,
-                    exc,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                _admit_elapsed += delay
-                continue
-        else:
-            # Exhausted 5-min ceiling — truly stuck
-            logger.error(
-                "Hook admission DB locked after %.0fs, action=%s session_key=%s",
-                _admit_elapsed,
-                str(action.name or action.to or action.kind or "unknown").strip(),
-                session_key,
-            )
+        admission_result = await self._admit_workflow_with_retry(
+            action=action,
+            session_key=session_key,
+            workflow_profile=workflow_profile,
+        )
+        if str(admission_result.get("decision") or "").strip().lower() == "failed":
             return {
                 "decision": "failed",
                 "reason": "runtime_db_locked",
                 "retryable": True,
                 "session_id": session_id,
             }
+        workflow_decision = admission_result["workflow_decision"]
+        workflow_run_id = str(admission_result.get("run_id") or "").strip() or None
+        workflow_attempt_id = str(admission_result.get("attempt_id") or "").strip() or None
+        workflow_attempt_number = int(admission_result.get("attempt_number") or 0) or None
+        workflow_workspace_dir = str(admission_result.get("workspace_dir") or "").strip()
 
         if workflow_decision.action in {"attach_to_existing_run", "defer", "skip_duplicate"}:
             return {
@@ -3850,28 +3955,24 @@ class HooksService:
             expected_video_id=expected_video_id,
         )
         workflow_service = self._workflow_admission_service() if workflow_profile is not None else None
-        if workflow_profile is not None and not skip_workflow_admission and workflow_service is not None:
-            workflow_trigger = workflow_profile["trigger"]
-            workflow_workspace_dir = workflow_workspace_dir or str(workflow_profile.get("workspace_dir") or "")
-            workflow_decision = workflow_service.admit(
-                workflow_trigger,
-                entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
-                workspace_dir=workflow_workspace_dir,
-                retryable_failure=bool(workflow_profile.get("retryable_failure")),
-                max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
+        if workflow_profile is not None and not skip_workflow_admission:
+            admission_result = await self._admit_workflow_with_retry(
+                action=action,
+                session_key=session_key,
+                workflow_profile=workflow_profile,
             )
-            workflow_run_id = workflow_decision.run_id
-            workflow_attempt_id = workflow_decision.attempt_id
-            attempt_context = self._workflow_attempt_context(
-                run_id=workflow_run_id,
-                attempt_id=workflow_attempt_id,
-            )
-            workflow_attempt_number = (
-                int(attempt_context.get("attempt_number") or 0) or None
-            )
-            workflow_workspace_dir = str(
-                attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
-            ) or workflow_workspace_dir
+            if str(admission_result.get("decision") or "").strip().lower() == "failed":
+                return {
+                    "decision": "failed",
+                    "reason": "runtime_db_locked",
+                    "retryable": True,
+                    "session_id": session_id,
+                }
+            workflow_decision = admission_result["workflow_decision"]
+            workflow_run_id = str(admission_result.get("run_id") or "").strip() or None
+            workflow_attempt_id = str(admission_result.get("attempt_id") or "").strip() or None
+            workflow_attempt_number = int(admission_result.get("attempt_number") or 0) or None
+            workflow_workspace_dir = str(admission_result.get("workspace_dir") or "").strip()
             if workflow_decision.action in {
                 "attach_to_existing_run",
                 "defer",
@@ -3957,7 +4058,7 @@ class HooksService:
             metadata["hook_timeout_seconds"] = timeout_seconds
         if workflow_profile is not None and workflow_run_id:
             if workflow_attempt_number is None:
-                attempt_context = self._workflow_attempt_context(
+                attempt_context = self._workflow_attempt_context_safe(
                     run_id=workflow_run_id,
                     attempt_id=workflow_attempt_id,
                 )
@@ -4064,7 +4165,7 @@ class HooksService:
                         **({"video_id": expected_video_id or ""} if expected_video_id else {}),
                     },
                 )
-                attempt_context = self._workflow_attempt_context(
+                attempt_context = self._workflow_attempt_context_safe(
                     run_id=workflow_run_id,
                     attempt_id=workflow_attempt_id,
                 )
@@ -4119,7 +4220,7 @@ class HooksService:
                                 failure_class=ingest_failure_class or "youtube_ingest_failed",
                                 max_attempts=3,
                             )
-                            retry_context = self._workflow_attempt_context(
+                            retry_context = self._workflow_attempt_context_safe(
                                 run_id=workflow_run_id,
                                 attempt_id=retry_decision.attempt_id,
                             )

@@ -48,14 +48,19 @@ def _make_payload(
 
 
 @pytest.fixture(autouse=True)
-def _clean_telegram_state(monkeypatch):
+def _clean_telegram_state(monkeypatch, tmp_path):
     """Reset all module-level dedup state between tests and configure env vars."""
     tutorial_telegram_notifier._video_ready_last_sent.clear()
     tutorial_telegram_notifier._video_new_last_sent.clear()
     tutorial_telegram_notifier._video_failed_last_sent.clear()
     tutorial_telegram_notifier._health_alert_last_sent.clear()
+    tutorial_telegram_notifier._video_message_state_cache = None
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", "-100123")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+    state_path = tutorial_telegram_notifier._state_path()
+    if state_path.exists():
+        state_path.unlink()
     yield
 
 
@@ -69,7 +74,7 @@ class TestSuppressedKinds:
 
     @pytest.mark.parametrize("kind", ["youtube_tutorial_started", "youtube_tutorial_progress"])
     def test_suppressed_kinds_return_false(self, kind: str) -> None:
-        with patch.object(tutorial_telegram_notifier, "_send", return_value=True) as mock_send:
+        with patch.object(tutorial_telegram_notifier, "_send_with_message_id", return_value=(True, 100)) as mock_send:
             result = tutorial_telegram_notifier.maybe_send(_make_payload(kind, metadata={"video_id": "v1"}))
         assert result is False
         mock_send.assert_not_called()
@@ -189,7 +194,7 @@ class TestUnconfigured:
 
     def test_unconfigured_returns_false_no_token(self, monkeypatch) -> None:
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-        with patch.object(tutorial_telegram_notifier, "_send", return_value=True) as mock_send:
+        with patch.object(tutorial_telegram_notifier, "_send_with_message_id", return_value=(True, 100)) as mock_send:
             result = tutorial_telegram_notifier.maybe_send(
                 _make_payload("youtube_tutorial_ready", metadata={"video_id": "v1"})
             )
@@ -198,7 +203,7 @@ class TestUnconfigured:
 
     def test_unconfigured_returns_false_no_chat_id(self, monkeypatch) -> None:
         monkeypatch.delenv("YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID", raising=False)
-        with patch.object(tutorial_telegram_notifier, "_send", return_value=True) as mock_send:
+        with patch.object(tutorial_telegram_notifier, "_send_with_message_id", return_value=(True, 100)) as mock_send:
             result = tutorial_telegram_notifier.maybe_send(
                 _make_payload("youtube_tutorial_ready", metadata={"video_id": "v1"})
             )
@@ -241,14 +246,82 @@ class TestPerVideoDedup:
         sent: list[str] = []
         with patch.object(
             tutorial_telegram_notifier,
-            "_send",
-            side_effect=lambda text: (sent.append(text), True)[-1],
+            "_send_with_message_id",
+            side_effect=lambda text: (sent.append(text), (True, len(sent)))[1],
         ):
             r1 = tutorial_telegram_notifier.maybe_send(_make_payload(kind, metadata={"video_id": "v1"}))
             r2 = tutorial_telegram_notifier.maybe_send(_make_payload(kind, metadata={"video_id": "v1"}))
         assert r1 is True
         assert r2 is False
         assert len(sent) == 1
+
+
+class TestLifecycleMessageReplacement:
+    """Per-video lifecycle notices should update the same Telegram post."""
+
+    def test_ready_edits_existing_video_message(self) -> None:
+        new_payload = _make_payload(
+            "youtube_playlist_new_video",
+            title="New Tutorial Video Detected",
+            message="Example video — queued for processing",
+            metadata={
+                "video_id": "vid_replace",
+                "video_url": "https://youtube.com/watch?v=vid_replace",
+            },
+        )
+        ready_payload = _make_payload(
+            "youtube_tutorial_ready",
+            title="YouTube Tutorial Artifacts Ready",
+            message="Example video artifacts are ready for review.",
+            severity="success",
+            metadata={
+                "video_id": "vid_replace",
+                "tutorial_status": "completed",
+                "tutorial_run_path": "youtube-tutorial-creation/vid_replace",
+            },
+        )
+
+        with patch.object(
+            tutorial_telegram_notifier,
+            "_send_with_message_id",
+            return_value=(True, 321),
+        ) as mock_send, patch.object(
+            tutorial_telegram_notifier,
+            "_edit_message",
+            return_value=True,
+        ) as mock_edit:
+            assert tutorial_telegram_notifier.maybe_send(new_payload) is True
+            assert tutorial_telegram_notifier.maybe_send(ready_payload) is True
+
+        mock_send.assert_called_once()
+        mock_edit.assert_called_once()
+        state = tutorial_telegram_notifier._load_video_message_state()
+        assert state["vid_replace"]["message_id"] == 321
+        assert state["vid_replace"]["kind"] == "youtube_tutorial_ready"
+
+    def test_duplicate_delayed_update_is_suppressed_after_state_is_persisted(self) -> None:
+        payload = _make_payload(
+            "youtube_playlist_dispatch_failed",
+            title="Tutorial Dispatch Delayed",
+            message="Example video: runtime storage is temporarily busy; automatic retry will occur on the next playlist poll.",
+            severity="warning",
+            metadata={"video_id": "vid_delay"},
+        )
+
+        with patch.object(
+            tutorial_telegram_notifier,
+            "_send_with_message_id",
+            return_value=(True, 654),
+        ) as mock_send, patch.object(
+            tutorial_telegram_notifier,
+            "_edit_message",
+            return_value=True,
+        ) as mock_edit:
+            assert tutorial_telegram_notifier.maybe_send(payload) is True
+            assert tutorial_telegram_notifier.maybe_send(payload) is False
+
+        mock_send.assert_called_once()
+        mock_edit.assert_not_called()
 
 
 # ===========================================================================

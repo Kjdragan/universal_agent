@@ -331,3 +331,59 @@ async def test_runtime_db_locked_dispatch_is_reported_as_delayed_and_left_retrya
     assert failed["title"] == "Tutorial Dispatch Delayed"
     assert "automatic retry will occur on the next playlist poll" in str(failed.get("message") or "").lower()
     assert (failed.get("metadata") or {}).get("retryable") is True
+
+
+@pytest.mark.asyncio
+async def test_poll_now_skips_videos_with_existing_processed_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("UA_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+
+    video_id = "doneVid123"
+    run_dir = (
+        tmp_path
+        / "artifacts"
+        / "youtube-tutorial-creation"
+        / "2026-03-25"
+        / "done-video"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": video_id,
+                "status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "README.md").write_text("# ready\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# concept\n", encoding="utf-8")
+
+    notifications: list[dict] = []
+    dispatch_mock = AsyncMock(return_value=(True, "agent"))
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=dispatch_mock,
+        notification_sink=notifications.append,
+    )
+    watcher._fetch_playlist_items = AsyncMock(
+        return_value=[
+            {
+                "video_id": video_id,
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "title": "Already processed",
+                "channel_id": "chan1",
+                "occurred_at": "2026-03-25T15:00:00Z",
+                "playlist_id": "PLdemo",
+            }
+        ]
+    )
+
+    result = await watcher.poll_now()
+
+    assert result["new_dispatched"] == 0
+    assert dispatch_mock.await_count == 0
+    assert notifications == []
+    saved = json.loads(_state_path().read_text(encoding="utf-8"))
+    assert saved["seen_ids"] == [video_id]

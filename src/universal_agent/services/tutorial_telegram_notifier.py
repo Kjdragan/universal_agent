@@ -4,11 +4,13 @@ Sends structured messages to a dedicated Telegram chat at each stage of
 the tutorial processing lifecycle.
 
 Per-video Telegram behaviour:
-  - 2 messages per video are sent:
-      1. youtube_playlist_new_video   (video detected, pipeline kicked off)
-      2. youtube_tutorial_ready | youtube_tutorial_failed | youtube_tutorial_interrupted
+  - A single Telegram post is maintained per video when possible.
+  - youtube_playlist_new_video creates the initial post.
+  - youtube_playlist_dispatch_failed and terminal outcomes edit that same post
+    in place so old "queued" or "delayed" notices do not linger as separate
+    entries for the same video.
   - youtube_tutorial_started and youtube_tutorial_progress are suppressed
-    (redundant given the detection + outcome pair).
+    (redundant given the detected -> outcome lifecycle message).
 
 System-health alerts (youtube_ingest_proxy_alert, hook_dispatch_queue_overflow)
 are global notices — NOT per-video.  They are rate-limited to at most one
@@ -26,13 +28,14 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
-import httpx
+import json
+
+from universal_agent.ops_config import resolve_ops_config_path
 
 logger = logging.getLogger(__name__)
-
-_BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
 # ---- event kind classification ------------------------------------------
 
@@ -64,6 +67,22 @@ _HEALTH_ALERT_KINDS = {
     "youtube_ingest_proxy_alert",
     "hook_dispatch_queue_overflow",
 }
+_VIDEO_LIFECYCLE_KINDS = {
+    "youtube_playlist_new_video",
+    "youtube_playlist_dispatch_failed",
+    "youtube_tutorial_interrupted",
+    "youtube_tutorial_ready",
+    "youtube_tutorial_failed",
+}
+_VIDEO_KIND_PRIORITY: dict[str, int] = {
+    "youtube_playlist_new_video": 10,
+    "youtube_playlist_dispatch_failed": 20,
+    "youtube_tutorial_interrupted": 30,
+    "youtube_tutorial_failed": 40,
+    "youtube_tutorial_ready": 50,
+}
+_VIDEO_MESSAGE_STATE_FILENAME = "tutorial_telegram_state.json"
+_VIDEO_MESSAGE_STATE_VERSION = 1
 
 # 1-hour cooldown for health alerts (seconds)
 HEALTH_ALERT_COOLDOWN_SECONDS: float = float(
@@ -91,6 +110,7 @@ VIDEO_FAILED_DEDUP_SECONDS: float = float(
 _video_ready_last_sent: dict[str, float] = {}
 _video_new_last_sent: dict[str, float] = {}
 _video_failed_last_sent: dict[str, float] = {}
+_video_message_state_cache: dict[str, dict[str, Any]] | None = None
 
 # Config table: kind → (dedup dict, cooldown attr name)
 # We store the *attribute name* rather than the float value so that
@@ -276,6 +296,175 @@ def _escape(text: str) -> str:
     return text
 
 
+def _state_path() -> Path:
+    ops_dir = Path(
+        os.getenv("UA_OPS_DIR", "")
+        or os.getenv("UA_OPS_CONFIG_PATH", str(resolve_ops_config_path()))
+    )
+    if ops_dir.suffix:
+        ops_dir = ops_dir.parent
+    ops_dir.mkdir(parents=True, exist_ok=True)
+    return ops_dir / _VIDEO_MESSAGE_STATE_FILENAME
+
+
+def _load_video_message_state() -> dict[str, dict[str, Any]]:
+    global _video_message_state_cache
+    if _video_message_state_cache is not None:
+        return _video_message_state_cache
+    path = _state_path()
+    if not path.exists():
+        _video_message_state_cache = {}
+        return _video_message_state_cache
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        _video_message_state_cache = {}
+        return _video_message_state_cache
+    raw_videos = payload.get("videos") if isinstance(payload, dict) else {}
+    videos: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_videos, dict):
+        for video_id, state in raw_videos.items():
+            clean_video_id = str(video_id or "").strip()
+            if not clean_video_id or not isinstance(state, dict):
+                continue
+            videos[clean_video_id] = {
+                "message_id": state.get("message_id"),
+                "kind": str(state.get("kind") or "").strip(),
+                "text": str(state.get("text") or ""),
+                "updated_at": str(state.get("updated_at") or ""),
+            }
+    _video_message_state_cache = videos
+    return _video_message_state_cache
+
+
+def _save_video_message_state(state: dict[str, dict[str, Any]]) -> None:
+    global _video_message_state_cache
+    path = _state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": _VIDEO_MESSAGE_STATE_VERSION,
+        "videos": state,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    _video_message_state_cache = state
+
+
+def _video_id_from_metadata(metadata: dict[str, Any]) -> str:
+    return str(metadata.get("video_id") or "").strip()
+
+
+def _kind_priority(kind: str) -> int:
+    return int(_VIDEO_KIND_PRIORITY.get(kind, 0))
+
+
+def _should_suppress_video_update(
+    existing_kind: str,
+    incoming_kind: str,
+    *,
+    existing_text: str,
+    incoming_text: str,
+) -> bool:
+    if existing_kind == incoming_kind and existing_text == incoming_text:
+        return True
+    return _kind_priority(existing_kind) > _kind_priority(incoming_kind)
+
+
+def _send_with_message_id(text: str) -> tuple[bool, int | None]:
+    token = _bot_token()
+    chat = _chat_id()
+    if not token or not chat:
+        return False, None
+    from universal_agent.services.telegram_send import telegram_send_with_response_sync
+
+    ok, payload, _err = telegram_send_with_response_sync(
+        chat_id=chat,
+        text=text,
+        bot_token=token,
+        parse_mode="Markdown",
+        disable_preview=True,
+    )
+    if not ok:
+        return False, None
+    result = payload.get("result") if isinstance(payload, dict) else None
+    try:
+        message_id = int((result or {}).get("message_id"))
+    except Exception:
+        message_id = None
+    return True, message_id
+
+
+def _edit_message(message_id: int | str, text: str) -> bool:
+    token = _bot_token()
+    chat = _chat_id()
+    if not token or not chat:
+        return False
+    from universal_agent.services.telegram_send import telegram_edit_sync
+
+    ok, err = telegram_edit_sync(
+        chat_id=chat,
+        message_id=message_id,
+        text=text,
+        bot_token=token,
+        parse_mode="Markdown",
+        disable_preview=True,
+    )
+    if ok:
+        return True
+    detail = str(err or "").strip().lower()
+    return "message is not modified" in detail
+
+
+def _upsert_video_lifecycle_message(
+    kind: str,
+    text: str,
+    metadata: dict[str, Any],
+) -> bool:
+    video_id = _video_id_from_metadata(metadata)
+    if not video_id:
+        sent, _message_id = _send_with_message_id(text)
+        return sent
+    state = _load_video_message_state()
+    existing = state.get(video_id) or {}
+    existing_kind = str(existing.get("kind") or "").strip()
+    existing_text = str(existing.get("text") or "")
+    if _should_suppress_video_update(
+        existing_kind,
+        kind,
+        existing_text=existing_text,
+        incoming_text=text,
+    ):
+        logger.debug(
+            "tutorial_telegram_notifier: suppressed stale lifecycle update kind=%s existing_kind=%s video_id=%s",
+            kind,
+            existing_kind,
+            video_id,
+        )
+        return False
+
+    existing_message_id = existing.get("message_id")
+    if existing_message_id not in {None, ""} and _edit_message(existing_message_id, text):
+        state[video_id] = {
+            "message_id": existing_message_id,
+            "kind": kind,
+            "text": text,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        _save_video_message_state(state)
+        return True
+
+    sent, message_id = _send_with_message_id(text)
+    if not sent:
+        return False
+    state[video_id] = {
+        "message_id": message_id,
+        "kind": kind,
+        "text": text,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    _save_video_message_state(state)
+    return True
+
+
 def _send(text: str) -> bool:
     token = _bot_token()
     chat = _chat_id()
@@ -346,10 +535,13 @@ def maybe_send(payload: dict[str, Any]) -> bool:
         metadata = {}
     try:
         text = _build_message(kind, title, message, metadata)
-        sent = _send(text)
+        if kind in _VIDEO_LIFECYCLE_KINDS:
+            sent = _upsert_video_lifecycle_message(kind, text, metadata)
+        else:
+            sent = _send(text)
         # Record successful send for per-video dedup
         if sent:
-            video_id = str(metadata.get("video_id") or "").strip()
+            video_id = _video_id_from_metadata(metadata)
             _record_per_video_send(kind, video_id)
         return sent
     except Exception:
