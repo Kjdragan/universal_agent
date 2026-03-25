@@ -38,7 +38,7 @@ from universal_agent.delegation.redis_bus import (
 from universal_agent.delegation.heartbeat import FactoryHeartbeat, HeartbeatConfig
 from universal_agent.delegation.redis_vp_bridge import BridgeConfig, RedisVpBridge
 from universal_agent.delegation.redis_vp_result_bridge import RedisVpResultBridge
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_sqlite_busy_timeout_ms
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.runtime_role import resolve_machine_slug
 
@@ -88,7 +88,7 @@ async def _run(*, once: bool, poll_seconds: float) -> int:
     db_path = get_runtime_db_path()
     conn = connect_runtime_db(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=60000")
+    conn.execute(f"PRAGMA busy_timeout={get_sqlite_busy_timeout_ms()}")
     ensure_schema(conn)
     logger.info("Runtime DB connected: %s", db_path)
 

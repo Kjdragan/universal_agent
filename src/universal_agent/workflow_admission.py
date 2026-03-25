@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional, TypeVar
 
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
@@ -28,6 +29,14 @@ _ACTIVE_RUN_STATUSES = {
 }
 _SUCCESS_RUN_STATUSES = {"completed", "succeeded", "success"}
 _FAILED_RUN_STATUSES = {"failed"}
+_SQLITE_LOCK_RETRY_ATTEMPTS = 4
+_SQLITE_LOCK_RETRY_BASE_SECONDS = 0.25
+_T = TypeVar("_T")
+
+
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    detail = str(exc or "").strip().lower()
+    return "database is locked" in detail or "database table is locked" in detail
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,29 @@ class WorkflowAdmissionService:
         conn = connect_runtime_db(self.db_path)
         ensure_schema(conn)
         return conn
+
+    def _run_with_retry(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
+        attempts = max(1, int(_SQLITE_LOCK_RETRY_ATTEMPTS))
+        base_delay = max(0.0, float(_SQLITE_LOCK_RETRY_BASE_SECONDS))
+        last_exc: Optional[sqlite3.OperationalError] = None
+        for attempt in range(1, attempts + 1):
+            conn = self._connect()
+            try:
+                return operation(conn)
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                if not _is_sqlite_lock_error(exc) or attempt >= attempts:
+                    raise
+                time.sleep(base_delay * attempt)
+            finally:
+                conn.close()
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("workflow admission retry exhausted without result")
 
     @staticmethod
     def _parse_run_spec(row: sqlite3.Row | None) -> dict:
@@ -117,8 +149,7 @@ class WorkflowAdmissionService:
             "workspace_dir": workspace_dir,
             "priority": trigger.priority,
         }
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> WorkflowAdmissionDecision:
             existing = self._latest_matching_run(conn, trigger)
             if existing is not None:
                 status = str(existing["status"] or "").strip().lower()
@@ -221,8 +252,7 @@ class WorkflowAdmissionService:
                 )
             conn.commit()
             return WorkflowAdmissionDecision("start_new_run", run_id, attempt_id, "new_run_created")
-        finally:
-            conn.close()
+        return self._run_with_retry(_operation)
 
     def mark_completed(
         self,
@@ -231,8 +261,7 @@ class WorkflowAdmissionService:
         attempt_id: Optional[str],
         summary: Optional[dict] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> None:
             row = get_run(conn, run_id)
             if row is None:
                 return
@@ -272,8 +301,7 @@ class WorkflowAdmissionService:
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
             conn.commit()
-        finally:
-            conn.close()
+        self._run_with_retry(_operation)
 
     def mark_running(
         self,
@@ -283,8 +311,7 @@ class WorkflowAdmissionService:
         provider_session_id: Optional[str] = None,
         summary: Optional[dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> None:
             row = get_run(conn, run_id)
             if row is None:
                 return
@@ -326,8 +353,7 @@ class WorkflowAdmissionService:
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
             conn.commit()
-        finally:
-            conn.close()
+        self._run_with_retry(_operation)
 
     def mark_blocked(
         self,
@@ -337,8 +363,7 @@ class WorkflowAdmissionService:
         reason: str,
         summary: Optional[dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> None:
             row = get_run(conn, run_id)
             if row is None:
                 return
@@ -379,8 +404,7 @@ class WorkflowAdmissionService:
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
             conn.commit()
-        finally:
-            conn.close()
+        self._run_with_retry(_operation)
 
     def mark_needs_review(
         self,
@@ -391,8 +415,7 @@ class WorkflowAdmissionService:
         failure_class: str,
         summary: Optional[dict[str, Any]] = None,
     ) -> None:
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> None:
             row = get_run(conn, run_id)
             if row is None:
                 return
@@ -435,8 +458,7 @@ class WorkflowAdmissionService:
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
             conn.commit()
-        finally:
-            conn.close()
+        self._run_with_retry(_operation)
 
     def queue_retry(
         self,
@@ -450,8 +472,7 @@ class WorkflowAdmissionService:
         failure_class: str,
         max_attempts: int,
     ) -> WorkflowAdmissionDecision:
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> WorkflowAdmissionDecision:
             row = get_run(conn, run_id)
             if row is None:
                 return WorkflowAdmissionDecision("escalate_review", run_id, attempt_id, "unknown_run")
@@ -537,8 +558,7 @@ class WorkflowAdmissionService:
                 )
             conn.commit()
             return WorkflowAdmissionDecision("start_new_attempt", run_id, next_attempt_id, "retry_queued")
-        finally:
-            conn.close()
+        return self._run_with_retry(_operation)
 
     def mark_failed(
         self,
@@ -548,8 +568,7 @@ class WorkflowAdmissionService:
         failure_reason: str,
         failure_class: str = "dispatch_failed",
     ) -> None:
-        conn = self._connect()
-        try:
+        def _operation(conn: sqlite3.Connection) -> None:
             row = get_run(conn, run_id)
             if row is None:
                 return
@@ -591,5 +610,4 @@ class WorkflowAdmissionService:
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
             conn.commit()
-        finally:
-            conn.close()
+        self._run_with_retry(_operation)

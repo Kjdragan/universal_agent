@@ -1,4 +1,22 @@
 import sqlite3
+import threading
+
+_SCHEMA_READY_PATHS: set[str] = set()
+_SCHEMA_READY_LOCK = threading.Lock()
+
+
+def _schema_cache_key(conn: sqlite3.Connection) -> str | None:
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+    except Exception:
+        return None
+    for row in rows:
+        name = row[1] if len(row) > 1 else None
+        path = row[2] if len(row) > 2 else None
+        if name == "main":
+            normalized = str(path or "").strip()
+            return normalized or None
+    return None
 
 
 SCHEMA_SQL = """
@@ -218,6 +236,11 @@ def _add_column_if_missing(
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    cache_key = _schema_cache_key(conn)
+    if cache_key:
+        with _SCHEMA_READY_LOCK:
+            if cache_key in _SCHEMA_READY_PATHS:
+                return
     conn.executescript(SCHEMA_SQL)
     _add_column_if_missing(conn, "runs", "workspace_dir", "TEXT")
     _add_column_if_missing(conn, "runs", "run_kind", "TEXT")
@@ -275,3 +298,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ON vp_missions(source, result_published, status)"
     )
     conn.commit()
+    if cache_key:
+        with _SCHEMA_READY_LOCK:
+            _SCHEMA_READY_PATHS.add(cache_key)

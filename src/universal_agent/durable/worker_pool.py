@@ -145,6 +145,11 @@ class Worker:
         # Release any held leases
         if self.state.current_run_id:
             release_run_lease(self.conn, self.state.current_run_id, self.config.worker_id)
+
+        try:
+            self.conn.close()
+        except Exception:
+            pass
         
         logger.info(f"Worker {self.config.worker_id} stopped")
 
@@ -400,6 +405,12 @@ class WorkerPoolManager:
             await asyncio.gather(*stop_tasks, return_exceptions=True)
         
         self.workers.clear()
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
         logger.info("Worker pool stopped")
 
     async def _spawn_worker(self) -> Worker:
@@ -413,7 +424,9 @@ class WorkerPoolManager:
             gateway_url=self.worker_config_template.gateway_url,
         )
         
-        worker = Worker(config, self.conn, self.run_handler)
+        worker_conn = connect_runtime_db(self.pool_config.db_path)
+        ensure_schema(worker_conn)
+        worker = Worker(config, worker_conn, self.run_handler)
         await worker.start()
         self.workers[config.worker_id] = worker
         

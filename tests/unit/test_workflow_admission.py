@@ -1,5 +1,7 @@
+import sqlite3
 from pathlib import Path
 
+import universal_agent.workflow_admission as workflow_admission_module
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import create_run_attempt, get_run, get_run_attempt, list_run_attempts, upsert_run
@@ -277,3 +279,36 @@ def test_workflow_admission_queue_retry_and_needs_review(tmp_path: Path):
     assert retry_row is not None
     assert run_row["status"] == "needs_review"
     assert retry_row["status"] == "failed"
+
+
+def test_workflow_admission_retries_sqlite_lock_during_admit(tmp_path: Path, monkeypatch):
+    service = _service(tmp_path)
+    original_upsert_run = workflow_admission_module.upsert_run
+    call_count = {"value": 0}
+
+    def flaky_upsert_run(*args, **kwargs):
+        if call_count["value"] == 0:
+            call_count["value"] += 1
+            raise sqlite3.OperationalError("database is locked")
+        return original_upsert_run(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_admission_module, "upsert_run", flaky_upsert_run)
+
+    decision = service.admit(
+        WorkflowTrigger(
+            run_kind="youtube_tutorial_hook",
+            trigger_source="webhook",
+            dedup_key="video-lock-1",
+            payload_json='{"video_id":"video-lock-1"}',
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+        ),
+        entrypoint="test_entrypoint",
+        workspace_dir=str((tmp_path / "run_lock_retry").resolve()),
+    )
+
+    assert decision.action == "start_new_run"
+    assert decision.run_id
+    assert decision.attempt_id
+    assert call_count["value"] == 1

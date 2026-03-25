@@ -253,6 +253,28 @@ class TestWorkerPoolManager:
             await pool.stop(drain=False)
 
     @pytest.mark.asyncio
+    async def test_pool_workers_use_distinct_connections(self, mock_run_handler):
+        """Each worker should get its own SQLite connection."""
+        with patch('universal_agent.durable.worker_pool.connect_runtime_db') as mock_connect:
+            manager_conn = MagicMock(name="manager_conn")
+            worker_conn_a = MagicMock(name="worker_conn_a")
+            worker_conn_b = MagicMock(name="worker_conn_b")
+            for conn in (manager_conn, worker_conn_a, worker_conn_b):
+                conn.execute.return_value.fetchall.return_value = []
+            mock_connect.side_effect = [manager_conn, worker_conn_a, worker_conn_b]
+
+            config = PoolConfig(min_workers=2, max_workers=4)
+            pool = WorkerPoolManager(config, run_handler=mock_run_handler)
+
+            await pool.start()
+
+            worker_conns = {id(worker.conn) for worker in pool.workers.values()}
+            assert len(worker_conns) == 2
+            assert id(manager_conn) not in worker_conns
+
+            await pool.stop(drain=False)
+
+    @pytest.mark.asyncio
     async def test_pool_stop_removes_workers(self, mock_run_handler):
         """Test that stopping pool removes all workers."""
         with patch('universal_agent.durable.worker_pool.connect_runtime_db') as mock_connect:

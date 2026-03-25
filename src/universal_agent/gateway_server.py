@@ -78,7 +78,12 @@ from universal_agent.feature_flags import (
 )
 from universal_agent.sdk import session_history_adapter
 from universal_agent.identity import resolve_user_id
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_activity_db_path
+from universal_agent.durable.db import (
+    connect_runtime_db,
+    get_runtime_db_path,
+    get_activity_db_path,
+    get_sqlite_busy_timeout_ms,
+)
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
     append_vp_event,
@@ -11535,9 +11540,9 @@ async def lifespan(app: FastAPI):
     main_module.runtime_db_conn = connect_runtime_db(db_path)
     # Enable WAL mode for concurrent access (CLI + gateway can coexist)
     main_module.runtime_db_conn.execute("PRAGMA journal_mode=WAL")
-    # Keep timeout aligned with durable.db connect_runtime_db() defaults to reduce
-    # transient lock errors during concurrent cron + VP runtime activity.
-    main_module.runtime_db_conn.execute("PRAGMA busy_timeout=60000")
+    # Keep timeout aligned with durable.db connect_runtime_db() defaults so
+    # application-level retries can react quickly to transient lock contention.
+    main_module.runtime_db_conn.execute(f"PRAGMA busy_timeout={get_sqlite_busy_timeout_ms()}")
     ensure_schema(main_module.runtime_db_conn)
     _ensure_activity_schema(main_module.runtime_db_conn)
     _activity_prune_old(main_module.runtime_db_conn)
