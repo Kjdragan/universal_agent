@@ -93,7 +93,19 @@ def connect_runtime_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     # - Disable same-thread checks because the gateway can dispatch work
     #   across async tasks and libraries that may use background threads.
     busy_timeout_ms = get_sqlite_busy_timeout_ms()
-    conn = sqlite3.connect(path, timeout=busy_timeout_ms / 1000.0, check_same_thread=False)
+    # isolation_level=None → true autocommit mode.  Each DML statement
+    # commits immediately so the WAL write lock is held only for the
+    # duration of a single statement, not until the next conn.commit().
+    # This eliminates multi-minute lock contention between long-running
+    # agent sessions (e.g. Simone heartbeat) and short writes like
+    # YouTube dispatch admission.  Explicit transactions (BEGIN IMMEDIATE)
+    # still work exactly as before.
+    conn = sqlite3.connect(
+        path,
+        timeout=busy_timeout_ms / 1000.0,
+        check_same_thread=False,
+        isolation_level=None,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON;")
     # WAL improves concurrent read/write behavior across independent processes.
