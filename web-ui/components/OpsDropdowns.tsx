@@ -2167,7 +2167,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
     if (s < 86400) return `${(s / 3600).toFixed(1)}h ago`;
     return `${(s / 86400).toFixed(1)}d ago`;
   };
-  const statusDot = (ts?: string | null, status?: string) => {
+  const statusDot = (ts?: string | number | null, status?: string) => {
     if (status === "active" || status === "idle") {
       const age = ageSeconds(ts);
       if (age < 120) return "bg-primary";
