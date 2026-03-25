@@ -4,6 +4,9 @@ R1: LLM error tokens classified as interruptions
 R2: Non-success iteration_status logged to run.log
 R3: Zero-tool-call completions emit structured warning
 R4: Startup warmup delay before recovery dispatch
+
+
+R5: Session key double-underscore delimiter for video IDs with underscores
 """
 
 import json
@@ -19,6 +22,7 @@ from universal_agent.durable.migrations import ensure_schema
 from universal_agent.hooks_service import (
     HooksService,
     YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS,
+    build_manual_youtube_action,
 )
 from universal_agent.workflow_admission import WorkflowAdmissionService
 from universal_agent.gateway import InProcessGateway, GatewaySession
@@ -224,3 +228,58 @@ class TestZeroToolCallDispatch:
         assert [int(row["attempt_number"]) for row in attempts] == [1, 2]
         assert str(attempts[0]["status"]) == "failed"
         assert str(attempts[1]["status"]) in {"queued", "running", "completed"}
+
+
+# ── R5: Session key double-underscore delimiter ─────────────────────────────
+
+class TestSessionKeyDoubleUnderscoreDelimiter:
+    """R5: Video IDs with underscores are preserved via __ delimiter."""
+
+    def test_new_format_underscore_video_id(self, hooks_service):
+        """New __ format correctly parses video IDs containing underscores."""
+        ch, vid = HooksService._youtube_parts_from_session_key(
+            "yt_UC0C_17n9iuUQPylguM1d_lQ__7AO4w4Y_L24"
+        )
+        assert vid == "7AO4w4Y_L24"
+        assert ch == "UC0C_17n9iuUQPylguM1d_lQ"
+
+    def test_new_format_simple_video_id(self, hooks_service):
+        """New __ format works for video IDs without underscores."""
+        ch, vid = HooksService._youtube_parts_from_session_key(
+            "yt_somechannel__xUlX6jvwVfM"
+        )
+        assert vid == "xUlX6jvwVfM"
+        assert ch == "somechannel"
+
+    def test_legacy_format_backward_compat(self, hooks_service):
+        """Legacy single _ format still works for video IDs without underscores."""
+        ch, vid = HooksService._youtube_parts_from_session_key(
+            "yt_somechannel_xUlX6jvwVfM"
+        )
+        assert vid == "xUlX6jvwVfM"
+        assert ch == "somechannel"
+
+    def test_empty_session_key(self, hooks_service):
+        ch, vid = HooksService._youtube_parts_from_session_key("")
+        assert ch == ""
+        assert vid == ""
+
+    def test_non_yt_prefix(self, hooks_service):
+        ch, vid = HooksService._youtube_parts_from_session_key("other_key")
+        assert ch == ""
+        assert vid == ""
+
+    def test_build_action_uses_double_underscore(self):
+        """build_manual_youtube_action produces __ delimiter in session_key."""
+        action = build_manual_youtube_action({
+            "video_url": "https://www.youtube.com/watch?v=7AO4w4Y_L24",
+            "video_id": "7AO4w4Y_L24",
+            "channel_id": "UC0C-17n9iuUQPylguM1d-lQ",
+            "title": "Test",
+        })
+        assert action is not None
+        sk = action["session_key"]
+        assert "__" in sk, f"session_key should use __ delimiter: {sk}"
+        # Verify round-trip: parsing the session_key recovers the full video ID
+        ch, vid = HooksService._youtube_parts_from_session_key(sk)
+        assert vid == "7AO4w4Y_L24"

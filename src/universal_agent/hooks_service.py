@@ -340,7 +340,7 @@ def build_manual_youtube_action(
         video_seg = _manual_youtube_safe_segment(video_id, "manual")
     else:
         video_seg = hashlib.sha256(video_url.encode("utf-8", errors="replace")).hexdigest()[:12]
-    session_key = f"yt_{channel_seg}_{video_seg}"
+    session_key = f"yt_{channel_seg}__{video_seg}"
 
     lines = [
         "Manual YouTube URL ingestion event received.",
@@ -778,6 +778,15 @@ class HooksService:
         if not raw.startswith("yt_"):
             return "", ""
         body = raw[len("yt_") :]
+        # New format uses __ (double underscore) as the delimiter between
+        # channel and video segments.  YouTube video IDs are base64url
+        # ([A-Za-z0-9_-]) and can contain single underscores, but never
+        # two consecutive underscores, so __ is unambiguous.
+        if "__" in body:
+            channel_key, video_id = body.split("__", 1)
+            return channel_key.strip(), video_id.strip()
+        # Legacy format fallback: single underscore delimiter.  Safe only
+        # when the video ID itself does not contain an underscore.
         if "_" not in body:
             return "", ""
         channel_key, video_id = body.rsplit("_", 1)
