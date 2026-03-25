@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -385,5 +386,42 @@ async def test_poll_now_skips_videos_with_existing_processed_artifacts(monkeypat
     assert result["new_dispatched"] == 0
     assert dispatch_mock.await_count == 0
     assert notifications == []
+    saved = json.loads(_state_path().read_text(encoding="utf-8"))
+    assert saved["seen_ids"] == [video_id]
+
+
+@pytest.mark.asyncio
+async def test_poll_now_seeds_on_startup_before_first_background_seed(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    video_id = "seedNow123"
+    watcher = YouTubePlaylistWatcher(dispatch_fn=AsyncMock(return_value=(True, "agent")))
+    watcher._fetch_playlist_items = AsyncMock(
+        return_value=[
+            {
+                "video_id": video_id,
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "title": "Seed now video",
+                "channel_id": "chan1",
+                "occurred_at": "2026-03-25T15:00:00Z",
+                "playlist_id": "PLdemo",
+            }
+        ]
+    )
+    watcher._task = asyncio.create_task(asyncio.sleep(10))
+    try:
+        result = await watcher.poll_now()
+    finally:
+        watcher._task.cancel()
+        try:
+            await watcher._task
+        except asyncio.CancelledError:
+            pass
+
+    assert result["ok"] is True
+    assert result["new_dispatched"] == 0
+    assert result["seeded_existing"] == 1
     saved = json.loads(_state_path().read_text(encoding="utf-8"))
     assert saved["seen_ids"] == [video_id]

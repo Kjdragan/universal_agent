@@ -239,6 +239,24 @@ class YouTubePlaylistWatcher:
         self._dispatch_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
+    def _sanitize_pending_state(raw_pending: Any) -> dict[str, dict[str, Any]]:
+        if not isinstance(raw_pending, dict):
+            return {}
+        pending: dict[str, dict[str, Any]] = {}
+        for raw_video_id, raw_item in raw_pending.items():
+            video_id = str(raw_video_id or "").strip()
+            if not video_id or not isinstance(raw_item, dict):
+                continue
+            item_video_id = str(raw_item.get("video_id") or "").strip()
+            if item_video_id and item_video_id != video_id:
+                continue
+            if not item_video_id:
+                raw_item = dict(raw_item)
+                raw_item["video_id"] = video_id
+            pending[video_id] = dict(raw_item)
+        return pending
+
+    @staticmethod
     def _normalize_dispatch_result(result: DispatchResult) -> tuple[bool, str, dict[str, Any]]:
         if isinstance(result, dict):
             payload = dict(result)
@@ -277,6 +295,13 @@ class YouTubePlaylistWatcher:
         )
         state = _load_state()
         seen: set[str] = set(state.get("seen_ids", []))
+        self._pending_dispatch_items = self._sanitize_pending_state(state.get("pending_dispatch_items"))
+        self._notified_delayed_videos = set(
+            str(v or "").strip()
+            for v in list(state.get("notified_delayed_video_ids") or [])
+            if str(v or "").strip()
+        )
+        seen.update(self._pending_dispatch_items.keys())
         self._seen_ids = seen
         self._seen_count = len(seen)
         self._task = asyncio.create_task(self._loop(playlist_id, api_key, seen))
@@ -317,9 +342,22 @@ class YouTubePlaylistWatcher:
         timestamp_key: str,
     ) -> set[str]:
         if len(seen) > 1000:
-            seen = set(current_ids[:1000])
+            preserved_pending = list(self._pending_dispatch_items.keys())[:200]
+            seen = set(current_ids[:1000] + preserved_pending)
         self._seen_count = len(seen)
-        _save_state({"seen_ids": list(seen), timestamp_key: _iso_now()})
+        serialized_pending = {
+            video_id: dict(item)
+            for video_id, item in self._pending_dispatch_items.items()
+            if video_id
+        }
+        _save_state(
+            {
+                "seen_ids": list(seen),
+                "pending_dispatch_items": serialized_pending,
+                "notified_delayed_video_ids": sorted(self._notified_delayed_videos),
+                timestamp_key: _iso_now(),
+            }
+        )
         return seen
 
     # ------------------------------------------------------------------
@@ -793,6 +831,7 @@ class YouTubePlaylistWatcher:
                 else:
                     # Track for silent retry on next poll — no new notification
                     self._pending_dispatch_items[vid] = item
+                self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
         return accepted
 
 
@@ -815,6 +854,29 @@ class YouTubePlaylistWatcher:
         # Merge watcher's in-memory seen set + pending items so manual polls
         # never re-discover videos already tracked by the background loop.
         seen.update(self._seen_ids)
+        if (
+            self._task is not None
+            and not self._task.done()
+            and self._poll_count == 1
+            and not seen
+            and not self._pending_dispatch_items
+        ):
+            seen.update(current_ids)
+            self._seen_ids = set(seen)
+            self._persist_seen_state(seen, current_ids, timestamp_key="seeded_at")
+            logger.info(
+                "📺 poll_now: startup seed applied playlist_id=%s seen=%d",
+                playlist_id,
+                len(seen),
+            )
+            return {
+                "ok": True,
+                "total_in_playlist": len(items),
+                "new_dispatched": 0,
+                "dispatched_video_ids": [],
+                "seeded_existing": len(current_ids),
+                "polled_at": self._last_poll_at,
+            }
         dispatched = []
         for vid in list(self._pending_dispatch_items):
             pending_item = self._pending_dispatch_items[vid]

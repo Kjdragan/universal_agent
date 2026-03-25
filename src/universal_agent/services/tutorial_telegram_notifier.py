@@ -5,12 +5,10 @@ the tutorial processing lifecycle.
 
 Per-video Telegram behaviour:
   - A single Telegram post is maintained per video when possible.
-  - youtube_playlist_new_video creates the initial post.
-  - youtube_playlist_dispatch_failed and terminal outcomes edit that same post
-    in place so old "queued" or "delayed" notices do not linger as separate
-    entries for the same video.
-  - youtube_tutorial_started and youtube_tutorial_progress are suppressed
-    (redundant given the detected -> outcome lifecycle message).
+  - The post is created when the run is admitted (`youtube_tutorial_progress`)
+    and then replaced by terminal outcome (`ready` / `failed` / `interrupted`).
+  - Detection-only and retryable dispatch-not-admitted events are intentionally
+    suppressed from Telegram to avoid notification floods.
 
 System-health alerts (youtube_ingest_proxy_alert, hook_dispatch_queue_overflow)
 are global notices — NOT per-video.  They are rate-limited to at most one
@@ -57,8 +55,9 @@ _RELEVANT_KINDS = {
 #   msg 1: youtube_playlist_new_video (video detected + pipeline kicked off)
 #   msg 2: ready / failed / interrupted (final outcome)
 _SUPPRESSED_KINDS = {
+    "youtube_playlist_new_video",
+    "youtube_playlist_dispatch_failed",
     "youtube_tutorial_started",
-    "youtube_tutorial_progress",
 }
 
 # Global system-health alert kinds: not tied to a specific video.
@@ -68,15 +67,13 @@ _HEALTH_ALERT_KINDS = {
     "hook_dispatch_queue_overflow",
 }
 _VIDEO_LIFECYCLE_KINDS = {
-    "youtube_playlist_new_video",
-    "youtube_playlist_dispatch_failed",
+    "youtube_tutorial_progress",
     "youtube_tutorial_interrupted",
     "youtube_tutorial_ready",
     "youtube_tutorial_failed",
 }
 _VIDEO_KIND_PRIORITY: dict[str, int] = {
-    "youtube_playlist_new_video": 10,
-    "youtube_playlist_dispatch_failed": 20,
+    "youtube_tutorial_progress": 10,
     "youtube_tutorial_interrupted": 30,
     "youtube_tutorial_failed": 40,
     "youtube_tutorial_ready": 50,

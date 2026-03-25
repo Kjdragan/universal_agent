@@ -72,7 +72,14 @@ def _clean_telegram_state(monkeypatch, tmp_path):
 class TestSuppressedKinds:
     """Intermediate lifecycle events are silently dropped."""
 
-    @pytest.mark.parametrize("kind", ["youtube_tutorial_started", "youtube_tutorial_progress"])
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            "youtube_playlist_new_video",
+            "youtube_playlist_dispatch_failed",
+            "youtube_tutorial_started",
+        ],
+    )
     def test_suppressed_kinds_return_false(self, kind: str) -> None:
         with patch.object(tutorial_telegram_notifier, "_send_with_message_id", return_value=(True, 100)) as mock_send:
             result = tutorial_telegram_notifier.maybe_send(_make_payload(kind, metadata={"video_id": "v1"}))
@@ -235,7 +242,6 @@ class TestPerVideoDedup:
         "kind,cooldown_attr,dedup_dict_attr",
         [
             ("youtube_tutorial_ready", "VIDEO_READY_DEDUP_SECONDS", "_video_ready_last_sent"),
-            ("youtube_playlist_new_video", "VIDEO_NEW_DEDUP_SECONDS", "_video_new_last_sent"),
             ("youtube_tutorial_failed", "VIDEO_FAILED_DEDUP_SECONDS", "_video_failed_last_sent"),
         ],
     )
@@ -260,13 +266,14 @@ class TestLifecycleMessageReplacement:
     """Per-video lifecycle notices should update the same Telegram post."""
 
     def test_ready_edits_existing_video_message(self) -> None:
-        new_payload = _make_payload(
-            "youtube_playlist_new_video",
-            title="New Tutorial Video Detected",
-            message="Example video — queued for processing",
+        progress_payload = _make_payload(
+            "youtube_tutorial_progress",
+            title="YouTube Tutorial Pipeline Queued",
+            message="Example video: tutorial pipeline attempt 1 admitted for processing.",
             metadata={
                 "video_id": "vid_replace",
-                "video_url": "https://youtube.com/watch?v=vid_replace",
+                "dispatch_decision": "accepted",
+                "attempt_number": 1,
             },
         )
         ready_payload = _make_payload(
@@ -290,7 +297,7 @@ class TestLifecycleMessageReplacement:
             "_edit_message",
             return_value=True,
         ) as mock_edit:
-            assert tutorial_telegram_notifier.maybe_send(new_payload) is True
+            assert tutorial_telegram_notifier.maybe_send(progress_payload) is True
             assert tutorial_telegram_notifier.maybe_send(ready_payload) is True
 
         mock_send.assert_called_once()
@@ -299,7 +306,7 @@ class TestLifecycleMessageReplacement:
         assert state["vid_replace"]["message_id"] == 321
         assert state["vid_replace"]["kind"] == "youtube_tutorial_ready"
 
-    def test_duplicate_delayed_update_is_suppressed_after_state_is_persisted(self) -> None:
+    def test_delayed_dispatch_updates_are_suppressed_in_telegram(self) -> None:
         payload = _make_payload(
             "youtube_playlist_dispatch_failed",
             title="Tutorial Dispatch Delayed",
@@ -317,10 +324,10 @@ class TestLifecycleMessageReplacement:
             "_edit_message",
             return_value=True,
         ) as mock_edit:
-            assert tutorial_telegram_notifier.maybe_send(payload) is True
+            assert tutorial_telegram_notifier.maybe_send(payload) is False
             assert tutorial_telegram_notifier.maybe_send(payload) is False
 
-        mock_send.assert_called_once()
+        mock_send.assert_not_called()
         mock_edit.assert_not_called()
 
 

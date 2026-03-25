@@ -104,28 +104,17 @@ def test_dedup_expires_after_cooldown(monkeypatch):
     assert len(sent_messages) == 2
 
 
-def test_new_video_kind_is_deduped(monkeypatch):
-    """youtube_playlist_new_video should also be deduped per video_id."""
-    monkeypatch.setattr(tutorial_telegram_notifier, "VIDEO_NEW_DEDUP_SECONDS", 60.0)
-    sent_messages: list[str] = []
-
-    with patch.object(
-        tutorial_telegram_notifier,
-        "_send_with_message_id",
-        side_effect=lambda text: (sent_messages.append(text), (True, len(sent_messages)))[1],
-    ):
-        payload = {
-            "kind": "youtube_playlist_new_video",
-            "title": "New Tutorial Video Detected",
-            "message": "Test Video — queued for processing",
-            "metadata": {"video_id": "vid123", "video_url": "https://youtube.com/watch?v=vid123"},
-        }
-        result1 = tutorial_telegram_notifier.maybe_send(payload)
-        result2 = tutorial_telegram_notifier.maybe_send(payload)
-        assert result1 is True
-        assert result2 is False  # second should be suppressed
-
-    assert len(sent_messages) == 1
+def test_new_video_kind_is_suppressed_in_run_lifecycle_mode():
+    """Detection-only notices are intentionally suppressed in Telegram."""
+    payload = {
+        "kind": "youtube_playlist_new_video",
+        "title": "New Tutorial Video Detected",
+        "message": "Test Video — queued for processing",
+        "metadata": {"video_id": "vid123", "video_url": "https://youtube.com/watch?v=vid123"},
+    }
+    with patch.object(tutorial_telegram_notifier, "_send_with_message_id", return_value=(True, 123)) as mock_send:
+        assert tutorial_telegram_notifier.maybe_send(payload) is False
+    mock_send.assert_not_called()
 
 
 def test_non_deduped_kinds_not_affected(monkeypatch):
