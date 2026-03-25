@@ -11679,15 +11679,15 @@ async def lifespan(app: FastAPI):
     # YouTube tutorial playlist watcher (native UA poller — replaces CSI ingester source)
     async def _yt_watcher_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
         if _hooks_service is None:
-            return False, "hooks_service_not_ready"
+            return {"decision": "failed", "reason": "hooks_service_not_ready", "error": "hooks_service_not_ready"}
         if subpath == "youtube/manual":
             action_payload = build_manual_youtube_action(
                 payload,
                 name="PlaylistWatcherYouTubeWebhook",
             )
             if action_payload is None:
-                return False, "invalid_manual_youtube_payload"
-            return await _hooks_service.dispatch_internal_action(action_payload)
+                return {"decision": "failed", "reason": "invalid_manual_youtube_payload", "error": "invalid_manual_youtube_payload"}
+            return await _hooks_service.dispatch_internal_action_background_with_admission(action_payload)
         return await _hooks_service.dispatch_internal_payload(
             subpath=subpath, payload=payload, headers={"x-ua-source": "yt_playlist_watcher"}
         )

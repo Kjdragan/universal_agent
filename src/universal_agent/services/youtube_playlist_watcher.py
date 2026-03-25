@@ -137,7 +137,8 @@ def _infer_youtube_mode(*parts: Any) -> str:
     return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
 
 
-DispatchFn = Callable[[str, dict[str, Any]], Coroutine[Any, Any, tuple[bool, str]]]
+DispatchResult = tuple[bool, str] | dict[str, Any]
+DispatchFn = Callable[[str, dict[str, Any]], Coroutine[Any, Any, DispatchResult]]
 NotifyFn = Callable[[dict[str, Any]], None]
 
 
@@ -163,13 +164,28 @@ class YouTubePlaylistWatcher:
         self._seen_count: int = 0
         self._dispatched_total: int = 0
         self._poll_count: int = 0
-        # In-process dedup guard: tracks video IDs dispatched during this service
-        # lifetime so that concurrent _loop + poll_now calls never double-notify
-        # for the same video (e.g. on service restart race or manual poll overlap).
-        self._dispatched_this_session: set[str] = set()
-        # Mutex that serialises the check-and-register section so _loop and
-        # poll_now cannot both see the same video as "unseen" simultaneously.
+        # In-process dedup guard for inflight dispatches only. We intentionally
+        # do NOT treat "detected" as "processed"; a video is persisted to the
+        # seen set only after the dispatch handoff is accepted. That allows the
+        # watcher to retry naturally after crashes or rejected dispatch attempts,
+        # with durable run admission acting as the authoritative dedupe layer.
+        self._inflight_dispatches: set[str] = set()
+        # Mutex that serialises the inflight/seen transition so _loop and
+        # poll_now cannot both dispatch the same unseen video simultaneously.
         self._dispatch_lock: asyncio.Lock = asyncio.Lock()
+
+    @staticmethod
+    def _normalize_dispatch_result(result: DispatchResult) -> tuple[bool, str, dict[str, Any]]:
+        if isinstance(result, dict):
+            payload = dict(result)
+            decision = str(payload.get("decision") or "").strip().lower()
+            reason = str(payload.get("reason") or decision or "dispatch_result").strip()
+            ok = decision not in {"failed", "error"}
+            return ok, reason, payload
+        if isinstance(result, tuple) and len(result) == 2:
+            ok, reason = result
+            return bool(ok), str(reason or ""), {}
+        return False, "invalid_dispatch_result", {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -444,7 +460,7 @@ class YouTubePlaylistWatcher:
     # Dispatch + notification helpers
     # ------------------------------------------------------------------
 
-    async def _dispatch(self, item: dict[str, Any]) -> None:
+    async def _dispatch(self, item: dict[str, Any]) -> bool:
         mode = _infer_youtube_mode(
             item.get("title"),
             item.get("channel_id"),
@@ -461,11 +477,52 @@ class YouTubePlaylistWatcher:
             "source": "yt_playlist_watcher",
         }
         try:
-            ok, reason = await self._dispatch_fn("youtube/manual", payload)
+            result = await self._dispatch_fn("youtube/manual", payload)
+            ok, reason, details = self._normalize_dispatch_result(result)
             if ok:
                 logger.info(
                     "📺 Dispatched tutorial pipeline video_id=%s", item.get("video_id")
                 )
+                run_id = str(details.get("run_id") or "").strip()
+                attempt_id = str(details.get("attempt_id") or "").strip()
+                attempt_number = int(details.get("attempt_number") or 0) if str(details.get("attempt_number") or "").strip() else 0
+                workspace_dir = str(details.get("workspace_dir") or "").strip()
+                decision = str(details.get("decision") or "").strip().lower()
+                if run_id or attempt_id or workspace_dir or decision in {"accepted", "skipped", "defer", "attach_to_existing_run"}:
+                    if decision in {"skipped"}:
+                        title = "YouTube Tutorial Already Tracked"
+                        message = (
+                            f"{item.get('title') or item.get('video_id')}: existing workflow reused "
+                            f"({reason or decision})."
+                        )
+                        severity = "info"
+                    else:
+                        title = "YouTube Tutorial Pipeline Queued"
+                        attempt_label = attempt_number or 1
+                        message = (
+                            f"{item.get('title') or item.get('video_id')}: "
+                            f"tutorial pipeline attempt {attempt_label} admitted for processing."
+                        )
+                        severity = "info"
+                    self._emit_notification(
+                        kind="youtube_tutorial_progress",
+                        title=title,
+                        message=message,
+                        severity=severity,
+                        metadata={
+                            "video_id": item.get("video_id", ""),
+                            "video_url": item.get("url", f"https://www.youtube.com/watch?v={item['video_id']}"),
+                            "title": item.get("title", ""),
+                            "playlist_id": item.get("playlist_id", ""),
+                            "dispatch_decision": decision or "accepted",
+                            "dispatch_reason": reason,
+                            "run_id": run_id,
+                            "attempt_id": attempt_id,
+                            "attempt_number": attempt_number or None,
+                            "workspace_dir": workspace_dir,
+                        },
+                    )
+                return True
             else:
                 logger.warning(
                     "📺 Dispatch rejected video_id=%s reason=%s",
@@ -477,12 +534,33 @@ class YouTubePlaylistWatcher:
                     title="Tutorial Dispatch Rejected",
                     message=f"{item.get('title') or item.get('video_id')}: {reason}",
                     severity="warning",
-                    metadata={"video_id": item.get("video_id", ""), "reason": reason},
+                    metadata={
+                        "video_id": item.get("video_id", ""),
+                        "reason": reason,
+                        "run_id": str(details.get("run_id") or "").strip(),
+                        "attempt_id": str(details.get("attempt_id") or "").strip(),
+                        "attempt_number": details.get("attempt_number"),
+                        "workspace_dir": str(details.get("workspace_dir") or "").strip(),
+                    },
                 )
+                return False
         except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             logger.exception(
                 "📺 Dispatch error video_id=%s: %s", item.get("video_id"), exc
             )
+            self._emit_notification(
+                kind="youtube_playlist_dispatch_failed",
+                title="Tutorial Dispatch Error",
+                message=f"{item.get('title') or item.get('video_id')}: {self._last_error}",
+                severity="error",
+                metadata={
+                    "video_id": item.get("video_id", ""),
+                    "reason": self._last_error,
+                    "failure_class": "dispatch_exception",
+                },
+            )
+            return False
 
     def _emit_notification(
         self,
@@ -517,21 +595,19 @@ class YouTubePlaylistWatcher:
     ) -> bool:
         """Check-and-register a video then dispatch it. Returns True if dispatched.
 
-        The critical section (seen update + _dispatched_this_session check/add) is
+        The critical section (inflight check/add, then seen update on success) is
         protected by _dispatch_lock so that concurrent calls from _loop and poll_now
-        never both register the same video as unseen at the same time, which was the
-        root cause of duplicate 'New Tutorial Video Detected' Telegram notifications.
-        The actual dispatch coroutine (slow network/agent call) runs outside the lock.
+        never both dispatch the same unseen video at the same time.
+        A video is persisted to seen only after dispatch admission succeeds; failed
+        or crashed dispatch attempts are left eligible for retry on the next poll.
         """
         vid = item["video_id"]
         async with self._dispatch_lock:
-            # Persist to disk first so a restart after this point does not re-dispatch.
-            seen.add(vid)
-            self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
-            if vid in self._dispatched_this_session:
-                return False  # already handled by a concurrent path
-            self._dispatched_this_session.add(vid)
-            self._dispatched_total += 1
+            if vid in seen:
+                return False
+            if vid in self._inflight_dispatches:
+                return False
+            self._inflight_dispatches.add(vid)
 
         # Emit notification and dispatch outside the lock (slow operations).
         logger.info(
@@ -551,8 +627,38 @@ class YouTubePlaylistWatcher:
                 "playlist_id": playlist_id,
             },
         )
-        await self._dispatch(item)
-        return True
+        accepted = False
+        try:
+            accepted = await self._dispatch(item)
+        except Exception as exc:
+            # _dispatch normally swallows/records its own errors, but keep this
+            # outer guard so an unexpected monkeypatch/runtime error never marks
+            # the item as seen or kills the whole poll cycle.
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            logger.exception(
+                "📺 Unexpected watcher dispatch wrapper error video_id=%s: %s",
+                vid,
+                exc,
+            )
+            self._emit_notification(
+                kind="youtube_playlist_dispatch_failed",
+                title="Tutorial Dispatch Error",
+                message=f"{item.get('title') or vid}: {self._last_error}",
+                severity="error",
+                metadata={
+                    "video_id": vid,
+                    "reason": self._last_error,
+                    "failure_class": "dispatch_wrapper_exception",
+                },
+            )
+        finally:
+            async with self._dispatch_lock:
+                self._inflight_dispatches.discard(vid)
+                if accepted:
+                    seen.add(vid)
+                    self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                    self._dispatched_total += 1
+        return accepted
 
 
     async def poll_now(self) -> dict[str, Any]:

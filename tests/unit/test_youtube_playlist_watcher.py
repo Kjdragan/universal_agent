@@ -105,7 +105,7 @@ async def test_poll_now_works_without_api_key_when_rss_is_available(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_poll_now_persists_seen_ids_before_dispatch_side_effects(monkeypatch, tmp_path):
+async def test_poll_now_does_not_persist_seen_ids_when_dispatch_crashes(monkeypatch, tmp_path):
     monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
     monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
     monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
@@ -125,11 +125,13 @@ async def test_poll_now_persists_seen_ids_before_dispatch_side_effects(monkeypat
     )
     watcher._dispatch = AsyncMock(side_effect=RuntimeError("dispatch_crashed"))
 
-    with pytest.raises(RuntimeError, match="dispatch_crashed"):
-        await watcher.poll_now()
+    result = await watcher.poll_now()
 
-    saved = json.loads(_state_path().read_text(encoding="utf-8"))
-    assert saved["seen_ids"] == ["vid123"]
+    assert result["ok"] is True
+    state_file = _state_path()
+    if state_file.exists():
+        saved = json.loads(state_file.read_text(encoding="utf-8"))
+        assert saved.get("seen_ids", []) == []
 
 
 @pytest.mark.asyncio
@@ -180,3 +182,116 @@ async def test_concurrent_poll_now_calls_dispatch_exactly_once(monkeypatch, tmp_
     assert len(detected_notifs) == 1, (
         f"Expected 1 'New Tutorial Video Detected' notification, got {len(detected_notifs)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_poll_now_emits_progress_notification_when_run_admission_is_returned(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    new_item = {
+        "video_id": "runAware123",
+        "url": "https://www.youtube.com/watch?v=runAware123",
+        "title": "Run-aware dispatch video",
+        "channel_id": "chan1",
+        "occurred_at": "2026-03-25T15:00:00Z",
+        "playlist_id": "PLdemo",
+    }
+
+    notifications: list[dict] = []
+    dispatch_mock = AsyncMock(
+        return_value={
+            "decision": "accepted",
+            "reason": "dispatched",
+            "run_id": "run_youtube_123",
+            "attempt_id": "attempt_youtube_1",
+            "attempt_number": 1,
+            "workspace_dir": "/tmp/run_session_hook_yt_demo",
+        }
+    )
+
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=dispatch_mock,
+        notification_sink=notifications.append,
+    )
+    watcher._fetch_playlist_items = AsyncMock(return_value=[new_item])
+
+    result = await watcher.poll_now()
+
+    assert result["ok"] is True
+    progress = next((n for n in notifications if n.get("kind") == "youtube_tutorial_progress"), None)
+    assert progress is not None
+    assert "attempt 1 admitted for processing" in str(progress.get("message") or "").lower()
+    assert (progress.get("metadata") or {}).get("run_id") == "run_youtube_123"
+    assert (progress.get("metadata") or {}).get("attempt_id") == "attempt_youtube_1"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_exception_emits_dispatch_failed_notification(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    notifications: list[dict] = []
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=AsyncMock(side_effect=RuntimeError("hook dispatch crashed")),
+        notification_sink=notifications.append,
+    )
+
+    await watcher._dispatch(
+        {
+            "video_id": "dispatchBoom123",
+            "url": "https://www.youtube.com/watch?v=dispatchBoom123",
+            "title": "Dispatch boom",
+            "channel_id": "chan1",
+            "playlist_id": "PLdemo",
+        }
+    )
+
+    failed = next((n for n in notifications if n.get("kind") == "youtube_playlist_dispatch_failed"), None)
+    assert failed is not None
+    assert "hook dispatch crashed" in str(failed.get("message") or "")
+    assert (failed.get("metadata") or {}).get("failure_class") == "dispatch_exception"
+
+
+@pytest.mark.asyncio
+async def test_poll_now_retries_same_video_after_rejected_dispatch(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    new_item = {
+        "video_id": "retryVid123",
+        "url": "https://www.youtube.com/watch?v=retryVid123",
+        "title": "Retry after rejected dispatch",
+        "channel_id": "chan1",
+        "occurred_at": "2026-03-25T15:00:00Z",
+        "playlist_id": "PLdemo",
+    }
+
+    dispatch_mock = AsyncMock(
+        side_effect=[
+            (False, "dispatch_rejected"),
+            {
+                "decision": "accepted",
+                "reason": "dispatched",
+                "run_id": "run_retry_123",
+                "attempt_id": "attempt_retry_1",
+                "attempt_number": 1,
+                "workspace_dir": "/tmp/run_session_hook_yt_retry",
+            },
+        ]
+    )
+
+    watcher = YouTubePlaylistWatcher(dispatch_fn=dispatch_mock)
+    watcher._fetch_playlist_items = AsyncMock(return_value=[new_item])
+
+    first = await watcher.poll_now()
+    second = await watcher.poll_now()
+
+    assert first["new_dispatched"] == 0
+    assert second["new_dispatched"] == 1
+    saved = json.loads(_state_path().read_text(encoding="utf-8"))
+    assert saved["seen_ids"] == ["retryVid123"]
+    assert dispatch_mock.await_count == 2
