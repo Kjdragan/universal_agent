@@ -305,9 +305,6 @@ class YouTubePlaylistWatcher:
 
                 # ── Retry pending (previously failed) dispatches silently ──
                 for vid in list(self._pending_dispatch_items):
-                    if vid in seen:
-                        self._pending_dispatch_items.pop(vid, None)
-                        continue
                     pending_item = self._pending_dispatch_items[vid]
                     logger.info("📺 Retrying pending dispatch video_id=%s", vid)
                     dispatched = await self._dispatch(pending_item, silent=True)
@@ -752,13 +749,26 @@ class YouTubePlaylistWatcher:
         # Merge watcher's in-memory seen set + pending items so manual polls
         # never re-discover videos already tracked by the background loop.
         seen.update(self._seen_ids)
+        dispatched = []
+        for vid in list(self._pending_dispatch_items):
+            pending_item = self._pending_dispatch_items[vid]
+            logger.info("📺 poll_now: retrying pending dispatch video_id=%s", vid)
+            ok = await self._dispatch(pending_item, silent=True)
+            if ok:
+                async with self._dispatch_lock:
+                    seen.add(vid)
+                    self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                    self._dispatched_total += 1
+                self._pending_dispatch_items.pop(vid, None)
+                self._notified_delayed_videos.discard(vid)
+                dispatched.append(vid)
+                logger.info("📺 poll_now: pending dispatch succeeded video_id=%s", vid)
         new_items = [
             i for i in items
             if i.get("video_id")
             and i["video_id"] not in seen
             and i["video_id"] not in self._pending_dispatch_items
         ]
-        dispatched = []
         for item in reversed(new_items):
             vid = item["video_id"]
             ok = await self._process_new_video(item, seen, current_ids, playlist_id)

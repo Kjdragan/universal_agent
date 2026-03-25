@@ -891,6 +891,170 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
     return [item for _, item in runs[: max(1, min(limit, 1000))]]
 
 
+_TUTORIAL_RUN_NOT_READY_STATUSES = frozenset({
+    "",
+    "unknown",
+    "failed",
+    "dispatch_failed",
+    "failed_local_ingest",
+    "pending_local_ingest",
+    "timed_out",
+})
+_TUTORIAL_RUN_RECONCILEABLE_NOTIFICATION_KINDS = frozenset({
+    "youtube_playlist_new_video",
+    "youtube_playlist_dispatch_failed",
+    "youtube_tutorial_started",
+    "youtube_tutorial_progress",
+    "youtube_tutorial_ready",
+    "youtube_tutorial_failed",
+    "youtube_tutorial_interrupted",
+    "youtube_ingest_failed",
+    "youtube_hook_recovery_queued",
+})
+
+
+def _tutorial_run_is_ready_for_notification(run: dict[str, Any]) -> bool:
+    status = str(run.get("status") or "").strip().lower()
+    return status not in _TUTORIAL_RUN_NOT_READY_STATUSES
+
+
+def _tutorial_ready_run_indexes(limit: int = 1000) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    ready_by_video: dict[str, dict[str, Any]] = {}
+    ready_by_path: dict[str, dict[str, Any]] = {}
+    for run in _list_tutorial_runs(limit=limit):
+        if not _tutorial_run_is_ready_for_notification(run):
+            continue
+        video_id = str(run.get("video_id") or "").strip()
+        run_path = str(run.get("run_path") or "").strip().strip("/")
+        if video_id and video_id not in ready_by_video:
+            ready_by_video[video_id] = run
+        if run_path and run_path not in ready_by_path:
+            ready_by_path[run_path] = run
+    return ready_by_video, ready_by_path
+
+
+def _tutorial_ready_run_for_metadata(
+    metadata: Any,
+    *,
+    ready_runs_by_video: dict[str, dict[str, Any]],
+    ready_runs_by_path: dict[str, dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if not isinstance(metadata, dict):
+        return None
+    video_id = _notification_video_id(metadata)
+    if video_id:
+        run = ready_runs_by_video.get(video_id)
+        if run is not None:
+            return run
+    run_path = str(metadata.get("tutorial_run_path") or metadata.get("run_path") or "").strip().strip("/")
+    if run_path:
+        return ready_runs_by_path.get(run_path)
+    return None
+
+
+def _tutorial_ready_message_from_run(run: dict[str, Any]) -> str:
+    tutorial_title = str(run.get("title") or run.get("video_id") or "Tutorial").strip()
+    video_id = str(run.get("video_id") or "").strip()
+    suffix = f" (video_id: {video_id})" if video_id else ""
+    return f"{tutorial_title} artifacts are ready for review.{suffix}"
+
+
+def _reconcile_tutorial_notification_with_run(
+    item: dict[str, Any],
+    run: dict[str, Any],
+) -> dict[str, Any]:
+    reconciled = dict(item)
+    metadata = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}
+    tutorial_files = run.get("files") if isinstance(run.get("files"), list) else []
+    metadata.update(
+        {
+            "video_id": str(run.get("video_id") or metadata.get("video_id") or "").strip(),
+            "video_url": str(run.get("video_url") or metadata.get("video_url") or "").strip(),
+            "tutorial_status": str(run.get("status") or metadata.get("tutorial_status") or "full").strip(),
+            "tutorial_run_path": str(run.get("run_path") or metadata.get("tutorial_run_path") or "").strip(),
+            "tutorial_manifest_path": str(run.get("manifest_path") or metadata.get("tutorial_manifest_path") or "").strip(),
+            "tutorial_key_files": tutorial_files or list(metadata.get("tutorial_key_files") or []),
+            "tutorial_notification_reconciled": True,
+            "reconciled_from_kind": str(item.get("kind") or "").strip(),
+        }
+    )
+    ready_message = _tutorial_ready_message_from_run(run)
+    reconciled.update(
+        {
+            "kind": "youtube_tutorial_ready",
+            "title": "YouTube Tutorial Artifacts Ready",
+            "message": ready_message,
+            "summary": _activity_summary_text(ready_message),
+            "full_message": ready_message,
+            "severity": "success",
+            "requires_action": True,
+            "metadata": metadata,
+        }
+    )
+    return reconciled
+
+
+def _reconcile_tutorial_notifications_with_processed_runs(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not items:
+        return items
+    ready_runs_by_video, ready_runs_by_path = _tutorial_ready_run_indexes()
+    if not ready_runs_by_video and not ready_runs_by_path:
+        return items
+
+    reconciled: list[dict[str, Any]] = []
+    for item in items:
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in _TUTORIAL_RUN_RECONCILEABLE_NOTIFICATION_KINDS:
+            reconciled.append(item)
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        ready_run = _tutorial_ready_run_for_metadata(
+            metadata,
+            ready_runs_by_video=ready_runs_by_video,
+            ready_runs_by_path=ready_runs_by_path,
+        )
+        if ready_run is None:
+            reconciled.append(item)
+            continue
+        reconciled.append(_reconcile_tutorial_notification_with_run(item, ready_run))
+    return reconciled
+
+
+def _tutorial_notification_entity_key(item: dict[str, Any]) -> str:
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind in _HEALTH_ALERT_NOTIFICATION_KINDS:
+        return f"kind:{kind}"
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    video_id = _notification_video_id(metadata)
+    if video_id:
+        return f"video:{video_id}"
+    run_path = str(metadata.get("tutorial_run_path") or metadata.get("run_path") or "").strip().strip("/")
+    if run_path:
+        return f"run:{run_path}"
+    return ""
+
+
+def _collapse_tutorial_notifications(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest_by_entity: dict[str, dict[str, Any]] = {}
+    passthrough: list[dict[str, Any]] = []
+    for item in items:
+        entity_key = _tutorial_notification_entity_key(item)
+        if not entity_key:
+            passthrough.append(item)
+            continue
+        existing = latest_by_entity.get(entity_key)
+        if (
+            existing is None
+            or _notification_created_timestamp_value(item) > _notification_created_timestamp_value(existing)
+        ):
+            latest_by_entity[entity_key] = item
+    collapsed = [*latest_by_entity.values(), *passthrough]
+    collapsed.sort(key=_notification_created_timestamp_value, reverse=True)
+    return collapsed
+
+
 _TUTORIAL_ACTIVE_KINDS = frozenset({
     "youtube_playlist_new_video",
     "youtube_tutorial_started",
@@ -921,7 +1085,13 @@ def _tutorial_activity_event_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _collect_active_tutorial_runs_from_rows(rows: list[dict[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+def _collect_active_tutorial_runs_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+    ready_runs_by_video: Optional[dict[str, dict[str, Any]]] = None,
+    ready_runs_by_path: Optional[dict[str, dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
     stage_map = {
         "youtube_playlist_new_video": "queued",
         "youtube_tutorial_started": "processing",
@@ -929,6 +1099,8 @@ def _collect_active_tutorial_runs_from_rows(rows: list[dict[str, Any]], *, limit
         "youtube_tutorial_interrupted": "interrupted",
         "youtube_hook_recovery_queued": "recovery_queued",
     }
+    ready_runs_by_video = ready_runs_by_video or {}
+    ready_runs_by_path = ready_runs_by_path or {}
     active_runs: list[dict[str, Any]] = []
     seen_run_keys: set[str] = set()
     for item in rows:
@@ -940,6 +1112,12 @@ def _collect_active_tutorial_runs_from_rows(rows: list[dict[str, Any]], *, limit
         if normalized_status in {"dismissed", "resolved", "completed"}:
             continue
         metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if _tutorial_ready_run_for_metadata(
+            metadata,
+            ready_runs_by_video=ready_runs_by_video,
+            ready_runs_by_path=ready_runs_by_path,
+        ) is not None:
+            continue
         video_id = str(metadata.get("video_id") or metadata.get("youtube_video_id") or "").strip()
         run_path = str(metadata.get("tutorial_run_path") or metadata.get("run_path") or "").strip()
         ingest_status = str(
@@ -17832,7 +18010,15 @@ async def dashboard_tutorial_active_runs(limit: int = 20):
             source_domain="tutorial",
             apply_default_window=False,
         )
-        return {"runs": _collect_active_tutorial_runs_from_rows(rows, limit=clamped)}
+        ready_runs_by_video, ready_runs_by_path = _tutorial_ready_run_indexes()
+        return {
+            "runs": _collect_active_tutorial_runs_from_rows(
+                rows,
+                limit=clamped,
+                ready_runs_by_video=ready_runs_by_video,
+                ready_runs_by_path=ready_runs_by_path,
+            )
+        }
     except Exception as exc:
         logger.debug("Dashboard tutorial active-runs query failed: %s", exc)
         return {"runs": []}
@@ -17927,7 +18113,10 @@ async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: b
                     "metadata": metadata,
                 }
             )
-        matching = _filter_superseded_tutorial_notifications(matching)[:clamped]
+        matching = _reconcile_tutorial_notifications_with_processed_runs(matching)
+        matching = _collapse_tutorial_notifications(
+            _filter_superseded_tutorial_notifications(matching)
+        )[:clamped]
         if matching:
             return {"notifications": matching}
     except Exception as exc:
@@ -17941,7 +18130,10 @@ async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: b
             or not _notification_hidden_by_default(n.get("status") or "new")
         )
     ]
-    matching = _filter_superseded_tutorial_notifications(matching)[:clamped]
+    matching = _reconcile_tutorial_notifications_with_processed_runs(matching)
+    matching = _collapse_tutorial_notifications(
+        _filter_superseded_tutorial_notifications(matching)
+    )[:clamped]
     return {"notifications": matching}
 
 

@@ -2583,6 +2583,107 @@ def test_dashboard_tutorial_notifications_suppress_superseded_youtube_failure_ro
     assert "ntf_stale_tutorial_failure" not in ids
 
 
+def test_dashboard_tutorial_notifications_reconcile_processed_run_over_started(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "Anthropic__9d5bzVxocw__2026-03-25"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "README.md").write_text("# README\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# Concept\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "title": "Anthropic Just Dropped the New Blueprint for Long-Running AI Agents.",
+                "video_id": "9d5bzVxocw",
+                "video_url": "https://www.youtube.com/watch?v=9d5bzVxocw",
+                "status": "full",
+                "learning_mode": "concept_plus_implementation",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_stale_started",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_started",
+            "title": "YouTube Tutorial Pipeline Started",
+            "summary": "Processing tutorial pipeline attempt 1.",
+            "full_message": "Processing tutorial pipeline attempt 1.",
+            "severity": "info",
+            "status": "new",
+            "requires_action": False,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T20:52:00+00:00",
+            "updated_at": "2026-03-25T20:52:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "9d5bzVxocw"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=20")
+    assert resp.status_code == 200
+    notifications = resp.json()["notifications"]
+    current = next((item for item in notifications if (item.get("metadata") or {}).get("video_id") == "9d5bzVxocw"), None)
+    assert current is not None
+    assert current["kind"] == "youtube_tutorial_ready"
+    assert current["title"] == "YouTube Tutorial Artifacts Ready"
+    assert "artifacts are ready for review" in str(current.get("message") or "").lower()
+    assert ((current.get("metadata") or {}).get("tutorial_run_path") or "").startswith("youtube-tutorial-creation/")
+
+
+def test_dashboard_tutorial_active_runs_exclude_processed_video_rows(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "Anthropic__9d5bzVxocw__2026-03-25"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "README.md").write_text("# README\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "title": "Anthropic Just Dropped the New Blueprint for Long-Running AI Agents.",
+                "video_id": "9d5bzVxocw",
+                "video_url": "https://www.youtube.com/watch?v=9d5bzVxocw",
+                "status": "full",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_active_started",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_started",
+            "title": "YouTube Tutorial Pipeline Started",
+            "summary": "Processing tutorial pipeline attempt 1.",
+            "full_message": "Processing tutorial pipeline attempt 1.",
+            "severity": "info",
+            "status": "new",
+            "requires_action": False,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T20:52:00+00:00",
+            "updated_at": "2026-03-25T20:52:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "9d5bzVxocw"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/active-runs?limit=20")
+    assert resp.status_code == 200
+    runs = resp.json()["runs"]
+    assert not any(str(item.get("video_id") or "") == "9d5bzVxocw" for item in runs)
+
+
 def test_dashboard_tutorial_active_runs_include_degraded_stage(client):
     gateway_server._add_notification(
         kind="youtube_playlist_new_video",
