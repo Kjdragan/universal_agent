@@ -328,7 +328,7 @@ metadata:
 ```
 
 ### gemini-url-context-scraper
-Fast URL/PDF/image content extraction using Gemini "URL Context" (built-in web/PDF reader) via google-genai. Use when the user wants to: scrape a URL, read/summarize a PDF, extract structured facts from public web content, or create an interim “scraped context” work product for downstream tasks. Writes interim outputs to CURRENT_SESSION_WORKSPACE/work_products by default, and can persist outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run` scripts with dotenv auto-loading (no hardcoded secrets).
+Fast URL/PDF/image content extraction using Gemini "URL Context" (built-in web/PDF reader) via google-genai. Use when the user wants to: scrape a URL, read/summarize a PDF, extract structured facts from public web content, or create an interim “scraped context” work product for downstream tasks. Writes interim outputs to CURRENT_RUN_WORKSPACE/work_products by default (`CURRENT_SESSION_WORKSPACE` is the legacy alias), and can persist outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run` scripts with dotenv auto-loading (no hardcoded secrets).
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/gemini-url-context-scraper/SKILL.md`
 ```yaml
 name: gemini-url-context-scraper
@@ -336,7 +336,7 @@ description: "Fast URL/PDF/image content extraction using Gemini \"URL Context\"
   \ web/PDF reader) via google-genai.\nUse when the user wants to: scrape a URL, read/summarize\
   \ a PDF, extract structured facts from public web content, or create an interim\
   \ \u201Cscraped context\u201D work product for downstream tasks.\nWrites interim\
-  \ outputs to CURRENT_SESSION_WORKSPACE/work_products by default, and can persist\
+  \ outputs to CURRENT_RUN_WORKSPACE/work_products by default (`CURRENT_SESSION_WORKSPACE` is the legacy alias), and can persist\
   \ outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run`\
   \ scripts with dotenv auto-loading (no hardcoded secrets).\n"
 ```
@@ -817,13 +817,13 @@ allowed-tools:
 ```
 
 ### reddit-intel
-Fetch compact, structured Reddit intelligence — top posts with engagement metrics (score, comments, author, permalink) — and save as an interim work product in the current session workspace for downstream agent reuse. USE when you need to understand what the Reddit community is saying about a topic, check trending discussion in a subreddit, or gather social signals for a research task. Trigger phrases: "what's trending on Reddit", "check Reddit for", "top Reddit posts about", "Reddit sentiment on", "what's r/X saying about", "check r/MachineLearning", "get Reddit intel on", "pull Reddit data for", "what's popular in this subreddit".
+Fetch compact, structured Reddit intelligence — top posts with engagement metrics (score, comments, author, permalink) — and save as an interim work product in the current run workspace for downstream agent reuse. USE when you need to understand what the Reddit community is saying about a topic, check trending discussion in a subreddit, or gather social signals for a research task. Trigger phrases: "what's trending on Reddit", "check Reddit for", "top Reddit posts about", "Reddit sentiment on", "what's r/X saying about", "check r/MachineLearning", "get Reddit intel on", "pull Reddit data for", "what's popular in this subreddit".
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/reddit-intel/SKILL.md`
 ```yaml
 name: reddit-intel
 description: "Fetch compact, structured Reddit intelligence \u2014 top posts with\
   \ engagement metrics (score, comments, author, permalink) \u2014 and save as an\
-  \ interim work product in the current session workspace for downstream agent reuse.\
+  \ interim work product in the current run workspace for downstream agent reuse.\
   \ USE when you need to understand what the Reddit community is saying about a topic,\
   \ check trending discussion in a subreddit, or gather social signals for a research\
   \ task. Trigger phrases: \"what's trending on Reddit\", \"check Reddit for\", \"\

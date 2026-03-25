@@ -12,7 +12,7 @@ from claude_agent_sdk import tool
 
 from universal_agent.utils.session_workspace import (
     build_interim_work_product_paths,
-    resolve_current_session_workspace,
+    resolve_current_run_workspace,
     safe_slug,
     write_json,
 )
@@ -194,7 +194,7 @@ def _aggregate_source_mix(subject: Dict[str, Any], source: str) -> Dict[str, int
 
 
 def _save_snapshot(*, tool_name: str, args: Dict[str, Any], payload: Dict[str, Any]) -> Optional[str]:
-    ws = resolve_current_session_workspace(repo_root=str(Path(__file__).resolve().parents[3]))
+    ws = resolve_current_run_workspace(repo_root=str(Path(__file__).resolve().parents[3]))
     if not ws:
         return None
     wp = build_interim_work_product_paths(

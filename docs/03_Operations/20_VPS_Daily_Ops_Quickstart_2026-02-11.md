@@ -75,7 +75,7 @@ Expected:
 ---
 
 ## Workspace Inspector (Read-Only Debug)
-Use this when you want the agent/runtime to inspect a session workspace safely.
+Use this when you want the agent/runtime to inspect a run workspace safely.
 
 Quick smoke test on VPS:
 ```bash

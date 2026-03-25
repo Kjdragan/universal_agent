@@ -17,6 +17,8 @@ const DISPLAY_TIMEZONE = getDisplayTimezone();
 
 type SessionSummary = {
   session_id: string;
+  run_id?: string | null;
+  is_live_session?: boolean;
   status: string;
   source?: string;
   channel?: string;
@@ -1913,7 +1915,7 @@ export function OpsConfigSection({ variant = "compact" }: { variant?: SectionVar
   const [purgeRemoteSaving, setPurgeRemoteSaving] = useState(false);
 
   const purgeRemoteData = useCallback(async () => {
-    if (!confirm("⚠️ DANGER: This will delete ALL session workspaces and artifacts on the specific remote VPS.\n\nRunning sessions may fail. Local files are NOT affected.\n\nAre you sure you want to PURGE ALL REMOTE DATA?")) {
+    if (!confirm("⚠️ DANGER: This will delete ALL run workspaces and artifacts on the specific remote VPS.\n\nRunning sessions may fail. Local files are NOT affected.\n\nAre you sure you want to PURGE ALL REMOTE DATA?")) {
       return;
     }
     try {
@@ -1970,7 +1972,7 @@ export function OpsConfigSection({ variant = "compact" }: { variant?: SectionVar
           <div className="mt-4 pt-3 border-t border-border/40">
             <div className="font-semibold text-secondary mb-1">Danger Zone</div>
             <div className="text-[10px] text-muted-foreground mb-2">
-              Permanently delete all session workspaces and artifacts on the remote server.
+              Permanently delete all run workspaces and artifacts on the remote server.
               This does not affect your local files.
             </div>
             <button
@@ -2337,4 +2339,3 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
     </div>
   );
 }
-

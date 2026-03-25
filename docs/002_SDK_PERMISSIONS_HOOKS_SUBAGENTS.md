@@ -218,7 +218,7 @@ When `run_in_background: true`:
 - The subagent runs as a sidechain process
 - Output goes to `/tmp/claude-*/tasks/{agentId}.output`
 - The primary agent must poll for completion (wastes turns)
-- The subagent's `cwd` is the repo root, NOT the session workspace
+- The subagent's `cwd` is the repo root, NOT the run workspace
 
 **Lesson learned**: For sequential pipeline tasks (research → report → PDF),
 NEVER use `run_in_background`. The primary agent wastes turns polling with
@@ -336,7 +336,7 @@ Internal MCP tools: `mcp__internal__{tool_name}`
 **Fix**: Strip `run_in_background` via guardrail for pipeline subagents.
 
 ### 5. Not injecting workspace path into subagent context
-**Symptom**: Files created at repo root instead of session workspace.
+**Symptom**: Files created at repo root instead of run workspace.
 **Fix**: Inject CURRENT_SESSION_WORKSPACE via PreToolUse hook on Task tool.
 
 ### 6. Composio crawl/fetch tools bypassing Crawl4AI pipeline

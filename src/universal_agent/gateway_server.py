@@ -130,6 +130,10 @@ from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services import tutorial_telegram_notifier
 from universal_agent import process_heartbeat
+from universal_agent.workflow_admission import (
+    WorkflowAdmissionService,
+    WorkflowTrigger,
+)
 from universal_agent.security_paths import (
     allow_external_workspaces_from_env,
     resolve_ops_log_path,
@@ -1454,7 +1458,7 @@ async def _run_tutorial_review_job(
         _remember_tutorial_review_job(started)
 
         gateway = get_gateway()
-        session_workspace = WORKSPACES_DIR / f"session_tutorial_review_{uuid.uuid4().hex[:10]}"
+        session_workspace = WORKSPACES_DIR / f"run_tutorial_review_{uuid.uuid4().hex[:10]}"
         session = await gateway.create_session(
             user_id="ops_tutorial_review",
             workspace_dir=str(session_workspace),
@@ -1592,6 +1596,7 @@ def _refresh_ops_auth_config_from_env() -> None:
 class CreateSessionRequest(BaseModel):
     user_id: Optional[str] = None
     workspace_dir: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class CreateSessionResponse(BaseModel):
@@ -5575,6 +5580,87 @@ def _mark_session_terminal(session_id: str, reason: str) -> None:
     _sync_runtime_metadata(session_id)
 
 
+def _should_auto_close_terminal_session(
+    session: GatewaySession,
+    *,
+    run_source: str,
+    terminal_reason: str,
+) -> bool:
+    if not terminal_reason:
+        return False
+    source = _normalize_run_source(
+        session.metadata.get("source") if isinstance(session.metadata, dict) else None
+    )
+    if source not in get_gateway()._ADMIN_SOURCES:
+        return False
+    runtime = _session_runtime_snapshot(session.session_id)
+    if int(runtime.get("active_runs", 0) or 0) > 0:
+        return False
+    if int(runtime.get("active_connections", 0) or 0) > 0:
+        return False
+    if _normalize_run_source(run_source) == "user":
+        return False
+    return True
+
+
+async def _close_terminal_session_if_idle(
+    session_id: str,
+    *,
+    run_source: str,
+    terminal_reason: str,
+) -> bool:
+    session = get_session(session_id)
+    if session is None:
+        return False
+    if not _should_auto_close_terminal_session(
+        session,
+        run_source=run_source,
+        terminal_reason=terminal_reason,
+    ):
+        return False
+    _mark_session_terminal(session_id, terminal_reason)
+    _pending_gated_requests.pop(session_id, None)
+    try:
+        await get_gateway().close_session(session_id)
+    except Exception:
+        logger.exception(
+            "Failed auto-closing terminal automation session %s (reason=%s)",
+            session_id,
+            terminal_reason,
+        )
+        return False
+    logger.info(
+        "Auto-closed terminal automation session %s (source=%s, reason=%s)",
+        session_id,
+        _normalize_run_source(run_source),
+        terminal_reason,
+    )
+    return True
+
+
+def _finish_session_run(
+    session_id: str,
+    *,
+    run_source: str,
+    terminal_reason: Optional[str] = None,
+) -> None:
+    _decrement_session_active_runs(session_id, run_source=run_source)
+    cleaned_reason = str(terminal_reason or "").strip().lower()
+    if not cleaned_reason:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(
+        _close_terminal_session_if_idle(
+            session_id,
+            run_source=run_source,
+            terminal_reason=cleaned_reason,
+        )
+    )
+
+
 def _emit_cron_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "cron_event")
     _scheduling_record_event("cron", event_type)
@@ -5644,7 +5730,7 @@ def _emit_cron_event(payload: dict) -> None:
         _maybe_wake_heartbeat_after_autonomous_cron(
             run_status=run_status,
             is_autonomous=is_autonomous,
-            reason=f"cron_autonomous_run:{job_id or run_id or 'unknown'}",
+            reason=f"cron_autonomous_run:{run_id or job_id or 'unknown'}",
         )
     event = {
         "type": event_type,
@@ -5724,6 +5810,65 @@ def _agentmail_payload_requests_heartbeat_wake(action_payload: dict[str, Any]) -
     return any(token in candidate for token in command_tokens)
 
 
+def _gateway_live_session_summaries() -> list[Any]:
+    """Return only runtime-live gateway session summaries.
+
+    This intentionally excludes archived disk workspaces that may still appear
+    in broad session listings for historical browsing.
+    """
+    gateway = get_gateway()
+    live_list = getattr(gateway, "list_live_sessions", None)
+    if callable(live_list):
+        try:
+            return list(live_list())
+        except Exception:
+            logger.debug("Failed reading live gateway sessions", exc_info=True)
+            return []
+    try:
+        summaries = list(gateway.list_sessions())
+    except Exception:
+        logger.debug("Failed reading fallback gateway session inventory", exc_info=True)
+        return []
+    live_summaries: list[Any] = []
+    for summary in summaries:
+        metadata = getattr(summary, "metadata", {})
+        status = str(getattr(summary, "status", "") or "").strip().lower()
+        if isinstance(metadata, dict) and metadata.get("archived"):
+            continue
+        if status.startswith("archived"):
+            continue
+        live_summaries.append(summary)
+    return live_summaries
+
+
+def _collect_live_heartbeat_targets(
+    *,
+    register_with_heartbeat: bool = False,
+    include_heartbeat_active: bool = False,
+) -> set[str]:
+    target_sessions: set[str] = {str(sid) for sid in _sessions.keys() if str(sid)}
+    for session in _gateway_live_session_summaries():
+        sid = str(getattr(session, "session_id", "") or "").strip()
+        if not sid:
+            continue
+        target_sessions.add(sid)
+        if register_with_heartbeat and _heartbeat_service:
+            try:
+                _heartbeat_service.register_session(session)
+            except Exception:
+                logger.debug("Failed to register live session %s with heartbeat", sid)
+    if include_heartbeat_active and _heartbeat_service and hasattr(_heartbeat_service, "active_sessions"):
+        for sid in getattr(_heartbeat_service, "active_sessions", set()) or set():
+            clean = str(sid or "").strip()
+            if clean:
+                target_sessions.add(clean)
+    return target_sessions
+
+
+def _workflow_admission_service() -> WorkflowAdmissionService:
+    return WorkflowAdmissionService()
+
+
 def _queue_heartbeat_wake_from_operator_email(
     *,
     sender_email: str,
@@ -5733,18 +5878,48 @@ def _queue_heartbeat_wake_from_operator_email(
     if not _heartbeat_service:
         return {"triggered": False, "reason": "heartbeat_unavailable", "count": 0}
 
-    target_sessions: set[str] = {str(sid) for sid in _sessions.keys() if str(sid)}
-    for session in get_gateway().list_sessions():
-        sid = str(session.session_id or "").strip()
-        if not sid:
-            continue
-        target_sessions.add(sid)
-        try:
-            _heartbeat_service.register_session(session)
-        except Exception:
-            logger.debug("Failed to register session %s during AgentMail heartbeat wake", sid)
+    dedup_key = str(message_id or thread_id or sender_email or "").strip()
+    admission = _workflow_admission_service().admit(
+        WorkflowTrigger(
+            run_kind="heartbeat_email_wake",
+            trigger_source="agentmail",
+            dedup_key=dedup_key,
+            payload_json=json.dumps(
+                {
+                    "sender_email": sender_email,
+                    "thread_id": thread_id,
+                    "message_id": message_id,
+                }
+            ),
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="defer_if_foreground",
+            external_origin="agentmail",
+            external_origin_id=message_id or None,
+            external_correlation_id=thread_id or None,
+        ),
+        entrypoint="agentmail_heartbeat_wake",
+        retryable_failure=False,
+        max_attempts=1,
+    )
+    if admission.action not in {"start_new_run", "start_new_attempt"}:
+        return {
+            "triggered": False,
+            "reason": admission.action,
+            "count": 0,
+            "run_id": admission.run_id,
+            "attempt_id": admission.attempt_id,
+        }
+
+    target_sessions = _collect_live_heartbeat_targets(register_with_heartbeat=True)
 
     if not target_sessions:
+        _workflow_admission_service().mark_failed(
+            admission.run_id or "",
+            attempt_id=admission.attempt_id,
+            failure_reason="no_sessions",
+            failure_class="wake_no_targets",
+        )
         return {"triggered": False, "reason": "no_sessions", "count": 0}
 
     reason = "agentmail_trusted_heartbeat_request"
@@ -5769,7 +5944,18 @@ def _queue_heartbeat_wake_from_operator_email(
             "reason": reason,
         },
     )
-    return {"triggered": True, "reason": "queued", "count": len(target_sessions)}
+    _workflow_admission_service().mark_completed(
+        admission.run_id or "",
+        attempt_id=admission.attempt_id,
+        summary={"target_count": len(target_sessions), "reason": reason},
+    )
+    return {
+        "triggered": True,
+        "reason": "queued",
+        "count": len(target_sessions),
+        "run_id": admission.run_id,
+        "attempt_id": admission.attempt_id,
+    }
 
 
 def _maybe_trigger_heartbeat_from_agentmail_action(action_payload: dict[str, Any]) -> dict[str, Any]:
@@ -5957,9 +6143,15 @@ def _emit_heartbeat_event(payload: dict) -> None:
             # but is corrupt/invalid.  A missing artifact is normal for many
             # heartbeat run types (Task Hub dispatch, exec completions, etc.)
             # and should not generate noisy alerts.
+            _legacy_markdown_fallback = str(
+                metadata.get("heartbeat_findings_artifact_path") or ""
+            ).endswith(_HEARTBEAT_REPORT_FILENAME)
             _is_actual_parse_failure = bool(
                 parse_error
-                and "missing" not in parse_error
+                and (
+                    "missing" not in parse_error
+                    or _legacy_markdown_fallback
+                )
             )
             if _is_actual_parse_failure:
                 _add_notification(
@@ -6022,39 +6214,52 @@ def _maybe_wake_heartbeat_after_autonomous_cron(*, run_status: str, is_autonomou
     if not _task_hub_has_dispatch_eligible_items():
         return
 
-    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
-    for session in get_gateway().list_sessions():
-        sid = str(session.session_id or "").strip()
-        if not sid:
-            continue
-        target_sessions.add(sid)
-        try:
-            _heartbeat_service.register_session(session)
-        except Exception:
-            logger.debug("Failed to register session %s during autonomous cron wake sweep", sid)
+    admission = _workflow_admission_service().admit(
+        WorkflowTrigger(
+            run_kind="heartbeat_cron_wake",
+            trigger_source="cron",
+            dedup_key=str(reason or "").strip(),
+            payload_json=json.dumps({"reason": reason, "run_status": run_status}),
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="defer_if_foreground",
+            external_origin="cron",
+            external_origin_id=str(reason or "").strip() or None,
+        ),
+        entrypoint="cron_heartbeat_wake",
+        retryable_failure=False,
+        max_attempts=1,
+    )
+    if admission.action not in {"start_new_run", "start_new_attempt"}:
+        return
+
+    target_sessions = _collect_live_heartbeat_targets(register_with_heartbeat=True)
 
     for session_id in sorted(target_sessions):
         _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
     if target_sessions:
+        _workflow_admission_service().mark_completed(
+            admission.run_id or "",
+            attempt_id=admission.attempt_id,
+            summary={"target_count": len(target_sessions), "reason": reason},
+        )
         logger.info(
             "Autonomous cron coupling queued heartbeat-next for %s sessions (dispatch eligible).",
             len(target_sessions),
+        )
+    else:
+        _workflow_admission_service().mark_failed(
+            admission.run_id or "",
+            attempt_id=admission.attempt_id,
+            failure_reason="no_sessions",
+            failure_class="wake_no_targets",
         )
 
 
 def _queue_heartbeat_next_for_all_sessions(*, reason: str) -> int:
     if not _heartbeat_service:
         return 0
-    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
-    for session in get_gateway().list_sessions():
-        sid = str(session.session_id or "").strip()
-        if not sid:
-            continue
-        target_sessions.add(sid)
-        try:
-            _heartbeat_service.register_session(session)
-        except Exception:
-            logger.debug("Failed to register session %s during heartbeat queue sweep", sid)
+    target_sessions = _collect_live_heartbeat_targets(register_with_heartbeat=True)
     for session_id in sorted(target_sessions):
         _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
     return len(target_sessions)
@@ -7927,8 +8132,64 @@ async def _csi_operator_request_followup(
     if int(loop.get("follow_up_budget_remaining") or 0) <= 0:
         raise HTTPException(status_code=400, detail="Follow-up budget exhausted for this loop")
 
+    dedup_key = ":".join(
+        [
+            "csi_followup",
+            cleaned_topic_key,
+            str(loop.get("last_event_id") or "").strip() or "no_event",
+        ]
+    )
+    admission = _workflow_admission_service().admit(
+        WorkflowTrigger(
+            run_kind="csi_specialist_followup_dispatch",
+            trigger_source="csi",
+            dedup_key=dedup_key,
+            payload_json=json.dumps(
+                {
+                    "topic_key": cleaned_topic_key,
+                    "trigger": trigger,
+                    "last_event_id": loop.get("last_event_id"),
+                    "last_event_at": loop.get("last_event_at"),
+                }
+            ),
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+            external_origin="csi_ingester",
+            external_origin_id=str(loop.get("last_event_id") or cleaned_topic_key),
+            external_correlation_id=cleaned_topic_key,
+        ),
+        entrypoint="csi_specialist_followup_dispatch",
+        retryable_failure=True,
+        max_attempts=max(1, int(_csi_specialist_followup_budget)),
+    )
+    if admission.action in {"attach_to_existing_run", "skip_duplicate", "defer"}:
+        return {
+            "ok": True,
+            "reason": admission.action,
+            "loop": loop,
+            "dispatched": False,
+            "run_id": admission.run_id,
+            "attempt_id": admission.attempt_id,
+        }
+    if admission.action == "escalate_review":
+        return {
+            "ok": False,
+            "reason": "retry_exhausted",
+            "loop": loop,
+            "dispatched": False,
+            "run_id": admission.run_id,
+            "attempt_id": admission.attempt_id,
+        }
+
     ok, reason = await _csi_dispatch_specialist_followup(loop=loop, trigger=trigger, note=note)
     if not ok:
+        _workflow_admission_service().mark_failed(
+            admission.run_id or "",
+            attempt_id=admission.attempt_id,
+            failure_reason=reason or "dispatch_failed",
+            failure_class="dispatch_failed",
+        )
         _record_activity_audit(
             event_id=_csi_loop_audit_event_id(cleaned_topic_key),
             action="csi_loop_request_followup",
@@ -7938,9 +8199,23 @@ async def _csi_operator_request_followup(
             metadata={
                 "topic_key": cleaned_topic_key,
                 "reason": reason,
+                "run_id": admission.run_id,
             },
         )
-        return {"ok": False, "reason": reason, "loop": loop}
+        return {
+            "ok": False,
+            "reason": reason,
+            "loop": loop,
+            "dispatched": False,
+            "run_id": admission.run_id,
+            "attempt_id": admission.attempt_id,
+        }
+
+    _workflow_admission_service().mark_completed(
+        admission.run_id or "",
+        attempt_id=admission.attempt_id,
+        summary={"topic_key": cleaned_topic_key, "trigger": trigger},
+    )
 
     now_iso = _utc_now_iso()
     with _csi_specialist_loop_lock:
@@ -8000,9 +8275,17 @@ async def _csi_operator_request_followup(
             "topic_key": cleaned_topic_key,
             "trigger": trigger,
             "follow_up_budget_remaining": updated.get("follow_up_budget_remaining"),
+            "run_id": admission.run_id,
         },
     )
-    return {"ok": True, "reason": reason, "loop": updated}
+    return {
+        "ok": True,
+        "reason": reason,
+        "loop": updated,
+        "dispatched": True,
+        "run_id": admission.run_id,
+        "attempt_id": admission.attempt_id,
+    }
 
 
 def _record_activity_audit(
@@ -9620,7 +9903,7 @@ def _calendar_should_include_heartbeat_summary(summary: dict[str, Any], now_ts: 
     owner_id = str(summary.get("owner") or "").strip().lower()
     source = str(summary.get("source") or "").strip().lower()
 
-    # Ignore cron-owned/session workspaces in heartbeat views.
+    # Ignore cron-owned run workspaces and legacy session-shaped workspaces in heartbeat views.
     if session_id.startswith("cron_") or owner_id.startswith("cron:"):
         return False
     # Keep canonical chat/api session IDs by default; unknown local directories
@@ -10729,7 +11012,7 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
             )
             async with _session_turn_lock(session_id):
                 _finalize_turn(session_id, active_turn_id, TURN_STATUS_CANCELLED, error_message=reason)
-            _decrement_session_active_runs(session_id, run_source=run_source)
+            _finish_session_run(session_id, run_source=run_source, terminal_reason="cancelled")
 
     marked_run_id = _mark_run_cancel_requested(run_id, reason)
 
@@ -11184,7 +11467,7 @@ async def lifespan(app: FastAPI):
         await _heartbeat_service.start()
         try:
             seeded = 0
-            for existing_session in get_gateway().list_sessions():
+            for existing_session in _gateway_live_session_summaries():
                 _heartbeat_service.register_session(existing_session)
                 seeded += 1
             if seeded > 0:
@@ -11291,7 +11574,7 @@ async def lifespan(app: FastAPI):
         turn_admitter=_admit_hook_turn,
         turn_finalizer=_finalize_hook_turn,
         run_counter_start=_increment_session_active_runs,
-        run_counter_finish=_decrement_session_active_runs,
+        run_counter_finish=_finish_session_run,
         notification_sink=_hook_notification_sink,
     )
     logger.info("🪝 Hooks Service Initialized")
@@ -11375,15 +11658,8 @@ async def lifespan(app: FastAPI):
         if not _heartbeat_service:
             return {"dispatched": False, "reason": "heartbeat_unavailable"}
 
-        target_sessions: set[str] = {str(sid) for sid in _sessions.keys() if str(sid)}
-        for session in get_gateway().list_sessions():
-            sid = str(session.session_id or "").strip()
-            if sid:
-                target_sessions.add(sid)
+        target_sessions = _collect_live_heartbeat_targets(include_heartbeat_active=True)
         # Include daemon sessions (always-on agents) as dispatch targets
-        if _heartbeat_service and hasattr(_heartbeat_service, "active_sessions"):
-            for sid in _heartbeat_service.active_sessions:
-                target_sessions.add(str(sid))
 
         if not target_sessions:
             return {"dispatched": False, "reason": "no_sessions"}
@@ -11430,13 +11706,17 @@ async def lifespan(app: FastAPI):
         # Idle agent(s) available — wake them immediately
         wake_reason = f"priority_email_{priority}:{reason}"
         woke_count = 0
+        live_sessions_by_id = {
+            str(getattr(session, "session_id", "") or "").strip(): session
+            for session in _gateway_live_session_summaries()
+        }
         for sid in sorted(idle_sessions)[:1]:  # Wake one idle session
-            try:
-                _heartbeat_service.register_session(
-                    next(s for s in get_gateway().list_sessions() if s.session_id == sid)
-                )
-            except Exception:
-                pass
+            session = live_sessions_by_id.get(sid)
+            if session is not None:
+                try:
+                    _heartbeat_service.register_session(session)
+                except Exception:
+                    pass
             _heartbeat_service.request_heartbeat_now(sid, reason=wake_reason)
             woke_count += 1
 
@@ -11704,8 +11984,9 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "endpoints": {
-            "sessions": "/api/v1/sessions",
+            "live_sessions": "/api/v1/sessions",
             "stream": "/api/v1/sessions/{session_id}/stream",
+            "durable_runs": "/api/v1/ops/runs",
             "health": "/api/v1/health",
             "signals_ingest": "/api/v1/signals/ingest",
         },
@@ -13023,11 +13304,11 @@ async def get_artifact_file(file_path: str):
 
 @app.get("/api/files/{session_id}/{file_path:path}")
 async def get_session_file(session_id: str, file_path: str):
-    """Get file content from a session workspace (mirrors api/server.py endpoint)."""
+    """Get file content from a durable run workspace using a legacy session identifier."""
     safe_id = _sanitize_session_id_or_400(session_id)
     session_root = WORKSPACES_DIR / safe_id
     if not session_root.is_dir():
-        raise HTTPException(status_code=404, detail="Session workspace not found")
+        raise HTTPException(status_code=404, detail="Run workspace not found")
     return _read_file_from_root(session_root, file_path)
 
 
@@ -13057,7 +13338,7 @@ async def upload_session_file(
     session_id: str,
     file: UploadFile = File(...),
 ):
-    """Upload a file to a session workspace for chat attachment.
+    """Upload a file to a run workspace for chat attachment.
 
     Text files (.py, .md, .txt, …) are saved and their content is returned
     so the frontend can inject it into the user prompt.
@@ -13159,6 +13440,7 @@ async def dashboard_coder_vp_metrics(
 
 @app.post("/api/v1/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest, http_request: Request):
+    """Create a new live execution session."""
     _require_session_api_auth(http_request)
     if _DEPLOYMENT_PROFILE == "vps" and not str(request.user_id or "").strip():
         raise HTTPException(status_code=400, detail="user_id is required in vps profile")
@@ -13169,11 +13451,17 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
 
     workspace_dir = _sanitize_workspace_dir_or_400(request.workspace_dir)
+    session_id = (
+        _sanitize_session_id_or_400(request.session_id)
+        if str(request.session_id or "").strip()
+        else None
+    )
     gateway = get_gateway()
     try:
         session = await gateway.create_session(
             user_id=final_user_id,
             workspace_dir=workspace_dir,
+            session_id=session_id,
         )
         session.metadata["user_id"] = session.user_id
         policy = _session_policy(session)
@@ -13197,6 +13485,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
 
 @app.get("/api/v1/sessions")
 async def list_sessions(request: Request):
+    """List live execution sessions and compatibility-visible session records."""
     _require_session_api_auth(request)
     if _ops_service:
         summaries = _ops_service.list_sessions(status_filter="all")
@@ -13234,6 +13523,31 @@ async def list_sessions(request: Request):
             ).model_dump()
             for s in summaries
         ]
+    }
+
+
+@app.get("/api/v1/runs")
+async def list_runs_public(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    status: str = "all",
+    run_kind: str = "all",
+    trigger_source: str = "all",
+):
+    _require_session_api_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    summaries = _ops_service.list_runs(
+        status_filter=status,
+        run_kind_filter=run_kind,
+        trigger_source_filter=trigger_source,
+    )
+    return {
+        "runs": summaries[offset : offset + limit],
+        "total": len(summaries),
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -13327,6 +13641,10 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
             message = str(item.get("message") or "").strip()
             created_at = _normalize_notification_timestamp(item.get("created_at"))
             markdown = f"### {title}\n\n{message}" if message else f"### {title}"
+            session_id = str(item.get("session_id") or metadata.get("session_id") or "").strip() or None
+            run_id = str(metadata.get("run_id") or "").strip() or None
+            workspace_dir = str(metadata.get("workspace_dir") or "").strip() or None
+            latest_attempt_id = str(metadata.get("latest_attempt_id") or "").strip() or None
             reports.append(
                 {
                     "id": str(item.get("id") or f"ntf_{len(reports)+1}"),
@@ -13335,6 +13653,10 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     "usage": None,
                     "created_at": created_at,
                     "source": "notification_fallback",
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "workspace_dir": workspace_dir,
+                    "latest_attempt_id": latest_attempt_id,
                 }
             )
             if len(reports) >= max_items:
@@ -13351,7 +13673,10 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
         csi_rows: list[dict[str, Any]] = []
         for row in summaries:
             session_id = str(row.get("session_id") or "").strip()
-            if not session_id.lower().startswith("session_hook_csi_"):
+            if not (
+                session_id.lower().startswith("session_hook_csi_")
+                or session_id.lower().startswith("run_session_hook_csi_")
+            ):
                 continue
             csi_rows.append(row)
 
@@ -13366,18 +13691,23 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
         reports: list[dict[str, Any]] = []
         for row in csi_rows[:max_items]:
             session_id = str(row.get("session_id") or "").strip()
-            suffix = session_id.removeprefix("session_hook_csi_")
+            run_id = str(row.get("run_id") or "").strip()
+            workspace_dir = str(row.get("workspace_dir") or "").strip()
+            latest_attempt_id = str(row.get("latest_attempt_id") or "").strip() or None
+            if session_id.startswith("run_session_hook_csi_"):
+                suffix = session_id.removeprefix("run_session_hook_csi_")
+            else:
+                suffix = session_id.removeprefix("session_hook_csi_")
             report_type = suffix or "csi_event"
             description = str(row.get("description") or "").strip()
             owner = str(row.get("owner") or "unknown").strip()
             created_at = _normalize_notification_timestamp(
                 str(row.get("last_activity") or row.get("last_modified") or _utc_now_iso())
             )
-            markdown_lines = [
-                f"### CSI Session: {session_id}",
-                f"- event: `{report_type}`",
-                f"- owner: `{owner}`",
-            ]
+            heading = f"### CSI Run: {run_id}" if run_id else f"### CSI Session: {session_id}"
+            markdown_lines = [heading, f"- event: `{report_type}`", f"- owner: `{owner}`"]
+            if workspace_dir:
+                markdown_lines.append(f"- workspace_dir: `{workspace_dir}`")
             if description:
                 markdown_lines.extend(["", description])
             reports.append(
@@ -13389,6 +13719,71 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     "created_at": created_at,
                     "source": "session_fallback",
                     "session_id": session_id,
+                    "run_id": run_id or None,
+                    "workspace_dir": workspace_dir or None,
+                    "latest_attempt_id": latest_attempt_id,
+                }
+            )
+        return reports
+
+    def _reports_from_csi_runs(max_items: int) -> list[dict[str, Any]]:
+        if not _ops_service:
+            return []
+        try:
+            summaries = _ops_service.list_runs(status_filter="all", trigger_source_filter="all")
+        except Exception:
+            return []
+
+        csi_rows: list[dict[str, Any]] = []
+        for row in summaries:
+            trigger_source = str(row.get("trigger_source") or "").strip().lower()
+            external_origin = str(row.get("external_origin") or "").strip().lower()
+            if trigger_source != "csi" and external_origin != "csi_ingester":
+                continue
+            csi_rows.append(row)
+
+        def _sort_key(row: dict[str, Any]) -> tuple[float, str]:
+            ts = _parse_iso_timestamp(row.get("updated_at")) or _parse_iso_timestamp(row.get("created_at"))
+            epoch = ts.timestamp() if ts else 0.0
+            return (epoch, str(row.get("run_id") or ""))
+
+        csi_rows.sort(key=_sort_key, reverse=True)
+        reports: list[dict[str, Any]] = []
+        for row in csi_rows[:max_items]:
+            run_id = str(row.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            workspace_dir = str(row.get("workspace_dir") or "").strip()
+            external_origin_id = str(row.get("external_origin_id") or "").strip()
+            external_correlation_id = str(row.get("external_correlation_id") or "").strip()
+            report_type = external_origin_id or external_correlation_id or str(row.get("run_kind") or "csi_event")
+            created_at = _normalize_notification_timestamp(
+                str(row.get("updated_at") or row.get("created_at") or _utc_now_iso())
+            )
+            workspace_summary = row.get("workspace_summary") if isinstance(row.get("workspace_summary"), dict) else {}
+            description = str(workspace_summary.get("description") or "").strip()
+            markdown_lines = [
+                f"### CSI Run: {run_id}",
+                f"- trigger_source: `{trigger_source or 'csi'}`",
+                f"- workspace_dir: `{workspace_dir or 'unknown'}`",
+            ]
+            if external_origin_id:
+                markdown_lines.append(f"- external_origin_id: `{external_origin_id}`")
+            if external_correlation_id:
+                markdown_lines.append(f"- external_correlation_id: `{external_correlation_id}`")
+            if description:
+                markdown_lines.extend(["", description])
+            reports.append(
+                {
+                    "id": f"run:{run_id}",
+                    "report_type": report_type,
+                    "report_data": {"markdown_content": "\n".join(markdown_lines)},
+                    "usage": None,
+                    "created_at": created_at,
+                    "source": "run_fallback",
+                    "run_id": run_id,
+                    "workspace_dir": workspace_dir,
+                    "latest_attempt_id": row.get("latest_attempt_id"),
                 }
             )
         return reports
@@ -13874,6 +14269,10 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
     if notification_reports:
         notification_reports = _apply_quality_gates(notification_reports)
         return {"status": "ok", "source": "notification_fallback", "detail": db_detail, "reports": notification_reports}
+
+    run_reports = _reports_from_csi_runs(clamped_limit)
+    if run_reports:
+        return {"status": "ok", "source": "run_fallback", "detail": db_detail, "reports": run_reports}
 
     session_reports = _reports_from_hook_sessions(clamped_limit)
     if session_reports:
@@ -17236,7 +17635,11 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         if source_session_id:
             target_sessions = [source_session_id]
         else:
-            target_sessions = [str(s.session_id) for s in get_gateway().list_sessions()[:5]]
+            target_sessions = [
+                str(getattr(s, "session_id", "") or "")
+                for s in _gateway_live_session_summaries()[:5]
+                if str(getattr(s, "session_id", "") or "")
+            ]
         for sid in target_sessions:
             if sid:
                 _heartbeat_service.request_heartbeat_next(sid, reason="system_command_schedule")
@@ -18291,16 +18694,7 @@ async def wake_heartbeat(request: HeartbeatWakeRequest):
             _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
         return {"status": "queued", "session_id": session_id, "reason": reason, "mode": mode}
 
-    target_sessions: set[str] = {str(session_id) for session_id in list(_sessions.keys()) if str(session_id)}
-    for session in get_gateway().list_sessions():
-        sid = str(session.session_id or "").strip()
-        if not sid:
-            continue
-        target_sessions.add(sid)
-        try:
-            _heartbeat_service.register_session(session)
-        except Exception:
-            logger.debug("Failed to register session %s during heartbeat wake sweep", sid)
+    target_sessions = _collect_live_heartbeat_targets(register_with_heartbeat=True)
 
     for session_id in sorted(target_sessions):
         if mode == "next":
@@ -21235,6 +21629,7 @@ async def interpret_cron_nl_command(request: CronNLCommandRequest):
 
 @app.get("/api/v1/sessions/{session_id}")
 async def get_session_info(session_id: str, request: Request):
+    """Get live session information."""
     _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     session = get_session(session_id)
@@ -21266,6 +21661,35 @@ async def get_session_info(session_id: str, request: Request):
         workspace_dir=session.workspace_dir,
         metadata=session.metadata,
     )
+
+
+@app.get("/api/v1/runs/{run_id}")
+async def get_run_info(run_id: str, request: Request):
+    _require_session_api_auth(request)
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    details = _ops_service.get_run_details(safe_run_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return details
+
+
+@app.get("/api/v1/runs/{run_id}/attempts")
+async def get_run_attempts_info(run_id: str, request: Request):
+    _require_session_api_auth(request)
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    details = _ops_service.get_run_details(safe_run_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Run not found")
+    attempts = _ops_service.list_run_attempt_details(safe_run_id)
+    return {"run_id": safe_run_id, "attempts": attempts, "total": len(attempts)}
 
 
 @app.get("/api/v1/sessions/{session_id}/policy")
@@ -21466,6 +21890,37 @@ async def ops_list_sessions(
         raise HTTPException(status_code=500, detail="Internal Server Error: check gateway logs")
 
 
+@app.get("/api/v1/ops/runs")
+async def ops_list_runs(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    status: str = "all",
+    run_kind: str = "all",
+    trigger_source: str = "all",
+):
+    _require_ops_auth(request)
+    try:
+        if not _ops_service:
+            raise HTTPException(status_code=503, detail="Ops service not initialized")
+        summaries = _ops_service.list_runs(
+            status_filter=status,
+            run_kind_filter=run_kind,
+            trigger_source_filter=trigger_source,
+        )
+        return {
+            "runs": summaries[offset : offset + limit],
+            "total": len(summaries),
+            "limit": limit,
+            "offset": offset,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("CRITICAL: Failed to list runs")
+        raise HTTPException(status_code=500, detail="Internal Server Error: check gateway logs")
+
+
 @app.get("/api/v1/ops/sdk/sessions")
 async def ops_list_sdk_sessions(
     request: Request,
@@ -21613,26 +22068,79 @@ async def ops_purge_csi_sessions(request: Request, payload: OpsCsiSessionPurgeRe
     csi_sessions = [
         item
         for item in sessions
-        if str(item.get("session_id") or "").strip().lower().startswith("session_hook_csi_")
+        if (
+            str(item.get("session_id") or "").strip().lower().startswith("session_hook_csi_")
+            or str(item.get("session_id") or "").strip().lower().startswith("run_session_hook_csi_")
+        )
+    ]
+    csi_runs = _ops_service.list_runs(status_filter="all", trigger_source_filter="all")
+    csi_run_entries = [
+        item
+        for item in csi_runs
+        if str(item.get("trigger_source") or "").strip().lower() == "csi"
+        or str(item.get("external_origin") or "").strip().lower() == "csi_ingester"
     ]
 
     def _activity_epoch(item: dict[str, Any]) -> Optional[float]:
-        dt = _parse_iso_timestamp(item.get("last_activity")) or _parse_iso_timestamp(item.get("last_modified"))
+        dt = (
+            _parse_iso_timestamp(item.get("last_activity"))
+            or _parse_iso_timestamp(item.get("last_modified"))
+            or _parse_iso_timestamp(item.get("updated_at"))
+            or _parse_iso_timestamp(item.get("created_at"))
+        )
         if dt is None:
             return None
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp()
 
-    csi_sessions.sort(
-        key=lambda item: (_activity_epoch(item) or 0.0, str(item.get("session_id") or "")),
+    purge_rows: list[dict[str, Any]] = []
+    seen_targets: set[str] = set()
+
+    for item in csi_sessions:
+        session_id = str(item.get("session_id") or "").strip()
+        if not session_id or session_id in seen_targets:
+            continue
+        seen_targets.add(session_id)
+        purge_rows.append(
+            {
+                "target_id": session_id,
+                "kind": "session",
+                "workspace_dir": str(item.get("workspace_dir") or "").strip(),
+                "status": str(item.get("status") or "").strip(),
+                "active_runs": int(item.get("active_runs") or 0),
+                "activity_epoch": _activity_epoch(item),
+            }
+        )
+
+    for item in csi_run_entries:
+        workspace_dir = str(item.get("workspace_dir") or "").strip()
+        run_id = str(item.get("run_id") or "").strip()
+        target_id = Path(workspace_dir).name if workspace_dir else run_id
+        if not target_id or target_id in seen_targets:
+            continue
+        seen_targets.add(target_id)
+        purge_rows.append(
+            {
+                "target_id": target_id,
+                "kind": "run",
+                "run_id": run_id,
+                "workspace_dir": workspace_dir,
+                "status": str(item.get("status") or "").strip(),
+                "active_runs": 1 if str(item.get("status") or "").strip().lower() in {"running", "active"} else 0,
+                "activity_epoch": _activity_epoch(item),
+            }
+        )
+
+    purge_rows.sort(
+        key=lambda item: (item.get("activity_epoch") or 0.0, str(item.get("target_id") or "")),
         reverse=True,
     )
 
     protected_ids = {
-        str(item.get("session_id") or "").strip()
-        for item in csi_sessions[:keep_latest]
-        if str(item.get("session_id") or "").strip()
+        str(item.get("target_id") or "").strip()
+        for item in purge_rows[:keep_latest]
+        if str(item.get("target_id") or "").strip()
     }
 
     now_ts = time.time()
@@ -21641,36 +22149,36 @@ async def ops_purge_csi_sessions(request: Request, payload: OpsCsiSessionPurgeRe
     skipped_active: list[str] = []
     skipped_protected: list[str] = []
 
-    for item in csi_sessions:
-        session_id = str(item.get("session_id") or "").strip()
-        if not session_id:
+    for item in purge_rows:
+        target_id = str(item.get("target_id") or "").strip()
+        if not target_id:
             continue
-        if session_id in protected_ids:
-            skipped_protected.append(session_id)
+        if target_id in protected_ids:
+            skipped_protected.append(target_id)
             continue
 
         status = str(item.get("status") or "").strip().lower()
         active_runs = int(item.get("active_runs") or 0)
         is_active = status in {"running", "active"} or active_runs > 0
         if is_active and not include_active:
-            skipped_active.append(session_id)
+            skipped_active.append(target_id)
             continue
 
         if older_than_seconds > 0:
-            activity_ts = _activity_epoch(item)
+            activity_ts = item.get("activity_epoch")
             if activity_ts is None:
-                skipped_recent.append(session_id)
+                skipped_recent.append(target_id)
                 continue
             if (now_ts - activity_ts) < older_than_seconds:
-                skipped_recent.append(session_id)
+                skipped_recent.append(target_id)
                 continue
 
-        candidates.append(session_id)
+        candidates.append(target_id)
 
     if payload.dry_run:
         return {
             "status": "dry_run",
-            "total_csi_sessions": len(csi_sessions),
+            "total_csi_sessions": len(purge_rows),
             "keep_latest": keep_latest,
             "older_than_minutes": older_than_minutes,
             "include_active": include_active,
@@ -21684,24 +22192,24 @@ async def ops_purge_csi_sessions(request: Request, payload: OpsCsiSessionPurgeRe
 
     deleted: list[str] = []
     failed: dict[str, str] = {}
-    for session_id in candidates:
+    for target_id in candidates:
         try:
             if include_active:
                 try:
-                    await _cancel_session_execution(session_id, "CSI session purge requested")
+                    await _cancel_session_execution(target_id, "CSI session purge requested")
                 except Exception:
-                    logger.debug("CSI purge cancel skipped for session=%s", session_id, exc_info=True)
-            removed = await _ops_service.delete_session(session_id)
+                    logger.debug("CSI purge cancel skipped for target=%s", target_id, exc_info=True)
+            removed = await _ops_service.delete_session(target_id)
             if removed:
-                deleted.append(session_id)
+                deleted.append(target_id)
             else:
-                failed[session_id] = "not_found_or_not_deleted"
+                failed[target_id] = "not_found_or_not_deleted"
         except Exception as exc:
-            failed[session_id] = str(exc)
+            failed[target_id] = str(exc)
 
     return {
         "status": "ok",
-        "total_csi_sessions": len(csi_sessions),
+        "total_csi_sessions": len(purge_rows),
         "keep_latest": keep_latest,
         "older_than_minutes": older_than_minutes,
         "include_active": include_active,
@@ -22438,6 +22946,20 @@ async def ops_get_session(request: Request, session_id: str):
     return details
 
 
+@app.get("/api/v1/ops/runs/{run_id}")
+async def ops_get_run(request: Request, run_id: str):
+    _require_ops_auth(request)
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    details = _ops_service.get_run_details(safe_run_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return details
+
+
 @app.get("/api/v1/ops/sessions/{session_id}/preview")
 async def ops_session_preview(
     request: Request, session_id: str, limit: int = 200, max_bytes: int = 200_000
@@ -22775,7 +23297,7 @@ async def ops_memory_compact_task_intel(request: Request, payload: MemoryTaskCom
 @app.post("/api/v1/ops/workspaces/purge")
 async def ops_workspaces_purge(request: Request, confirm: bool = False):
     """
-    Purge all session workspaces and artifacts from the VPS filesystem.
+    Purge all run workspaces and artifacts from the VPS filesystem.
     This frees up disk space and prevents old data from syncing to local environments.
     """
     _require_ops_auth(request)
@@ -23459,6 +23981,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         tool_call_count = 0
                         execution_duration_seconds = 0.0
                         execution_start_ts = time.time()
+                        terminal_reason: Optional[str] = None
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
 
@@ -23580,7 +24103,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     result=checkpoint_result,
                                 )
                                 generator.save(checkpoint)
-                                logger.info(f"✅ Saved session checkpoint: {workspace_path / 'session_checkpoint.json'}")
+                                logger.info(f"✅ Saved run checkpoint: {workspace_path / 'run_checkpoint.json'}")
                             except Exception as ckpt_err:
                                 logger.warning(f"⚠️ Failed to save checkpoint: {ckpt_err}")
 
@@ -23649,6 +24172,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         error_message=goal_message,
                                         completion=completion_summary,
                                     )
+                                terminal_reason = "goal_unsatisfied"
                                 return
 
                             _add_notification(
@@ -23691,7 +24215,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     TURN_STATUS_COMPLETED,
                                     completion=completion_summary,
                                 )
+                            terminal_reason = "completed"
                         except asyncio.CancelledError:
+                            terminal_reason = "cancelled"
                             logger.warning("Execution cancelled for session %s turn %s", session_id, turn_id)
                             await manager.broadcast(
                                 session_id,
@@ -23726,6 +24252,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 )
                             raise
                         except Exception as e:
+                            terminal_reason = "failed"
                             logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
                             _add_notification(
                                 kind="assistance_needed",
@@ -23760,7 +24287,11 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     _run_log_handle.close()
                                 except Exception:
                                     pass
-                            _decrement_session_active_runs(session_id, run_source=request_source)
+                            _finish_session_run(
+                                session_id,
+                                run_source=request_source,
+                                terminal_reason=terminal_reason,
+                            )
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)
 

@@ -170,6 +170,12 @@ export interface SessionInfo {
   user_id: string;
   session_url?: string;
   logfire_enabled?: boolean;
+  run_id?: string | null;
+  is_live_session?: boolean;
+  run_status?: string | null;
+  run_kind?: string | null;
+  trigger_source?: string | null;
+  attempt_count?: number | null;
 }
 
 // =============================================================================
@@ -362,8 +368,13 @@ export interface SystemPresenceData {
 
 
 
-export interface StorageSessionItem {
+export interface StorageRunWorkspaceItem {
   session_id: string;
+  run_id?: string | null;
+  run_status?: string | null;
+  run_kind?: string | null;
+  trigger_source?: string | null;
+  attempt_count?: number | null;
   source_type: "web" | "hook" | "telegram" | "vp" | "other";
   status: string;
   ready: boolean;
@@ -374,6 +385,8 @@ export interface StorageSessionItem {
   root_path: string;
   run_log_path?: string | null;
 }
+
+export type StorageSessionItem = StorageRunWorkspaceItem;
 
 export interface StorageArtifactItem {
   path: string;
@@ -390,11 +403,17 @@ export interface StorageArtifactItem {
 
 export interface StorageOverview {
   pending_ready_count: number;
+  latest_runs?: {
+    web: StorageRunWorkspaceItem | null;
+    hook: StorageRunWorkspaceItem | null;
+    telegram: StorageRunWorkspaceItem | null;
+    vp?: StorageRunWorkspaceItem | null;
+  };
   latest_sessions: {
-    web: StorageSessionItem | null;
-    hook: StorageSessionItem | null;
-    telegram: StorageSessionItem | null;
-    vp?: StorageSessionItem | null;
+    web: StorageRunWorkspaceItem | null;
+    hook: StorageRunWorkspaceItem | null;
+    telegram: StorageRunWorkspaceItem | null;
+    vp?: StorageRunWorkspaceItem | null;
   };
   latest_artifact: StorageArtifactItem | null;
   workspace_root: string;

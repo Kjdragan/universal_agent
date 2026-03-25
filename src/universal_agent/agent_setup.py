@@ -341,7 +341,7 @@ class AgentSetup:
 
     def _load_soul_context(self):
         """Load the 'Soul' (Persona/Identity) from SOUL.md."""
-        # Priority 1: Session Workspace (Task-specific override)
+        # Priority 1: Run Workspace (Task-specific override)
         workspace_soul = os.path.join(self.workspace_dir, "SOUL.md")
         # Priority 2: Centralized Prompt Assets (The Codebase Persona)
         assets_soul = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "SOUL.md")
@@ -437,8 +437,10 @@ class AgentSetup:
                 "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"),
                 "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv("UA_ENABLE_SDK_SESSION_HISTORY", "0"),
                 "UA_ENABLE_DYNAMIC_MCP": os.getenv("UA_ENABLE_DYNAMIC_MCP", "0"),
+                "CURRENT_RUN_WORKSPACE": os.path.abspath(self.workspace_dir),
+                # Legacy alias kept during the run-workspace cutover.
                 "CURRENT_SESSION_WORKSPACE": os.path.abspath(self.workspace_dir),
-                # Durable outputs should go here; session workspace is scratch.
+                # Durable outputs should go here; the run workspace is scratch.
                 "UA_ARTIFACTS_DIR": os.path.abspath(
                     os.getenv(
                         "UA_ARTIFACTS_DIR",
@@ -803,7 +805,7 @@ class AgentSetup:
 
 def create_workspace_path(base_dir: Optional[str] = None) -> str:
     """
-    Create a new session workspace directory.
+    Create a new durable run workspace directory.
     
     Args:
         base_dir: Optional base directory. If not provided, auto-discovers.
@@ -812,16 +814,17 @@ def create_workspace_path(base_dir: Optional[str] = None) -> str:
         Absolute path to the created workspace directory.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    workspace_name = f"run_{timestamp}"
     
     if base_dir:
-        workspace_dir = os.path.join(base_dir, f"session_{timestamp}")
+        workspace_dir = os.path.join(base_dir, workspace_name)
     elif os.getenv("AGENT_WORKSPACE_ROOT"):
-        workspace_dir = os.path.join(os.getenv("AGENT_WORKSPACE_ROOT"), f"session_{timestamp}")
+        workspace_dir = os.path.join(os.getenv("AGENT_WORKSPACE_ROOT"), workspace_name)
     else:
         # Auto-discovery
         src_dir = _get_src_dir()
         for candidate in ["/app", src_dir, "/tmp"]:
-            workspace_dir = os.path.join(candidate, "AGENT_RUN_WORKSPACES", f"session_{timestamp}")
+            workspace_dir = os.path.join(candidate, "AGENT_RUN_WORKSPACES", workspace_name)
             try:
                 os.makedirs(workspace_dir, exist_ok=True)
                 return workspace_dir

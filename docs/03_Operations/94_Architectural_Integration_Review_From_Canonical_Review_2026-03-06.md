@@ -177,11 +177,11 @@ These are parallel liveness/health models that could inform each other but curre
 
 ---
 
-### 2.6 Session Workspace Ownership Is Enforced by Convention, Not by the Filesystem
+### 2.6 Run Workspace Ownership Is Enforced by Convention, Not by the Filesystem
 
 **Type:** Structural concern
 
-**Observation:** Session workspaces are created under `AGENT_RUN_WORKSPACES/` with session-id-based naming. The auth/session security model enforces ownership at the API level by comparing the authenticated owner with the session metadata. But the filesystem itself has no per-session access control — any process with access to `AGENT_RUN_WORKSPACES` can read any session's files.
+**Observation:** Run workspaces are created under `AGENT_RUN_WORKSPACES/` with run-based naming plus some legacy session-shaped names during migration. The auth/session security model enforces ownership at the API level by comparing the authenticated owner with the session or run metadata. But the filesystem itself has no per-workspace access control — any process with access to `AGENT_RUN_WORKSPACES` can read another workspace's files.
 
 Today this is fine because all processes run under the same user. But if factories, VP workers, or CSI processes ever need workspace access, the convention-based model becomes a shared-filesystem trust surface.
 
@@ -190,7 +190,7 @@ Today this is fine because all processes run under the same user. But if factori
 - `src/universal_agent/gateway_server.py` — session creation
 - `scripts/sync_remote_workspaces.sh` — sync has access to all workspaces
 
-**Recommendation:** No immediate change needed. But if multi-user or multi-tenant use is ever considered, the ownership boundary must move from API-level enforcement to filesystem-level isolation (per-session directories with restricted permissions, or a workspace-access proxy).
+**Recommendation:** No immediate change needed. But if multi-user or multi-tenant use is ever considered, the ownership boundary must move from API-level enforcement to filesystem-level isolation (per-run-workspace directories with restricted permissions, or a workspace-access proxy).
 
 ---
 

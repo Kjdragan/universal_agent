@@ -125,8 +125,8 @@ export function PathLink({ path, className }: { path: string; className?: string
           }
         }
 
-        // Strip session workspace prefix from absolute paths to get relative paths
-        // for the file API. The API expects: /api/files/{session_id}/{relative_path}
+        // Strip the active run-workspace prefix from absolute paths to get a
+        // relative path for the file API.
         if (currentSession?.workspace && fullPath.startsWith(currentSession.workspace)) {
           const wsPrefix = currentSession.workspace.endsWith("/")
             ? currentSession.workspace

@@ -11,7 +11,7 @@ from claude_agent_sdk import tool
 
 from universal_agent.utils.session_workspace import (
     build_interim_work_product_paths,
-    resolve_current_session_workspace,
+    resolve_current_run_workspace,
     safe_slug,
     write_json,
 )
@@ -174,7 +174,7 @@ async def _x_trends_posts_impl(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # Best-effort session capture for downstream agents.
     if save_to_workspace:
-        ws = resolve_current_session_workspace(repo_root=str(Path(__file__).resolve().parents[3]))
+        ws = resolve_current_run_workspace(repo_root=str(Path(__file__).resolve().parents[3]))
         if ws:
             wp = build_interim_work_product_paths(
                 workspace_dir=ws,

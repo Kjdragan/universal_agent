@@ -7,17 +7,17 @@
 
 ### Problem
 
-The Web UI constructs absolute file paths by appending relative paths (e.g., `./web-ui/app/page.tsx`) to the current session's workspace path (e.g., `/.../AGENT_RUN_WORKSPACES/session_123/`).
+The Web UI constructs absolute file paths by appending relative paths (e.g., `./web-ui/app/page.tsx`) to the current workspace path (for example, `/.../AGENT_RUN_WORKSPACES/run_123/`).
 
-However, project source files (like the Web UI code itself) reside in the **Repo Root**, not the **Session Workspace**. The backend API correctly rejected access because the files were not found in the path provided by the frontend.
+However, project source files (like the Web UI code itself) reside in the **Repo Root**, not the **Run Workspace**. The backend API correctly rejected access because the files were not found in the path provided by the frontend.
 
 ### Solution: Backend Fallback Logic
 
 We modified `gateway_bridge.py` to implement a robust path resolution strategy:
 
-1. **Check Session**: Look for the file exactly as requested (inside session workspace).
+1. **Check Workspace**: Look for the file exactly as requested (inside the current workspace).
 2. **Fallback to Project Root**:
-    * If the path looks like it includes the session directory prefix (but the file isn't there), **strip the prefix** to recover the relative path.
+    * If the path looks like it includes the workspace directory prefix (but the file isn't there), **strip the prefix** to recover the relative path.
     * Resolve this relative path against the **Project Base Directory**.
     * **Security Check**: Ensure the resolved project path is still within the project root (prevent traversal to `/etc/passwd`).
 

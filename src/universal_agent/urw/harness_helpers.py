@@ -1,7 +1,7 @@
 """
 URW Harness Helpers
 
-Helper functions for managing agent context and session transitions during harness execution.
+Helper functions for managing agent context and workspace transitions during harness execution.
 """
 
 from __future__ import annotations
@@ -18,16 +18,16 @@ def toggle_session(
     phase_num: int,
 ) -> str:
     """
-    Create a new session directory for the next phase and update globals.
+    Create a new phase workspace directory for the next phase and update globals.
     
     Args:
         harness_dir: Path to the harness directory
         phase_num: Phase number (1-indexed)
         
     Returns:
-        Path string to the new session directory
+        Path string to the new phase workspace directory
     """
-    session_name = f"session_phase_{phase_num}"
+    session_name = f"run_phase_{phase_num}"
     session_path = harness_dir / session_name
     session_path.mkdir(parents=True, exist_ok=True)
     

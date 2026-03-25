@@ -9,6 +9,20 @@ CREATE TABLE IF NOT EXISTS runs (
   status TEXT NOT NULL,
   entrypoint TEXT NOT NULL,
   run_spec_json TEXT NOT NULL,
+  workspace_dir TEXT,
+  run_kind TEXT,
+  trigger_source TEXT,
+  dedup_key TEXT,
+  run_policy TEXT,
+  interrupt_policy TEXT,
+  terminal_reason TEXT,
+  attempt_count INTEGER DEFAULT 0,
+  latest_attempt_id TEXT,
+  last_success_attempt_id TEXT,
+  canonical_attempt_id TEXT,
+  external_origin TEXT,
+  external_origin_id TEXT,
+  external_correlation_id TEXT,
   run_mode TEXT,
   job_path TEXT,
   last_job_prompt TEXT,
@@ -25,6 +39,28 @@ CREATE TABLE IF NOT EXISTS runs (
   cancel_requested_at TEXT,
   cancel_reason TEXT,
   total_tokens INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS run_attempts (
+  attempt_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  provider_session_id TEXT,
+  started_at TEXT,
+  ended_at TEXT,
+  failure_class TEXT,
+  failure_reason TEXT,
+  retry_reason TEXT,
+  retry_backoff_seconds INTEGER,
+  workspace_subdir TEXT,
+  summary_json TEXT,
+  FOREIGN KEY(run_id) REFERENCES runs(run_id),
+  UNIQUE(run_id, attempt_number)
 );
 
 CREATE TABLE IF NOT EXISTS run_steps (
@@ -155,6 +191,9 @@ CREATE TABLE IF NOT EXISTS vp_bridge_cursors (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_step ON tool_calls(run_id, step_id);
 CREATE INDEX IF NOT EXISTS idx_run_steps_run ON run_steps(run_id, step_index);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_run ON run_attempts(run_id, attempt_number);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_status ON run_attempts(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_provider_session ON run_attempts(provider_session_id);
 CREATE INDEX IF NOT EXISTS idx_tool_receipts_run ON tool_receipts(run_id);
 CREATE INDEX IF NOT EXISTS idx_vp_sessions_status ON vp_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_vp_missions_vp_status ON vp_missions(vp_id, status, created_at);
@@ -180,6 +219,20 @@ def _add_column_if_missing(
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    _add_column_if_missing(conn, "runs", "workspace_dir", "TEXT")
+    _add_column_if_missing(conn, "runs", "run_kind", "TEXT")
+    _add_column_if_missing(conn, "runs", "trigger_source", "TEXT")
+    _add_column_if_missing(conn, "runs", "dedup_key", "TEXT")
+    _add_column_if_missing(conn, "runs", "run_policy", "TEXT")
+    _add_column_if_missing(conn, "runs", "interrupt_policy", "TEXT")
+    _add_column_if_missing(conn, "runs", "terminal_reason", "TEXT")
+    _add_column_if_missing(conn, "runs", "attempt_count", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "runs", "latest_attempt_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "last_success_attempt_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "canonical_attempt_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "external_origin", "TEXT")
+    _add_column_if_missing(conn, "runs", "external_origin_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "external_correlation_id", "TEXT")
     _add_column_if_missing(conn, "runs", "run_mode", "TEXT")
     _add_column_if_missing(conn, "runs", "job_path", "TEXT")
     _add_column_if_missing(conn, "runs", "last_job_prompt", "TEXT")

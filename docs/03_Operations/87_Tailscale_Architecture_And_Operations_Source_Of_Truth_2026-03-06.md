@@ -219,7 +219,7 @@ Primary implementations:
 - `scripts/remote_workspace_sync_control.sh`
 
 Purpose:
-- mirror remote session workspaces and durable artifacts into local directories for debugging and inspection
+- mirror remote run workspaces and durable artifacts into local directories for debugging and inspection
 
 This is one of the main operational benefits of the current Tailscale setup.
 

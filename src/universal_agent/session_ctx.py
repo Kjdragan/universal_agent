@@ -57,6 +57,7 @@ class SessionContext:
     trace: dict = field(default_factory=_default_trace)
     start_ts: float = field(default_factory=time.time)
     runtime_db_conn: Optional[Any] = None
+    current_run_attempt_id: Optional[str] = None
 
     # ------------------------------------------------------------------ workspace
     observer_workspace_dir: str = field(default_factory=lambda: "")

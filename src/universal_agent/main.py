@@ -37,6 +37,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
+from universal_agent.task_stop_guardrails import (
+    extract_task_stop_id as _shared_extract_task_stop_id,
+    task_stop_rejection_reason as _shared_task_stop_rejection_reason,
+)
 
 from universal_agent.utils.message_history import (
     TRUNCATION_THRESHOLD,
@@ -208,6 +212,7 @@ gateway_mode_active = False
 interrupt_requested = False
 last_sigint_ts = None
 current_step_id = None
+current_run_attempt_id = None
 
 # Feature flags — evaluated lazily at call sites so they read env AFTER
 # Infisical runtime bootstrap has injected secrets.  Do NOT snapshot these
@@ -816,7 +821,11 @@ from universal_agent.durable.classification import (
     validate_tool_policies,
 )
 from universal_agent.durable.state import (
+    create_run_attempt,
+    get_run_attempt,
     upsert_run,
+    update_run_attempt,
+    update_run_attempt_provider_session,
     update_run_tokens,
     update_run_status,
     update_run_provider_session,
@@ -837,6 +846,7 @@ from universal_agent.durable.checkpointing import (
     load_last_checkpoint,
     load_corpus_cache,
 )
+from universal_agent.run_workspace import ensure_run_workspace_scaffold
 # Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.\n# Note: File Read/Write now uses native Claude SDK tools
 
 # Composio client - will be initialized in main() with file_download_dir
@@ -1307,6 +1317,10 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
     return None  # Looks like a real SDK token
 
 
+_extract_task_stop_id = _shared_extract_task_stop_id
+_task_stop_rejection_reason = _shared_task_stop_rejection_reason
+
+
 def _format_tool_display_name(tool_name: str, tool_input: Any) -> str:
     """Return a human-friendly tool label for execution summaries."""
     name = str(tool_name or "")
@@ -1461,8 +1475,13 @@ async def on_pre_tool_use_ledger(
         if workspace_hint:
             try:
                 ws_path = Path(workspace_hint).resolve()
-                looks_like_session_ws = ws_path.name.startswith("session_") or (
-                    (ws_path / "session_policy.json").exists()
+                looks_like_session_ws = ws_path.name.startswith(("run_", "session_")) or (
+                    (
+                        (ws_path / "session_policy.json").exists()
+                        or (ws_path / "run_manifest.json").exists()
+                        or (ws_path / "run_checkpoint.json").exists()
+                        or (ws_path / "session_checkpoint.json").exists()
+                    )
                     and (ws_path / "work_products").exists()
                 )
             except Exception:
@@ -1483,7 +1502,7 @@ async def on_pre_tool_use_ledger(
         if reason:
             return {
                 "systemMessage": (
-                    "⚠️ Action blocked — no active tasks to manage.\n\n"
+                    "⚠️ Invalid TaskStop request blocked — no active tasks to manage.\n\n"
                     f"{reason}\n"
                     "Redirect: begin productive work now — delegate via Task(), "
                     "call an MCP tool, or start a search."
@@ -1806,7 +1825,7 @@ async def on_pre_tool_use_ledger(
                     },
                 }
 
-    # Keep Bash execution rooted in the active session workspace by default to
+    # Keep Bash execution rooted in the active run workspace by default to
     # prevent accidental repo-root artifacts.
     if tool_name == "Bash" and isinstance(tool_input, dict):
         from universal_agent.execution_context import get_current_workspace as _get_ws
@@ -2463,10 +2482,10 @@ async def on_post_tool_use_ledger(
                     error_detail=error_detail or "tool error",
                 )
                 if expected.get("attempts", 0) >= FORCED_TOOL_MAX_ATTEMPTS:
-                    if _ctx.runtime_db_conn and _ctx.run_id:
-                        update_run_status(
-                            _ctx.runtime_db_conn, _ctx.run_id, "waiting_for_human"
-                        )
+                    _mark_run_waiting_for_human(
+                        "forced_tool_replay_exhausted",
+                        tool_call_id=expected["tool_call_id"],
+                    )
                     _ctx.forced_tool_queue = []
                     logfire.warning(
                         "replay_exhausted",
@@ -3362,8 +3381,8 @@ async def on_pre_task_skill_awareness(
     """
     PreToolUse Hook: Before Task tool executes (spawning a sub-agent),
     inject skill awareness context so the sub-agent knows what skills exist.
-    Also injects CURRENT_SESSION_WORKSPACE so the sub-agent writes to the
-    correct session directory (not the repo root).
+    Also injects CURRENT_RUN_WORKSPACE so the sub-agent writes to the
+    correct run workspace directory (not the repo root).
     """
     _ctx = _get_ctx()
     if _ctx is not None:
@@ -3390,7 +3409,8 @@ async def on_pre_task_skill_awareness(
     workspace_path = OBSERVER_WORKSPACE_DIR or get_current_workspace() or ""
     if workspace_path:
         combined_context = (
-            f"# SESSION WORKSPACE (MANDATORY)\n"
+            f"# RUN WORKSPACE (MANDATORY)\n"
+            f"CURRENT_RUN_WORKSPACE: {workspace_path}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n"
             f"ALL file outputs MUST go under this directory. Key subdirectories:\n"
             f"- `{workspace_path}/search_results/` — search result JSON files\n"
@@ -4234,6 +4254,7 @@ runtime_db_conn: Optional[sqlite3.Connection] = None
 current_execution_session: Optional[ExecutionSession] = None
 interrupt_requested = False
 last_sigint_ts: float | None = None
+current_run_attempt_id: Optional[str] = None
 OBSERVER_WORKSPACE_DIR = os.getcwd()  # Default baseline
 provider_session_forked_from: Optional[str] = None
 gateway_mode_active = False
@@ -4267,6 +4288,10 @@ def _mark_run_waiting_for_human(
         runtime_db_conn = _ctx.runtime_db_conn
     if runtime_db_conn and run_id:
         update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+        _update_current_run_attempt(
+            status="waiting_for_human",
+            failure_reason=reason,
+        )
     logfire.warning(
         "run_waiting_for_human",
         run_id=run_id,
@@ -4289,6 +4314,146 @@ def _maybe_mark_run_succeeded() -> None:
     if status in WAITING_STATUSES or status in TERMINAL_STATUSES:
         return
     update_run_status(runtime_db_conn, run_id, "succeeded")
+    _update_current_run_attempt(status="succeeded")
+
+
+def _set_current_run_attempt_id(attempt_id: Optional[str]) -> None:
+    global current_run_attempt_id
+    current_run_attempt_id = attempt_id
+    if trace is not None:
+        trace["run_attempt_id"] = attempt_id
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        _ctx.current_run_attempt_id = attempt_id
+        _ctx.trace["run_attempt_id"] = attempt_id
+
+
+def _get_current_run_attempt_id() -> Optional[str]:
+    _ctx = _get_ctx()
+    if _ctx is not None and _ctx.current_run_attempt_id:
+        return _ctx.current_run_attempt_id
+    return current_run_attempt_id
+
+
+def _ensure_current_run_attempt(
+    *,
+    status: str = "running",
+    existing_run_row: Optional[sqlite3.Row] = None,
+    resume_requested: bool = False,
+) -> Optional[str]:
+    _ctx = _get_ctx()
+    run_id = _ctx.run_id if _ctx is not None else globals().get("run_id")
+    runtime_db_conn = (
+        _ctx.runtime_db_conn if _ctx is not None else globals().get("runtime_db_conn")
+    )
+    if not runtime_db_conn or not run_id:
+        return None
+
+    attempt_id = _get_current_run_attempt_id()
+    if attempt_id and get_run_attempt(runtime_db_conn, attempt_id):
+        return attempt_id
+
+    run_row = existing_run_row or get_run(runtime_db_conn, run_id)
+    latest_attempt_id = None
+    if run_row and "latest_attempt_id" in run_row.keys():
+        latest_attempt_id = run_row["latest_attempt_id"]
+    if latest_attempt_id:
+        latest_attempt = get_run_attempt(runtime_db_conn, latest_attempt_id)
+        if (
+            latest_attempt
+            and resume_requested
+            and run_row["status"] not in TERMINAL_STATUSES
+        ):
+            update_run_attempt(runtime_db_conn, latest_attempt_id, status=status)
+            _set_current_run_attempt_id(latest_attempt_id)
+            return latest_attempt_id
+
+    attempt_id = create_run_attempt(runtime_db_conn, run_id, status=status)
+    effective_workspace_dir = (
+        str(run_row["workspace_dir"] or "").strip()
+        if run_row is not None and "workspace_dir" in run_row.keys()
+        else ""
+    )
+    if effective_workspace_dir:
+        attempt_row = get_run_attempt(runtime_db_conn, attempt_id)
+        if attempt_row is not None:
+            ensure_run_workspace_scaffold(
+                workspace_dir=effective_workspace_dir,
+                run_id=run_id,
+                attempt_id=attempt_id,
+                attempt_number=int(attempt_row["attempt_number"] or 0),
+                status=status,
+                run_kind=(str(run_row["run_kind"] or "").strip() or None) if run_row is not None else None,
+                trigger_source=(str(run_row["trigger_source"] or "").strip() or None) if run_row is not None else None,
+            )
+    _set_current_run_attempt_id(attempt_id)
+    return attempt_id
+
+
+def _update_current_run_attempt(**kwargs: Any) -> None:
+    _ctx = _get_ctx()
+    run_id = _ctx.run_id if _ctx is not None else globals().get("run_id")
+    runtime_db_conn = (
+        _ctx.runtime_db_conn if _ctx is not None else globals().get("runtime_db_conn")
+    )
+    if not runtime_db_conn or not run_id:
+        return
+    attempt_id = _ensure_current_run_attempt()
+    if not attempt_id:
+        return
+    update_run_attempt(runtime_db_conn, attempt_id, **kwargs)
+    run_row = get_run(runtime_db_conn, run_id)
+    attempt_row = get_run_attempt(runtime_db_conn, attempt_id)
+    effective_workspace_dir = (
+        str(run_row["workspace_dir"] or "").strip()
+        if run_row is not None and "workspace_dir" in run_row.keys()
+        else ""
+    )
+    if effective_workspace_dir and attempt_row is not None:
+        ensure_run_workspace_scaffold(
+            workspace_dir=effective_workspace_dir,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            attempt_number=int(attempt_row["attempt_number"] or 0),
+            status=str(attempt_row["status"] or "").strip() or None,
+            run_kind=(str(run_row["run_kind"] or "").strip() or None) if run_row is not None else None,
+            trigger_source=(str(run_row["trigger_source"] or "").strip() or None) if run_row is not None else None,
+        )
+
+
+def _mark_run_failed(
+    reason: str,
+    *,
+    failure_class: str = "run_failed",
+) -> None:
+    run_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
+    if runtime_db_conn and run_id:
+        update_run_status(runtime_db_conn, run_id, "failed")
+        _update_current_run_attempt(
+            status="failed",
+            failure_class=failure_class,
+            failure_reason=reason,
+        )
+
+
+def _mark_run_paused(reason: str = "interrupted") -> None:
+    run_id = None
+    runtime_db_conn = None
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
+    if runtime_db_conn and run_id:
+        update_run_status(runtime_db_conn, run_id, "paused")
+        _update_current_run_attempt(
+            status="paused",
+            failure_reason=reason,
+        )
 
 
 def _resolve_input_paths(inputs: dict, workspace_dir: Optional[str]) -> dict:
@@ -4727,6 +4892,7 @@ def _maybe_update_provider_session(
         update_run_provider_session(
             runtime_db_conn, run_id, session_id, forked_from=forked_from
         )
+        _update_current_run_attempt_provider_session(session_id)
     if trace is not None:
         trace["provider_session_id"] = session_id
 
@@ -4762,6 +4928,7 @@ def _invalidate_provider_session(error_msg: str) -> None:
         trace = _ctx.trace
     if runtime_db_conn and run_id:
         update_run_provider_session(runtime_db_conn, run_id, None)
+        _update_current_run_attempt_provider_session(None)
     if trace is not None:
         trace["provider_session_id"] = None
     logfire.warning(
@@ -4769,6 +4936,21 @@ def _invalidate_provider_session(error_msg: str) -> None:
         run_id=run_id,
         error=error_msg[:200],
     )
+
+
+def _update_current_run_attempt_provider_session(
+    provider_session_id: Optional[str],
+) -> None:
+    _ctx = _get_ctx()
+    runtime_db_conn = (
+        _ctx.runtime_db_conn if _ctx is not None else globals().get("runtime_db_conn")
+    )
+    if not runtime_db_conn:
+        return
+    attempt_id = _ensure_current_run_attempt()
+    if not attempt_id:
+        return
+    update_run_attempt_provider_session(runtime_db_conn, attempt_id, provider_session_id)
 
 
 def _normalize_crash_tool_name(value: str) -> str:
@@ -5931,8 +6113,7 @@ async def reconcile_inflight_tools(
             await fallback_client.__aexit__(None, None, None)
         _ctx.forced_tool_mode_active = False
     if _ctx.forced_tool_queue:
-        if _ctx.runtime_db_conn and _ctx.run_id:
-            update_run_status(_ctx.runtime_db_conn, _ctx.run_id, "waiting_for_human")
+        _mark_run_waiting_for_human("inflight_replay_incomplete")
         logfire.warning(
             "inflight_replay_incomplete",
             run_id=_ctx.run_id,
@@ -6136,6 +6317,7 @@ async def continue_job_run(
     while True:
         if runtime_db_conn and run_id:
             update_run_status(runtime_db_conn, run_id, "running")
+            _update_current_run_attempt(status="running")
 
         prompt_parts = []
         if last_job_prompt:
@@ -6155,8 +6337,7 @@ async def continue_job_run(
             _maybe_mark_run_succeeded()
             return final_response_text
         except BudgetExceeded as exc:
-            if runtime_db_conn and run_id:
-                update_run_status(runtime_db_conn, run_id, "failed")
+            _mark_run_failed(str(exc), failure_class="budget_exceeded")
             raise
         except Exception as exc:
             error_msg = str(exc)
@@ -6186,8 +6367,7 @@ async def continue_job_run(
                 error_retries = 1
                 last_error = error_msg
             if error_retries >= max_error_retries:
-                if runtime_db_conn and run_id:
-                    update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+                _mark_run_waiting_for_human("repeated_resume_errors")
                 print(
                     "\n⚠️ Repeated errors detected. Run status set to waiting_for_human."
                 )
@@ -7337,7 +7517,7 @@ async def run_conversation(
                                             _ctx.observer_workspace_dir,
                                         )
                                     )
-                                    # Video/audio output observer - copy media to session workspace
+                                    # Video/audio output observer - copy media to run workspace scratch
                                     asyncio.create_task(
                                         observe_and_save_video_outputs(
                                             tool_name,
@@ -7394,6 +7574,7 @@ async def run_conversation(
                     ):
                         error_text = str(msg.result).lower()
                         if "resume" in error_text or "session" in error_text:
+                            _update_current_run_attempt_provider_session(None)
                             update_run_provider_session(
                                 _ctx.runtime_db_conn, _ctx.run_id, None
                             )
@@ -7955,14 +8136,7 @@ async def _run_urw_from_cli(args: argparse.Namespace) -> None:
     if args.workspace:
         workspace_path = Path(args.workspace).expanduser().resolve()
     else:
-        import datetime
-        import uuid
-
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_uuid = str(uuid.uuid4())[:8]
-        workspace_path = (
-            Path(f"./urw_sessions/session_{ts}_{run_uuid}").expanduser().resolve()
-        )
+        workspace_path = _default_urw_workspace_path()
 
     print(f"[URW] Workspace initialized at: {workspace_path}")
     workspace_path.mkdir(parents=True, exist_ok=True)
@@ -8034,7 +8208,7 @@ def _print_tool_policy_explain(raw_tool_name: str) -> None:
 async def setup_session(
     run_id_override: Optional[str] = None,
     workspace_dir_override: Optional[str] = None,
-    session_prefix: str = "session_",
+    session_prefix: str = "run_",
     attach_stdio: bool = True,
 ) -> tuple[ClaudeAgentOptions, Any, str, str, dict, Any]:
     """
@@ -8061,7 +8235,7 @@ async def setup_session(
     # Create main span for entire execution
     # with logfire.span("standalone_composio_test") as span: # Moved to caller
 
-    # Setup Session Workspace
+    # Setup durable run workspace
     if workspace_dir_override:
         workspace_dir = workspace_dir_override
         os.makedirs(workspace_dir, exist_ok=True)
@@ -8104,7 +8278,7 @@ async def setup_session(
 
     def load_soul_context(ws_dir: str, source_dir: str) -> str:
         """Load the 'Soul' (Persona/Identity) from SOUL.md."""
-        # Priority 1: Session Workspace (Task-specific override)
+        # Priority 1: Run Workspace (Task-specific override)
         workspace_soul = os.path.join(ws_dir, "SOUL.md")
         # Priority 2: Centralized Prompt Assets (The Codebase Persona)
         assets_soul = os.path.join(
@@ -8472,6 +8646,7 @@ async def setup_session(
                 "UA_ENABLE_SDK_SESSION_HISTORY", "0"
             ),
             "UA_ENABLE_DYNAMIC_MCP": os.getenv("UA_ENABLE_DYNAMIC_MCP", "0"),
+            "CURRENT_RUN_WORKSPACE": abs_workspace_path,
             "CURRENT_SESSION_WORKSPACE": abs_workspace_path,
             "UA_ARTIFACTS_DIR": os.path.abspath(
                 os.getenv(
@@ -8554,9 +8729,9 @@ async def setup_session(
 
     # Inject Workspace Path into System Prompt for Sub-Agents
     _append_system_prompt_text(
-        f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+        f"Context:\nCURRENT_RUN_WORKSPACE: {abs_workspace_path}\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
     )
-    print(f"✅ Injected Session Workspace: {abs_workspace_path}")
+    print(f"✅ Injected Run Workspace: {abs_workspace_path}")
 
     # Inject Knowledge Base (Static Tool Guidance)
     if tool_knowledge_block:
@@ -8564,6 +8739,20 @@ async def setup_session(
         print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
 
     return options, session, user_id, workspace_dir, trace, agent
+
+
+def _workspace_timestamp_fragment(workspace_dir: str) -> str:
+    name = os.path.basename(str(workspace_dir or ""))
+    for prefix in ("run_", "session_", "harness_"):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def _default_urw_workspace_path() -> Path:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_uuid = str(uuid.uuid4())[:8]
+    return Path(f"./urw_sessions/run_{ts}_{run_uuid}").expanduser().resolve()
 
 
 def _sync_session_memory_if_enabled(
@@ -8620,6 +8809,8 @@ async def process_turn(
             run_id = session_ctx.run_id
         if session_ctx.runtime_db_conn is not None:
             runtime_db_conn = session_ctx.runtime_db_conn
+        if session_ctx.current_run_attempt_id is not None:
+            globals()["current_run_attempt_id"] = session_ctx.current_run_attempt_id
 
     def _set_observer_workspace(path: str) -> None:
         global OBSERVER_WORKSPACE_DIR
@@ -8640,6 +8831,7 @@ async def process_turn(
             run_id=run_id,
             trace=trace,
             runtime_db_conn=runtime_db_conn,
+            current_run_attempt_id=current_run_attempt_id,
             current_step_id=current_step_id,
             tool_ledger=tool_ledger,
             observer_workspace_dir=OBSERVER_WORKSPACE_DIR,
@@ -9495,8 +9687,8 @@ async def main(args: argparse.Namespace):
         workspace_override = run_spec.get("workspace_dir")
         run_id_override = args.run_id
 
-    # Determine session prefix (Consolidate Harness Workspace)
-    session_prefix = "session_"
+    # Determine workspace prefix (default durable run workspace)
+    session_prefix = "run_"
     if args.harness_objective or args.harness_template:
         session_prefix = "harness_"
 
@@ -9631,7 +9823,7 @@ async def main(args: argparse.Namespace):
                     print(f"   Tasks completed: {len(checkpoint.completed_tasks)}")
                     print(f"   Artifacts: {len(checkpoint.artifacts)}")
                 else:
-                    print("ℹ️ No session checkpoint found; starting fresh")
+                    print("ℹ️ No run checkpoint found; starting fresh")
         except Exception as ckpt_err:
             print(f"⚠️ Failed to load checkpoint: {ckpt_err}")
 
@@ -9697,6 +9889,7 @@ async def main(args: argparse.Namespace):
             run_id,
             "cli",
             run_spec,
+            workspace_dir=workspace_dir,
             run_mode=run_mode,
             job_path=job_path,
             last_job_prompt=job_prompt,
@@ -9705,6 +9898,11 @@ async def main(args: argparse.Namespace):
             max_iterations=args.max_iterations,
             completion_promise=args.completion_promise,
         )
+        _ensure_current_run_attempt(
+            status=status_to_set,
+            existing_run_row=run_row,
+            resume_requested=bool(args.resume),
+        )
         logfire.info("durable_run_upserted", run_id=run_id, entrypoint="cli")
         if parent_run_id:
             trace["parent_run_id"] = parent_run_id
@@ -9712,8 +9910,8 @@ async def main(args: argparse.Namespace):
     # Use the trace ID extracted earlier (now stored in main_trace_id_hex and env var)
     trace["trace_id"] = main_trace_id_hex
 
-    # Extract timestamp from workspace_dir (e.g. "session_20251228_123456" -> "20251228_123456")
-    timestamp = os.path.basename(workspace_dir).replace("session_", "")
+    # Extract timestamp-ish suffix from workspace_dir across legacy and new prefixes.
+    timestamp = _workspace_timestamp_fragment(workspace_dir)
 
     print(f"\n{'=' * 60}")
     print("         🔍 TRACE IDS (Logfire context)")
@@ -9813,7 +10011,7 @@ async def main(args: argparse.Namespace):
             state_snapshot=state_snapshot,
             cursor=cursor,
         )
-        update_run_status(runtime_db_conn, run_id, "paused")
+        _mark_run_paused("interrupt_checkpoint")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "durable_checkpoint_saved",
@@ -9995,8 +10193,11 @@ async def main(args: argparse.Namespace):
                                 error_code="budget_exceeded",
                                 error_detail=str(exc),
                             )
+                        _mark_run_failed(
+                            str(exc),
+                            failure_class="budget_exceeded",
+                        )
                         if runtime_db_conn and run_id:
-                            update_run_status(runtime_db_conn, run_id, "failed")
                             logfire.warning(
                                 "durable_run_failed",
                                 run_id=run_id,
@@ -10499,7 +10700,7 @@ async def main(args: argparse.Namespace):
                             )
                             checkpoint_gen.save(checkpoint)
                             print(
-                                f"✅ Session checkpoint saved: {ws_path / 'session_checkpoint.json'}"
+                                f"✅ Run checkpoint saved: {ws_path / 'run_checkpoint.json'}"
                             )
                         except Exception as ckpt_err:
                             print(f"⚠️ Failed to save checkpoint: {ckpt_err}")
@@ -10973,8 +11174,11 @@ async def main(args: argparse.Namespace):
                             error_code="budget_exceeded",
                             error_detail=str(exc),
                         )
+                    _mark_run_failed(
+                        str(exc),
+                        failure_class="budget_exceeded",
+                    )
                     if runtime_db_conn and run_id:
-                        update_run_status(runtime_db_conn, run_id, "failed")
                         logfire.warning(
                             "durable_run_failed",
                             run_id=run_id,
@@ -10993,8 +11197,8 @@ async def main(args: argparse.Namespace):
                             error_code="exception",
                             error_detail=str(exc),
                         )
+                    _mark_run_failed(str(exc), failure_class="exception")
                     if runtime_db_conn and run_id:
-                        update_run_status(runtime_db_conn, run_id, "failed")
                         logfire.warning(
                             "durable_run_failed",
                             run_id=run_id,

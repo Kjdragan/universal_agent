@@ -66,7 +66,7 @@ If `command -v nlm` fails, this is an installation or PATH problem, not an auth 
 
 1. Never print or persist cookie header values.
 2. Never commit NotebookLM auth artifacts to git.
-3. Keep seed files ephemeral in session workspace only.
+3. Keep seed files ephemeral in the run workspace only.
 
 ## Failure Modes
 

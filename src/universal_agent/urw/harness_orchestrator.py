@@ -783,8 +783,9 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
     def _persist_current_workspace(self, session_path: Path) -> None:
         """Persist current phase workspace for tools that cannot see env updates."""
         try:
-            marker_path = self.workspaces_root / ".current_session_workspace"
-            marker_path.write_text(str(session_path))
+            for marker_name in (".current_run_workspace", ".current_session_workspace"):
+                marker_path = self.workspaces_root / marker_name
+                marker_path.write_text(str(session_path))
         except Exception as exc:
             self._log(f"⚠️ Failed to persist current workspace: {exc}")
 

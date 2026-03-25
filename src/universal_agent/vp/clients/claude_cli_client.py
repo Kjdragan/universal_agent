@@ -391,6 +391,7 @@ def _build_cli_env(enable_agent_teams: bool, workspace_dir: Path) -> dict[str, s
     if enable_agent_teams:
         env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
 
+    env["CURRENT_RUN_WORKSPACE"] = str(workspace_dir)
     env["CURRENT_SESSION_WORKSPACE"] = str(workspace_dir)
     env.pop("UA_INFISICAL_STRICT", None)  # Don't enforce Infisical in CLI subprocess
 

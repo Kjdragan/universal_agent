@@ -24,6 +24,7 @@ from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
+from universal_agent.run_catalog import RunCatalogService
 from universal_agent.youtube_ingest import normalize_video_target
 
 logger = logging.getLogger(__name__)
@@ -377,7 +378,7 @@ class HooksService:
             Callable[[str, str, str, Optional[str], Optional[dict[str, Any]]], Awaitable[None]]
         ] = None,
         run_counter_start: Optional[Callable[[str, str], None]] = None,
-        run_counter_finish: Optional[Callable[[str, str], None]] = None,
+        run_counter_finish: Optional[Callable[..., None]] = None,
         notification_sink: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         self.gateway = gateway
@@ -555,11 +556,27 @@ class HooksService:
         transforms_dir = str(hooks_data.get("transforms_dir") or "").strip() or DEFAULT_BOOTSTRAP_TRANSFORMS_DIR
         ops_dir = resolve_ops_config_path().parent
         transforms_root = (ops_dir / transforms_dir).resolve()
+        composio_transform_path = transforms_root / "composio_youtube_transform.py"
         manual_transform_path = transforms_root / "manual_youtube_transform.py"
 
         token_configured = bool((hooks_data.get("token") or "").strip() or (os.getenv("UA_HOOKS_TOKEN") or "").strip())
+        composio_secret_configured = bool((os.getenv("COMPOSIO_WEBHOOK_SECRET") or "").strip())
 
         bootstrap_mappings: list[dict[str, Any]] = []
+
+        if composio_transform_path.exists() and composio_secret_configured:
+            bootstrap_mappings.append(
+                {
+                    "id": "composio-youtube-trigger",
+                    "match": {"path": "composio"},
+                    "action": "agent",
+                    "auth": {"strategy": "composio_hmac"},
+                    "transform": {
+                        "module": "composio_youtube_transform.py",
+                        "export": "transform",
+                    },
+                }
+            )
 
         # Never expose manual ingestion without token auth.
         if manual_transform_path.exists() and token_configured:
@@ -642,6 +659,71 @@ class HooksService:
         if sid.startswith(HOOK_SESSION_ID_PREFIX):
             return sid[len(HOOK_SESSION_ID_PREFIX) :]
         return sid
+
+    @staticmethod
+    def _session_id_from_workspace_dir(session_dir: Path) -> Optional[str]:
+        name = str(getattr(session_dir, "name", "") or "").strip()
+        if not name:
+            return None
+        if name.startswith(HOOK_SESSION_ID_PREFIX):
+            return name
+        if name.startswith("run_"):
+            candidate = name[len("run_") :].strip()
+            if candidate.startswith(HOOK_SESSION_ID_PREFIX):
+                return candidate
+
+        # Migration backstop: prefer explicit marker/session payload when the
+        # directory name is no longer enough to recover the live hook session id.
+        for marker_name in ("pending_hook_recovery.json", "pending_local_ingest.json", ".hook_startup_recovery.json"):
+            marker_path = session_dir / marker_name
+            if not marker_path.is_file():
+                continue
+            try:
+                payload = json.loads(marker_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            candidate = str(payload.get("session_id") or "").strip()
+            if candidate.startswith(HOOK_SESSION_ID_PREFIX):
+                return candidate
+        return None
+
+    def _iter_hook_workspace_candidates(
+        self,
+        workspace_root: Path,
+        *,
+        session_key_prefix: str,
+    ) -> list[tuple[float, Path, str]]:
+        root = Path(str(workspace_root or "")).expanduser().resolve()
+        if not root.exists() or not root.is_dir():
+            return []
+
+        candidates: list[tuple[float, Path, str]] = []
+        seen_dirs: set[Path] = set()
+        glob_patterns = (
+            f"{HOOK_SESSION_ID_PREFIX}{session_key_prefix}*",
+            f"run_{HOOK_SESSION_ID_PREFIX}{session_key_prefix}*",
+        )
+        for pattern in glob_patterns:
+            for session_dir in root.glob(pattern):
+                try:
+                    resolved_dir = session_dir.resolve()
+                except Exception:
+                    resolved_dir = session_dir
+                if resolved_dir in seen_dirs or not session_dir.is_dir():
+                    continue
+                session_id = self._session_id_from_workspace_dir(session_dir)
+                if not session_id or not session_id.startswith(f"{HOOK_SESSION_ID_PREFIX}{session_key_prefix}"):
+                    continue
+                try:
+                    mtime = float(session_dir.stat().st_mtime)
+                except Exception:
+                    mtime = 0.0
+                candidates.append((mtime, session_dir, session_id))
+                seen_dirs.add(resolved_dir)
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates
 
     @staticmethod
     def _youtube_parts_from_session_key(session_key: str) -> tuple[str, str]:
@@ -991,23 +1073,13 @@ class HooksService:
         root = Path(str(workspace_root or "")).expanduser().resolve()
         if not root.exists() or not root.is_dir():
             return 0
-        candidates: list[tuple[float, Path]] = []
-        for session_dir in root.glob(f"{HOOK_SESSION_ID_PREFIX}yt_*"):
-            if not session_dir.is_dir():
-                continue
-            try:
-                mtime = float(session_dir.stat().st_mtime)
-            except Exception:
-                mtime = 0.0
-            candidates.append((mtime, session_dir))
-        candidates.sort(key=lambda item: item[0], reverse=True)
+        candidates = self._iter_hook_workspace_candidates(root, session_key_prefix="yt_")
 
         recovered: int = 0
         now_epoch = time.time()
-        for _, session_dir in candidates:
+        for _, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
-            session_id = session_dir.name
             turns_dir = session_dir / "turns"
             if not turns_dir.exists() or not turns_dir.is_dir():
                 continue
@@ -1045,10 +1117,9 @@ class HooksService:
                 metadata={"source": "hooks", "reason": "startup_recovery"},
             )
 
-        for _, session_dir in candidates:
+        for _, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
-            session_id = session_dir.name
             pending_dispatch_path = self._pending_hook_recovery_marker_path(session_dir)
             if not pending_dispatch_path.is_file():
                 continue
@@ -1119,10 +1190,9 @@ class HooksService:
                 metadata={"source": "hooks", "reason": "startup_dispatch_interrupted_backfill"},
             )
 
-        for _, session_dir in candidates:
+        for _, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
-            session_id = session_dir.name
             pending_path = session_dir / "pending_local_ingest.json"
             if not pending_path.is_file():
                 continue
@@ -1634,6 +1704,20 @@ class HooksService:
                     )
                     continue
 
+                auth_outcome = context.get("_hook_auth_outcome")
+                if isinstance(auth_outcome, dict) and auth_outcome.get("deduped"):
+                    logger.info(
+                        "Hook ingress deduped path=%s mapping=%s webhook_id=%s",
+                        subpath,
+                        mapping_id,
+                        auth_outcome.get("webhook_id"),
+                    )
+                    return Response(
+                        json.dumps({"ok": True, "deduped": True}),
+                        media_type="application/json",
+                        status_code=200,
+                    )
+
                 action = await self._build_action(mapping, context)
                 if action is None:
                     logger.info("Hook ingress skipped path=%s mapping=%s", subpath, mapping_id)
@@ -1867,7 +1951,7 @@ class HooksService:
         if self._deployment_profile == "vps":
             return loopback or deduped
         if self._deployment_profile == "local_workstation":
-            return non_loopback + loopback if non_loopback else loopback
+            return loopback + non_loopback if loopback else deduped
         return deduped
 
     def _is_youtube_local_ingest_target(self, action: HookAction) -> bool:
@@ -2535,8 +2619,64 @@ class HooksService:
     def _authenticate_request(self, mapping: HookMappingConfig, request: Request, context: Dict) -> bool:
         auth = mapping.auth or HookAuthConfig()
         strategy = (auth.strategy or "token").strip().lower()
+        context.pop("_hook_auth_outcome", None)
 
         if strategy == "none":
+            return True
+        if strategy == "composio_hmac":
+            secret = str(os.getenv("COMPOSIO_WEBHOOK_SECRET") or "").strip()
+            if not secret:
+                return False
+
+            webhook_id = str(request.headers.get("webhook-id") or "").strip()
+            webhook_timestamp = str(request.headers.get("webhook-timestamp") or "").strip()
+            webhook_signature = str(request.headers.get("webhook-signature") or "").strip()
+            raw_body = context.get("raw_body") or b""
+            if not isinstance(raw_body, (bytes, bytearray)):
+                raw_body = str(raw_body).encode("utf-8", errors="replace")
+
+            if not webhook_id or not webhook_timestamp or not webhook_signature:
+                return False
+            try:
+                timestamp_epoch = int(webhook_timestamp)
+            except (TypeError, ValueError):
+                return False
+
+            now_epoch = int(time.time())
+            if abs(now_epoch - timestamp_epoch) > int(auth.timestamp_tolerance_seconds or 300):
+                return False
+
+            signing_string = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8', errors='replace')}"
+            expected_digest = hmac.new(
+                secret.encode("utf-8"),
+                signing_string.encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+            expected_signature = base64.b64encode(expected_digest).decode("utf-8")
+            provided_signatures = [part.strip() for part in webhook_signature.split() if part.strip()]
+            if not provided_signatures:
+                provided_signatures = [part.strip() for part in webhook_signature.split(",") if part.strip()]
+
+            valid_signature = False
+            for candidate in provided_signatures:
+                if "," in candidate:
+                    _, _, candidate = candidate.partition(",")
+                    candidate = candidate.strip()
+                if candidate and hmac.compare_digest(candidate, expected_signature):
+                    valid_signature = True
+                    break
+            if not valid_signature:
+                return False
+
+            replay_window = int(auth.replay_window_seconds or 600)
+            if replay_window > 0:
+                self._cleanup_seen_webhook_ids(now_epoch)
+                seen_key = f"composio:{webhook_id}"
+                existing_expiry = self._seen_webhook_ids.get(seen_key)
+                if existing_expiry and existing_expiry > now_epoch:
+                    context["_hook_auth_outcome"] = {"deduped": True, "webhook_id": webhook_id}
+                    return True
+                self._seen_webhook_ids[seen_key] = float(now_epoch + replay_window)
             return True
         # default: token strategy
         if not self.config.token:
@@ -2737,6 +2877,7 @@ class HooksService:
         admitted_turn_id: Optional[str] = None
         start_ts: Optional[float] = None
         execution_summary: dict[str, Any] = {}
+        terminal_reason: Optional[str] = None
         dispatch_gate_acquired = False
         dispatch_wait_started = time.time()
         pending_admitted = False
@@ -3104,6 +3245,7 @@ class HooksService:
                     workspace_root=session_workspace,
                 )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, hook_name)
+            terminal_reason = "completed"
             return {
                 "decision": "accepted",
                 "turn_id": admitted_turn_id,
@@ -3112,6 +3254,7 @@ class HooksService:
                 "execution_summary": execution_summary,
             }
         except HookReportedTimeout as exc:
+            terminal_reason = "agent_reported_timeout"
             logger.error(
                 "Hook action reported timeout session_key=%s session_id=%s detail=%s",
                 session_key,
@@ -3168,6 +3311,7 @@ class HooksService:
                 "session_id": session_id,
             }
         except HookIdleTimeout as exc:
+            terminal_reason = f"hook_idle_timeout_{int(self._youtube_hook_idle_timeout_seconds or 0)}s"
             logger.error(
                 "Hook action idle timed out session_key=%s session_id=%s detail=%s",
                 session_key,
@@ -3228,6 +3372,7 @@ class HooksService:
                 "session_id": session_id,
             }
         except asyncio.TimeoutError:
+            terminal_reason = f"hook_timeout_{timeout_seconds}s"
             logger.error(
                 "Hook action timed out session_key=%s session_id=%s timeout_seconds=%s",
                 session_key,
@@ -3289,6 +3434,7 @@ class HooksService:
             }
         except Exception as exc:
             dispatch_failure_reason = self._dispatch_failure_reason(exc, execution_summary)
+            terminal_reason = dispatch_failure_reason
             is_interrupted_dispatch = dispatch_failure_reason == "hook_dispatch_interrupted"
             logger.exception(
                 "Failed dispatching hook action session_key=%s session_id=%s reason=%s",
@@ -3414,9 +3560,12 @@ class HooksService:
         finally:
             if self._run_counter_finish:
                 try:
-                    self._run_counter_finish(session_id, run_source)
+                    try:
+                        self._run_counter_finish(session_id, run_source, terminal_reason)
+                    except TypeError:
+                        self._run_counter_finish(session_id, run_source)
                 except Exception:
-                    logger.exception("Failed decrementing hook run counter session_id=%s", session_id)
+                    logger.exception("Failed finishing hook run counter session_id=%s", session_id)
             if dispatch_gate_acquired:
                 self._agent_dispatch_gate.release()
             if pending_admitted:
@@ -3640,9 +3789,25 @@ class HooksService:
         try:
             return await self.gateway.resume_session(session_id)
         except ValueError:
-            workspace_dir = Path("AGENT_RUN_WORKSPACES") / session_id
+            workspace_dir: Path | None = None
+            try:
+                run_summary = RunCatalogService().find_latest_run_for_provider_session(session_id)
+                resolved_workspace = str((run_summary or {}).get("workspace_dir") or "").strip()
+                if resolved_workspace:
+                    workspace_dir = Path(resolved_workspace)
+            except Exception:
+                logger.exception(
+                    "Failed to resolve webhook workspace from run catalog session_id=%s",
+                    session_id,
+                )
+            if workspace_dir is None:
+                workspace_dir = Path("AGENT_RUN_WORKSPACES") / f"run_{session_id}"
             logger.info("Creating webhook session session_id=%s workspace=%s", session_id, workspace_dir)
-            return await self.gateway.create_session(user_id="webhook", workspace_dir=str(workspace_dir))
+            return await self.gateway.create_session(
+                user_id="webhook",
+                workspace_dir=str(workspace_dir),
+                session_id=session_id,
+            )
 
     def _evict_stale_video_dispatch_entries(self) -> None:
         """Remove expired entries from the video dispatch inflight dict."""

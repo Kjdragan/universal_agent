@@ -23,12 +23,16 @@ from universal_agent.cron_service import CronService
 from universal_agent.durable.state import (
     append_vp_event,
     append_vp_session_event,
+    create_run_attempt,
     get_vp_mission,
     get_vp_bridge_cursor,
     list_vp_events,
+    upsert_run,
     upsert_vp_mission,
     upsert_vp_session,
 )
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.worker_loop import VpWorkerLoop
 from universal_agent.runtime_role import build_factory_runtime_policy
@@ -321,6 +325,21 @@ def test_ops_list_sessions(client, tmp_path):
         encoding="utf-8",
     )
     _create_dummy_session(tmp_path, "session_B", ["logB"])
+
+    conn = connect_runtime_db(str((tmp_path / "runtime_state.db").resolve()))
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        "session_A",
+        "cli",
+        {"workspace_dir": str(session_a)},
+        workspace_dir=str(session_a),
+        status="running",
+        run_kind="email_triage",
+        trigger_source="agentmail",
+    )
+    attempt_id = create_run_attempt(conn, "session_A", status="running")
+    conn.close()
     
     # The gateway lists active sessions (in memory) + discovered (on disk)
     # Our mocked gateway won't have active sessions initially unless we create them via gateway.
@@ -339,6 +358,12 @@ def test_ops_list_sessions(client, tmp_path):
     # Session description should be surfaced when a checkpoint exists.
     row_a = next(s for s in data["sessions"] if s["session_id"] == "session_A")
     assert row_a.get("description") == "Do the thing about the widgets"
+    assert row_a.get("run_id") == "session_A"
+    assert row_a.get("run_status") == "running"
+    assert row_a.get("run_kind") == "email_triage"
+    assert row_a.get("trigger_source") == "agentmail"
+    assert row_a.get("attempt_count") == 1
+    assert row_a.get("latest_attempt_id") == attempt_id
     # Session timestamps must be timezone-aware UTC to avoid client-side timezone drift.
     assert str(row_a.get("last_modified", "")).endswith("+00:00")
     assert str(row_a.get("last_activity", "")).endswith("+00:00")
@@ -352,6 +377,86 @@ def test_ops_get_session(client, tmp_path):
     assert "session" in data
     assert data["session"]["session_id"] == "session_details"
     assert data["session"]["has_run_log"] is True
+
+
+def test_ops_list_runs_and_get_run(client, tmp_path):
+    workspace = _create_dummy_session(tmp_path, "session_run_details", ["foo"])
+
+    conn = connect_runtime_db(str((tmp_path / "runtime_state.db").resolve()))
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        "run_ops_1",
+        "cli",
+        {"workspace_dir": str(workspace)},
+        workspace_dir=str(workspace),
+        status="running",
+        run_kind="heartbeat_investigation",
+        trigger_source="heartbeat",
+        run_policy="automation_ephemeral",
+    )
+    attempt_id = create_run_attempt(conn, "run_ops_1", status="running")
+    conn.close()
+
+    list_resp = client.get("/api/v1/ops/runs")
+    assert list_resp.status_code == 200
+    list_payload = list_resp.json()
+    assert "runs" in list_payload
+    run_row = next(item for item in list_payload["runs"] if item["run_id"] == "run_ops_1")
+    assert run_row["status"] == "running"
+    assert run_row["run_kind"] == "heartbeat_investigation"
+    assert run_row["trigger_source"] == "heartbeat"
+    assert run_row["attempt_count"] == 1
+    assert run_row["latest_attempt_id"] == attempt_id
+    assert run_row["workspace_exists"] is True
+    assert run_row["workspace_summary"]["session_id"] == "session_run_details"
+
+    detail_resp = client.get("/api/v1/ops/runs/run_ops_1")
+    assert detail_resp.status_code == 200
+    detail_payload = detail_resp.json()
+    assert detail_payload["run"]["run_id"] == "run_ops_1"
+    assert detail_payload["run"]["run_policy"] == "automation_ephemeral"
+    assert detail_payload["workspace"]["session_id"] == "session_run_details"
+
+
+def test_public_runs_endpoints_return_run_details_and_attempts(client, tmp_path):
+    workspace = _create_dummy_session(tmp_path, "session_public_run_details", ["foo"])
+
+    conn = connect_runtime_db(str((tmp_path / "runtime_state.db").resolve()))
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        "run_public_1",
+        "cli",
+        {"workspace_dir": str(workspace)},
+        workspace_dir=str(workspace),
+        status="running",
+        run_kind="heartbeat_investigation",
+        trigger_source="heartbeat",
+        run_policy="automation_ephemeral",
+    )
+    attempt_id = create_run_attempt(conn, "run_public_1", status="running")
+    conn.close()
+
+    list_resp = client.get("/api/v1/runs")
+    assert list_resp.status_code == 200
+    list_payload = list_resp.json()
+    run_row = next(item for item in list_payload["runs"] if item["run_id"] == "run_public_1")
+    assert run_row["latest_attempt_id"] == attempt_id
+    assert run_row["workspace_summary"]["session_id"] == "session_public_run_details"
+
+    detail_resp = client.get("/api/v1/runs/run_public_1")
+    assert detail_resp.status_code == 200
+    detail_payload = detail_resp.json()
+    assert detail_payload["run"]["run_id"] == "run_public_1"
+    assert detail_payload["workspace"]["session_id"] == "session_public_run_details"
+
+    attempts_resp = client.get("/api/v1/runs/run_public_1/attempts")
+    assert attempts_resp.status_code == 200
+    attempts_payload = attempts_resp.json()
+    assert attempts_payload["run_id"] == "run_public_1"
+    assert attempts_payload["total"] == 1
+    assert attempts_payload["attempts"][0]["attempt_id"] == attempt_id
 
 def test_ops_delete_session(client, tmp_path):
     _create_dummy_session(tmp_path, "session_del", ["foo"])
@@ -1025,6 +1130,103 @@ def test_dashboard_csi_reports_fallbacks_to_sessions_when_notifications_empty(cl
     assert payload["source"] == "session_fallback"
     assert len(payload["reports"]) >= 1
     assert payload["reports"][0]["session_id"].startswith("session_hook_csi_")
+
+
+def test_dashboard_csi_reports_fallbacks_to_run_session_hook_prefix(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
+    _create_dummy_session(
+        tmp_path,
+        "run_session_hook_csi_csi_analytics_rss_insight_runprefixed",
+        ["[00:00:00] INFO CSI run-prefixed fallback"],
+    )
+
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["source"] == "session_fallback"
+    assert len(payload["reports"]) >= 1
+    assert payload["reports"][0]["session_id"].startswith("run_session_hook_csi_")
+    assert payload["reports"][0]["report_type"] == "csi_analytics_rss_insight_runprefixed"
+
+
+def test_dashboard_csi_session_fallback_includes_run_linkage_when_available(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
+    runtime_db = tmp_path / "runtime_state.db"
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(runtime_db))
+
+    session_workspace = _create_dummy_session(
+        tmp_path,
+        "session_hook_csi_csi_analytics_rss_insight_enriched",
+        ["[00:00:00] INFO CSI enriched fallback"],
+    )
+
+    conn = connect_runtime_db(str(runtime_db))
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        run_id="run_csi_session_bridge_1",
+        entrypoint="unit_test",
+        run_spec={"workspace_dir": str(session_workspace.resolve())},
+        status="completed",
+        workspace_dir=str(session_workspace.resolve()),
+        run_kind="hook_session_bridge",
+        trigger_source="hook",
+    )
+    create_run_attempt(conn, "run_csi_session_bridge_1", status="completed")
+    conn.commit()
+    conn.close()
+
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["source"] == "session_fallback"
+    assert len(payload["reports"]) >= 1
+    first = payload["reports"][0]
+    assert first["session_id"] == "session_hook_csi_csi_analytics_rss_insight_enriched"
+    assert first["run_id"] == "run_csi_session_bridge_1"
+    assert first["workspace_dir"] == str(session_workspace.resolve())
+    assert "latest_attempt_id" in first
+
+
+def test_dashboard_csi_reports_fallbacks_to_runs_when_notifications_empty(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
+    runtime_db = tmp_path / "runtime_state.db"
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(runtime_db))
+
+    run_workspace = tmp_path / "run_csi_hourly_report"
+    run_workspace.mkdir()
+    (run_workspace / "run_checkpoint.json").write_text(
+        json.dumps({"original_request": "CSI hourly report follow-up"}),
+        encoding="utf-8",
+    )
+
+    conn = connect_runtime_db(str(runtime_db))
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        run_id="run_csi_report_1",
+        entrypoint="unit_test",
+        run_spec={"workspace_dir": str(run_workspace.resolve())},
+        status="completed",
+        workspace_dir=str(run_workspace.resolve()),
+        run_kind="csi_hourly_report",
+        trigger_source="csi",
+        external_origin="csi_ingester",
+        external_origin_id="rss_trend_report",
+        external_correlation_id="evt-123",
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["source"] == "run_fallback"
+    assert len(payload["reports"]) >= 1
+    assert payload["reports"][0]["run_id"] == "run_csi_report_1"
 
 
 def test_dashboard_csi_reports_include_specialist_synthesis_notifications(client, tmp_path, monkeypatch):
@@ -1755,6 +1957,7 @@ def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     _create_dummy_session(tmp_path, "session_hook_csi_alpha", ["alpha"])
     _create_dummy_session(tmp_path, "session_hook_csi_bravo", ["bravo"])
     _create_dummy_session(tmp_path, "session_hook_csi_charlie", ["charlie"])
+    _create_dummy_session(tmp_path, "run_session_hook_csi_delta", ["delta"])
 
     dry_run = client.post(
         "/api/v1/ops/sessions/csi/purge",
@@ -1768,8 +1971,8 @@ def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     assert dry_run.status_code == 200
     dry_payload = dry_run.json()
     assert dry_payload["status"] == "dry_run"
-    assert dry_payload["total_csi_sessions"] == 3
-    assert len(dry_payload["candidates"]) == 2
+    assert dry_payload["total_csi_sessions"] == 4
+    assert len(dry_payload["candidates"]) == 3
     assert len(dry_payload["skipped"]["protected"]) == 1
 
     purge = client.post(
@@ -1784,11 +1987,70 @@ def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     assert purge.status_code == 200
     payload = purge.json()
     assert payload["status"] == "ok"
-    assert len(payload["deleted"]) == 2
+    assert len(payload["deleted"]) == 3
     assert len(payload["skipped"]["protected"]) == 1
 
-    remaining = [p.name for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith("session_hook_csi_")]
+    remaining = [
+        p.name
+        for p in tmp_path.iterdir()
+        if p.is_dir()
+        and (p.name.startswith("session_hook_csi_") or p.name.startswith("run_session_hook_csi_"))
+    ]
     assert len(remaining) == 1
+
+
+def test_ops_purge_csi_sessions_includes_csi_runs(client, tmp_path, monkeypatch):
+    runtime_db = tmp_path / "runtime_state.db"
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(runtime_db.resolve()))
+
+    run_workspace = tmp_path / "run_csi_cleanup_alpha"
+    run_workspace.mkdir()
+
+    conn = connect_runtime_db(str(runtime_db))
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        run_id="run_csi_cleanup_1",
+        entrypoint="unit_test",
+        run_spec={"workspace_dir": str(run_workspace.resolve())},
+        status="completed",
+        workspace_dir=str(run_workspace.resolve()),
+        run_kind="csi_cleanup_test",
+        trigger_source="csi",
+        external_origin="csi_ingester",
+        external_origin_id="cleanup_alpha",
+    )
+    conn.commit()
+    conn.close()
+
+    dry_run = client.post(
+        "/api/v1/ops/sessions/csi/purge",
+        json={
+            "dry_run": True,
+            "keep_latest": 0,
+            "older_than_minutes": 0,
+            "include_active": False,
+        },
+    )
+    assert dry_run.status_code == 200
+    dry_payload = dry_run.json()
+    assert dry_payload["status"] == "dry_run"
+    assert "run_csi_cleanup_alpha" in dry_payload["candidates"]
+
+    purge = client.post(
+        "/api/v1/ops/sessions/csi/purge",
+        json={
+            "dry_run": False,
+            "keep_latest": 0,
+            "older_than_minutes": 0,
+            "include_active": False,
+        },
+    )
+    assert purge.status_code == 200
+    payload = purge.json()
+    assert payload["status"] == "ok"
+    assert "run_csi_cleanup_alpha" in payload["deleted"]
+    assert not run_workspace.exists()
 
 
 def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, monkeypatch):

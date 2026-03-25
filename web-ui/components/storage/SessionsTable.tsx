@@ -1,6 +1,6 @@
 "use client";
 
-import { StorageSessionItem } from "@/types/agent";
+import { StorageRunWorkspaceItem } from "@/types/agent";
 import { formatDateTimeTz } from "@/lib/timezone";
 
 function formatEpoch(value?: number | null): string {
@@ -16,7 +16,7 @@ function formatBytes(bytes?: number | null): string {
 }
 
 type SessionsTableProps = {
-  sessions: StorageSessionItem[];
+  sessions: StorageRunWorkspaceItem[];
   loading: boolean;
   rootSource: "local" | "mirror";
   onOpenRoot: (path: string) => void;
@@ -25,10 +25,10 @@ type SessionsTableProps = {
 
 export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpenRunLog }: SessionsTableProps) {
   if (loading) {
-    return <div className="rounded-lg border border-border bg-background/50 p-4 text-sm text-muted-foreground">Loading sessions...</div>;
+    return <div className="rounded-lg border border-border bg-background/50 p-4 text-sm text-muted-foreground">Loading run workspaces...</div>;
   }
   if (!sessions.length) {
-    return <div className="rounded-lg border border-border bg-background/50 p-4 text-sm text-muted-foreground">No sessions found in {rootSource} storage root.</div>;
+    return <div className="rounded-lg border border-border bg-background/50 p-4 text-sm text-muted-foreground">No run workspaces found in {rootSource} storage root.</div>;
   }
 
   return (
@@ -36,7 +36,7 @@ export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpe
       <table className="min-w-full text-left text-sm">
         <thead className="bg-background/80 text-xs uppercase tracking-wider text-muted-foreground">
           <tr>
-            <th className="px-3 py-2">Session</th>
+            <th className="px-3 py-2">Run Workspace</th>
             <th className="px-3 py-2">Source</th>
             <th className="px-3 py-2">Status</th>
             <th className="px-3 py-2">Completed</th>
@@ -47,7 +47,16 @@ export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpe
         <tbody>
           {sessions.map((item) => (
             <tr key={item.session_id} className="border-t border-border/80">
-              <td className="px-3 py-2 font-mono text-xs text-foreground">{item.session_id}</td>
+              <td className="px-3 py-2">
+                <div className="font-mono text-xs text-foreground">{item.session_id}</div>
+                {item.run_id ? (
+                  <div className="text-[11px] text-primary/80">
+                    run {item.run_id}
+                    {item.attempt_count ? ` · ${item.attempt_count} attempt${item.attempt_count === 1 ? "" : "s"}` : ""}
+                    {item.run_kind ? ` · ${item.run_kind}` : ""}
+                  </div>
+                ) : null}
+              </td>
               <td className="px-3 py-2 text-xs uppercase tracking-wide text-foreground/80">{item.source_type}</td>
               <td className="px-3 py-2 text-xs text-foreground/80">{item.status || (item.ready ? "ready" : "unknown")}</td>
               <td className="px-3 py-2 text-xs text-foreground/80">{formatEpoch(item.completed_at_epoch || item.updated_at_epoch || item.modified_epoch)}</td>

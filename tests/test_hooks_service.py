@@ -137,10 +137,32 @@ async def test_authorized_create_new(hooks_service, mock_gateway):
     mock_gateway.resume_session.assert_called_once_with("session_hook_test-session")
     mock_gateway.create_session.assert_called_once_with(
         user_id="webhook",
-        workspace_dir="AGENT_RUN_WORKSPACES/session_hook_test-session",
+        workspace_dir="AGENT_RUN_WORKSPACES/run_session_hook_test-session",
+        session_id="session_hook_test-session",
     )
     mock_gateway.execute.assert_called()
     assert mock_gateway.execute.call_args[0][0] == mock_session
+
+
+@pytest.mark.asyncio
+async def test_resolve_or_create_webhook_session_reuses_run_workspace_from_catalog(hooks_service, mock_gateway):
+    mock_session = GatewaySession(session_id="session_new", user_id="webhook", workspace_dir="/tmp/new")
+    mock_gateway.resume_session = AsyncMock(side_effect=ValueError("Not found"))
+    mock_gateway.create_session = AsyncMock(return_value=mock_session)
+
+    with patch(
+        "universal_agent.hooks_service.RunCatalogService.find_latest_run_for_provider_session",
+        return_value={"workspace_dir": "/tmp/run_hook_test_session"},
+    ):
+        result = await hooks_service._resolve_or_create_webhook_session("session_hook_test-session")
+
+    assert result == mock_session
+    mock_gateway.resume_session.assert_called_once_with("session_hook_test-session")
+    mock_gateway.create_session.assert_called_once_with(
+        user_id="webhook",
+        workspace_dir="/tmp/run_hook_test_session",
+        session_id="session_hook_test-session",
+    )
 
 
 @pytest.mark.asyncio
@@ -1697,6 +1719,51 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
 
 
 @pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_supports_run_workspace_prefix(mock_gateway, tmp_path):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+
+    session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_runprefix123"
+    session_dir = tmp_path / f"run_{session_id}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_local_ingest.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "failed_local_ingest",
+                "session_id": session_id,
+                "video_url": "https://www.youtube.com/watch?v=runprefix123",
+                "video_id": "runprefix123",
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    assert recovered == 1
+    await asyncio.sleep(0.05)
+    service._dispatch_action.assert_called_once()
+    action = service._dispatch_action.call_args.args[0]
+    assert action.to == "youtube-expert"
+    assert action.name == "RecoveredPendingLocalIngest"
+    assert "runprefix123" in (action.message or "")
+    marker = session_dir / ".hook_startup_recovery.json"
+    assert marker.exists()
+
+
+@pytest.mark.asyncio
 async def test_recover_interrupted_youtube_sessions_skips_non_retryable_pending_local_ingest(
     mock_gateway, tmp_path
 ):
@@ -1949,7 +2016,7 @@ def test_validate_youtube_tutorial_artifacts_generates_repo_scripts_for_implemen
     assert "uv add -r requirements.txt" in create_content
     assert "uv sync" in create_content
     assert "uv run app.py" in create_content
-    assert "/home/kjdragan/lrepos" in create_content
+    assert service._tutorial_bootstrap_repo_root in create_content
     assert "deletethisrepo.sh" in create_content
 
     delete_content = delete_script.read_text(encoding="utf-8")

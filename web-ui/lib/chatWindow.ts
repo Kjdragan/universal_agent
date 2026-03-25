@@ -2,6 +2,7 @@ export const CHAT_WINDOW_NAME = "ua-chat-window";
 
 type ChatWindowOptions = {
   sessionId?: string | null;
+  runId?: string | null;
   attachMode?: "default" | "tail";
   role?: "writer" | "viewer";
   newSession?: boolean;
@@ -13,8 +14,12 @@ type ChatWindowOptions = {
 export function buildChatUrl(options?: ChatWindowOptions): string {
   const params = new URLSearchParams();
   const sessionId = (options?.sessionId || "").trim();
+  const runId = (options?.runId || "").trim();
   if (sessionId) {
     params.set("session_id", sessionId);
+  }
+  if (runId) {
+    params.set("run_id", runId);
   }
   if (options?.attachMode === "tail") {
     params.set("attach", "tail");

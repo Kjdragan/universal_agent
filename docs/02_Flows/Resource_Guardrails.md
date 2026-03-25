@@ -26,7 +26,7 @@ graph TD
 The agent is largely confined to the `AGENT_RUN_WORKSPACES/` directory.
 
 - **Read Operations**: Tools like `list_dir` or `view_file` are allowed to read from anywhere in the repository for context.
-- **Write Operations**: Tools that modify files (e.g., `write_text_file`, `sh`) are strictly validated. Any attempt to write outside the session workspace or the `UA_ARTIFACTS_DIR` is blocked or rewritten.
+- **Write Operations**: Tools that modify files (e.g., `write_text_file`, `sh`) are strictly validated. Any attempt to write outside the current run workspace or the `UA_ARTIFACTS_DIR` is blocked or rewritten.
 
 ### SDK Bypassing (`hooks.py`)
 

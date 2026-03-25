@@ -3,7 +3,7 @@
 Date: 2026-02-11
 
 ## What this adds
-The internal tool `inspect_session_workspace` lets the agent inspect its own session workspace safely, without write/delete access.
+The internal tool `inspect_session_workspace` lets the agent inspect its own run workspace safely, without write/delete access. The tool name is legacy; the durable concept is the run workspace.
 
 It is designed for debugging and run-review use cases:
 - Read tail of `run.log`

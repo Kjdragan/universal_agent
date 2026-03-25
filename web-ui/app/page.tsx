@@ -466,18 +466,14 @@ function FileViewer() {
   const isPdf = viewingFile?.name.endsWith(".pdf") ?? false;
   const isImage = viewingFile?.name.match(/\.(png|jpg|jpeg|gif|webp)$/i) ?? false;
 
-  const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
-
   const fileUrl = viewingFile
     ? viewingFile.type === "artifact"
-      ? `${API_BASE}/api/artifacts/files/${encodePath(viewingFile.path)}`
+      ? `${API_BASE}/api/artifacts/files/${encodeWorkspacePath(viewingFile.path)}`
       : viewingFile.type === "vps_workspace"
         ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(viewingFile.path)}`
         : viewingFile.type === "vps_artifact"
           ? `${API_BASE}/api/vps/file?scope=artifacts&path=${encodeURIComponent(viewingFile.path)}`
-          : currentSession?.session_id
-            ? `${API_BASE}/api/files/${currentSession.session_id}/${encodePath(viewingFile.path)}`
-            : ""
+          : buildDurableFileUrl(currentSession, viewingFile.path)
     : "";
 
   useEffect(() => {
@@ -570,6 +566,41 @@ function FileViewer() {
 }
 
 const API_BASE = "";
+
+function encodeWorkspacePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function isRunOnlySelection(
+  session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
+): boolean {
+  return Boolean(session?.run_id && session?.is_live_session === false);
+}
+
+function buildDurableFileListUrl(
+  session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
+  path: string,
+): string {
+  if (isRunOnlySelection(session) && session?.run_id) {
+    const base = `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files`;
+    return path ? `${base}?path=${encodeURIComponent(path)}` : base;
+  }
+  const sessionId = String(session?.session_id || "").trim();
+  if (!sessionId) return "";
+  return `${API_BASE}/api/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+}
+
+function buildDurableFileUrl(
+  session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
+  path: string,
+): string {
+  if (isRunOnlySelection(session) && session?.run_id) {
+    return `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files/${encodeWorkspacePath(path)}`;
+  }
+  const sessionId = String(session?.session_id || "").trim();
+  if (!sessionId) return "";
+  return `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/${encodeWorkspacePath(path)}`;
+}
 
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);
@@ -665,14 +696,12 @@ function FileExplorer() {
   };
 
   useEffect(() => {
-    const sessionId = currentSession?.session_id;
-    if (mode === "session" && !sessionId) return;
+    if (mode === "session" && !currentSession?.session_id && !currentSession?.run_id) return;
     if (mode === "local") {
       void loadLocalEntries();
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     const url = mode === "artifacts"
       ? `${API_BASE}/api/artifacts?path=${encodeURIComponent(path)}`
@@ -680,7 +709,7 @@ function FileExplorer() {
         ? `${API_BASE}/api/vps/files?scope=workspaces&path=${encodeURIComponent(path)}`
         : mode === "vps_artifacts"
           ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
-          : `${API_BASE}/api/files?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
+          : buildDurableFileListUrl(currentSession, path);
     fetch(url)
       .then(res => res.json())
       .then(data => {
@@ -695,7 +724,7 @@ function FileExplorer() {
       .catch(err => console.error("Failed to fetch files:", err))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSession?.session_id, path, mode]);
+  }, [currentSession?.session_id, currentSession?.run_id, currentSession?.is_live_session, path, mode]);
 
   const handleSyncVps = () => {
     if (syncingVps) return;
@@ -1306,6 +1335,7 @@ function ChatInterface() {
   const [historyHydrationNotice, setHistoryHydrationNotice] = useState<string | null>(null);
   const [hydrationError, setHydrationError] = useState<string | null>(null);
   const [requestedSessionIdFromUrl, setRequestedSessionIdFromUrl] = useState("");
+  const [requestedRunIdFromUrl, setRequestedRunIdFromUrl] = useState("");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -1313,7 +1343,11 @@ function ChatInterface() {
   const hydratedSessionIdsRef = React.useRef<Set<string>>(new Set());
   const lastSessionIdRef = React.useRef<string>("");
   const effectiveSessionId = (currentSession?.session_id || requestedSessionIdFromUrl || "").trim();
+  const effectiveRunId = (currentSession?.run_id || requestedRunIdFromUrl || "").trim();
+  const isRunWorkspaceOnly = isRunOnlySelection(currentSession) || (!effectiveSessionId && !!effectiveRunId);
+  const effectiveViewerKey = effectiveSessionId || effectiveRunId;
   const isVpObserverSession = /^vp_/i.test(effectiveSessionId);
+  const setCurrentSession = useAgentStore((s) => s.setCurrentSession);
 
   // ── File Attachment State ──
   type AttachedFile = {
@@ -1331,7 +1365,7 @@ function ChatInterface() {
   const ALLOWED_EXTENSIONS = ".py,.ts,.tsx,.js,.jsx,.md,.txt,.json,.yaml,.yml,.csv,.log,.toml,.cfg,.ini,.html,.css,.xml,.sql,.sh,.bash,.rs,.go,.java,.c,.cpp,.h,.hpp,.rb,.php,.env,.gitignore,.dockerignore,.conf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg";
 
   const handleFileUpload = async (files: FileList | null) => {
-    if (!files || !files.length || !effectiveSessionId) return;
+    if (!files || !files.length || !effectiveSessionId || isRunWorkspaceOnly) return;
     setIsUploading(true);
     setUploadError(null);
     try {
@@ -1445,7 +1479,7 @@ function ChatInterface() {
     document.addEventListener("paste", handlePaste);
     return () => document.removeEventListener("paste", handlePaste);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatRole, isVpObserverSession, effectiveSessionId]);
+  }, [chatRole, isVpObserverSession, effectiveSessionId, isRunWorkspaceOnly]);
 
   // ── Local file explorer attach bridge ──
   useEffect(() => {
@@ -1474,6 +1508,7 @@ function ChatInterface() {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     setRequestedSessionIdFromUrl((params.get("session_id") || "").trim());
+    setRequestedRunIdFromUrl((params.get("run_id") || "").trim());
     const role = (params.get("role") || "").trim().toLowerCase();
     const nextRole = role === "viewer" ? "viewer" : "writer";
     setChatRole(nextRole);
@@ -1506,9 +1541,40 @@ function ChatInterface() {
   }, [focusInput]);
 
   useEffect(() => {
-    if (!isVpObserverSession) return;
+    if (!isVpObserverSession && !isRunWorkspaceOnly) return;
     setChatRole("viewer");
-  }, [isVpObserverSession]);
+  }, [isVpObserverSession, isRunWorkspaceOnly]);
+
+  useEffect(() => {
+    if (!currentSession?.run_id || currentSession.workspace) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/runs/${encodeURIComponent(currentSession.run_id || "")}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const payload = await res.json();
+        const workspace = String(payload.workspace_dir || "").trim();
+        if (!workspace || cancelled) return;
+        const snapshot = useAgentStore.getState().currentSession;
+        if (!snapshot || snapshot.run_id !== currentSession.run_id || snapshot.workspace) return;
+        setCurrentSession({
+          ...snapshot,
+          workspace,
+          run_status: payload.status ?? snapshot.run_status,
+          run_kind: payload.run_kind ?? snapshot.run_kind,
+          trigger_source: payload.trigger_source ?? snapshot.trigger_source,
+          attempt_count: typeof payload.attempt_count === "number" ? payload.attempt_count : snapshot.attempt_count,
+        });
+      } catch (error) {
+        console.debug("run workspace metadata hydration skipped:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSession?.run_id, currentSession?.workspace, setCurrentSession]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1539,7 +1605,7 @@ function ChatInterface() {
       } else if (f.type === "image") {
         fileParts.push(
           `\n\n[Attached image: ${f.path}]\n` +
-          `This image file has been uploaded to the session workspace at "${f.path}" (relative to your workspace root). ` +
+          `This image file has been uploaded to the run workspace at "${f.path}" (relative to your workspace root). ` +
           `To analyze it, use the ZAI Vision MCP tool \`mcp__zai_vision__image_analysis\` with the full workspace path. ` +
           `Then proceed with the user's request using the analysis results.`
         );
@@ -1593,12 +1659,12 @@ function ChatInterface() {
   }, [messages, currentStreamingMessage]);
 
   useEffect(() => {
-    if (!effectiveSessionId) return;
+    if (!effectiveViewerKey) return;
     if (!lastSessionIdRef.current) {
-      lastSessionIdRef.current = effectiveSessionId;
+      lastSessionIdRef.current = effectiveViewerKey;
       return;
     }
-    if (lastSessionIdRef.current === effectiveSessionId) return;
+    if (lastSessionIdRef.current === effectiveViewerKey) return;
 
     const store = useAgentStore.getState();
     store.clearMessages();
@@ -1610,16 +1676,19 @@ function ChatInterface() {
     setHistoryHydrationNotice(null);
     setHydrationError(null);
     hydratedSessionIdsRef.current.clear();
-    lastSessionIdRef.current = effectiveSessionId;
-  }, [effectiveSessionId]);
+    lastSessionIdRef.current = effectiveViewerKey;
+  }, [effectiveViewerKey]);
 
   useEffect(() => {
     const sessionId = effectiveSessionId;
-    if (!sessionId) return;
+    const runId = effectiveRunId;
+    if (!sessionId && !runId) return;
     const vpWorkspaceRel = workspaceRelativePathFromAbsolute(currentSession?.workspace || "");
     const hydrationKey = isVpObserverSession
       ? `${sessionId}::${vpWorkspaceRel || "no_workspace"}`
-      : sessionId;
+      : runId
+        ? `${runId}::${sessionId || "no_session"}`
+        : sessionId;
     setHistoryHydrationNotice(null);
     if (hydratedSessionIdsRef.current.has(hydrationKey)) return;
 
@@ -1638,17 +1707,17 @@ function ChatInterface() {
         let hydratedMessageCount = 0;
         let hydratedLogCount = 0;
 
-        const useOpsTailHydration = sessionAttachMode === "tail" && !isVpObserverSession;
+        const useOpsTailHydration = sessionAttachMode === "tail" && !isVpObserverSession && !isRunWorkspaceOnly;
         const runLogUrl = useOpsTailHydration
           ? `${API_BASE}/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sessionId)}&limit=2000`
           : (isVpObserverSession && vpWorkspaceRel
             ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
-            : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
+            : buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "run.log"));
         let response = await fetch(runLogUrl, { cache: "no-store" });
         let didFallback = false;
         // Fallback: if ops tail returns auth error or non-200, try direct file endpoint
         if (!response.ok && useOpsTailHydration) {
-          const fallbackUrl = `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`;
+          const fallbackUrl = buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "run.log");
           const fallbackResp = await fetch(fallbackUrl, { cache: "no-store" });
           if (fallbackResp.ok) {
             response = fallbackResp;
@@ -1675,7 +1744,7 @@ function ChatInterface() {
             try {
               const traceUrl = isVpObserverSession && vpWorkspaceRel
                 ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/trace.json`)}`
-                : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/trace.json`;
+                : buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "trace.json");
               const traceResp = await fetch(traceUrl, { cache: "no-store" });
               if (traceResp.ok) {
                 const traceData = await traceResp.json() as TraceJsonData;
@@ -1753,7 +1822,7 @@ function ChatInterface() {
         } else if (response.status !== 404) {
           // Non-404 failures indicate a connectivity/proxy issue
           if (!cancelled) {
-            setHydrationError(`Failed to load session history (HTTP ${response.status}). The gateway API may not be reachable.`);
+            setHydrationError(`Failed to load run history (HTTP ${response.status}). The gateway API may not be reachable.`);
           }
         }
 
@@ -1803,7 +1872,7 @@ function ChatInterface() {
           const connStatus = useAgentStore.getState().connectionStatus;
           const isActive = connStatus === "processing" || connStatus === "connected";
           if (!isActive) {
-            setHistoryHydrationNotice(`No run history found for ${sessionId}`);
+            setHistoryHydrationNotice(`No run history found for ${runId || sessionId}`);
             hydratedSessionIdsRef.current.add(hydrationKey);
           }
           // For active sessions, allow retry on next render cycle
@@ -1823,7 +1892,7 @@ function ChatInterface() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveSessionId, isVpObserverSession, currentSession?.workspace, sessionAttachMode]);
+  }, [effectiveSessionId, effectiveRunId, isVpObserverSession, isRunWorkspaceOnly, currentSession, currentSession?.workspace, sessionAttachMode]);
 
   return (
     <div className="flex flex-col h-full">
@@ -1872,6 +1941,11 @@ function ChatInterface() {
             >
               Hide Tag
             </button>
+          </div>
+        )}
+        {isRunWorkspaceOnly && effectiveRunId && (
+          <div className="mb-3 rounded border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-200">
+            Run Workspace Viewer: <span className="font-mono">{effectiveRunId}</span> · live messaging is disabled
           </div>
         )}
         {messages.length === 0 && !currentStreamingMessage ? (
@@ -2125,17 +2199,17 @@ function WorkProductViewer() {
 
   // Fetch key files (transcript, runs, report) from actual FS
   useEffect(() => {
-    if (!currentSession?.session_id) return;
+    if (!currentSession?.session_id && !currentSession?.run_id) return;
 
     const fetchKeyFiles = async () => {
       try {
         // Fetch valid files from ROOT
-        const resRoot = await fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=.`);
+        const resRoot = await fetch(buildDurableFileListUrl(currentSession, "."));
         const dataRoot = await resRoot.json();
         const filesRoot = dataRoot.files || [];
 
         // Fetch valid files from WORK_PRODUCTS
-        const resWp = await fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=work_products`);
+        const resWp = await fetch(buildDurableFileListUrl(currentSession, "work_products"));
         const dataWp = await resWp.json();
         const filesWp = dataWp.files || [];
 
@@ -2173,7 +2247,7 @@ function WorkProductViewer() {
     const interval = setInterval(fetchKeyFiles, 10000); // Poll every 10 seconds
 
     return () => clearInterval(interval);
-  }, [currentSession?.session_id, workProducts.length]);
+  }, [currentSession, currentSession?.session_id, currentSession?.run_id, currentSession?.is_live_session, workProducts.length]);
 
   return (
     <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
@@ -2317,6 +2391,7 @@ export default function HomePage() {
     // attach to that session in this tab before opening the socket.
     const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     const requestedSessionId = (params?.get("session_id") || "").trim();
+    const requestedRunId = (params?.get("run_id") || "").trim();
     const requestedAttach = (params?.get("attach") || "").trim().toLowerCase();
     const requestedNewSession = (params?.get("new_session") || "").trim() === "1";
 
@@ -2330,6 +2405,7 @@ export default function HomePage() {
         const url = new URL(window.location.href);
         url.searchParams.delete("new_session");
         url.searchParams.delete("session_id");
+        url.searchParams.delete("run_id");
         url.searchParams.delete("attach");
         window.history.replaceState({}, "", url.toString());
       }
@@ -2346,6 +2422,18 @@ export default function HomePage() {
         });
       }
       ws.attachToSession(requestedSessionId);
+    } else if (requestedRunId) {
+      const store = useAgentStore.getState();
+      store.setSessionAttachMode("default");
+      store.setCurrentSession({
+        session_id: "",
+        run_id: requestedRunId,
+        is_live_session: false,
+        workspace: "",
+        user_id: "observer",
+        session_url: undefined,
+        logfire_enabled: false,
+      });
     } else {
       ws.connect();
     }

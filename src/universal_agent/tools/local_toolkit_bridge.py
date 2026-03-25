@@ -96,8 +96,9 @@ async def list_directory_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 @tool(
     name="inspect_session_workspace",
     description=(
-        "Read-only snapshot of session workspace diagnostics: run.log/activity_journal tails, "
-        "trace.json, heartbeat_state.json, transcript.md, and recent artifacts."
+        "Read-only snapshot of run workspace diagnostics: run.log/activity_journal tails, "
+        "trace.json, heartbeat_state.json, transcript.md, and recent artifacts. "
+        "Tool name remains legacy for compatibility."
     ),
     input_schema={
         "session_id": str,
@@ -122,8 +123,8 @@ async def inspect_session_workspace_wrapper(args: dict[str, Any]) -> dict[str, A
 @tool(
     name="list_agent_sessions",
     description=(
-        "List available agent session workspaces with metadata. "
-        "Use to discover past sessions for debugging, cross-session file access, or review."
+        "List available agent run workspaces with metadata. "
+        "Tool name remains legacy for compatibility with existing callers."
     ),
     input_schema={
         "limit": int,
@@ -180,7 +181,7 @@ async def append_to_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     name="write_text_file",
-    description="Write a UTF-8 text file under CURRENT_SESSION_WORKSPACE or UA_ARTIFACTS_DIR (in-process).",
+    description="Write a UTF-8 text file under CURRENT_RUN_WORKSPACE (CURRENT_SESSION_WORKSPACE is the legacy alias) or UA_ARTIFACTS_DIR (in-process).",
     input_schema={"path": str, "content": str, "overwrite": bool},
 )
 async def write_text_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:

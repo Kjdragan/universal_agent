@@ -213,7 +213,7 @@ def _tool_circuit_breaker_precheck(tool_name: str, tool_input: dict[str, Any] | 
     Best-effort tool-side guardrail to prevent runaway loops from burning tool budget.
 
     This is intentionally conservative:
-    - Only enforces limits when a session workspace can be resolved.
+    - Only enforces limits when a run workspace can be resolved.
     - Uses session_policy.json limits when present.
     - Otherwise does nothing (so we don't unexpectedly break ad-hoc usage).
     """
@@ -285,14 +285,19 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def _is_valid_session_workspace(path: str) -> bool:
-    """Check if a path is a proper session workspace (under AGENT_RUN_WORKSPACES/session_*)."""
+    """Check if a path is a proper durable workspace under AGENT_RUN_WORKSPACES."""
     try:
         p = Path(path).resolve()
-        # Quick check: is this a session_* directory?
-        if p.name.startswith("session_"):
+        # Quick check: is this a known durable workspace prefix?
+        if p.name.startswith("session_") or p.name.startswith("run_"):
             return True
-        # Also accept if it has the hallmarks of a session workspace
-        if (p / "session_policy.json").exists() and (p / "search_results").exists():
+        # Also accept if it has the hallmarks of a durable workspace.
+        if (
+            (p / "session_policy.json").exists()
+            or (p / "run_manifest.json").exists()
+            or (p / "session_checkpoint.json").exists()
+            or (p / "run_checkpoint.json").exists()
+        ):
             return True
         return False
     except Exception:
@@ -303,6 +308,7 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
     candidates = []
     if preferred:
         candidates.append(preferred)
+    workspaces_root = _resolve_workspaces_root()
 
     # Priority 1½: ContextVar (session-scoped, safe under concurrency)
     ctx_workspace = _ctx_get_workspace()
@@ -310,21 +316,27 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
         candidates.append(ctx_workspace)
 
     # Priority 2: Marker File (Dynamic, updated by harness)
-    marker_path = os.getenv("CURRENT_SESSION_WORKSPACE_FILE") or os.path.join(
-        PROJECT_ROOT, "AGENT_RUN_WORKSPACES", ".current_session_workspace"
+    marker_path = (
+        os.getenv("CURRENT_RUN_WORKSPACE_FILE")
+        or os.getenv("CURRENT_SESSION_WORKSPACE_FILE")
+        or str(workspaces_root / ".current_run_workspace")
     )
-    if os.path.exists(marker_path):
+    legacy_marker_path = str(workspaces_root / ".current_session_workspace")
+    for candidate_marker in (marker_path, legacy_marker_path):
+        if not candidate_marker or not os.path.exists(candidate_marker):
+            continue
         try:
-            candidates.append(Path(marker_path).read_text().strip())
+            candidates.append(Path(candidate_marker).read_text().strip())
         except Exception:
             pass
 
     # Priority 3: Env Var (Static, often stale in long-running processes)
-    env_workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
-    if env_workspace:
-        candidates.append(env_workspace)
+    for env_name in ("CURRENT_RUN_WORKSPACE", "CURRENT_SESSION_WORKSPACE"):
+        env_workspace = os.getenv(env_name)
+        if env_workspace:
+            candidates.append(env_workspace)
 
-    # First pass: prefer candidates that are proper session workspaces
+    # First pass: prefer candidates that are proper run workspaces
     for candidate in candidates:
         if not candidate:
             continue
@@ -332,17 +344,20 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
         if os.path.exists(resolved) and _is_valid_session_workspace(resolved):
             return resolved
 
-    # Second pass: fall back to latest session workspace by mtime
-    workspaces_root = Path(PROJECT_ROOT) / "AGENT_RUN_WORKSPACES"
+    # Second pass: fall back to latest durable workspace by mtime
     if workspaces_root.exists():
         session_dirs = sorted(
-            (p for p in workspaces_root.iterdir() if p.is_dir() and p.name.startswith("session_")),
+            (
+                p
+                for p in workspaces_root.iterdir()
+                if p.is_dir() and (p.name.startswith("run_") or p.name.startswith("session_"))
+            ),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         if session_dirs:
             latest = str(session_dirs[0].resolve())
-            mcp_log(f"[workspace] Fell back to latest session workspace: {latest}", level="INFO")
+            mcp_log(f"[workspace] Fell back to latest durable workspace: {latest}", level="INFO")
             return latest
 
     # Last resort: accept any existing candidate (may be stale)
@@ -1013,7 +1028,7 @@ async def draft_report_parallel(retry_id: str = "", task_name: str = "default", 
 
     workspace = workspace or _resolve_workspace()
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias). Cannot determine run workspace."
         
     sys.stderr.write(f"[Local Toolkit] Starting parallel drafter in-process for: {workspace} (Task: {task_name})\n")
     
@@ -1055,7 +1070,7 @@ def compile_report(theme: str = "modern", custom_css: str = None, workspace: str
     # Locate workspace - use provided or resolve
     workspace = workspace or _resolve_workspace()
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias). Cannot determine run workspace."
         
     cmd = [sys.executable, script_path, "--work-dir", workspace, "--theme", theme]
     if custom_css:
@@ -1106,7 +1121,7 @@ async def cleanup_report(workspace: str | None = None) -> str:
 
     workspace = workspace or _resolve_workspace()
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias)."
 
     sys.stderr.write(f"[Local Toolkit] Running cleanup in-process for: {workspace}\n")
     
@@ -1137,7 +1152,7 @@ async def generate_outline(topic: str, task_name: str = "default", workspace: st
         
     workspace = workspace or _resolve_workspace()
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias)."
 
     sys.stderr.write(f"[Local Toolkit] Generating outline for task '{task_name}' in: {workspace}\n")
     
@@ -1205,7 +1220,7 @@ def write_text_file(path: str, content: str, overwrite: bool = True) -> str:
     Write a UTF-8 text file.
 
     Security: only allows writing under:
-    - CURRENT_SESSION_WORKSPACE (ephemeral scratch)
+    - CURRENT_RUN_WORKSPACE (ephemeral scratch; CURRENT_SESSION_WORKSPACE is the legacy alias)
     - UA_ARTIFACTS_DIR (durable artifacts)
     """
     try:
@@ -1224,7 +1239,7 @@ def write_text_file(path: str, content: str, overwrite: bool = True) -> str:
 
         if not allowed:
             return (
-                "Error: write denied. Path must be within CURRENT_SESSION_WORKSPACE "
+                "Error: write denied. Path must be within CURRENT_RUN_WORKSPACE "
                 f"or UA_ARTIFACTS_DIR. Got: {abs_path}"
             )
 
@@ -1419,7 +1434,7 @@ def inspect_session_workspace(
     recent_file_limit: int = 25,
 ) -> str:
     """
-    Read-only snapshot of a session workspace for debugging and self-review.
+    Read-only snapshot of a run workspace for debugging and self-review.
 
     By default this inspects the active workspace and includes transcript.md,
     run.log/activity logs tail, trace.json, heartbeat state, and recent artifacts.
@@ -1493,7 +1508,7 @@ def list_agent_sessions(
     include_stats: bool = True,
 ) -> str:
     """
-    List available agent session workspaces with metadata.
+    List available agent run workspaces with metadata.
 
     Use this to discover past or active sessions for debugging, review,
     or cross-session file access.  Combine with inspect_session_workspace
@@ -2515,11 +2530,11 @@ async def _crawl_parallel_legacy(urls: list[str], session_dir: str) -> str:
     """
     High-speed parallel web scraping using crawl4ai.
     Scrapes multiple URLs concurrently, extracts clean markdown (removing ads/nav),
-    and saves results to 'search_results' directory in the session workspace.
+    and saves results to 'search_results' directory in the run workspace.
 
     Args:
         urls: List of URLs to scrape (no limit - crawl4ai handles parallel batches automatically)
-        session_dir: Absolute path to the current session workspace (e.g. AGENT_RUN_WORKSPACES/session_...)
+        session_dir: Absolute path to the current run workspace (e.g. AGENT_RUN_WORKSPACES/run_...)
 
     Returns:
         JSON summary of results (success/fail counts, saved file paths).
@@ -2543,7 +2558,7 @@ async def finalize_research(
     4. Generates scoped 'research_overview.md' in 'tasks/{task_name}/'.
 
     Args:
-        session_dir: Path to the current session workspace.
+        session_dir: Path to the current run workspace.
         task_name: Name of the current task/iteration (e.g., "01_venezuela").
                    Used to isolate context in 'tasks/{task_name}/'.
         retry_id: Optional identifier to bypass idempotency checks (e.g., timestamp).
@@ -2561,8 +2576,8 @@ async def finalize_research(
                 return json.dumps(
                     {
                         "error": (
-                            "Session scope violation: finalize_research must run against the active "
-                            f"CURRENT_SESSION_WORKSPACE. Got {session_path}, expected {active_workspace_path}."
+                            "Run workspace scope violation: finalize_research must run against the active "
+                            f"CURRENT_RUN_WORKSPACE. Got {session_path}, expected {active_workspace_path}."
                         )
                     }
                 )
@@ -2572,7 +2587,7 @@ async def finalize_research(
             return json.dumps(
                 {
                     "error": (
-                        "Search results directory not found in session workspace. "
+                        "Search results directory not found in run workspace. "
                         f"Expected: {search_results_dir}"
                     )
                 }
@@ -3247,7 +3262,7 @@ async def build_evidence_ledger(
     Use this AFTER finalize_research and BEFORE report synthesis for large corpora.
 
     Args:
-        session_dir: Path to the current session workspace
+        session_dir: Path to the current run workspace
         topic: Research topic (for context and themes)
         task_name: Task scope (should match finalize_research task_name)
 
@@ -3525,7 +3540,7 @@ def generate_image(
         client = genai.Client(api_key=api_key)
 
         # Resolve happy-path output roots:
-        # 1) session workspace work_products/media (primary)
+        # 1) run workspace work_products/media (primary)
         # 2) persistent artifacts/media (mirror)
         workspace = _resolve_workspace()
         if workspace:
@@ -4265,7 +4280,7 @@ async def _run_research_pipeline_legacy(
     """
     workspace = _resolve_workspace(preferred=workspace_dir)
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias)."
 
     mcp_log(f"🚀 [Pipeline] Starting post-search research pipeline for: '{query}'", level="INFO", prefix="")
     
@@ -4367,7 +4382,7 @@ async def _run_research_phase_legacy(
     """
     workspace = _resolve_workspace(preferred=workspace_dir)
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias)."
 
     mcp_log(f"🚀 [Research Phase] Starting crawling & refinement for: '{query}'", level="INFO", prefix="")
     
@@ -4464,7 +4479,7 @@ async def _run_report_generation_legacy(
     """
     workspace = _resolve_workspace(preferred=workspace_dir)
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set."
+        return "Error: CURRENT_RUN_WORKSPACE not set (CURRENT_SESSION_WORKSPACE is the legacy alias)."
 
     mcp_log(f"🚀 [Report Gen] Starting report generation for: '{query}'", level="INFO", prefix="")
     

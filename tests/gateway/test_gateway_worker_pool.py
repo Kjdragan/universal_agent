@@ -10,8 +10,14 @@ Tests cover:
 
 import pytest
 import asyncio
+import sqlite3
+import json
+from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_run, list_run_attempts
 
 try:
     from universal_agent.durable.worker_pool import (
@@ -305,7 +311,14 @@ class TestQueueRun:
         """Test that queue_run calls upsert_run with correct parameters."""
         mock_conn = MagicMock()
         
-        with patch('universal_agent.durable.state.upsert_run') as mock_upsert:
+        with (
+            patch('universal_agent.durable.state.upsert_run') as mock_upsert,
+            patch('universal_agent.durable.state.create_run_attempt') as mock_create_attempt,
+            patch('universal_agent.durable.worker_pool.get_run_attempt') as mock_get_run_attempt,
+            patch('universal_agent.durable.worker_pool.ensure_run_workspace_scaffold') as mock_scaffold,
+        ):
+            mock_create_attempt.return_value = "job_123:attempt:1"
+            mock_get_run_attempt.return_value = {"attempt_number": 1}
             queue_run(
                 mock_conn,
                 run_id="job_123",
@@ -315,8 +328,69 @@ class TestQueueRun:
             )
             
             mock_upsert.assert_called_once()
+            mock_create_attempt.assert_called_once_with(
+                mock_conn,
+                run_id="job_123",
+                status="queued",
+                retry_reason="initial_queue",
+            )
             call_kwargs = mock_upsert.call_args
             
             assert call_kwargs[1]["run_id"] == "job_123"
             assert call_kwargs[1]["status"] == "queued"
             assert call_kwargs[1]["last_job_prompt"] == "Test prompt"
+            assert call_kwargs[1]["workspace_dir"] == "/tmp/workspace"
+            assert call_kwargs[1]["run_kind"] == "worker_pool"
+            assert call_kwargs[1]["trigger_source"] == "worker_pool_queue"
+            mock_scaffold.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_worker_process_loop_updates_attempt_state_and_workspace(self):
+        """Queued worker-pool runs should execute against a durable attempt."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON;")
+        ensure_schema(conn)
+
+        queue_run(
+            conn,
+            run_id="job_456",
+            prompt="Process this job",
+            workspace_dir="/tmp/worker-pool-run",
+        )
+
+        config = WorkerConfig(
+            worker_id="worker_test_attempts",
+            poll_interval_seconds=0,
+            heartbeat_interval_seconds=60,
+        )
+        worker_holder: dict[str, Worker] = {}
+        handler_calls: list[tuple[str, str]] = []
+
+        async def run_handler(run_id: str, workspace_dir: str) -> bool:
+            handler_calls.append((run_id, workspace_dir))
+            worker_holder["worker"]._shutdown_event.set()
+            return True
+
+        worker = Worker(config, conn, run_handler)
+        worker_holder["worker"] = worker
+
+        await asyncio.wait_for(worker._process_loop(), timeout=1)
+
+        run_row = get_run(conn, "job_456")
+        assert run_row is not None
+        assert run_row["status"] == "completed"
+        assert run_row["workspace_dir"] == "/tmp/worker-pool-run"
+        assert handler_calls == [("job_456", "/tmp/worker-pool-run")]
+
+        attempts = list_run_attempts(conn, "job_456")
+        assert len(attempts) == 1
+        assert attempts[0]["attempt_number"] == 1
+        assert attempts[0]["status"] == "completed"
+        assert attempts[0]["retry_reason"] == "initial_queue"
+        assert run_row["latest_attempt_id"] == attempts[0]["attempt_id"]
+        assert run_row["canonical_attempt_id"] == attempts[0]["attempt_id"]
+        attempt_meta = json.loads(
+            Path("/tmp/worker-pool-run/attempts/001/attempt_meta.json").read_text(encoding="utf-8")
+        )
+        assert attempt_meta["status"] == "completed"

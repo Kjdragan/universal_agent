@@ -622,7 +622,7 @@ async def malformed_tool_guardrail_hook(
                     f"⚠️ BLOCKED: You tried to write to a relative path: '{file_path}'.\n"
                     "Security rules require absolute paths to ensure files are saved in the correct workspace.\n"
                     "Please construct the path dynamically:\n"
-                    "path = os.path.join(os.environ['CURRENT_SESSION_WORKSPACE'], 'work_products', 'filename')"
+                    "path = os.path.join(os.environ['CURRENT_RUN_WORKSPACE'], 'work_products', 'filename')"
                 ),
                 "decision": "block",
                 "hookSpecificOutput": {
@@ -1280,9 +1280,9 @@ class UniversalAgent:
             await self._event_queue.put(event)
 
     def _create_workspace(self) -> str:
-        """Create a new session workspace directory."""
+        """Create a new durable run workspace directory."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", f"session_{timestamp}")
+        workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", f"run_{timestamp}")
         os.makedirs(workspace_dir, exist_ok=True)
         return workspace_dir
 
@@ -1620,14 +1620,14 @@ class UniversalAgent:
             "**Your Value**: You obtain the user's intent, route it to the right expert, and synthesize the result.\n\n"
             "## ⚡ AUTONOMOUS BEHAVIOR\n"
             "- **Proactive**: If a task requires multiple steps (search -> summarize -> email), plan and execute the chain.\n"
-            "- **Filesystem**: `CURRENT_SESSION_WORKSPACE` is your scratchpad. `UA_ARTIFACTS_DIR` is for permanent output.\n"
+            "- **Filesystem**: `CURRENT_RUN_WORKSPACE` is your scratchpad (`CURRENT_SESSION_WORKSPACE` remains as a legacy alias). `UA_ARTIFACTS_DIR` is for permanent output.\n"
             "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
             "## 📧 EMAIL & COMMUNICATION\n"
             "- **Simone's own email**: Use the `agentmail` Skill (Skill invocation, NOT curl/ops-API). This is Simone's default for sending reports, descriptions, replies.\n"
             "- **Kevin's Gmail**: Use the `gmail` Skill (gws CLI) ONLY when explicitly acting as Kevin.\n"
             "- **Deprecated**: Composio Gmail tools. Do NOT use.\n"
             "- Keep email bodies concise.\n\n"
-            f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
+            f"Context:\nCURRENT_RUN_WORKSPACE: {workspace_path}\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
 
         tool_knowledge = get_tool_knowledge_block()
@@ -1661,7 +1661,7 @@ class UniversalAgent:
         temporal_line = self._get_temporal_context_line()
         prompt = (
             f"{temporal_line}\n"
-            f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
+            f"CURRENT_RUN_WORKSPACE: {workspace_path}\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
             "You are a **Research Specialist** sub-agent.\n"
             "**Goal:** Execute the COMPLETE research pipeline from web search to corpus finalization.\n"
             "**You do NOT write reports.** You gather and organize data for the Writer agent.\n\n"
@@ -1731,7 +1731,7 @@ class UniversalAgent:
         """Build the report-writer sub-agent prompt.
 
         Args:
-            workspace_path: Path to the session workspace
+            workspace_path: Path to the run workspace
             cached_corpus: Optional pre-loaded corpus text from checkpoint cache
         """
         temporal_line = self._get_temporal_context_line()

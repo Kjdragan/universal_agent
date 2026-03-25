@@ -23,6 +23,8 @@ from universal_agent.api.events import (
     create_status_event,
 )
 from universal_agent.identity import resolve_user_id
+from universal_agent.run_catalog import RunCatalogService
+from universal_agent.workspace_catalog import list_workspace_summaries
 
 
 class AgentBridge:
@@ -60,7 +62,7 @@ class AgentBridge:
             self._session_roots.add(workspace_path.parent)
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
+            session_id = f"run_{timestamp}_{uuid.uuid4().hex[:8]}"
             workspace_path = self.workspace_base / session_id
             workspace_path.mkdir(parents=True, exist_ok=True)
 
@@ -170,42 +172,23 @@ class AgentBridge:
     def list_sessions(self) -> list[dict]:
         """List all available sessions."""
         sessions: list[dict] = []
-
-        def _session_entry(session_dir: Path) -> Optional[dict]:
-            if not session_dir.exists() or not session_dir.is_dir():
-                return None
-            trace_file = session_dir / "trace.json"
-            status = "complete" if trace_file.exists() else "incomplete"
-            files = self._get_session_files(session_dir)
-            return {
-                "session_id": session_dir.name,
-                "timestamp": session_dir.stat().st_mtime,
-                "workspace_path": str(session_dir),
-                "status": status,
-                "files": files,
-            }
-
         seen: set[str] = set()
-
-        for session_id, session_dir in self._session_registry.items():
-            entry = _session_entry(session_dir)
-            if entry:
-                sessions.append(entry)
-                seen.add(entry["session_id"])
 
         for root in sorted(self._session_roots):
             if not root.exists():
                 continue
-            for session_dir in sorted(root.iterdir(), reverse=True):
-                if (
-                    session_dir.is_dir()
-                    and session_dir.name.startswith("session_")
-                    and session_dir.name not in seen
-                ):
-                    entry = _session_entry(session_dir)
-                    if entry:
-                        sessions.append(entry)
-                        seen.add(entry["session_id"])
+            for entry in list_workspace_summaries(root, limit=100, run_catalog=RunCatalogService()):
+                session_id = str(entry.get("session_id") or "")
+                if not session_id or session_id in seen:
+                    continue
+                session_dir = Path(str(entry["workspace_path"]))
+                entry["files"] = self._get_session_files(session_dir)
+                registry_path = self._session_registry.get(session_id)
+                if registry_path is not None:
+                    entry.setdefault("metadata", {})
+                    entry["metadata"]["workspace_registered"] = True
+                sessions.append(entry)
+                seen.add(session_id)
 
         sessions.sort(key=lambda row: row.get("timestamp", 0), reverse=True)
         return sessions[:50]
@@ -254,6 +237,8 @@ class AgentBridge:
     def get_session_file(self, session_id: str, file_path: str) -> Optional[tuple[str, str, bytes]]:
         """Get file content from session. Returns (content_type, filename, content)."""
         session_dir = self.workspace_base / session_id
+        if not session_dir.exists():
+            session_dir = self._session_registry.get(session_id, session_dir)
         if not session_dir.exists():
             return None
 

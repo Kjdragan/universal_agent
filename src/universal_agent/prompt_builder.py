@@ -137,7 +137,7 @@ def _load_user_profile(max_chars: int = 4000) -> str:
 
 def _load_recovery_handoff(workspace_path: str, *, max_chars: int = 4000) -> str:
     """
-    Load a recovery handoff packet if present in the session workspace.
+    Load a recovery handoff packet if present in the run workspace.
     Keep it bounded so it doesn't crowd out the rest of the system prompt.
     """
     try:
@@ -187,7 +187,7 @@ def build_system_prompt(
     Parameters
     ----------
     workspace_path : str
-        Absolute path to the current session workspace.
+        Absolute path to the current run workspace.
     soul_context : str
         Contents of SOUL.md (personality / identity).
     memory_context : str
@@ -354,7 +354,7 @@ def build_system_prompt(
         "- `mcp__zai_vision__video_analysis` — Analyze video content\n\n"
         "**When to use:**\n"
         "- When the user attaches an image file to chat, the file path will appear in the message (e.g., `uploads/screenshot.png`).\n"
-        "- Pass the **absolute file path** to the appropriate ZAI vision tool. The path is relative to `CURRENT_SESSION_WORKSPACE`.\n"
+        "- Pass the **absolute file path** to the appropriate ZAI vision tool. The path is relative to `CURRENT_RUN_WORKSPACE` (`CURRENT_SESSION_WORKSPACE` is a legacy alias).\n"
         "- For screenshots with text/lists/tables: prefer `extract_text_from_screenshot`.\n"
         "- For error screenshots: prefer `diagnose_error_screenshot`.\n"
         "- For general images: use `image_analysis`.\n\n"
@@ -428,8 +428,8 @@ def build_system_prompt(
 
     # ── 12. ARTIFACT OUTPUT POLICY ────────────────────────────────────
     sections.append(
-        "## 📦 ARTIFACTS vs SESSION SCRATCH (OUTPUT POLICY)\n"
-        "- **Session workspace** is ephemeral scratch: `CURRENT_SESSION_WORKSPACE`\n"
+        "## 📦 ARTIFACTS vs RUN WORKSPACE SCRATCH (OUTPUT POLICY)\n"
+        "- **Run workspace** is ephemeral scratch: `CURRENT_RUN_WORKSPACE` (`CURRENT_SESSION_WORKSPACE` is a legacy alias)\n"
         "  Use it for caches, downloads, intermediate pipeline steps.\n"
         "- **Durable deliverables** are artifacts: `UA_ARTIFACTS_DIR`\n"
         "  Use it for docs/code/diagrams you may want to revisit later.\n"
@@ -595,7 +595,7 @@ def build_system_prompt(
 
     # ── 18. WORKSPACE CONTEXT ─────────────────────────────────────────
     sections.append(
-        f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}"
+        f"Context:\nCURRENT_RUN_WORKSPACE: {workspace_path}\nCURRENT_SESSION_WORKSPACE: {workspace_path}"
     )
 
     return "\n\n".join(sections)
@@ -750,7 +750,7 @@ def build_vp_system_prompt(
 
     # ── 12. WORKSPACE CONTEXT ─────────────────────────────────────────
     sections.append(
-        f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}"
+        f"Context:\nCURRENT_RUN_WORKSPACE: {workspace_path}\nCURRENT_SESSION_WORKSPACE: {workspace_path}"
     )
 
     return "\n\n".join(sections)

@@ -180,7 +180,7 @@ Non-OK heartbeats are treated as operational investigations:
 2. Gateway classifies findings (known-rule vs unknown, severity)
 3. Gateway adds `autonomous_heartbeat_completed` notification with `requires_action=true`
 4. Simone is automatically dispatched for investigation
-5. Simone writes investigation summary back into hook session workspace
+5. Simone writes investigation summary back into the hook run workspace
 6. If operator review needed, Kevin gets dashboard notification + AgentMail
 
 > [!NOTE]

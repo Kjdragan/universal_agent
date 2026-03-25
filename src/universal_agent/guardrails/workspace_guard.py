@@ -1,11 +1,11 @@
 """
 Workspace Path Guardrail
 
-Ensures all file operations are scoped to the session workspace.
+Ensures all file operations are scoped to the run workspace.
 Prevents cross-workspace writes that caused Web UI divergence.
 
 This guardrail is critical for the unified gateway architecture:
-- All clients (CLI, Web UI, Harness) must write to the same workspace
+- All clients (CLI, Web UI, Harness) must write to the same run workspace
 - Prevents accidental writes to repo root or other locations
 - Enforces consistent output paths across all entry points
 """
@@ -50,7 +50,7 @@ def enforce_workspace_path(
     
     Args:
         file_path: The path to validate
-        workspace_root: The session workspace root
+        workspace_root: The run workspace root
         allow_reads_outside: If True, allow reads from outside (e.g., /tmp)
         operation: Description of operation (for error messages)
     
@@ -89,7 +89,7 @@ def enforce_workspace_path(
         raise WorkspaceGuardError(
             f"Path '{file_path}' resolves to '{resolved}' which is outside "
             f"workspace '{root}'. All {operation} operations must be inside "
-            "the session workspace."
+            "the run workspace."
         )
 
 
@@ -106,7 +106,7 @@ def workspace_scoped_path(
     
     Args:
         file_path: The path to scope
-        workspace_root: The session workspace root
+        workspace_root: The run workspace root
         create_parents: If True, create parent directories
     
     Returns:
@@ -133,7 +133,7 @@ def validate_tool_paths(
     
     Args:
         tool_input: The tool's input dictionary
-        workspace_root: The session workspace root
+        workspace_root: The run workspace root
         path_keys: Keys to check for file paths (default: common path keys)
     
     Returns:
@@ -172,7 +172,7 @@ def validate_tool_paths(
                 # Re-raise with more context
                 raise WorkspaceGuardError(
                     f"Tool input '{key}' contains path '{original}' which "
-                    f"is outside the session workspace '{workspace_root}'"
+                    f"is outside the run workspace '{workspace_root}'"
                 )
     
     return modified
@@ -187,7 +187,7 @@ def is_inside_workspace(
     
     Args:
         file_path: The path to check
-        workspace_root: The session workspace root
+        workspace_root: The run workspace root
     
     Returns:
         True if path is inside workspace, False otherwise
@@ -208,7 +208,7 @@ def get_workspace_relative_path(
     
     Args:
         file_path: The absolute path
-        workspace_root: The session workspace root
+        workspace_root: The run workspace root
     
     Returns:
         Relative path from workspace root, or None if outside workspace

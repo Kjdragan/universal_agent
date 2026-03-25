@@ -10,6 +10,10 @@ from typing import Any, Dict, Optional
 
 
 _SAFE_SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+CURRENT_WORKSPACE_MARKER_FILENAMES = (
+    ".current_run_workspace",
+    ".current_session_workspace",
+)
 
 
 def safe_slug(text: str, *, fallback: str = "run", max_len: int = 80) -> str:
@@ -22,33 +26,45 @@ def safe_slug(text: str, *, fallback: str = "run", max_len: int = 80) -> str:
     return s[:max_len]
 
 
-def resolve_current_session_workspace(repo_root: Optional[str] = None) -> Optional[str]:
+def resolve_current_run_workspace(repo_root: Optional[str] = None) -> Optional[str]:
     """
-    Best-effort resolution for the *current* session workspace directory.
+    Best-effort resolution for the *current* durable workspace directory.
 
     Priority:
-    1. CURRENT_SESSION_WORKSPACE (set by harness/gateway)
-    2. CURRENT_SESSION_WORKSPACE_FILE (or default marker under AGENT_RUN_WORKSPACES)
+    1. CURRENT_RUN_WORKSPACE / CURRENT_SESSION_WORKSPACE
+    2. CURRENT_RUN_WORKSPACE_FILE / CURRENT_SESSION_WORKSPACE_FILE
+    3. default marker under AGENT_RUN_WORKSPACES
     """
     candidates: list[str] = []
 
-    ws = (os.getenv("CURRENT_SESSION_WORKSPACE") or "").strip()
-    if ws:
-        candidates.append(ws)
+    for env_name in ("CURRENT_RUN_WORKSPACE", "CURRENT_SESSION_WORKSPACE"):
+        ws = (os.getenv(env_name) or "").strip()
+        if ws:
+            candidates.append(ws)
 
-    marker = (os.getenv("CURRENT_SESSION_WORKSPACE_FILE") or "").strip()
-    if not marker:
-        # Default marker path used by the local toolkit server.
+    marker_candidates: list[str] = []
+    for env_name in ("CURRENT_RUN_WORKSPACE_FILE", "CURRENT_SESSION_WORKSPACE_FILE"):
+        marker = (os.getenv(env_name) or "").strip()
+        if marker:
+            marker_candidates.append(marker)
+    if not marker_candidates:
+        # Default marker paths used by the local toolkit server during migration.
         base = Path(repo_root or Path.cwd()).resolve()
-        marker = str((base / "AGENT_RUN_WORKSPACES" / ".current_session_workspace").resolve())
+        marker_candidates.extend(
+            [
+                str((base / "AGENT_RUN_WORKSPACES" / marker_name).resolve())
+                for marker_name in CURRENT_WORKSPACE_MARKER_FILENAMES
+            ]
+        )
 
-    if marker and os.path.exists(marker):
-        try:
-            p = Path(marker).read_text(encoding="utf-8").strip()
-            if p:
-                candidates.append(p)
-        except Exception:
-            pass
+    for marker in marker_candidates:
+        if marker and os.path.exists(marker):
+            try:
+                p = Path(marker).read_text(encoding="utf-8").strip()
+                if p:
+                    candidates.append(p)
+            except Exception:
+                pass
 
     for c in candidates:
         try:
@@ -63,6 +79,11 @@ def resolve_current_session_workspace(repo_root: Optional[str] = None) -> Option
             continue
 
     return None
+
+
+def resolve_current_session_workspace(repo_root: Optional[str] = None) -> Optional[str]:
+    """Backward-compatible alias for callers still using the legacy helper name."""
+    return resolve_current_run_workspace(repo_root=repo_root)
 
 
 @dataclass(frozen=True)
@@ -81,7 +102,7 @@ def build_interim_work_product_paths(
     run_slug: str,
 ) -> InterimWorkProduct:
     """
-    Returns canonical paths for interim work products under a session workspace.
+    Returns canonical paths for interim work products under a run workspace.
 
     Layout:
       {workspace}/work_products/social/{source}/{domain}/{run_slug}__{YYYYMMDD_HHMMSS}/
@@ -105,4 +126,3 @@ def build_interim_work_product_paths(
 def write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-

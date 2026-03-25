@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from universal_agent.session_checkpoint import SessionCheckpointGenerator
@@ -36,3 +37,39 @@ def test_session_checkpoint_persists_goal_satisfaction_and_research_adherence(tm
     assert "### Goal Satisfaction" in markdown
     assert "Research pipeline adherence: passed" in markdown
     assert "run_research_phase called: true" in markdown
+
+
+def test_session_checkpoint_writes_run_and_legacy_checkpoint_files(tmp_path):
+    generator = SessionCheckpointGenerator(tmp_path)
+    checkpoint = generator.generate_from_result(
+        session_id="run_test",
+        original_request="Do the thing.",
+        result=SimpleNamespace(tool_calls=1, execution_time_seconds=1.0),
+    )
+
+    saved_path = generator.save(checkpoint)
+
+    assert saved_path == tmp_path / "run_checkpoint.json"
+    assert (tmp_path / "run_checkpoint.json").exists()
+    assert (tmp_path / "run_checkpoint.md").exists()
+    assert (tmp_path / "session_checkpoint.json").exists()
+    assert (tmp_path / "session_checkpoint.md").exists()
+
+
+def test_session_checkpoint_load_latest_reads_legacy_if_run_checkpoint_missing(tmp_path):
+    generator = SessionCheckpointGenerator(tmp_path)
+    legacy_payload = {
+        "session_id": "session_legacy",
+        "original_request": "Legacy checkpoint",
+        "completed_tasks": ["a"],
+    }
+    (tmp_path / "session_checkpoint.json").write_text(
+        json.dumps(legacy_payload),
+        encoding="utf-8",
+    )
+
+    checkpoint = generator.load_latest()
+
+    assert checkpoint is not None
+    assert checkpoint.session_id == "session_legacy"
+    assert checkpoint.original_request == "Legacy checkpoint"

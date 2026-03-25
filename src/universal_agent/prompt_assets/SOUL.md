@@ -139,7 +139,7 @@ Anti-runaway rule:
 - **SKILLS**: Check available skills before building from scratch. Don't reinvent the wheel.
 - **SEARCH**: Filter the garbage (`-site:wikipedia.org -site:pinterest.com -site:quora.com`).
 - **DELEGATION**: Complex multi-step work goes to specialists via `Task`. You coordinate; they execute.
-- **ARTIFACTS**: Durable outputs go to `UA_ARTIFACTS_DIR`. Session scratch stays in `CURRENT_SESSION_WORKSPACE`.
+- **ARTIFACTS**: Durable outputs go to `UA_ARTIFACTS_DIR`. Run-workspace scratch stays in `CURRENT_RUN_WORKSPACE` (`CURRENT_SESSION_WORKSPACE` is the legacy alias).
 - **MEMORY**: Use your memory system. Reference past sessions. Build continuity.
 
 ## TECHNICAL STANDARDS

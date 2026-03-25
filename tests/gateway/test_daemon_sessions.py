@@ -110,6 +110,7 @@ class TestDaemonSessionManager:
             assert session is not None
             ws_path = Path(session.workspace_dir)
             assert ws_path.exists()
+            assert ws_path.name.startswith("run_daemon_")
             assert (ws_path / "work_products").exists()
 
     def test_session_metadata(self, manager):
@@ -175,7 +176,7 @@ class TestDaemonSessionManager:
         # Create a fake old archive
         archive_dir = workspaces_dir / "_daemon_archives"
         archive_dir.mkdir(exist_ok=True)
-        old_archive = archive_dir / "daemon_simone_20200101_000000_abc12345"
+        old_archive = archive_dir / "run_daemon_simone_20200101_000000_abc12345"
         old_archive.mkdir()
         # Set modification time to 72 hours ago
         old_mtime = time.time() - (72 * 3600)
@@ -184,6 +185,17 @@ class TestDaemonSessionManager:
         removed = manager.cleanup_old_archives(max_age_hours=48)
         assert removed == 1
         assert not old_archive.exists()
+
+    def test_cleanup_stale_workspaces_archives_run_daemon_workspaces(self, manager, workspaces_dir):
+        stale_workspace = workspaces_dir / "run_daemon_simone_20200101_000000_abc12345"
+        stale_workspace.mkdir()
+
+        archived = manager._cleanup_stale_workspaces()
+
+        assert archived == 1
+        assert not stale_workspace.exists()
+        archived_copy = workspaces_dir / "_daemon_archives" / stale_workspace.name
+        assert archived_copy.exists()
 
 
 # ── Heartbeat idle exemption ─────────────────────────────────────────────────

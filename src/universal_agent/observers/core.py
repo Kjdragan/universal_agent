@@ -388,7 +388,7 @@ async def observe_and_save_work_products(
 ) -> None:
     """
     Observer: Copy work product reports to persistent SAVED_REPORTS directory.
-    This supplements the session workspace save - reports are saved to BOTH locations.
+    This supplements the run workspace save - reports are saved to BOTH locations.
     """
     with logfire.span("observer_work_products", tool=tool_name):
         # Check for both native Write tool and legacy write_local_file
@@ -473,7 +473,7 @@ async def observe_and_save_video_outputs(
     tool_name: str, tool_input: dict, tool_result: str, workspace_dir: str
 ) -> None:
     """
-    Observer: Copy video/audio outputs to session work_products directory.
+    Observer: Copy video/audio outputs to run-workspace work_products directory.
     Triggered when video_audio or youtube MCP tools produce output files.
     """
     with logfire.span("observer_video_outputs", tool=tool_name):
@@ -529,14 +529,14 @@ async def observe_and_save_video_outputs(
             if any(pat in filename.lower() for pat in intermediate_patterns):
                 return  # Skip intermediate files
 
-            # Create work_products/media directory in session workspace
+            # Create work_products/media directory in the run workspace
             media_dir = os.path.join(workspace_dir, "work_products", "media")
             os.makedirs(media_dir, exist_ok=True)
 
-            # Copy to session workspace
+            # Copy to run workspace
             dest_path = os.path.join(media_dir, filename)
             shutil.copy2(output_path, dest_path)
-            print(f"\n🎬 [OBSERVER] Saved media to session: {dest_path}")
+            print(f"\n🎬 [OBSERVER] Saved media to run workspace: {dest_path}")
             logfire.info(
                 "video_output_saved_session", source=output_path, dest=dest_path
             )

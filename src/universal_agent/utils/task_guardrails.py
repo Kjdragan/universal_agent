@@ -43,20 +43,28 @@ def resolve_best_task_match(requested_name: str, workspace_root: Optional[Path] 
     if not workspace_root:
         # Replicate _resolve_workspace logic from mcp_server.py to avoid circular imports
         # Priority: Env Var > Marker File > Heuristic
-        env_workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
-        if env_workspace and os.path.exists(env_workspace):
-            workspace_root = Path(env_workspace)
+        for env_name in ("CURRENT_RUN_WORKSPACE", "CURRENT_SESSION_WORKSPACE"):
+            env_workspace = os.getenv(env_name)
+            if env_workspace and os.path.exists(env_workspace):
+                workspace_root = Path(env_workspace)
+                break
         else:
             # Try marker file
             # Assuming we are running from project root or src/
             # Try to find AGENT_RUN_WORKSPACES relative to CWD
             cwd = Path.cwd()
-            marker_path = os.getenv("CURRENT_SESSION_WORKSPACE_FILE")
+            marker_path = (
+                os.getenv("CURRENT_RUN_WORKSPACE_FILE")
+                or os.getenv("CURRENT_SESSION_WORKSPACE_FILE")
+            )
             if not marker_path:
                  # Check common locations
                  candidates = [
+                     cwd / "AGENT_RUN_WORKSPACES" / ".current_run_workspace",
                      cwd / "AGENT_RUN_WORKSPACES" / ".current_session_workspace",
+                     cwd.parent / "AGENT_RUN_WORKSPACES" / ".current_run_workspace",
                      cwd.parent / "AGENT_RUN_WORKSPACES" / ".current_session_workspace",
+                     Path("/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/.current_run_workspace"),
                      Path("/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/.current_session_workspace")
                  ]
                  for c in candidates:

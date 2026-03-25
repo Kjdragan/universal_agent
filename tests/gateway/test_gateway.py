@@ -133,6 +133,17 @@ class TestInProcessGateway:
         assert session.workspace_dir is not None
 
     @pytest.mark.asyncio
+    async def test_create_session_preserves_explicit_session_id_with_custom_workspace(self, gateway, tmp_path):
+        session = await gateway.create_session(
+            user_id="test_user",
+            workspace_dir=str(tmp_path / "run_hook_demo"),
+            session_id="session_hook_demo",
+        )
+
+        assert session.session_id == "session_hook_demo"
+        assert Path(session.workspace_dir).name == "run_hook_demo"
+
+    @pytest.mark.asyncio
     async def test_create_session_auto_workspace(self, gateway):
         """Test creating session with auto-generated workspace."""
         session = await gateway.create_session(user_id="test_user")

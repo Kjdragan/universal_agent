@@ -4,11 +4,14 @@ from datetime import datetime, timedelta, timezone
 
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
+    create_run_attempt,
+    get_run_attempt,
     get_run,
     get_step_count,
     get_vp_bridge_cursor,
     get_vp_mission,
     get_vp_session,
+    list_run_attempts,
     list_vp_events,
     list_vp_missions,
     list_vp_sessions,
@@ -19,6 +22,8 @@ from universal_agent.durable.state import (
     upsert_vp_mission,
     upsert_vp_session,
     upsert_vp_bridge_cursor,
+    update_run_attempt,
+    update_run_attempt_provider_session,
     update_run_status,
     update_run_provider_session,
     acquire_vp_session_lease,
@@ -72,6 +77,116 @@ def test_update_run_provider_session_fields():
     assert row["provider_session_id"] == "session-1"
     assert row["provider_session_forked_from"] == "base-1"
     assert row["provider_session_last_seen_at"] is not None
+
+
+def test_upsert_run_persists_run_metadata_fields():
+    conn = _conn()
+    run_id = "run-metadata"
+    spec = {"objective": "metadata", "workspace_dir": "/tmp/run-metadata"}
+
+    upsert_run(
+        conn,
+        run_id,
+        "cli",
+        spec,
+        status="queued",
+        run_kind="email_triage",
+        trigger_source="agentmail",
+        dedup_key="msg:123",
+        run_policy="automation_ephemeral",
+        interrupt_policy="defer_if_foreground",
+        external_origin="csi_ingester",
+        external_origin_id="event-42",
+        external_correlation_id="corr-42",
+    )
+
+    row = get_run(conn, run_id)
+    assert row is not None
+    assert row["workspace_dir"] == "/tmp/run-metadata"
+    assert row["run_kind"] == "email_triage"
+    assert row["trigger_source"] == "agentmail"
+    assert row["dedup_key"] == "msg:123"
+    assert row["run_policy"] == "automation_ephemeral"
+    assert row["interrupt_policy"] == "defer_if_foreground"
+    assert row["external_origin"] == "csi_ingester"
+    assert row["external_origin_id"] == "event-42"
+    assert row["external_correlation_id"] == "corr-42"
+
+
+def test_run_attempt_lifecycle_updates_parent_run_pointers():
+    conn = _conn()
+    run_id = "run-attempts"
+    upsert_run(conn, run_id, "cli", {"objective": "attempts"}, status="running")
+
+    attempt_1 = create_run_attempt(
+        conn,
+        run_id,
+        workspace_subdir="attempts/001",
+        summary={"phase": "initial"},
+    )
+
+    run_row = get_run(conn, run_id)
+    assert run_row is not None
+    assert run_row["attempt_count"] == 1
+    assert run_row["latest_attempt_id"] == attempt_1
+    assert run_row["canonical_attempt_id"] is None
+
+    attempt_row = get_run_attempt(conn, attempt_1)
+    assert attempt_row is not None
+    assert attempt_row["attempt_number"] == 1
+    assert attempt_row["workspace_subdir"] == "attempts/001"
+    assert json.loads(attempt_row["summary_json"]) == {"phase": "initial"}
+
+    update_run_attempt_provider_session(conn, attempt_1, "provider-1")
+    attempt_row = get_run_attempt(conn, attempt_1)
+    assert attempt_row["provider_session_id"] == "provider-1"
+
+    update_run_attempt(
+        conn,
+        attempt_1,
+        status="failed",
+        ended_at="2026-03-24T10:00:00+00:00",
+        failure_class="timeout",
+        failure_reason="worker timed out",
+        retry_reason="automatic retry",
+        retry_backoff_seconds=30,
+        terminal_reason="attempt_timeout",
+    )
+
+    run_row = get_run(conn, run_id)
+    assert run_row["terminal_reason"] == "attempt_timeout"
+    assert run_row["latest_attempt_id"] == attempt_1
+    attempt_row = get_run_attempt(conn, attempt_1)
+    assert attempt_row["status"] == "failed"
+    assert attempt_row["failure_class"] == "timeout"
+    assert attempt_row["failure_reason"] == "worker timed out"
+    assert attempt_row["retry_reason"] == "automatic retry"
+    assert attempt_row["retry_backoff_seconds"] == 30
+
+    attempt_2 = create_run_attempt(
+        conn,
+        run_id,
+        status="queued",
+        workspace_subdir="attempts/002",
+    )
+    update_run_attempt(
+        conn,
+        attempt_2,
+        status="succeeded",
+        ended_at="2026-03-24T10:05:00+00:00",
+        summary={"result": "ok"},
+    )
+    update_run_attempt_provider_session(conn, attempt_2, None)
+
+    run_row = get_run(conn, run_id)
+    assert run_row["attempt_count"] == 2
+    assert run_row["latest_attempt_id"] == attempt_2
+    assert run_row["last_success_attempt_id"] == attempt_2
+    assert run_row["canonical_attempt_id"] == attempt_2
+
+    attempts = list_run_attempts(conn, run_id)
+    assert [row["attempt_number"] for row in attempts] == [1, 2]
+    assert get_run_attempt(conn, attempt_2)["provider_session_id"] is None
 
 
 def test_vp_session_registry_lifecycle_and_leases():

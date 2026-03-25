@@ -66,7 +66,8 @@ def test_inspect_session_workspace_uses_current_workspace(monkeypatch, tmp_path)
     _write_text(session_dir / "run.log", "r1\nr2")
 
     monkeypatch.setenv("UA_WORKSPACES_DIR", str(workspaces_root))
-    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(session_dir))
+    monkeypatch.setenv("CURRENT_RUN_WORKSPACE", str(session_dir))
+    monkeypatch.delenv("CURRENT_SESSION_WORKSPACE", raising=False)
 
     result = inspect_session_workspace(include_transcript=False, tail_lines=10)
     payload = json.loads(result)

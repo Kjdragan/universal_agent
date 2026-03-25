@@ -118,13 +118,13 @@ flowchart LR
 | **Hook** | `on_pre_tool_use_workspace_guard` |
 | **Location** | [hooks.py:348-478](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/hooks.py#L348-L478) |
 | **Matcher** | `*` |
-| **Action** | Enforces write operations stay within session workspace. |
+| **Action** | Enforces write operations stay within the current run workspace. |
 
 **Key behaviors:**
 
 - Read-only tools (`Read`, `View`, `ListDir`, etc.) are allowed anywhere
 - Write tools are restricted to:
-  - Session workspace (`AGENT_RUN_WORKSPACES/session_xxx/`)
+  - Run workspace (`AGENT_RUN_WORKSPACES/run_xxx/` or legacy session-shaped workspace during migration)
   - Artifacts directory (`UA_ARTIFACTS_DIR`)
   - Memory directory (`/memory/`) - for heartbeat system
 

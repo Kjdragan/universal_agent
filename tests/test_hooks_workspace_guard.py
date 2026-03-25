@@ -145,6 +145,7 @@ async def test_pre_bash_injects_workspace_and_artifacts(tmp_path, monkeypatch):
 
     assert "tool_input" in out
     cmd = out["tool_input"]["command"]
+    assert "export CURRENT_RUN_WORKSPACE=" in cmd
     assert "export CURRENT_SESSION_WORKSPACE=" in cmd
     assert "export UA_ARTIFACTS_DIR=" in cmd
 

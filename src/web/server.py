@@ -19,6 +19,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from universal_agent.run_catalog import RunCatalogService
+from universal_agent.workspace_catalog import list_workspace_summaries
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -223,6 +225,42 @@ class AgentBridge:
 
 agent_bridge = AgentBridge()
 
+
+def _list_workspace_sessions(limit: int = 20) -> list[dict]:
+    return list_workspace_summaries(
+        WORKSPACES_DIR,
+        limit=limit,
+        run_catalog=RunCatalogService(),
+    )
+
+
+def _list_runs(limit: int = 20) -> list[dict]:
+    return RunCatalogService().list_runs(limit=limit)
+
+
+def _get_run(run_id: str) -> Optional[dict]:
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        return None
+    return RunCatalogService().get_run(safe_run_id)
+
+
+def _run_workspace_path(run_id: str) -> Optional[Path]:
+    run = _get_run(run_id)
+    if not run:
+        return None
+    workspace_dir = str(run.get("workspace_dir") or "").strip()
+    if not workspace_dir:
+        return None
+    return Path(workspace_dir)
+
+
+def _latest_workspace() -> Optional[Path]:
+    sessions = _list_workspace_sessions(limit=1)
+    if not sessions:
+        return None
+    return Path(str(sessions[0]["workspace_path"]))
+
 # ============================================================================
 # FastAPI App
 # ============================================================================
@@ -272,41 +310,92 @@ async def health():
 
 @app.get("/api/sessions")
 async def list_sessions():
-    """List all agent sessions."""
-    sessions = []
-    
-    if WORKSPACES_DIR.exists():
-        for session_dir in sorted(WORKSPACES_DIR.iterdir(), reverse=True):
-            if session_dir.is_dir() and session_dir.name.startswith("session_"):
-                # Check for trace.json to determine status
-                trace_file = session_dir / "trace.json"
-                status = "complete" if trace_file.exists() else "incomplete"
-                
-                sessions.append({
-                    "session_id": session_dir.name,
-                    "timestamp": session_dir.name.replace("session_", ""),
-                    "workspace_path": str(session_dir),
-                    "status": status
-                })
-    
-    return {"sessions": sessions[:20]}  # Return latest 20
+    """List legacy session-shaped workspace summaries."""
+    return {"sessions": _list_workspace_sessions(limit=20)}
+
+
+@app.get("/api/runs")
+async def list_runs():
+    """List durable runs."""
+    return {"runs": _list_runs(limit=20)}
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: str):
+    """Get a durable run record."""
+    run = _get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@app.get("/api/runs/{run_id}/files")
+async def list_run_files(run_id: str, path: str = ""):
+    """List files inside a durable run workspace."""
+    run_workspace = _run_workspace_path(run_id)
+    if run_workspace is None or not run_workspace.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    base_path = run_workspace / path if path else run_workspace
+    if not base_path.exists():
+        return {"files": [], "path": path, "workspace": str(run_workspace), "run_id": run_id}
+
+    files = []
+    try:
+        for item in sorted(base_path.iterdir()):
+            file_info = {
+                "name": item.name,
+                "isDirectory": item.is_dir(),
+                "path": str(item.relative_to(run_workspace)),
+            }
+            if item.is_file():
+                file_info["size"] = item.stat().st_size
+            files.append(file_info)
+    except Exception:
+        pass
+
+    return {
+        "files": files,
+        "path": path,
+        "workspace": str(run_workspace),
+        "run_id": run_id,
+    }
+
+
+@app.get("/api/runs/{run_id}/files/{file_path:path}")
+async def get_run_file(run_id: str, file_path: str):
+    """Get file content from a durable run workspace."""
+    run_workspace = _run_workspace_path(run_id)
+    if run_workspace is None or not run_workspace.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    full_path = run_workspace / file_path
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    if full_path.is_dir():
+        files = []
+        for item in sorted(full_path.iterdir()):
+            file_info = {
+                "name": item.name,
+                "isDirectory": item.is_dir(),
+                "path": str(item.relative_to(run_workspace)),
+            }
+            if item.is_file():
+                file_info["size"] = item.stat().st_size
+            files.append(file_info)
+        return {"files": files, "path": file_path, "run_id": run_id}
+
+    return FileResponse(full_path)
 
 
 @app.get("/api/files")
 async def list_files(path: str = ""):
     """List files in workspace - for file browser."""
-    # Get the most recent session
-    sessions = []
-    if WORKSPACES_DIR.exists():
-        for session_dir in sorted(WORKSPACES_DIR.iterdir(), reverse=True):
-            if session_dir.is_dir() and session_dir.name.startswith("session_"):
-                sessions.append(session_dir)
-                break
-    
-    if not sessions:
+    current_session = _latest_workspace()
+    if current_session is None:
         return {"files": [], "path": "", "workspace": ""}
-    
-    current_session = sessions[0]
+
     base_path = current_session / path if path else current_session
     
     if not base_path.exists():
@@ -335,19 +424,11 @@ async def list_files(path: str = ""):
 
 @app.get("/api/file/{file_path:path}")
 async def get_workspace_file(file_path: str):
-    """Get file content from the most recent workspace session."""
-    # Get the most recent session
-    sessions = []
-    if WORKSPACES_DIR.exists():
-        for session_dir in sorted(WORKSPACES_DIR.iterdir(), reverse=True):
-            if session_dir.is_dir() and session_dir.name.startswith("session_"):
-                sessions.append(session_dir)
-                break
-    
-    if not sessions:
-        raise HTTPException(status_code=404, detail="No session found")
-    
-    current_session = sessions[0]
+    """Get file content from the most recent run workspace."""
+    current_session = _latest_workspace()
+    if current_session is None:
+        raise HTTPException(status_code=404, detail="No run workspace found")
+
     full_path = current_session / file_path
     
     if not full_path.exists():
@@ -372,7 +453,7 @@ async def get_workspace_file(file_path: str):
 
 @app.get("/api/sessions/{session_id}")
 async def get_session(session_id: str):
-    """Get session details including files."""
+    """Get legacy session-shaped workspace details."""
     session_path = WORKSPACES_DIR / session_id
     
     if not session_path.exists():
@@ -416,7 +497,7 @@ async def get_session(session_id: str):
 
 @app.get("/api/sessions/{session_id}/files/{subdir}/{filename}")
 async def get_file(session_id: str, subdir: str, filename: str):
-    """Get file content from session."""
+    """Get file content from a legacy session-shaped workspace path."""
     file_path = WORKSPACES_DIR / session_id / subdir / filename
     
     if not file_path.exists():

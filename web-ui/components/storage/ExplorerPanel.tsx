@@ -77,6 +77,7 @@ export function ExplorerPanel({
   const [error, setError] = useState("");
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const preview = useFilePreview(scope);
+  const { previewFile } = preview;
 
   useEffect(() => { setScope(initialScope); }, [initialScope]);
   useEffect(() => { setPath(initialPath); }, [initialPath]);
@@ -85,7 +86,7 @@ export function ExplorerPanel({
   const breadcrumbs = useMemo(() => {
     const segments = path.split("/").filter(Boolean);
     const crumbs: Array<{ label: string; path: string }> = [
-      { label: scope === "workspaces" ? "Workspaces" : scope === "artifacts" ? "Artifacts" : "VPS Root", path: "" },
+      { label: scope === "workspaces" ? "Run Workspaces" : scope === "artifacts" ? "Artifacts" : "VPS Root", path: "" },
     ];
     let current = "";
     for (const seg of segments) {
@@ -131,8 +132,8 @@ export function ExplorerPanel({
     const candidate = String(initialPreviewPath || "").trim();
     if (!candidate) return;
     if (parentPath(candidate) !== path) return;
-    void preview.previewFile(candidate);
-  }, [initialPreviewPath, path]);
+    void previewFile(candidate);
+  }, [initialPreviewPath, path, previewFile]);
 
   // ── Navigate ─────────────────────────────────────────────────────────
   const openEntry = async (entry: FileEntry) => {
@@ -232,7 +233,7 @@ export function ExplorerPanel({
                   : "text-muted-foreground hover:bg-card/50/40 hover:text-foreground"
                   }`}
               >
-                {s === "workspaces" ? "Sessions" : s === "artifacts" ? "Artifacts" : "VPS"}
+                {s === "workspaces" ? "Runs" : s === "artifacts" ? "Artifacts" : "VPS"}
               </button>
             ))}
             <button

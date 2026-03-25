@@ -2,13 +2,13 @@
 
 ## Purpose
 
-This document is the canonical source of truth for where Universal Agent stores session workspaces and durable artifacts, how local versus mirrored storage roots are exposed through the API, and how remote VPS workspace/artifact sync currently works.
+This document is the canonical source of truth for where Universal Agent stores run workspaces and durable artifacts, how local versus mirrored storage roots are exposed through the API, and how remote VPS workspace/artifact sync currently works.
 
 ## Executive Summary
 
 The current storage model has three distinct layers:
 
-1. **canonical local session workspaces** under `AGENT_RUN_WORKSPACES`
+1. **canonical local run workspaces** under `AGENT_RUN_WORKSPACES`
 2. **canonical local durable artifacts** under `UA_ARTIFACTS_DIR` or repo `artifacts`
 3. **optional mirrored remote VPS copies** under `remote_vps_workspaces` and `remote_vps_artifacts`
 
@@ -33,7 +33,7 @@ Configured by env:
 - `UA_VPS_WORKSPACES_MIRROR_DIR`
 - `UA_VPS_ARTIFACTS_MIRROR_DIR`
 
-## 1. Session Workspaces
+## 1. Run Workspaces
 
 Primary implementation:
 - `src/universal_agent/api/server.py`
@@ -41,7 +41,7 @@ Primary implementation:
 - `src/universal_agent/workspace/bootstrap.py`
 - various runtime session producers
 
-A session workspace is the main per-session storage directory.
+A run workspace is the main durable storage directory for a logical workflow. During migration, legacy `session_*` workspaces remain readable, but new durable work should be described as run workspaces.
 
 Current common contents include:
 - `transcript.md`
@@ -51,17 +51,17 @@ Current common contents include:
 - `work_products/`
 - sometimes `memory/`
 
-### Session Identity Patterns
+### Workspace Identity Patterns
 
-Current session-id source inference uses prefixes such as:
-- `session_` -> chat/web
-- `session_hook_` / `session-hook_` -> webhook/hook
+Current workspace source inference uses prefixes such as:
+- `run_` -> canonical durable run workspace
+- `run_session_hook_` / legacy `session_hook_` / `session-hook_` -> webhook/hook
 - `tg_` -> telegram
 - `api_` -> API
 - `cron_` -> cron
 - `vp_` -> VP-related
 
-These prefixes are used both for UI labeling and for sync/ops handling.
+These prefixes are used for UI labeling, migration compatibility, and sync/ops handling. A live execution session may still have a `session_id`, but that is distinct from the durable run workspace.
 
 ## 2. Durable Artifacts
 
@@ -80,7 +80,7 @@ The API server exposes this durable root through:
 - `GET /api/artifacts/files/{file_path}`
 
 Important distinction:
-- session workspaces are per-session execution context
+- run workspaces are the durable workflow evidence bundle
 - artifacts root is the durable shared output surface
 
 ## 3. API Storage Root Model
@@ -111,6 +111,10 @@ Primary implementation:
 - `web-ui/lib/sessionDirectory.ts`
 
 Current workspace/file endpoints include:
+- `GET /api/v1/runs`
+- `GET /api/v1/runs/{run_id}`
+- `GET /api/v1/runs/{run_id}/files`
+- `GET /api/v1/runs/{run_id}/files/{file_path}`
 - `GET /api/sessions`
 - `GET /api/sessions/{session_id}`
 - `GET /api/files?session_id=...`
@@ -126,8 +130,8 @@ Current VPS/mirror storage endpoints include:
 - `GET /api/vps/file`
 - `POST /api/vps/files/delete`
 
-Current session directory UI path:
-- dashboard session listing prefers `/api/v1/ops/sessions`
+Current durable directory UI path:
+- dashboard directory listing prefers `/api/v1/ops/runs` plus run-enriched workspace summaries
 - falls back to legacy `/api/v1/sessions` in local-only mode
 
 ## 5. Remote VPS Sync Model
@@ -140,7 +144,7 @@ Primary implementation:
 - `scripts/remote_workspace_sync_control.sh`
 
 Current sync purpose:
-- mirror remote VPS session workspaces and durable artifacts locally for debugging, inspection, and incident response
+- mirror remote VPS run workspaces and durable artifacts locally for debugging, inspection, and incident response
 
 This is not intended to make the mirror authoritative for active runtime state.
 
@@ -175,7 +179,7 @@ Defaults:
 - enabled by default
 - marker file name defaults to `sync_ready.json`
 - ready minimum age defaults to `45` seconds
-- default gated prefixes are `session_` and `tg_`
+- default gated prefixes are legacy `session_`, canonical `run_`, and `tg_` where applicable
 
 Current control env:
 - `UA_REMOTE_SYNC_REQUIRE_READY_MARKER`
@@ -185,7 +189,7 @@ Current control env:
 
 ### Current Ready Logic
 
-For gated session types, sync checks the remote workspace and only syncs when the run is terminal and old enough.
+For gated workspace types, sync checks the remote workspace and only syncs when the run is terminal and old enough.
 
 Current accepted terminal states in the marker logic include:
 - `completed`
@@ -305,7 +309,7 @@ Remote-toggle controls:
 
 - mirrored VPS storage is for inspection/debugging, not the main source of truth for the active local node
 - `local` and `mirror` are deliberate separate roots in the storage API model
-- session workspace browsing and durable artifact browsing are different responsibilities and should stay conceptually separate
+- run workspace browsing and durable artifact browsing are different responsibilities and should stay conceptually separate
 
 ## Current Gaps and Follow-Up Items
 
@@ -338,7 +342,7 @@ Relevant supporting docs:
 ## Bottom Line
 
 The canonical current storage model is:
-- **local workspaces are the active per-session execution roots**
+- **local run workspaces are the active durable execution roots**
 - **local artifacts are the durable output roots**
 - **mirrored VPS storage is a separate debug/inspection layer**
 - **remote sync is guarded by ready markers, manifests, and explicit operator controls**

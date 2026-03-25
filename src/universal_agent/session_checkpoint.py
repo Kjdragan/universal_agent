@@ -182,8 +182,10 @@ class SessionCheckpointGenerator:
             inject_context(checkpoint.to_markdown())
     """
     
-    CHECKPOINT_FILENAME = "session_checkpoint.json"
-    CHECKPOINT_MARKDOWN_FILENAME = "session_checkpoint.md"
+    CHECKPOINT_FILENAME = "run_checkpoint.json"
+    CHECKPOINT_MARKDOWN_FILENAME = "run_checkpoint.md"
+    LEGACY_CHECKPOINT_FILENAME = "session_checkpoint.json"
+    LEGACY_CHECKPOINT_MARKDOWN_FILENAME = "session_checkpoint.md"
     
     def __init__(self, workspace_path: Path | str):
         self.workspace_path = Path(workspace_path)
@@ -382,23 +384,28 @@ class SessionCheckpointGenerator:
         """Save checkpoint to workspace."""
         # Save JSON
         json_path = self.workspace_path / self.CHECKPOINT_FILENAME
-        json_path.write_text(json.dumps(checkpoint.to_dict(), indent=2))
-        
+        payload = json.dumps(checkpoint.to_dict(), indent=2)
+        json_path.write_text(payload)
+        # Preserve the legacy path during migration so existing readers continue to work.
+        (self.workspace_path / self.LEGACY_CHECKPOINT_FILENAME).write_text(payload)
+
         # Save Markdown (human-readable)
         md_path = self.workspace_path / self.CHECKPOINT_MARKDOWN_FILENAME
-        md_path.write_text(checkpoint.to_markdown())
-        
+        markdown = checkpoint.to_markdown()
+        md_path.write_text(markdown)
+        (self.workspace_path / self.LEGACY_CHECKPOINT_MARKDOWN_FILENAME).write_text(markdown)
+
         return json_path
-    
+
     def load_latest(self) -> Optional[SessionCheckpoint]:
         """Load the latest checkpoint from workspace."""
-        json_path = self.workspace_path / self.CHECKPOINT_FILENAME
-        
-        if not json_path.exists():
-            return None
-        
-        try:
-            data = json.loads(json_path.read_text())
-            return SessionCheckpoint.from_dict(data)
-        except Exception:
-            return None
+        for filename in (self.CHECKPOINT_FILENAME, self.LEGACY_CHECKPOINT_FILENAME):
+            json_path = self.workspace_path / filename
+            if not json_path.exists():
+                continue
+            try:
+                data = json.loads(json_path.read_text())
+                return SessionCheckpoint.from_dict(data)
+            except Exception:
+                continue
+        return None

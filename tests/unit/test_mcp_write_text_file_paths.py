@@ -13,7 +13,8 @@ def test_write_text_file_rewrites_literal_absolute_ua_artifacts_dir_path(
     artifacts_root.mkdir(parents=True, exist_ok=True)
     workspace_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("UA_ARTIFACTS_DIR", str(artifacts_root))
-    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace_root))
+    monkeypatch.setenv("CURRENT_RUN_WORKSPACE", str(workspace_root))
+    monkeypatch.delenv("CURRENT_SESSION_WORKSPACE", raising=False)
 
     raw_path = "/opt/universal_agent/UA_ARTIFACTS_DIR/youtube-tutorial-creation/test-run/manifest.json"
     result = mcp_server.write_text_file(raw_path, '{"ok": true}')
@@ -32,7 +33,8 @@ def test_write_text_file_rewrites_relative_ua_artifacts_dir_path(
     artifacts_root.mkdir(parents=True, exist_ok=True)
     workspace_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("UA_ARTIFACTS_DIR", str(artifacts_root))
-    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace_root))
+    monkeypatch.setenv("CURRENT_RUN_WORKSPACE", str(workspace_root))
+    monkeypatch.delenv("CURRENT_SESSION_WORKSPACE", raising=False)
 
     raw_path = "UA_ARTIFACTS_DIR/youtube-tutorial-creation/test-run/README.md"
     result = mcp_server.write_text_file(raw_path, "hello")

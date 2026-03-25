@@ -5,7 +5,11 @@ import sys
 import os
 
 from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
-from universal_agent.utils.session_workspace import resolve_current_session_workspace
+from universal_agent.utils.session_workspace import resolve_current_run_workspace
+
+# Backward-compatible alias for older tests and call sites that still patch the
+# legacy helper symbol on this module.
+resolve_current_session_workspace = resolve_current_run_workspace
 
 # Import the original function
 # We need to ensure the python path can find src/mcp_server.py if it's not a package
@@ -33,10 +37,18 @@ def _is_session_workspace(path_value: str) -> bool:
         candidate = Path(path_value).resolve()
     except Exception:
         return False
-    if candidate.name.startswith("session_") and candidate.parent.name == "AGENT_RUN_WORKSPACES":
+    if (
+        candidate.name.startswith(("run_", "session_"))
+        and candidate.parent.name == "AGENT_RUN_WORKSPACES"
+    ):
         return True
     return (
-        (candidate / "session_policy.json").exists()
+        (
+            (candidate / "session_policy.json").exists()
+            or (candidate / "run_manifest.json").exists()
+            or (candidate / "run_checkpoint.json").exists()
+            or (candidate / "session_checkpoint.json").exists()
+        )
         and (candidate / "work_products").exists()
     )
 
@@ -46,7 +58,11 @@ def _infer_latest_session_workspace() -> str | None:
     if not root.exists():
         return None
     candidates = sorted(
-        (p for p in root.iterdir() if p.is_dir() and p.name.startswith("session_")),
+        (
+            p
+            for p in root.iterdir()
+            if p.is_dir() and p.name.startswith(("run_", "session_"))
+        ),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -89,7 +105,7 @@ def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
 
     inferred = _infer_latest_session_workspace()
     if inferred:
-        sys.stderr.write(f"[research_bridge] workspace resolved from latest session inference: {inferred}\n")
+        sys.stderr.write(f"[research_bridge] workspace resolved from latest workspace inference: {inferred}\n")
     else:
         sys.stderr.write(f"[research_bridge] WARNING: could not resolve workspace. explicit={explicit!r}, ctx={ctx_ws!r}\n")
     return inferred

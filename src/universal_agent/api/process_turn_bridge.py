@@ -19,6 +19,8 @@ from universal_agent.api.events import (
     SessionInfo,
     create_error_event,
 )
+from universal_agent.run_catalog import RunCatalogService
+from universal_agent.workspace_catalog import list_workspace_summaries
 
 
 class ProcessTurnBridge:
@@ -105,15 +107,23 @@ class ProcessTurnBridge:
 
     def list_sessions(self) -> list[dict]:
         """List sessions via the gateway."""
-        return [
-            {
-                "session_id": s.session_id,
-                "workspace_path": s.workspace_dir,
-                "status": s.status,
-                "metadata": s.metadata,
-            }
-            for s in self.gateway.list_sessions()
-        ]
+        live_by_workspace = {
+            str(s.workspace_dir): s
+            for s in self.gateway.list_live_sessions()
+        }
+        sessions = list_workspace_summaries(
+            self.gateway._workspace_base,
+            limit=50,
+            run_catalog=RunCatalogService(),
+        )
+        for item in sessions:
+            live = live_by_workspace.get(str(item.get("workspace_path") or ""))
+            if live is None:
+                continue
+            item["status"] = live.status
+            item["metadata"] = live.metadata
+            item["user_id"] = str(live.metadata.get("user_id") or "")
+        return sessions
 
     async def close(self) -> None:
         """Release bridge resources for this connection scope."""

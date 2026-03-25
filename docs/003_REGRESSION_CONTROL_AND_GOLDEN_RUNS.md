@@ -60,10 +60,10 @@ The primary agent should produce tool calls containing this ordered subsequence:
 7. COMPOSIO_MULTI_EXECUTE_TOOL  (Gmail send with attachment)
 ```
 
-### 2.3 Expected Session Workspace Structure
+### 2.3 Expected Run Workspace Structure
 
 ```
-session_*/
+run_*/   (legacy session_* still readable during migration)
   search_results/
     crawl_*.md              (20+ crawled source files)
     processed_json/         (optional, search result JSONs)
@@ -114,12 +114,12 @@ uv run pytest tests/unit/test_research_pipeline_drift.py -v
 | Section | Tests | Catches |
 |---------|-------|---------|
 | **Tool Permission Invariants** | 14 | Subagent tools accidentally added to `DISALLOWED_TOOLS`; Composio crawl/fetch escaping the ban; `PRIMARY_ONLY_BLOCKED_TOOLS` becoming non-empty |
-| **Agent Definition Integrity** | 9 | Missing tools in frontmatter; missing session workspace section; missing crawl ban; missing mode selection |
+| **Agent Definition Integrity** | 9 | Missing tools in frontmatter; missing run workspace section; missing crawl ban; missing mode selection |
 | **run_in_background Guardrail** | 3 | Guardrail not stripping `run_in_background` for pipeline subagents |
 | **Golden Run Sequence** | 3 | Expected tool subsequence validation; detects missing `run_research_phase` or `run_report_generation` |
-| **Session Workspace Structure** | 4 | Validates directory layout; detects missing `refined_corpus.md`, missing HTML report, repo root file leaks |
+| **Run Workspace Structure** | 4 | Validates directory layout; detects missing `refined_corpus.md`, missing HTML report, repo root file leaks |
 | **Prompt Builder Instructions** | 3 | Delegation instructions present for research-specialist and report-writer |
-| **Dynamic Capabilities Generation**| 2 | Verifies `capabilities.md` parses `.claude/agents/*.md` and writes valid output to the session workspace |
+| **Dynamic Capabilities Generation**| 2 | Verifies `capabilities.md` parses `.claude/agents/*.md` and writes valid output to the run workspace |
 | **Documentation** | 2 | SDK permissions reference doc exists and covers required topics |
 
 ### 3.3 When to Run

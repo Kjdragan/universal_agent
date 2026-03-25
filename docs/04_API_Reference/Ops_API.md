@@ -8,7 +8,8 @@ It runs on **port 8002** by default (configurable via `UA_GATEWAY_PORT`).
 
 The gateway server provides:
 
-- **Session Management**: Create, resume, and manage agent sessions
+- **Live Session Management**: Create, resume, and manage live agent sessions
+- **Durable Run Management**: Inspect run workspaces, run state, and attempts
 - **Real-time Streaming**: WebSocket endpoints for live event streaming
 - **Ops Administration**: Factory registration, VP mission control, cron jobs, hooks
 - **Dashboard APIs**: CSI digests, notifications, events, approvals, activity, tutorials
@@ -80,13 +81,15 @@ Session WebSocket endpoints may require auth when `UA_SESSION_API_AUTH_ENABLED=t
 }
 ```
 
-## 4. Session Management
+## 4. Live Session Management
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/sessions` | POST | Create new session |
 | `/api/v1/sessions` | GET | List active sessions |
 | `/api/v1/sessions/{id}` | GET | Get session details |
-| `/api/v1/sessions/{id}` | DELETE | Delete session workspace |
+| `/api/v1/sessions/{id}` | DELETE | Delete the live session and its linked workspace if eligible |
+| `/api/v1/ops/runs` | GET | List durable runs |
+| `/api/v1/ops/runs/{id}` | GET | Get durable run details |
 
 ### Create Session
 
@@ -127,6 +130,15 @@ GET /api/v1/sessions/{id}
   "created_at": "ISO8601 timestamp"
 }
 ```
+
+### Durable Runs
+
+```
+GET /api/v1/ops/runs
+GET /api/v1/ops/runs/{id}
+```
+
+These endpoints expose the durable run catalog. They are the canonical browsing surface for historical work, run metadata, and attempt state. Use the `/api/v1/sessions*` family only when you are dealing with a live execution session.
 
 ## 5. WebSocket Streaming
 | Endpoint | Protocol | Description |
@@ -349,7 +361,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 ## 14. Session Operations
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/ops/sessions/{id}/reset` | POST | Reset session workspace |
+| `/api/v1/ops/sessions/{id}/reset` | POST | Reset the live session and its linked run workspace state |
 | `/api/v1/ops/sessions/{id}/compact` | POST | Compact session logs |
 | `/api/v1/ops/sessions/{id}/archive` | POST | Archive session |
 | `/api/v1/ops/sessions/{id}/cancel` | POST | Cancel running session |

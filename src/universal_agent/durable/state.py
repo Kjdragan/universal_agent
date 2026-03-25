@@ -1,7 +1,13 @@
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
+
+
+_RUN_SUCCESS_STATUSES = {"succeeded", "completed", "success"}
+_RUN_TERMINAL_STATUSES = _RUN_SUCCESS_STATUSES | {"failed", "cancelled", "needs_review"}
+_UNSET = object()
 
 
 def _now() -> str:
@@ -28,15 +34,29 @@ def upsert_run(
     completion_promise: Optional[str] = None,
     total_tokens: int = 0,
     status: str = "running",
+    workspace_dir: Optional[str] = None,
+    run_kind: Optional[str] = None,
+    trigger_source: Optional[str] = None,
+    dedup_key: Optional[str] = None,
+    run_policy: Optional[str] = None,
+    interrupt_policy: Optional[str] = None,
+    terminal_reason: Optional[str] = None,
+    external_origin: Optional[str] = None,
+    external_origin_id: Optional[str] = None,
+    external_correlation_id: Optional[str] = None,
 ) -> None:
     now = _now()
+    workspace_dir = workspace_dir or run_spec.get("workspace_dir")
     conn.execute(
         """
         INSERT OR IGNORE INTO runs (
             run_id, created_at, updated_at, status, entrypoint, run_spec_json,
+            workspace_dir, run_kind, trigger_source, dedup_key, run_policy,
+            interrupt_policy, terminal_reason, external_origin, external_origin_id,
+            external_correlation_id,
             run_mode, job_path, last_job_prompt, parent_run_id,
             iteration_count, max_iterations, completion_promise, total_tokens
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -45,6 +65,16 @@ def upsert_run(
             status,
             entrypoint,
             json.dumps(run_spec, default=str),
+            workspace_dir,
+            run_kind,
+            trigger_source,
+            dedup_key,
+            run_policy,
+            interrupt_policy,
+            terminal_reason,
+            external_origin,
+            external_origin_id,
+            external_correlation_id,
             run_mode,
             job_path,
             last_job_prompt,
@@ -62,6 +92,16 @@ def upsert_run(
             status = ?,
             entrypoint = ?,
             run_spec_json = ?,
+            workspace_dir = COALESCE(?, workspace_dir),
+            run_kind = COALESCE(?, run_kind),
+            trigger_source = COALESCE(?, trigger_source),
+            dedup_key = COALESCE(?, dedup_key),
+            run_policy = COALESCE(?, run_policy),
+            interrupt_policy = COALESCE(?, interrupt_policy),
+            terminal_reason = COALESCE(?, terminal_reason),
+            external_origin = COALESCE(?, external_origin),
+            external_origin_id = COALESCE(?, external_origin_id),
+            external_correlation_id = COALESCE(?, external_correlation_id),
             run_mode = ?,
             job_path = ?,
             last_job_prompt = ?,
@@ -76,6 +116,16 @@ def upsert_run(
             status,
             entrypoint,
             json.dumps(run_spec, default=str),
+            workspace_dir,
+            run_kind,
+            trigger_source,
+            dedup_key,
+            run_policy,
+            interrupt_policy,
+            terminal_reason,
+            external_origin,
+            external_origin_id,
+            external_correlation_id,
             run_mode,
             job_path,
             last_job_prompt,
@@ -301,6 +351,230 @@ def release_run_lease(
         (_now(), run_id, lease_owner),
     )
     conn.commit()
+
+
+def create_run_attempt(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    attempt_id: Optional[str] = None,
+    status: str = "running",
+    lease_owner: Optional[str] = None,
+    lease_expires_at: Optional[str] = None,
+    provider_session_id: Optional[str] = None,
+    started_at: Optional[str] = None,
+    ended_at: Optional[str] = None,
+    failure_class: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+    retry_reason: Optional[str] = None,
+    retry_backoff_seconds: Optional[int] = None,
+    workspace_subdir: Optional[str] = None,
+    summary: Optional[dict[str, Any]] = None,
+    promote_to_canonical: bool = False,
+) -> str:
+    attempt_id = attempt_id or f"{run_id}:attempt:{uuid.uuid4()}"
+    now = _now()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(attempt_number), 0) AS max_attempt FROM run_attempts WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    attempt_number = int(row["max_attempt"]) + 1 if row else 1
+    started_at = started_at or now
+    conn.execute(
+        """
+        INSERT INTO run_attempts (
+            attempt_id, run_id, attempt_number, created_at, updated_at, status,
+            lease_owner, lease_expires_at, provider_session_id, started_at,
+            ended_at, failure_class, failure_reason, retry_reason,
+            retry_backoff_seconds, workspace_subdir, summary_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            attempt_id,
+            run_id,
+            attempt_number,
+            now,
+            now,
+            status,
+            lease_owner,
+            lease_expires_at,
+            provider_session_id,
+            started_at,
+            ended_at,
+            failure_class,
+            failure_reason,
+            retry_reason,
+            retry_backoff_seconds,
+            workspace_subdir,
+            _json_or_none(summary),
+        ),
+    )
+    last_success_attempt_id = attempt_id if status in _RUN_SUCCESS_STATUSES else None
+    canonical_attempt_id = (
+        attempt_id if promote_to_canonical or status in _RUN_SUCCESS_STATUSES else None
+    )
+    conn.execute(
+        """
+        UPDATE runs
+        SET attempt_count = COALESCE(attempt_count, 0) + 1,
+            latest_attempt_id = ?,
+            last_success_attempt_id = COALESCE(?, last_success_attempt_id),
+            canonical_attempt_id = COALESCE(?, canonical_attempt_id),
+            updated_at = ?
+        WHERE run_id = ?
+        """,
+        (attempt_id, last_success_attempt_id, canonical_attempt_id, now, run_id),
+    )
+    conn.commit()
+    return attempt_id
+
+
+def get_run_attempt(
+    conn: sqlite3.Connection, attempt_id: str
+) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM run_attempts WHERE attempt_id = ?",
+        (attempt_id,),
+    ).fetchone()
+
+
+def list_run_attempts(
+    conn: sqlite3.Connection,
+    run_id: str,
+) -> list[sqlite3.Row]:
+    rows = conn.execute(
+        """
+        SELECT * FROM run_attempts
+        WHERE run_id = ?
+        ORDER BY attempt_number ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    return list(rows)
+
+
+def update_run_attempt(
+    conn: sqlite3.Connection,
+    attempt_id: str,
+    *,
+    status: Any = _UNSET,
+    lease_owner: Any = _UNSET,
+    lease_expires_at: Any = _UNSET,
+    provider_session_id: Any = _UNSET,
+    started_at: Any = _UNSET,
+    ended_at: Any = _UNSET,
+    failure_class: Any = _UNSET,
+    failure_reason: Any = _UNSET,
+    retry_reason: Any = _UNSET,
+    retry_backoff_seconds: Any = _UNSET,
+    workspace_subdir: Any = _UNSET,
+    summary: Optional[dict[str, Any]] = None,
+    terminal_reason: Any = _UNSET,
+    promote_to_canonical: bool = False,
+) -> None:
+    now = _now()
+    current = get_run_attempt(conn, attempt_id)
+    if current is None:
+        raise ValueError(f"Unknown run attempt: {attempt_id}")
+
+    status = current["status"] if status is _UNSET else status
+    lease_owner = current["lease_owner"] if lease_owner is _UNSET else lease_owner
+    lease_expires_at = (
+        current["lease_expires_at"]
+        if lease_expires_at is _UNSET
+        else lease_expires_at
+    )
+    provider_session_id = (
+        current["provider_session_id"]
+        if provider_session_id is _UNSET
+        else provider_session_id
+    )
+    started_at = current["started_at"] if started_at is _UNSET else started_at
+    ended_at = current["ended_at"] if ended_at is _UNSET else ended_at
+    failure_class = (
+        current["failure_class"] if failure_class is _UNSET else failure_class
+    )
+    failure_reason = (
+        current["failure_reason"] if failure_reason is _UNSET else failure_reason
+    )
+    retry_reason = current["retry_reason"] if retry_reason is _UNSET else retry_reason
+    retry_backoff_seconds = (
+        current["retry_backoff_seconds"]
+        if retry_backoff_seconds is _UNSET
+        else retry_backoff_seconds
+    )
+    workspace_subdir = (
+        current["workspace_subdir"] if workspace_subdir is _UNSET else workspace_subdir
+    )
+    summary_json = _json_or_none(summary) if summary is not None else current["summary_json"]
+
+    conn.execute(
+        """
+        UPDATE run_attempts
+        SET updated_at = ?,
+            status = ?,
+            lease_owner = ?,
+            lease_expires_at = ?,
+            provider_session_id = ?,
+            started_at = ?,
+            ended_at = ?,
+            failure_class = ?,
+            failure_reason = ?,
+            retry_reason = ?,
+            retry_backoff_seconds = ?,
+            workspace_subdir = ?,
+            summary_json = ?
+        WHERE attempt_id = ?
+        """,
+        (
+            now,
+            status,
+            lease_owner,
+            lease_expires_at,
+            provider_session_id,
+            started_at,
+            ended_at,
+            failure_class,
+            failure_reason,
+            retry_reason,
+            retry_backoff_seconds,
+            workspace_subdir,
+            summary_json,
+            attempt_id,
+        ),
+    )
+    run_updates: list[str] = ["updated_at = ?"]
+    run_params: list[Any] = [now]
+    if terminal_reason is not _UNSET:
+        run_updates.append("terminal_reason = ?")
+        run_params.append(terminal_reason)
+    if status in _RUN_SUCCESS_STATUSES:
+        run_updates.append("last_success_attempt_id = ?")
+        run_params.append(attempt_id)
+    if promote_to_canonical or status in _RUN_SUCCESS_STATUSES:
+        run_updates.append("canonical_attempt_id = ?")
+        run_params.append(attempt_id)
+    if status in _RUN_TERMINAL_STATUSES:
+        run_updates.append("latest_attempt_id = ?")
+        run_params.append(attempt_id)
+    run_params.extend([current["run_id"]])
+    conn.execute(
+        f"UPDATE runs SET {', '.join(run_updates)} WHERE run_id = ?",
+        tuple(run_params),
+    )
+    conn.commit()
+
+
+def update_run_attempt_provider_session(
+    conn: sqlite3.Connection,
+    attempt_id: str,
+    provider_session_id: Optional[str],
+) -> None:
+    update_run_attempt(
+        conn,
+        attempt_id,
+        provider_session_id=provider_session_id,
+    )
 
 
 def get_step_count(conn: sqlite3.Connection, run_id: str) -> int:

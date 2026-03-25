@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-23
+**Last updated:** 2026-03-24
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -65,6 +65,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 100 | OpenClaw Release Sync Pipeline
 | 101 | VP Agent Identity & Prompt Architecture — CODIE/ATLAS souls, VP system prompt, mission briefing injection
 | 102 | E2BIG Kernel Limits and Prompt Architecture — 128KB execution limit constraints and prompt optimization strategy
+| 104 | Run/Attempt Lifecycle and Nomenclature Migration Plan — canonical migration plan for run/attempt terminology, packet rollout, rollback scope, and CSI boundary handling |
 
 ## CSI Subsystem (04_CSI/)
 

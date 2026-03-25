@@ -6,12 +6,6 @@ Constants for Universal Agent.
 # These are truly banned tools (hallucinated, deprecated, legacy aliases).
 # IMPORTANT: Do NOT put tools here that sub-agents need. Use PRIMARY_ONLY_BLOCKED_TOOLS instead.
 DISALLOWED_TOOLS = [
-    # TaskStop blocked: Simone doesn't use background tasks - all Task() delegations are
-    # foreground sub-agents that run to completion. The model was hallucinating task IDs
-    # and entering death loops trying to "clean up" non-existent background tasks.
-    # See: temp/taskstop_issue_context_for_review.md for full analysis.
-    "TaskStop",
-    "task_stop",
     "TaskOutput",
     "TaskResult",
     "taskoutput",

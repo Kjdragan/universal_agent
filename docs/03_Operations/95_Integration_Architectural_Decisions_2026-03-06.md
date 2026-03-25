@@ -44,13 +44,13 @@ Each works correctly for its purpose. The dashboard proxy injects ops tokens on 
 
 ---
 
-## ADR-INT-003: Session Workspace Filesystem Isolation
+## ADR-INT-003: Run Workspace Filesystem Isolation
 
-**Observation (2.6):** Session workspaces are created under `AGENT_RUN_WORKSPACES/` with session-id-based naming. Ownership is enforced at the API level by comparing the authenticated owner with session metadata. The filesystem itself has no per-session access control — any process with access to `AGENT_RUN_WORKSPACES` can read any session's files.
+**Observation (2.6):** Run workspaces are created under `AGENT_RUN_WORKSPACES/` with run-based naming plus some legacy session-shaped names during migration. Ownership is enforced at the API level by comparing the authenticated owner with session or run metadata. The filesystem itself has no per-workspace access control — any process with access to `AGENT_RUN_WORKSPACES` can read any workspace's files.
 
 **Current Assessment:** Acceptable for single-user deployment where all processes run under the same OS user.
 
-**Trigger for Revisitation:** If multi-user or multi-tenant access is ever considered, the ownership boundary must move from API-level enforcement to filesystem-level isolation (per-session directories with restricted permissions, or a workspace-access proxy).
+**Trigger for Revisitation:** If multi-user or multi-tenant access is ever considered, the ownership boundary must move from API-level enforcement to filesystem-level isolation (per-run-workspace directories with restricted permissions, or a workspace-access proxy).
 
 **Files involved:**
 - `src/universal_agent/api/server.py` — session ownership enforcement

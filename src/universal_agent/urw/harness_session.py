@@ -1,7 +1,7 @@
 """
 URW Harness Session Manager
 
-Manages harness directory structure and phase sessions for massive query processing.
+Manages harness directory structure and per-phase run workspaces for massive query processing.
 """
 
 from __future__ import annotations
@@ -13,15 +13,15 @@ from typing import Any, Dict, List, Optional
 
 
 class HarnessSessionManager:
-    """Manages harness directory structure and phase sessions.
+    """Manages harness directory structure and per-phase run workspaces.
     
     Directory structure:
         AGENT_RUN_WORKSPACES/
         └── harness_YYYYMMDD_HHMMSS/
             ├── harness_state.json     # Phase tracking, status
             ├── macro_tasks.json       # Decomposed phases
-            ├── session_phase_1/       # Phase 1 work products
-            ├── session_phase_2/       # Phase 2 work products
+            ├── run_phase_1/           # Phase 1 work products
+            ├── run_phase_2/           # Phase 2 work products
             └── ...
     """
 
@@ -78,10 +78,10 @@ class HarnessSessionManager:
         self._save_state()
 
     def next_phase_session(self) -> Path:
-        """Create new session directory for next phase."""
+        """Create a new phase workspace directory for the next phase."""
         self._current_phase += 1
         
-        session_name = f"session_phase_{self._current_phase}"
+        session_name = f"run_phase_{self._current_phase}"
         session_path = self.harness_dir / session_name
         session_path.mkdir(parents=True, exist_ok=True)
         
@@ -97,7 +97,7 @@ class HarnessSessionManager:
         return session_path
 
     def get_prior_session_paths(self) -> List[str]:
-        """Returns list of completed phase session paths for context injection."""
+        """Returns list of completed phase workspace paths for context injection."""
         return [str(p) for p in self._phase_sessions[:-1]]  # Exclude current
 
     def mark_phase_complete(self, phase_num: int, success: bool = True) -> None:

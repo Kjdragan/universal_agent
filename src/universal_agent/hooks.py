@@ -36,6 +36,10 @@ from universal_agent.identity import (
     resolve_email_recipients,
     validate_recipient_policy,
 )
+from universal_agent.task_stop_guardrails import (
+    extract_task_stop_id as _shared_extract_task_stop_id,
+    task_stop_rejection_reason as _shared_task_stop_rejection_reason,
+)
 import logfire
 
 logger = logging.getLogger(__name__)
@@ -245,6 +249,10 @@ def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
             )
 
     return None  # Looks like a real SDK token
+
+
+_extract_task_stop_id = _shared_extract_task_stop_id
+_task_stop_rejection_reason = _shared_task_stop_rejection_reason
 
 
 
@@ -561,10 +569,15 @@ def _looks_like_session_workspace_path(path_value: str) -> bool:
         candidate = Path(path_value).resolve()
     except Exception:
         return False
-    if candidate.name.startswith("session_"):
+    if candidate.name.startswith(("run_", "session_")):
         return True
     return (
-        (candidate / "session_policy.json").exists()
+        (
+            (candidate / "session_policy.json").exists()
+            or (candidate / "run_manifest.json").exists()
+            or (candidate / "run_checkpoint.json").exists()
+            or (candidate / "session_checkpoint.json").exists()
+        )
         and (candidate / "work_products").exists()
     )
 
@@ -911,8 +924,8 @@ class AgentHookSet:
             "list_dir",
         }
 
-        # Tools that legitimately operate across session workspaces (e.g.,
-        # reading HTML from one session, writing PDF to current session).
+        # Tools that legitimately operate across run workspaces (e.g.,
+        # reading HTML from one workspace, writing PDF to the current workspace).
         CROSS_WORKSPACE_TOOLS = {
             "mcp__internal__html_to_pdf",
             "mcp__internal__run_research_phase",
@@ -953,7 +966,7 @@ class AgentHookSet:
                 pass  # Not in memory dir, continue with normal checks
 
         # Special-case: `mcp__internal__write_text_file` is explicitly designed to write
-        # to either the session workspace *or* the durable artifacts root. It performs its
+        # to either the run workspace *or* the durable artifacts root. It performs its
         # own allowlist enforcement in the tool implementation, so we must not rewrite its
         # paths to be workspace-scoped. However, we still block obvious escapes for safety.
         tool_lower = tool_name.lower()
@@ -987,7 +1000,7 @@ class AgentHookSet:
                     if not allowed:
                         msg = (
                             f"Tool input 'path' contains path '{raw_path}' which is outside the "
-                            "session workspace and UA_ARTIFACTS_DIR."
+                            "run workspace and UA_ARTIFACTS_DIR."
                         )
                         logfire.warning(
                             "workspace_guard_blocked",
@@ -1082,7 +1095,7 @@ class AgentHookSet:
                 self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
-                        "⛔ Action blocked — no active tasks exist to manage. "
+                        "⛔ Circuit-breaker: action blocked — no active tasks exist to manage. "
                         f"({self._taskstop_consecutive_failures} consecutive invalid attempts).\n\n"
                         "REDIRECT: Begin productive work NOW:\n"
                         "→ Decompose the user request into steps\n"
@@ -1102,7 +1115,7 @@ class AgentHookSet:
                 self._taskstop_consecutive_failures += 1
                 return {
                     "systemMessage": (
-                        "⚠️ Action blocked — no active tasks to manage.\n\n"
+                        "⚠️ Invalid TaskStop request blocked — no active tasks to manage.\n\n"
                         f"{reason}\n"
                         "Redirect: begin productive work now — delegate via Task(), "
                         "call an MCP tool, or start a search."
@@ -1881,7 +1894,8 @@ class AgentHookSet:
         variables that were injected into the agent subprocess environment.
 
         This hook makes Bash commands resilient by prefixing:
-        - CURRENT_SESSION_WORKSPACE
+        - CURRENT_RUN_WORKSPACE
+        - CURRENT_SESSION_WORKSPACE (legacy alias)
         - UA_ARTIFACTS_DIR (defaulting to <repo>/artifacts if env not set)
         """
         command, command_source, tool_input = _extract_bash_command(input_data)
@@ -1925,6 +1939,8 @@ class AgentHookSet:
             auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
             auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
 
+            if "CURRENT_RUN_WORKSPACE=" not in command:
+                prefix_parts.append(f"export CURRENT_RUN_WORKSPACE={shlex.quote(ws)}")
             if "CURRENT_SESSION_WORKSPACE=" not in command:
                 prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
             if "UA_ARTIFACTS_DIR=" not in command:

@@ -233,7 +233,7 @@ class AgentAdapter:
                             result=result,
                         )
                         generator.save(checkpoint)
-                        print(f"✅ Saved session checkpoint: {workspace_path / 'session_checkpoint.json'}")
+                        print(f"✅ Saved run checkpoint: {workspace_path / 'run_checkpoint.json'}")
                     except Exception as ckpt_err:
                         print(f"⚠️ Failed to save checkpoint: {ckpt_err}")
                     

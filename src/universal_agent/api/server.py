@@ -98,12 +98,19 @@ from universal_agent.api.events import (
     create_error_event,
     ApprovalResponse,
 )
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.state import list_run_attempts
+from universal_agent.run_catalog import RunCatalogService
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.timeout_policy import (
     gateway_owner_lookup_timeout_seconds,
     gateway_ws_send_timeout_seconds,
     gateway_ws_handshake_timeout_seconds,
+)
+from universal_agent.workspace_catalog import (
+    list_workspace_summaries,
+    looks_like_agent_workspace,
 )
 ensure_runtime_path()
 
@@ -211,6 +218,118 @@ def _dashboard_session_secret() -> str:
         or (os.getenv("UA_DASHBOARD_PASSWORD") or "").strip()
     )
     return secret
+
+
+def _list_local_runs(limit: int = 100) -> list[dict[str, Any]]:
+    return RunCatalogService().list_runs(limit=limit)
+
+
+def _get_local_run(run_id: str) -> Optional[dict[str, Any]]:
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        return None
+    return RunCatalogService().get_run(safe_run_id)
+
+
+def _list_local_run_attempts(run_id: str) -> list[dict[str, Any]]:
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        return []
+    conn = connect_runtime_db()
+    try:
+        rows = list_run_attempts(conn, safe_run_id)
+        attempts: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            attempts.append(payload)
+        return attempts
+    finally:
+        conn.close()
+
+
+async def _resolve_run_workspace(run_id: str) -> Optional[Path]:
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        return None
+    if _gateway_url():
+        payload = await _fetch_gateway_run(safe_run_id)
+    else:
+        payload = _get_local_run(safe_run_id)
+    if not payload:
+        return None
+    workspace_dir = str(payload.get("workspace_dir") or "").strip()
+    if not workspace_dir:
+        return None
+    return Path(workspace_dir).expanduser().resolve()
+
+
+def _list_workspace_files_payload(workspace: Path, path: str = "") -> dict[str, Any]:
+    if not workspace.exists():
+        return {"files": [], "error": "Workspace not found"}
+
+    target_path = workspace / path if path else workspace
+
+    try:
+        target_path = target_path.resolve()
+        workspace_resolved = workspace.resolve()
+        if not str(target_path).startswith(str(workspace_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not target_path.exists():
+        return {"files": [], "path": path}
+
+    if target_path.is_file():
+        return {"files": [], "path": path, "is_file": True}
+
+    files = []
+    for item in sorted(target_path.iterdir()):
+        try:
+            stat = item.stat()
+            file_info = {
+                "name": item.name,
+                "path": str(item.relative_to(workspace)),
+                "is_dir": item.is_dir(),
+                "size": stat.st_size if item.is_file() else None,
+                "modified": stat.st_mtime,
+            }
+            files.append(file_info)
+        except Exception:
+            pass
+
+    return {
+        "files": files,
+        "path": path,
+        "workspace": str(workspace),
+    }
+
+
+def _read_workspace_file_response(workspace: Path, file_path: str) -> Response:
+    target = (workspace / file_path).resolve()
+    workspace_resolved = workspace.resolve()
+    if not str(target).startswith(str(workspace_resolved)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    filename = target.name
+    content = target.read_bytes()
+
+    if filename.endswith(".html"):
+        return Response(content=content, media_type="text/html")
+
+    if filename.endswith(".json"):
+        try:
+            data = json.loads(content.decode("utf-8"))
+            return Response(content=json.dumps(data, indent=2), media_type="application/json")
+        except Exception:
+            pass
+
+    mime, _ = mimetypes.guess_type(filename)
+    return Response(content=content, media_type=mime or "text/plain")
 
 
 def _log_internal_dashboard_auth(*, surface: str, target: str, client_host: str) -> None:
@@ -368,6 +487,60 @@ async def _fetch_gateway_session_owner(session_id: str) -> Optional[str]:
     return owner or None
 
 
+async def _fetch_gateway_runs() -> list[dict[str, Any]]:
+    gateway_url = _gateway_url()
+    if not gateway_url:
+        return []
+    url = f"{gateway_url}/api/v1/runs"
+    async with httpx.AsyncClient(timeout=gateway_owner_lookup_timeout_seconds()) as client:
+        response = await client.get(url, headers=_gateway_headers())
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to list runs ({response.status_code})",
+        )
+    payload = response.json()
+    runs = payload.get("runs", [])
+    return runs if isinstance(runs, list) else []
+
+
+async def _fetch_gateway_run(run_id: str) -> Optional[dict[str, Any]]:
+    gateway_url = _gateway_url()
+    if not gateway_url:
+        return None
+    url = f"{gateway_url}/api/v1/runs/{run_id}"
+    async with httpx.AsyncClient(timeout=gateway_owner_lookup_timeout_seconds()) as client:
+        response = await client.get(url, headers=_gateway_headers())
+    if response.status_code == 404:
+        return None
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch run ({response.status_code})",
+        )
+    payload = response.json()
+    return payload if isinstance(payload, dict) else None
+
+
+async def _fetch_gateway_run_attempts(run_id: str) -> Optional[list[dict[str, Any]]]:
+    gateway_url = _gateway_url()
+    if not gateway_url:
+        return None
+    url = f"{gateway_url}/api/v1/runs/{run_id}/attempts"
+    async with httpx.AsyncClient(timeout=gateway_owner_lookup_timeout_seconds()) as client:
+        response = await client.get(url, headers=_gateway_headers())
+    if response.status_code == 404:
+        return None
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch run attempts ({response.status_code})",
+        )
+    payload = response.json()
+    attempts = payload.get("attempts", [])
+    return attempts if isinstance(attempts, list) else []
+
+
 async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: bool) -> None:
     if not _gateway_url():
         return
@@ -381,7 +554,9 @@ async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: 
         # Hook sessions are automation/system workflows and may be resumed with a
         # runtime identity that differs from the dashboard owner lane. Allow the
         # primary dashboard owner to inspect these sessions.
-        if session_id.startswith("session_hook_") and hmac.compare_digest(owner_id, _normalize_owner_id(None)):
+        if session_id.startswith(("session_hook_", "run_session_hook_")) and hmac.compare_digest(
+            owner_id, _normalize_owner_id(None)
+        ):
             return
         raise HTTPException(status_code=403, detail="Access denied: session owner mismatch.")
     if auth_required:
@@ -841,7 +1016,7 @@ def _as_float(value: Any) -> Optional[float]:
 
 def _workspace_source_type(workspace_id: str) -> str:
     sid = workspace_id.lower()
-    if sid.startswith("session_hook_"):
+    if sid.startswith("session_hook_") or sid.startswith("run_session_hook_"):
         return "hook"
     if sid.startswith("tg_"):
         return "telegram"
@@ -897,13 +1072,7 @@ def _read_workspace_sync_marker(workspace_dir: Path) -> dict[str, Any]:
 
 
 def _looks_like_session_workspace(workspace_dir: Path) -> bool:
-    workspace_id = workspace_dir.name.lower()
-    if workspace_id.startswith(_SESSION_PREFIXES):
-        return True
-    return any(
-        (workspace_dir / marker_name).exists()
-        for marker_name in ("run.log", "session_checkpoint.json", "trace.json", "sync_ready.json")
-    )
+    return looks_like_agent_workspace(workspace_dir)
 
 
 def _storage_session_items(
@@ -927,11 +1096,23 @@ def _storage_session_items(
         return []
 
     source_filter = (source or "all").strip().lower()
+    catalog_rows = list_workspace_summaries(
+        root,
+        limit=max(limit * 10, 500),
+        run_catalog=RunCatalogService(),
+    )
+    run_by_workspace = {
+        str(item.get("workspace_dir") or ""): item
+        for item in catalog_rows
+    }
+
     items: list[dict[str, Any]] = []
     for workspace_dir in root.iterdir():
         if not workspace_dir.is_dir():
             continue
-        if not _looks_like_session_workspace(workspace_dir):
+        resolved_workspace = str(workspace_dir.resolve())
+        run_summary = run_by_workspace.get(resolved_workspace)
+        if run_summary is None and not _looks_like_session_workspace(workspace_dir):
             continue
         workspace_id = workspace_dir.name
         source_type = _workspace_source_type(workspace_id)
@@ -949,8 +1130,14 @@ def _storage_session_items(
         items.append(
             {
                 "session_id": workspace_id,
+                "run_id": (run_summary or {}).get("run_id"),
+                "run_status": (run_summary or {}).get("run_status"),
+                "run_kind": (run_summary or {}).get("run_kind"),
+                "trigger_source": (run_summary or {}).get("trigger_source"),
+                "attempt_count": (run_summary or {}).get("attempt_count"),
+                "latest_attempt_id": (run_summary or {}).get("latest_attempt_id"),
                 "source_type": source_type,
-                "status": marker.get("state") or "unknown",
+                "status": str((run_summary or {}).get("run_status") or marker.get("state") or "unknown"),
                 "ready": bool(marker.get("ready")),
                 "completed_at_epoch": completed_epoch,
                 "updated_at_epoch": marker.get("updated_at_epoch"),
@@ -983,6 +1170,16 @@ def _storage_session_items(
     for row in selected_items:
         row.pop("_workspace_dir", None)
     return selected_items
+
+
+def _storage_run_items(
+    source: str = "all",
+    limit: int = 100,
+    include_size: bool = True,
+    *,
+    root: Optional[Path] = None,
+) -> list[dict[str, Any]]:
+    return _storage_session_items(source, limit, include_size, root=root)
 
 
 def _extract_artifact_field(payload: Optional[dict[str, Any]], keys: tuple[str, ...]) -> Optional[str]:
@@ -1180,7 +1377,9 @@ async def root():
         "endpoints": {
             "websocket": "/ws/agent",
             "session_stream": "/api/v1/sessions/{session_id}/stream",
-            "sessions": "/api/sessions",
+            "live_sessions": "/api/v1/sessions",
+            "legacy_session_directory": "/api/sessions",
+            "runs": "/api/v1/runs",
             "files": "/api/files",
             "health": "/api/health",
         },
@@ -1201,7 +1400,7 @@ async def health():
 
 @app.post("/api/sessions")
 async def create_session(request: SessionCreateRequest, http_request: Request):
-    """Create a new agent session."""
+    """Create a new live agent session."""
     auth = getattr(http_request.state, "dashboard_auth", _authenticate_dashboard_request(http_request))
     owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
     requested_user = (request.user_id or "").strip()
@@ -1227,7 +1426,7 @@ async def create_session(request: SessionCreateRequest, http_request: Request):
 
 @app.get("/api/sessions")
 async def list_sessions(request: Request):
-    """List all agent sessions."""
+    """List live agent sessions via the compatibility API surface."""
     auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
     owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
     bridge = get_agent_bridge()
@@ -1248,6 +1447,72 @@ async def list_sessions(request: Request):
         if session_owner and hmac.compare_digest(session_owner, owner_id):
             filtered.append(session)
     return {"sessions": filtered}
+
+
+@app.get("/api/v1/runs")
+async def list_runs(request: Request):
+    """List durable runs."""
+    _ = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    if _gateway_url():
+        return {"runs": await _fetch_gateway_runs()}
+    return {"runs": _list_local_runs(limit=100)}
+
+
+@app.get("/api/v1/runs/{run_id}")
+async def get_run(run_id: str, request: Request):
+    """Get durable run details."""
+    _ = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if _gateway_url():
+        payload = await _fetch_gateway_run(safe_run_id)
+    else:
+        payload = _get_local_run(safe_run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return payload
+
+
+@app.get("/api/v1/runs/{run_id}/attempts")
+async def get_run_attempts(run_id: str, request: Request):
+    """Get durable run attempt details."""
+    _ = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if _gateway_url():
+        attempts = await _fetch_gateway_run_attempts(safe_run_id)
+        if attempts is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+    else:
+        run_payload = _get_local_run(safe_run_id)
+        if not run_payload:
+            raise HTTPException(status_code=404, detail="Run not found")
+        attempts = _list_local_run_attempts(safe_run_id)
+    return {"run_id": safe_run_id, "attempts": attempts, "total": len(attempts)}
+
+
+@app.get("/api/v1/runs/{run_id}/files")
+async def list_run_files(run_id: str, request: Request, path: str = ""):
+    """List files in a durable run workspace."""
+    _ = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    workspace = await _resolve_run_workspace(run_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    payload = _list_workspace_files_payload(workspace, path=path)
+    payload["run_id"] = str(run_id or "").strip()
+    return payload
+
+
+@app.get("/api/v1/runs/{run_id}/files/{file_path:path}")
+async def get_run_file(run_id: str, file_path: str, request: Request):
+    """Get file content from a durable run workspace."""
+    _ = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    workspace = await _resolve_run_workspace(run_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return _read_workspace_file_response(workspace, file_path)
 
 
 @app.get("/api/sessions/{session_id}")
@@ -1281,8 +1546,13 @@ async def get_session(session_id: str, request: Request):
 
 
 @app.get("/api/files")
-async def list_files(request: Request, session_id: Optional[str] = None, path: str = ""):
-    """List files in a session workspace."""
+async def list_files(
+    request: Request,
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    path: str = "",
+):
+    """List files in a run workspace."""
     auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
     owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
     auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
@@ -1291,90 +1561,25 @@ async def list_files(request: Request, session_id: Optional[str] = None, path: s
     if session_id:
         await _enforce_session_owner(session_id, owner_id, auth_required)
         workspace = WORKSPACES_DIR / session_id
+    elif run_id:
+        workspace = await _resolve_run_workspace(run_id)
+        if workspace is None:
+            raise HTTPException(status_code=404, detail="Run not found")
     else:
-        raise HTTPException(status_code=400, detail="session_id is required")
-
-    if not workspace.exists():
-        return {"files": [], "error": "Workspace not found"}
-
-    # Navigate to path
-    target_path = workspace / path if path else workspace
-
-    # Security check
-    try:
-        target_path = target_path.resolve()
-        workspace_resolved = workspace.resolve()
-        if not str(target_path).startswith(str(workspace_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    if not target_path.exists():
-        return {"files": [], "path": path}
-
-    if target_path.is_file():
-        return {"files": [], "path": path, "is_file": True}
-
-    files = []
-    for item in sorted(target_path.iterdir()):
-        try:
-            stat = item.stat()
-            file_info = {
-                "name": item.name,
-                "path": str(item.relative_to(workspace)),
-                "is_dir": item.is_dir(),
-                "size": stat.st_size if item.is_file() else None,
-                "modified": stat.st_mtime,
-            }
-            files.append(file_info)
-        except Exception:
-            pass
-
-    return {
-        "files": files,
-        "path": path,
-        "workspace": str(workspace),
-    }
+        raise HTTPException(status_code=400, detail="session_id or run_id is required")
+    return _list_workspace_files_payload(workspace, path=path)
 
 
 @app.get("/api/files/{session_id}/{file_path:path}")
 async def get_file(session_id: str, file_path: str, request: Request):
-    """Get file content from session workspace."""
+    """Get file content from a run workspace."""
     auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
     owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
     auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
     await _enforce_session_owner(session_id, owner_id, auth_required)
 
-    bridge = get_agent_bridge()
-    try:
-        result = bridge.get_session_file(session_id, file_path)
-    finally:
-        await _close_bridge(bridge)
-
-    if result is None:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    content_type, filename, content = result
-
-    # For HTML files, return as HTML
-    if filename.endswith(".html"):
-        return Response(content=content, media_type="text/html")
-
-    # For JSON files, return as JSON
-    if filename.endswith(".json"):
-        try:
-            data = json.loads(content.decode("utf-8"))
-            # Return pretty-printed JSON
-            return Response(content=json.dumps(data, indent=2), media_type="application/json")
-        except Exception:
-            pass
-
-    # For text files, return as text
-    if filename.endswith((".txt", ".md", ".log", ".py", ".js", ".ts", ".tsx", ".css")):
-        return Response(content=content, media_type="text/plain")
-
-    # Default: return as download
-    return Response(content=content, media_type=content_type)
+    workspace = WORKSPACES_DIR / session_id
+    return _read_workspace_file_response(workspace, file_path)
 
 
 @app.get("/api/artifacts")
@@ -1470,6 +1675,26 @@ async def vps_storage_sessions(source: str = "all", limit: int = 100, root_sourc
     }
 
 
+@app.get("/api/vps/storage/runs")
+async def vps_storage_runs(source: str = "all", limit: int = 100, root_source: str = "local"):
+    source_clean = (source or "all").strip().lower()
+    if source_clean not in {"all", "web", "hook", "telegram", "vp"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, web, hook, telegram, vp")
+    root_source_clean = _normalize_storage_root_source(root_source)
+    workspace_root = _storage_root("workspaces", root_source_clean)
+    limit_clamped = max(1, min(limit, 500))
+    runs = _storage_run_items(source_clean, limit_clamped, include_size=True, root=workspace_root)
+    return {
+        "workspace_root": str(workspace_root),
+        "root_source": root_source_clean,
+        "source": source_clean,
+        "limit": limit_clamped,
+        "runs": runs,
+        # Transitional alias for callers still expecting the old shape.
+        "sessions": runs,
+    }
+
+
 @app.get("/api/vps/storage/artifacts")
 async def vps_storage_artifacts(limit: int = 100, root_source: str = "local"):
     root_source_clean = _normalize_storage_root_source(root_source)
@@ -1515,6 +1740,7 @@ async def vps_storage_overview(root_source: str = "local"):
         "latest_ready_remote_epoch": _as_float(probe.get("latest_ready_remote_epoch")),
         "latest_ready_local_epoch": _as_float(probe.get("latest_ready_local_epoch")),
         "lag_seconds": _as_float(probe.get("lag_seconds")),
+        "latest_runs": latest_sessions,
         "latest_sessions": latest_sessions,
         "latest_artifact": latest_artifact,
         "workspace_root": str(workspace_root),

@@ -245,8 +245,10 @@ function chatSessionHref(sessionId?: string | null): string {
 
 function parseVideoIdFromHookSession(sessionId: string): string {
   const normalized = asText(sessionId);
-  if (!normalized.startsWith("session_hook_yt_")) return "";
-  const body = normalized.slice("session_hook_yt_".length);
+  const prefixes = ["session_hook_yt_", "run_session_hook_yt_"];
+  const prefix = prefixes.find((candidate) => normalized.startsWith(candidate));
+  if (!prefix) return "";
+  const body = normalized.slice(prefix.length);
   const parts = body.split("_");
   if (parts.length < 2) return "";
   return parts[parts.length - 1] || "";
@@ -267,6 +269,9 @@ function tutorialSessionId(item: DashboardNotification): string {
   const metadata = asRecord(item.metadata);
   const hookSessionKey = asText(metadata.hook_session_key);
   if (!hookSessionKey) return "";
+  if (hookSessionKey.startsWith("run_session_hook_") || hookSessionKey.startsWith("session_hook_")) {
+    return hookSessionKey;
+  }
   return `session_hook_${hookSessionKey}`;
 }
 
@@ -908,9 +913,10 @@ export default function DashboardPage() {
   const inferSourceCategory = useCallback((session: SessionDirectoryItem) => {
     // Heartbeat runs on existing sessions; detect via last_run_source metadata
     if (session.last_run_source === "heartbeat") return "heartbeat";
+    if (session.trigger_source) return session.trigger_source;
     const sid = session.session_id.toLowerCase();
     if (sid.startsWith("tg_")) return "telegram";
-    if (sid.startsWith("session_hook_")) return "hook";
+    if (sid.startsWith("session_hook_") || sid.startsWith("run_session_hook_")) return "hook";
     if (sid.startsWith("session_")) return "chat";
     if (sid.startsWith("cron_")) return "cron";
     if (sid.startsWith("api_")) return "api";
@@ -1355,7 +1361,7 @@ export default function DashboardPage() {
       <section ref={sessionSectionRef} className="rounded-xl border border-border bg-background/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">Session Directory</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">Runs & Sessions</h2>
             <div className="flex rounded-full border border-border overflow-hidden">
               <button
                 type="button"
@@ -1384,7 +1390,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <span className="text-xs text-muted-foreground">
-            {filteredSessions.length} session{filteredSessions.length !== 1 ? "s" : ""}
+            {filteredSessions.length} item{filteredSessions.length !== 1 ? "s" : ""}
           </span>
         </div>
 
@@ -1445,7 +1451,7 @@ export default function DashboardPage() {
             <button
               onClick={async () => {
                 const count = filteredSessions.length;
-                if (!window.confirm(`Delete ALL ${count} visible sessions? This cannot be undone.`)) return;
+                if (!window.confirm(`Delete ALL ${count} visible items? This cannot be undone.`)) return;
                 const ids = filteredSessions.map(s => s.session_id);
                 setDeletingIds(new Set(ids));
                 for (const id of ids) {
@@ -1466,6 +1472,10 @@ export default function DashboardPage() {
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {filteredSessions.map((session) => (
             <article key={session.session_id} className={`rounded-lg border p-3 transition ${selectedSessions.has(session.session_id) ? "border-primary/30 bg-primary/5" : "border-border/80 bg-background/50"} ${deletingIds.has(session.session_id) ? "opacity-40" : ""}`}>
+              {(() => {
+                const isLiveSession = session.is_live_session !== false;
+                return (
+                  <>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <input
@@ -1482,7 +1492,7 @@ export default function DashboardPage() {
                     type="button"
                     onClick={() => deleteSession(session.session_id)}
                     disabled={deletingIds.has(session.session_id)}
-                    title="Delete session"
+                    title={isLiveSession ? "Delete session" : "Delete run workspace"}
                     className="rounded p-0.5 text-secondary/60 hover:text-secondary hover:bg-red-400/10 transition disabled:opacity-30"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-3.5 w-3.5">
@@ -1497,6 +1507,13 @@ export default function DashboardPage() {
                   <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full border border-secondary/25 bg-secondary/10 px-1.5 py-0 text-[9px] text-secondary">♥ heartbeat</span>
                 )}
               </p>
+              {session.run_id ? (
+                <p className="mt-1 text-[11px] text-primary/70">
+                  run: {session.run_id}
+                  {session.attempt_count ? ` · ${session.attempt_count} attempt${session.attempt_count === 1 ? "" : "s"}` : ""}
+                  {session.run_kind ? ` · ${session.run_kind}` : ""}
+                </p>
+              ) : null}
               {session.description ? (
                 <p
                   className="mt-1 text-[11px] text-foreground/80/90 truncate"
@@ -1510,11 +1527,16 @@ export default function DashboardPage() {
               <p className="mt-1 text-[11px] text-muted-foreground">
                 memory: {session.memory_mode}
               </p>
+              {!isLiveSession && (
+                <p className="mt-1 text-[11px] text-amber-300/80">
+                  run workspace only · no live session attached
+                </p>
+              )}
               <p className="mt-1 text-[11px] text-muted-foreground">
                 last activity: {formatLocalDateTime(session.last_activity)}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
-                {!session.session_id.startsWith("vp_") && (
+                {isLiveSession && !session.session_id.startsWith("vp_") && (
                   <button
                     type="button"
                     className="rounded-lg border border-border/40 bg-card/15 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/30"
@@ -1529,25 +1551,43 @@ export default function DashboardPage() {
                     Open Writer
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="rounded border border-amber-700 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/30"
-                  onClick={() =>
-                    openOrFocusChatWindow({
-                      sessionId: session.session_id,
-                      attachMode: "tail",
-                      role: "viewer",
-                    })
-                  }
-                >
-                  Open Viewer
-                </button>
+                {isLiveSession ? (
+                  <button
+                    type="button"
+                    className="rounded border border-amber-700 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/30"
+                    onClick={() =>
+                      openOrFocusChatWindow({
+                        sessionId: session.session_id,
+                        attachMode: "tail",
+                        role: "viewer",
+                      })
+                    }
+                  >
+                    Open Viewer
+                  </button>
+                ) : session.run_id ? (
+                  <button
+                    type="button"
+                    className="rounded border border-amber-700 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/30"
+                    onClick={() =>
+                      openOrFocusChatWindow({
+                        runId: session.run_id || undefined,
+                        role: "viewer",
+                      })
+                    }
+                  >
+                    Open Run Viewer
+                  </button>
+                ) : null}
               </div>
+                  </>
+                );
+              })()}
             </article>
           ))}
           {filteredSessions.length === 0 && (
             <div className="rounded-lg border border-border/80 bg-background/50 p-3 text-sm text-muted-foreground">
-              {sessionDirectory.length === 0 ? "No sessions discovered yet." : "No sessions match the current filter."}
+              {sessionDirectory.length === 0 ? "No runs or live sessions discovered yet." : "No runs or sessions match the current filter."}
             </div>
           )}
         </div>

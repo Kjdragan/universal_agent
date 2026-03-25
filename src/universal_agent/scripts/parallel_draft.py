@@ -112,7 +112,7 @@ async def draft_report_async(
     Async entry point for drafting reports.
     
     Args:
-        workspace_path: Root directory of the session workspace.
+        workspace_path: Root directory of the run workspace.
         outline_path: Optional specific path to outline.json.
         corpus_path: Optional specific path to refined_corpus.md.
         

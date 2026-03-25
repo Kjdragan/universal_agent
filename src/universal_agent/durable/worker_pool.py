@@ -12,6 +12,7 @@ Architecture:
 """
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
@@ -24,14 +25,18 @@ from typing import Any, Callable, Dict, List, Optional, Awaitable
 
 from .state import (
     acquire_run_lease,
+    create_run_attempt,
+    get_run_attempt,
     heartbeat_run_lease,
     release_run_lease,
     list_runs_with_status,
     get_run,
+    update_run_attempt,
     update_run_status,
 )
 from .db import connect_runtime_db
 from .migrations import ensure_schema
+from universal_agent.run_workspace import ensure_run_workspace_scaffold
 
 logger = logging.getLogger(__name__)
 
@@ -202,23 +207,120 @@ class Worker:
                         try:
                             # Get run details
                             run = get_run(self.conn, run_id)
-                            workspace_dir = run["run_spec_json"] if run else "{}"
+                            run_spec = {}
+                            if run and run["run_spec_json"]:
+                                try:
+                                    run_spec = json.loads(run["run_spec_json"])
+                                except (TypeError, json.JSONDecodeError):
+                                    logger.warning(
+                                        "Worker %s could not decode run_spec_json for run %s",
+                                        self.config.worker_id,
+                                        run_id,
+                                    )
+                            workspace_dir = (
+                                run["workspace_dir"] if run and run["workspace_dir"] else None
+                            ) or run_spec.get("workspace_dir") or "{}"
+                            attempt_id = run["latest_attempt_id"] if run else None
+                            if not attempt_id or not get_run_attempt(self.conn, attempt_id):
+                                attempt_id = create_run_attempt(
+                                    self.conn,
+                                    run_id,
+                                    status="running",
+                                    lease_owner=self.config.worker_id,
+                                )
+                            else:
+                                update_run_attempt(
+                                    self.conn,
+                                    attempt_id,
+                                    status="running",
+                                    lease_owner=self.config.worker_id,
+                                )
+                            attempt_row = get_run_attempt(self.conn, attempt_id)
+                            if workspace_dir and attempt_row is not None:
+                                ensure_run_workspace_scaffold(
+                                    workspace_dir=workspace_dir,
+                                    run_id=run_id,
+                                    attempt_id=attempt_id,
+                                    attempt_number=int(attempt_row["attempt_number"] or 0),
+                                    status="running",
+                                    run_kind=str(run["run_kind"] or "") if run else None,
+                                    trigger_source=str(run["trigger_source"] or "") if run else None,
+                                )
                             
                             # Process the run
                             success = await self.run_handler(run_id, workspace_dir)
                             
                             if success:
                                 update_run_status(self.conn, run_id, "completed")
+                                update_run_attempt(
+                                    self.conn,
+                                    attempt_id,
+                                    status="completed",
+                                    lease_owner=None,
+                                    lease_expires_at=None,
+                                )
+                                attempt_row = get_run_attempt(self.conn, attempt_id)
+                                if workspace_dir and attempt_row is not None:
+                                    ensure_run_workspace_scaffold(
+                                        workspace_dir=workspace_dir,
+                                        run_id=run_id,
+                                        attempt_id=attempt_id,
+                                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                                        status="completed",
+                                        run_kind=str(run["run_kind"] or "") if run else None,
+                                        trigger_source=str(run["trigger_source"] or "") if run else None,
+                                    )
                                 self.state.runs_completed += 1
                                 logger.info(f"Worker {self.config.worker_id} completed run {run_id}")
                             else:
                                 update_run_status(self.conn, run_id, "failed")
+                                update_run_attempt(
+                                    self.conn,
+                                    attempt_id,
+                                    status="failed",
+                                    failure_class="run_handler_failed",
+                                    failure_reason="Worker run handler returned False",
+                                    lease_owner=None,
+                                    lease_expires_at=None,
+                                )
+                                attempt_row = get_run_attempt(self.conn, attempt_id)
+                                if workspace_dir and attempt_row is not None:
+                                    ensure_run_workspace_scaffold(
+                                        workspace_dir=workspace_dir,
+                                        run_id=run_id,
+                                        attempt_id=attempt_id,
+                                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                                        status="failed",
+                                        run_kind=str(run["run_kind"] or "") if run else None,
+                                        trigger_source=str(run["trigger_source"] or "") if run else None,
+                                    )
                                 self.state.runs_failed += 1
                                 logger.warning(f"Worker {self.config.worker_id} failed run {run_id}")
                         
                         except Exception as e:
                             logger.error(f"Worker {self.config.worker_id} error processing run {run_id}: {e}")
                             update_run_status(self.conn, run_id, "failed")
+                            if "attempt_id" in locals() and attempt_id:
+                                update_run_attempt(
+                                    self.conn,
+                                    attempt_id,
+                                    status="failed",
+                                    failure_class="worker_exception",
+                                    failure_reason=str(e),
+                                    lease_owner=None,
+                                    lease_expires_at=None,
+                                )
+                                attempt_row = get_run_attempt(self.conn, attempt_id)
+                                if workspace_dir and attempt_row is not None:
+                                    ensure_run_workspace_scaffold(
+                                        workspace_dir=workspace_dir,
+                                        run_id=run_id,
+                                        attempt_id=attempt_id,
+                                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                                        status="failed",
+                                        run_kind=str(run["run_kind"] or "") if run else None,
+                                        trigger_source=str(run["trigger_source"] or "") if run else None,
+                                    )
                             self.state.runs_failed += 1
                         
                         finally:
@@ -442,7 +544,7 @@ def queue_run(
     max_iterations: Optional[int] = None,
 ) -> None:
     """Queue a run for processing by the worker pool."""
-    from .state import upsert_run
+    from .state import create_run_attempt, upsert_run
     
     run_spec = {
         "prompt": prompt,
@@ -457,7 +559,27 @@ def queue_run(
         status="queued",
         last_job_prompt=prompt,
         max_iterations=max_iterations,
+        workspace_dir=workspace_dir,
+        run_kind="worker_pool",
+        trigger_source="worker_pool_queue",
     )
+    attempt_id = create_run_attempt(
+        conn,
+        run_id=run_id,
+        status="queued",
+        retry_reason="initial_queue",
+    )
+    attempt_row = get_run_attempt(conn, attempt_id)
+    if workspace_dir and attempt_row is not None:
+        ensure_run_workspace_scaffold(
+            workspace_dir=workspace_dir,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            attempt_number=int(attempt_row["attempt_number"] or 0),
+            status="queued",
+            run_kind="worker_pool",
+            trigger_source="worker_pool_queue",
+        )
     
     logger.info(f"Queued run {run_id}")
 

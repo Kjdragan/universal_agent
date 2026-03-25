@@ -32,12 +32,12 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def get_latest_workspace() -> Optional[str]:
-    """Get the latest session workspace directory."""
+    """Get the latest run workspace directory."""
     global _current_workspace
     if _current_workspace and os.path.exists(_current_workspace):
         return _current_workspace
 
-    # Fallback: find the most recent session using absolute path
+    # Fallback: find the most recent run workspace using absolute path
     workspaces_dir = PROJECT_ROOT / "AGENT_RUN_WORKSPACES"
     if not workspaces_dir.exists():
         return None

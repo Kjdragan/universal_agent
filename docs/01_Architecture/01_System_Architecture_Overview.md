@@ -256,7 +256,7 @@ erDiagram
     VP_WORKER ||--o{ CODER_VP_DB : "CODIE sessions"
     CSI_INGESTER ||--o{ CSI_DB : "events, DLQ, state"
     GATEWAY }o--|| CSI_DB : "cross-health read"
-    SESSION ||--o{ WORKSPACE : "per-session files"
+    RUN ||--o{ WORKSPACE : "durable run files"
 ```
 
 ## Data Stores
@@ -269,7 +269,7 @@ erDiagram
 | Activity DB | `AGENT_RUN_WORKSPACES/activity_events.db` | CSI events, notifications |
 | Factory Registry DB | `AGENT_RUN_WORKSPACES/factory_registry.db` | Factory presence tracking |
 | CSI DB | Configured via `CSI_DB_PATH` | CSI events, delivery state, DLQ |
-| Session Workspaces | `AGENT_RUN_WORKSPACES/<session_id>/` | Per-session files and artifacts |
+| Run Workspaces | `AGENT_RUN_WORKSPACES/run_<run_id>/` or legacy `AGENT_RUN_WORKSPACES/<session_id>/` | Durable run files, checkpoints, traces, and artifacts |
 
 ## Key Architectural Decisions
 

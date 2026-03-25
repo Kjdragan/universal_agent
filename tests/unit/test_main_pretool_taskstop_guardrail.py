@@ -119,3 +119,31 @@ def test_main_research_tool_injects_session_workspace_from_transcript_path(tmp_p
 
     assert result == {}
     assert payload["tool_input"]["workspace_dir"] == str(session_workspace.resolve())
+
+
+def test_main_research_tool_injects_run_workspace_from_transcript_path(tmp_path: Path):
+    run_workspace = tmp_path / "run_20260311_abc12345"
+    run_workspace.mkdir()
+    (run_workspace / "work_products").mkdir()
+    (run_workspace / "run_manifest.json").write_text("{}", encoding="utf-8")
+    transcript_path = run_workspace / "subagent_outputs" / "research" / "transcript.md"
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text("", encoding="utf-8")
+
+    payload = {
+        "tool_name": "mcp__internal__run_research_phase",
+        "tool_input": {
+            "query": "q",
+            "task_name": "t",
+        },
+        "transcript_path": str(transcript_path),
+    }
+
+    token = set_ctx(SessionContext(run_id="run-main-research-run-ws", observer_workspace_dir="/opt/universal_agent"))
+    try:
+        result = _run(agent_main.on_pre_tool_use_ledger(payload, "tool-pre-main-research-run", {}))
+    finally:
+        reset_ctx(token)
+
+    assert result == {}
+    assert payload["tool_input"]["workspace_dir"] == str(run_workspace.resolve())

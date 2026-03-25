@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from universal_agent import gateway_server
+from universal_agent.gateway import GatewaySessionSummary
 from universal_agent.cron_service import CronRunRecord, CronService
 from universal_agent.gateway import GatewaySession
 
@@ -385,7 +386,20 @@ def test_agentmail_trusted_heartbeat_request_queues_wake(monkeypatch):
 
     class _GatewayStub:
         def list_sessions(self):
-            return []
+            return [
+                GatewaySessionSummary(
+                    session_id="archived_1",
+                    workspace_dir="/tmp/archived_1",
+                    status="archived",
+                    metadata={"archived": True},
+                ),
+                GatewaySessionSummary(
+                    session_id="live_3",
+                    workspace_dir="/tmp/live_3",
+                    status="active",
+                    metadata={},
+                ),
+            ]
 
     notifications: list[dict] = []
 
@@ -417,8 +431,9 @@ def test_agentmail_trusted_heartbeat_request_queues_wake(monkeypatch):
     result = gateway_server._maybe_trigger_heartbeat_from_agentmail_action(payload)
 
     assert result["triggered"] is True
-    assert result["count"] == 2
-    assert len(heartbeat_stub.calls) == 2
+    assert result["count"] == 3
+    assert len(heartbeat_stub.calls) == 3
+    assert {sid for sid, _ in heartbeat_stub.calls} == {"session_1", "session_2", "live_3"}
     assert all(reason == "agentmail_trusted_heartbeat_request" for _, reason in heartbeat_stub.calls)
     assert notifications
     assert notifications[0]["kind"] == "agentmail_heartbeat_wake_queued"
@@ -485,6 +500,85 @@ def test_agentmail_heartbeat_request_dedupes_by_message_id(monkeypatch):
     assert second["triggered"] is False
     assert second["reason"] == "duplicate_message_id"
     assert len(heartbeat_stub.calls) == 1
+
+
+def test_operator_email_heartbeat_wake_dedupes_via_workflow_admission(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+
+    class _HeartbeatStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def register_session(self, session):
+            return None
+
+        def request_heartbeat_now(self, session_id: str, reason: str = "wake"):
+            self.calls.append((session_id, reason))
+
+    class _GatewayStub:
+        def list_sessions(self):
+            return []
+
+    heartbeat_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", heartbeat_stub)
+    monkeypatch.setattr(gateway_server, "_sessions", {"session_1": object()})
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+    monkeypatch.setattr(gateway_server, "_add_notification", lambda **kwargs: kwargs)
+
+    first = gateway_server._queue_heartbeat_wake_from_operator_email(
+        sender_email="kevin@example.com",
+        thread_id="thread-1",
+        message_id="msg-901",
+    )
+    second = gateway_server._queue_heartbeat_wake_from_operator_email(
+        sender_email="kevin@example.com",
+        thread_id="thread-1",
+        message_id="msg-901",
+    )
+
+    assert first["triggered"] is True
+    assert second["triggered"] is False
+    assert second["reason"] == "skip_duplicate"
+    assert len(heartbeat_stub.calls) == 1
+
+
+def test_autonomous_cron_heartbeat_wake_dedupes_via_workflow_admission(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+    monkeypatch.setenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", "1")
+
+    class _HeartbeatStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def register_session(self, session):
+            return None
+
+        def request_heartbeat_next(self, session_id: str, reason: str = "wake"):
+            self.calls.append((session_id, reason))
+
+    class _GatewayStub:
+        def list_sessions(self):
+            return []
+
+    heartbeat_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", heartbeat_stub)
+    monkeypatch.setattr(gateway_server, "_sessions", {"session_1": object()})
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+    monkeypatch.setattr(gateway_server, "_task_hub_has_dispatch_eligible_items", lambda: True)
+
+    gateway_server._maybe_wake_heartbeat_after_autonomous_cron(
+        run_status="success",
+        is_autonomous=True,
+        reason="cron_autonomous_run:job-1",
+    )
+    gateway_server._maybe_wake_heartbeat_after_autonomous_cron(
+        run_status="success",
+        is_autonomous=True,
+        reason="cron_autonomous_run:job-1",
+    )
+
+    assert len(heartbeat_stub.calls) == 1
+    assert heartbeat_stub.calls[0] == ("session_1", "cron_autonomous_run:job-1")
 
 
 def test_process_heartbeat_investigation_notification_includes_origin_findings_href(monkeypatch):

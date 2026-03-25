@@ -1,6 +1,9 @@
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from universal_agent import gateway_server
 
@@ -78,3 +81,132 @@ def test_runtime_foreground_counters_are_separate_from_heartbeat(monkeypatch):
     runtime = gateway_server._session_runtime_snapshot(session_id)
     assert runtime["active_runs"] == 0
     assert runtime["active_foreground_runs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_finish_session_run_auto_closes_idle_webhook_session(monkeypatch, tmp_path):
+    session_id = "session_hook_auto"
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_session_runtime", {})
+    monkeypatch.setattr(gateway_server, "_pending_gated_requests", {session_id: {"gate": True}})
+
+    session = SimpleNamespace(
+        session_id=session_id,
+        workspace_dir=str(tmp_path / session_id),
+        metadata={"source": "webhook"},
+    )
+    gateway_server._sessions[session_id] = session
+    runtime = gateway_server._session_runtime_snapshot(session_id)
+    runtime["active_runs"] = 1
+    runtime["active_connections"] = 0
+
+    closed: list[str] = []
+
+    class _GatewayStub:
+        _ADMIN_SOURCES = frozenset({"cron", "heartbeat", "hooks", "webhook", "ops", "system"})
+
+        async def close_session(self, sid: str) -> None:
+            closed.append(sid)
+
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+
+    gateway_server._finish_session_run(
+        session_id,
+        run_source="webhook",
+        terminal_reason="completed",
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    runtime = gateway_server._session_runtime_snapshot(session_id)
+    assert runtime["lifecycle_state"] == gateway_server.SESSION_STATE_TERMINAL
+    assert runtime["terminal_reason"] == "completed"
+    assert session_id not in gateway_server._pending_gated_requests
+    assert closed == [session_id]
+
+
+@pytest.mark.asyncio
+async def test_finish_session_run_keeps_user_session_open_after_background_heartbeat(monkeypatch, tmp_path):
+    session_id = "session_user_bg"
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_session_runtime", {})
+    monkeypatch.setattr(gateway_server, "_pending_gated_requests", {})
+
+    session = SimpleNamespace(
+        session_id=session_id,
+        workspace_dir=str(tmp_path / session_id),
+        metadata={"source": "user"},
+    )
+    gateway_server._sessions[session_id] = session
+    runtime = gateway_server._session_runtime_snapshot(session_id)
+    runtime["active_runs"] = 1
+    runtime["active_connections"] = 0
+
+    closed: list[str] = []
+
+    class _GatewayStub:
+        _ADMIN_SOURCES = frozenset({"cron", "heartbeat", "hooks", "webhook", "ops", "system"})
+
+        async def close_session(self, sid: str) -> None:
+            closed.append(sid)
+
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+
+    gateway_server._finish_session_run(
+        session_id,
+        run_source="heartbeat",
+        terminal_reason="completed",
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    runtime = gateway_server._session_runtime_snapshot(session_id)
+    assert runtime["active_runs"] == 0
+    assert runtime["lifecycle_state"] == gateway_server.SESSION_STATE_IDLE
+    assert runtime["terminal_reason"] is None
+    assert closed == []
+
+
+@pytest.mark.asyncio
+async def test_finish_session_run_keeps_automation_session_open_with_active_connections(
+    monkeypatch, tmp_path
+):
+    session_id = "session_webhook_connected"
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_session_runtime", {})
+    monkeypatch.setattr(gateway_server, "_pending_gated_requests", {})
+
+    session = SimpleNamespace(
+        session_id=session_id,
+        workspace_dir=str(tmp_path / session_id),
+        metadata={"source": "webhook"},
+    )
+    gateway_server._sessions[session_id] = session
+    runtime = gateway_server._session_runtime_snapshot(session_id)
+    runtime["active_runs"] = 1
+    runtime["active_connections"] = 1
+
+    closed: list[str] = []
+
+    class _GatewayStub:
+        _ADMIN_SOURCES = frozenset({"cron", "heartbeat", "hooks", "webhook", "ops", "system"})
+
+        async def close_session(self, sid: str) -> None:
+            closed.append(sid)
+
+    monkeypatch.setattr(gateway_server, "get_gateway", lambda: _GatewayStub())
+
+    gateway_server._finish_session_run(
+        session_id,
+        run_source="webhook",
+        terminal_reason="completed",
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    runtime = gateway_server._session_runtime_snapshot(session_id)
+    assert runtime["active_runs"] == 0
+    assert runtime["active_connections"] == 1
+    assert runtime["lifecycle_state"] == gateway_server.SESSION_STATE_IDLE
+    assert runtime["terminal_reason"] is None
+    assert closed == []

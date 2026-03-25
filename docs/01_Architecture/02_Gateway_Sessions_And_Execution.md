@@ -4,7 +4,7 @@
 
 ## Overview
 
-The gateway is the central hub of Universal Agent. All agent execution — whether triggered by the web UI, Telegram, webhooks, cron jobs, or VP delegation — flows through the gateway's session and execution model.
+The gateway is the central hub of Universal Agent. All agent execution — whether triggered by the web UI, Telegram, webhooks, cron jobs, or VP delegation — flows through the gateway's live execution-session model and the durable run/attempt model.
 
 ## Gateway Server
 
@@ -15,6 +15,7 @@ The gateway server is a FastAPI application running on port 8002. It is the larg
 ### What the gateway owns:
 
 - **Session lifecycle** — creation, execution, streaming, resume, deletion
+- **Durable run catalog** — run listing, attempt metadata, workspace linkage
 - **WebSocket streaming** — real-time event delivery to connected clients
 - **Ops API** — factory fleet management, delegation controls, health endpoints
 - **Webhook ingress** — `HooksService` for external event processing
@@ -31,6 +32,8 @@ The gateway server is a FastAPI application running on port 8002. It is the larg
 | `/api/v1/sessions/{id}/stream` | WS | WebSocket streaming for session execution |
 | `/api/v1/sessions/{id}` | GET | Retrieve session info |
 | `/api/v1/sessions` | GET | List sessions |
+| `/api/v1/ops/runs` | GET | List durable runs |
+| `/api/v1/ops/runs/{id}` | GET | Retrieve durable run info |
 | `/api/v1/health` | GET | Health check |
 | `/api/v1/factory/capabilities` | GET | Factory capabilities + delegation metrics |
 | `/api/v1/factory/registrations` | GET/POST | Factory fleet presence |
@@ -41,26 +44,32 @@ The gateway server is a FastAPI application running on port 8002. It is the larg
 | `/api/v1/signals/ingest` | POST | CSI analytics event ingestion |
 | `/api/v1/hooks/{path}` | POST | Webhook ingress |
 
-## Session Model
+## Execution Session Model
 
 **Primary implementation:** `src/universal_agent/gateway.py`
 
 ### Session Types
 
-Sessions are created through `InProcessGateway.create_session()` and stored in the runtime SQLite DB.
+Live execution sessions are created through `InProcessGateway.create_session()` and stored in the runtime SQLite DB. Durable work is tracked separately as runs and attempts.
 
-| Source | Session ID Pattern | Workspace Pattern |
-|--------|-------------------|-------------------|
-| Web UI | UUID-based | `AGENT_RUN_WORKSPACES/<session_id>/` |
-| Telegram | `tg_<user_id>_<short_uuid>` | `AGENT_RUN_WORKSPACES/tg_<user_id>/` |
-| Hooks/Cron | Session-key based | `AGENT_RUN_WORKSPACES/<session_key>/` |
-| CSI Analytics | `csi_<route_lane>` | Lane-specific workspace |
+| Source | Session ID Pattern | Durable Workspace Pattern |
+|--------|-------------------|--------------------------|
+| Web UI | UUID-based | `AGENT_RUN_WORKSPACES/run_<run_id>/` or legacy workspace during migration |
+| Telegram | `tg_<user_id>_<short_uuid>` | Sticky run workspace linked to the chat lane |
+| Hooks/Cron | Session-key based | Explicit hook/cron run workspace |
+| CSI Analytics | `csi_<route_lane>` | CSI-linked run workspace when UA follow-up work is created |
 
 Each session has:
 - `session_id` — unique identifier
 - `user_id` — owner identity (for ownership enforcement)
-- `workspace_dir` — isolated filesystem directory for session files
+- `workspace_dir` — isolated filesystem directory for the current execution context
 - `metadata` — arbitrary key-value store (includes `source`, policy snapshots, etc.)
+
+Separately, each durable run has:
+- `run_id` — the durable logical workflow identifier
+- `attempts` — one or more execution tries under that run
+- `workspace_dir` — the durable run workspace
+- optional linked `provider_session_id` for the live execution session
 
 ### Session Execution Flow
 

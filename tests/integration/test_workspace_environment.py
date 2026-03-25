@@ -2,7 +2,7 @@
 Unit tests for workspace path propagation to MCP tools.
 
 This test suite validates that:
-1. CURRENT_SESSION_WORKSPACE is properly passed to MCP server subprocess
+1. CURRENT_RUN_WORKSPACE is properly passed to MCP server subprocess
 2. Tools fail gracefully when environment variable is missing
 3. Tools correctly use the workspace path when provided
 """
@@ -55,44 +55,57 @@ class TestWorkspaceEnvironment:
     
     @pytest.mark.asyncio
     async def test_draft_report_parallel_without_env(self):
-        """Test that draft_report_parallel fails when CURRENT_SESSION_WORKSPACE is not set."""
-        # Ensure environment variable is not set
-        if "CURRENT_SESSION_WORKSPACE" in os.environ:
-            del os.environ["CURRENT_SESSION_WORKSPACE"]
-        
-        result = await draft_report_parallel()
-        
-        assert "Error" in result
-        assert "CURRENT_SESSION_WORKSPACE not set" in result
+        """Test that draft_report_parallel fails when CURRENT_RUN_WORKSPACE is not set."""
+        with tempfile.TemporaryDirectory() as empty_root:
+            os.environ["UA_WORKSPACES_DIR"] = empty_root
+            if "CURRENT_RUN_WORKSPACE" in os.environ:
+                del os.environ["CURRENT_RUN_WORKSPACE"]
+            if "CURRENT_SESSION_WORKSPACE" in os.environ:
+                del os.environ["CURRENT_SESSION_WORKSPACE"]
+
+            result = await draft_report_parallel()
+
+            assert "Error" in result
+            assert "CURRENT_RUN_WORKSPACE not set" in result
     
     @pytest.mark.asyncio
     async def test_draft_report_parallel_with_nonexistent_workspace(self):
         """Test that draft_report_parallel fails when workspace doesn't exist."""
-        os.environ["CURRENT_SESSION_WORKSPACE"] = "/nonexistent/path/to/workspace"
-        
-        result = await draft_report_parallel()
-        
-        assert "Error" in result
-        assert "CURRENT_SESSION_WORKSPACE not set" in result
+        with tempfile.TemporaryDirectory() as empty_root:
+            os.environ["UA_WORKSPACES_DIR"] = empty_root
+            os.environ["CURRENT_RUN_WORKSPACE"] = "/nonexistent/path/to/workspace"
+            os.environ.pop("CURRENT_SESSION_WORKSPACE", None)
+
+            result = await draft_report_parallel()
+
+            assert "Error" in result
+            assert "CURRENT_RUN_WORKSPACE not set" in result
     
     def test_compile_report_without_env(self):
-        """Test that compile_report fails when CURRENT_SESSION_WORKSPACE is not set."""
-        if "CURRENT_SESSION_WORKSPACE" in os.environ:
-            del os.environ["CURRENT_SESSION_WORKSPACE"]
-        
-        result = compile_report(theme="modern")
-        
-        assert "Error" in result
-        assert "CURRENT_SESSION_WORKSPACE not set" in result
+        """Test that compile_report fails when CURRENT_RUN_WORKSPACE is not set."""
+        with tempfile.TemporaryDirectory() as empty_root:
+            os.environ["UA_WORKSPACES_DIR"] = empty_root
+            if "CURRENT_RUN_WORKSPACE" in os.environ:
+                del os.environ["CURRENT_RUN_WORKSPACE"]
+            if "CURRENT_SESSION_WORKSPACE" in os.environ:
+                del os.environ["CURRENT_SESSION_WORKSPACE"]
+
+            result = compile_report(theme="modern")
+
+            assert "Error" in result
+            assert "CURRENT_RUN_WORKSPACE not set" in result
     
     def test_compile_report_with_nonexistent_workspace(self):
         """Test that compile_report fails when workspace doesn't exist."""
-        os.environ["CURRENT_SESSION_WORKSPACE"] = "/nonexistent/path/to/workspace"
-        
-        result = compile_report(theme="modern")
-        
-        assert "Error" in result
-        assert "CURRENT_SESSION_WORKSPACE not set" in result
+        with tempfile.TemporaryDirectory() as empty_root:
+            os.environ["UA_WORKSPACES_DIR"] = empty_root
+            os.environ["CURRENT_RUN_WORKSPACE"] = "/nonexistent/path/to/workspace"
+            os.environ.pop("CURRENT_SESSION_WORKSPACE", None)
+
+            result = compile_report(theme="modern")
+
+            assert "Error" in result
+            assert "CURRENT_RUN_WORKSPACE not set" in result
     
     def test_mcp_server_subprocess_environment(self, temp_workspace):
         """Test that MCP server subprocess receives environment variable."""
@@ -104,12 +117,12 @@ class TestWorkspaceEnvironment:
 import os
 import sys
 
-workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+workspace = os.getenv("CURRENT_RUN_WORKSPACE")
 if workspace:
     print(f"SUCCESS: Got workspace: {{workspace}}")
     sys.exit(0)
 else:
-    print("FAIL: CURRENT_SESSION_WORKSPACE not set")
+    print("FAIL: CURRENT_RUN_WORKSPACE not set")
     sys.exit(1)
 """
         
@@ -118,7 +131,8 @@ else:
         
         # Run subprocess WITH environment variable
         env = os.environ.copy()
-        env["CURRENT_SESSION_WORKSPACE"] = str(temp_workspace)
+        env["CURRENT_RUN_WORKSPACE"] = str(temp_workspace)
+        env["UA_WORKSPACES_DIR"] = str(temp_workspace.parent)
         
         result = subprocess.run(
             [sys.executable, str(test_script_path)],
@@ -137,12 +151,12 @@ else:
 import os
 import sys
 
-workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+workspace = os.getenv("CURRENT_RUN_WORKSPACE")
 if workspace:
     print(f"UNEXPECTED: Got workspace: {workspace}")
     sys.exit(1)
 else:
-    print("EXPECTED: CURRENT_SESSION_WORKSPACE not set")
+    print("EXPECTED: CURRENT_RUN_WORKSPACE not set")
     sys.exit(0)
 """
         
@@ -151,6 +165,9 @@ else:
         
         # Run subprocess WITHOUT environment variable
         env = os.environ.copy()
+        env["UA_WORKSPACES_DIR"] = str(temp_workspace.parent)
+        if "CURRENT_RUN_WORKSPACE" in env:
+            del env["CURRENT_RUN_WORKSPACE"]
         if "CURRENT_SESSION_WORKSPACE" in env:
             del env["CURRENT_SESSION_WORKSPACE"]
         
@@ -189,7 +206,9 @@ else:
     
     def test_workspace_not_confused_with_repo_root(self, temp_workspace):
         """Test that workspace path is never confused with repository root."""
-        os.environ["CURRENT_SESSION_WORKSPACE"] = str(temp_workspace)
+        os.environ["CURRENT_RUN_WORKSPACE"] = str(temp_workspace)
+        os.environ["UA_WORKSPACES_DIR"] = str(temp_workspace.parent)
+        os.environ.pop("CURRENT_SESSION_WORKSPACE", None)
         
         # Get repository root (should be different from workspace)
         repo_root = Path(__file__).parent.parent.resolve()

@@ -186,7 +186,10 @@ class GatewayResult:
 
 class Gateway:
     async def create_session(
-        self, user_id: str, workspace_dir: Optional[str] = None
+        self,
+        user_id: str,
+        workspace_dir: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> GatewaySession:
         raise NotImplementedError
 
@@ -204,6 +207,9 @@ class Gateway:
         raise NotImplementedError
 
     def list_sessions(self) -> list[GatewaySessionSummary]:
+        raise NotImplementedError
+
+    def list_live_sessions(self) -> list[GatewaySessionSummary]:
         raise NotImplementedError
 
     async def get_session_mcp_status(self, session_id: str) -> dict[str, Any]:
@@ -411,7 +417,10 @@ class InProcessGateway(Gateway):
         return self._vp_db_conn
 
     async def create_session(
-        self, user_id: str, workspace_dir: Optional[str] = None
+        self,
+        user_id: str,
+        workspace_dir: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> GatewaySession:
         async with self._timed_execution_lock("create_session"):
             if self._use_legacy:
@@ -419,22 +428,25 @@ class InProcessGateway(Gateway):
         
             # === NEW UNIFIED PATH ===
             # Generate session ID
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
+            resolved_session_id = str(session_id or "").strip()
+            if not resolved_session_id:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                resolved_session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
             
             # Create workspace directory
             if workspace_dir:
                 workspace_path = Path(workspace_dir).resolve()
             else:
-                workspace_path = self._workspace_base / session_id
+                workspace_path = self._workspace_base / resolved_session_id
             
             workspace_path.mkdir(parents=True, exist_ok=True)
             (workspace_path / "work_products").mkdir(exist_ok=True)
             bootstrap_result = seed_workspace_bootstrap(str(workspace_path))
             
-            # Update session_id to match workspace name if custom workspace provided
-            if workspace_dir:
-                session_id = workspace_path.name
+            # Preserve explicit session identity when provided; otherwise keep
+            # the historical "workspace name becomes session id" behavior.
+            if workspace_dir and not str(session_id or "").strip():
+                resolved_session_id = workspace_path.name
             
             # Create adapter with unified engine config
             config = EngineConfig(
@@ -447,12 +459,12 @@ class InProcessGateway(Gateway):
             await adapter.initialize()
             
             # Store adapter and session
-            self._adapters[session_id] = adapter
+            self._adapters[resolved_session_id] = adapter
             
             config_metadata = getattr(config, "metadata", {})
             
             session = GatewaySession(
-                session_id=session_id,
+                session_id=resolved_session_id,
                 user_id=user_id,
                 workspace_dir=str(workspace_path),
                 metadata={
@@ -463,7 +475,7 @@ class InProcessGateway(Gateway):
                     "last_activity_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            self._sessions[session_id] = session
+            self._sessions[resolved_session_id] = session
             
             return session
 
@@ -975,7 +987,7 @@ class InProcessGateway(Gateway):
                     )
                     return
 
-            # Keep webhook/cron executions pinned to their explicit session workspace
+            # Keep webhook/cron executions pinned to their explicit run workspace
             # for deterministic artifacts/log paths and easier ops visibility.
             if self._coder_vp_runtime and request_source not in {"cron", "webhook"}:
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
@@ -1767,6 +1779,53 @@ class InProcessGateway(Gateway):
         
         return summaries[:50]  # Limit to 50 sessions
 
+    def list_live_sessions(self) -> list[GatewaySessionSummary]:
+        """List only currently-live execution sessions.
+
+        This excludes archived workspace directories, SDK history, and other
+        disk-derived summaries that should not be used as runtime targets.
+        """
+        summaries: list[GatewaySessionSummary] = []
+
+        for session_id, session in self._sessions.items():
+            workspace_path = Path(session.workspace_dir)
+            trace_file = workspace_path / "trace.json"
+            runtime = session.metadata.get("runtime", {}) if isinstance(session.metadata, dict) else {}
+            runtime_state = runtime.get("lifecycle_state") if isinstance(runtime, dict) else None
+            if isinstance(runtime_state, str) and runtime_state:
+                status = runtime_state
+            else:
+                status = "complete" if trace_file.exists() else "active"
+            summaries.append(
+                GatewaySessionSummary(
+                    session_id=session_id,
+                    workspace_dir=session.workspace_dir,
+                    status=status,
+                    metadata=session.metadata,
+                )
+            )
+
+        if self._use_legacy and self._bridge:
+            live_ids = {item.session_id for item in summaries}
+            for session in self._bridge.list_sessions():
+                session_id = str(session.get("session_id") or "").strip()
+                if not session_id or session_id in live_ids:
+                    continue
+                summaries.append(
+                    GatewaySessionSummary(
+                        session_id=session_id,
+                        workspace_dir=str(session.get("workspace_path") or ""),
+                        status=str(session.get("status") or "unknown"),
+                        metadata={
+                            "timestamp": session.get("timestamp"),
+                            "files": session.get("files", {}),
+                            "engine": "agent_bridge_legacy",
+                        },
+                    )
+                )
+
+        return summaries
+
     async def get_session_mcp_status(self, session_id: str) -> dict[str, Any]:
         if not dynamic_mcp_enabled(default=False):
             raise ValueError("Dynamic MCP controls are disabled by feature flag")
@@ -1917,12 +1976,17 @@ class ExternalGateway(Gateway):
             self._http_client = None
 
     async def create_session(
-        self, user_id: str, workspace_dir: Optional[str] = None
+        self,
+        user_id: str,
+        workspace_dir: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> GatewaySession:
         client = await self._get_client()
         payload = {"user_id": user_id}
         if workspace_dir:
             payload["workspace_dir"] = workspace_dir
+        if session_id:
+            payload["session_id"] = session_id
         resp = await client.post("/api/v1/sessions", json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -2024,6 +2088,11 @@ class ExternalGateway(Gateway):
     def list_sessions(self) -> list[GatewaySessionSummary]:
         raise NotImplementedError(
             "list_sessions() is synchronous; use list_sessions_async() instead"
+        )
+
+    def list_live_sessions(self) -> list[GatewaySessionSummary]:
+        raise NotImplementedError(
+            "list_live_sessions() is synchronous; use list_sessions_async() instead"
         )
 
     async def list_sessions_async(self) -> list[GatewaySessionSummary]:

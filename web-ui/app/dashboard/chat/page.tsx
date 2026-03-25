@@ -22,7 +22,11 @@ export default function DashboardChatPage() {
     try {
       const rows = await fetchSessionDirectory(300);
       setSessions(rows);
-      setSelectedSession((prev) => prev || rows[0]?.session_id || "");
+      const firstLive = rows.find((row) => row.is_live_session !== false)?.session_id || "";
+      setSelectedSession((prev) => {
+        if (prev && rows.some((row) => row.session_id === prev)) return prev;
+        return firstLive;
+      });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -44,9 +48,25 @@ export default function DashboardChatPage() {
     return copy;
   }, [sessions]);
 
+  const selectedRow = useMemo(
+    () => sortedSessions.find((row) => row.session_id === selectedSession) || null,
+    [selectedSession, sortedSessions],
+  );
+
+  const selectedAttachable = Boolean(selectedRow?.is_live_session !== false && selectedSession);
+  const selectedRunViewable = Boolean(selectedRow?.run_id);
+
   const openSelected = () => {
     if (!selectedSession) {
       openOrFocusChatWindow({ role: attachRole });
+      return;
+    }
+    if (!selectedAttachable && selectedRow?.run_id) {
+      openOrFocusChatWindow({ runId: selectedRow.run_id, role: "viewer" });
+      return;
+    }
+    if (!selectedAttachable) {
+      setError("The selected item is a run workspace, not a live session. Start a new chat or pick a live session.");
       return;
     }
     openOrFocusChatWindow({ sessionId: selectedSession, attachMode: "tail", role: attachRole });
@@ -97,6 +117,7 @@ export default function DashboardChatPage() {
           <button
             type="button"
             onClick={openSelected}
+            disabled={Boolean(selectedSession) && !selectedAttachable && !selectedRunViewable}
             className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card"
           >
             Open/Focus Full Chat
@@ -149,6 +170,17 @@ export default function DashboardChatPage() {
                     <span className="text-[11px] text-muted-foreground">
                       {(session.source || "local")} · {session.status || "unknown"}
                     </span>
+                    {session.run_id ? (
+                      <span className="block text-[11px] text-primary/70 truncate">
+                        run {session.run_id}
+                        {session.attempt_count ? ` · ${session.attempt_count} attempt${session.attempt_count === 1 ? "" : "s"}` : ""}
+                      </span>
+                    ) : null}
+                    {session.is_live_session === false ? (
+                      <span className="block text-[11px] text-amber-300/80 truncate">
+                        run workspace only · no live session attached
+                      </span>
+                    ) : null}
                     {session.description ? (
                       <span className="mt-0.5 block text-[11px] text-foreground/80/90 truncate" title={session.description}>
                         {session.description}

@@ -54,6 +54,9 @@ def test_local_worker_health_only_blocks_ops_surface(client, monkeypatch):
     blocked = client.get("/api/v1/ops/sessions")
     assert blocked.status_code == 403
 
+    blocked_runs = client.get("/api/v1/ops/runs")
+    assert blocked_runs.status_code == 403
+
     health = client.get("/api/v1/health")
     assert health.status_code != 403
 
@@ -104,6 +107,13 @@ def test_issue_ops_token_and_use_bearer(client, monkeypatch):
     assert authed.status_code == 200
     assert "sessions" in authed.json()
 
+    authed_runs = client.get(
+        "/api/v1/ops/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert authed_runs.status_code == 200
+    assert "runs" in authed_runs.json()
+
 
 def test_ops_surface_unauthorized_is_401_not_500(client, monkeypatch):
     monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("HEADQUARTERS"))
@@ -114,6 +124,10 @@ def test_ops_surface_unauthorized_is_401_not_500(client, monkeypatch):
     resp = client.get("/api/v1/ops/sessions")
     assert resp.status_code == 401
     assert resp.json().get("detail") == "Unauthorized"
+
+    resp_runs = client.get("/api/v1/ops/runs")
+    assert resp_runs.status_code == 401
+    assert resp_runs.json().get("detail") == "Unauthorized"
 
 
 def test_local_worker_blocks_websocket_surface(client, monkeypatch):

@@ -10,7 +10,7 @@ The current flow is:
 2. heartbeat should also write a structured findings contract to `work_products/heartbeat_findings_latest.json`
 3. gateway classifies the findings and persists an actionable `autonomous_heartbeat_completed` notification
 4. gateway automatically dispatches Simone for investigation
-5. Simone writes an investigation summary back into the hook session workspace
+5. Simone writes an investigation summary back into the hook run workspace
 6. gateway updates the original heartbeat notification with mediation status
 7. if operator review is required, Kevin gets both:
    - a dashboard notification

@@ -353,7 +353,7 @@ class GatewayBridge:
             return []
 
     def get_session_file(self, session_id: str, file_path: str) -> Optional[tuple[str, str, bytes]]:
-        """Get file content from session workspace."""
+        """Get file content from the durable run workspace for a legacy session identifier."""
         # Files are stored locally in AGENT_RUN_WORKSPACES, not on gateway
         # So we read them directly
         base_dir = Path(__file__).parent.parent.parent.parent

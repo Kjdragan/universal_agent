@@ -131,7 +131,7 @@ class DaemonSessionManager:
     def _cleanup_stale_workspaces(self) -> int:
         """Archive leftover daemon workspace dirs from previous server runs.
 
-        On restart, old ``daemon_{agent}_{timestamp}_{uuid}`` directories may
+        On restart, old ``run_daemon_{agent}_{timestamp}_{uuid}`` directories may
         linger in the workspaces root.  Move them to ``_daemon_archives/``
         so that ``OpsService.list_sessions()`` doesn't treat them as separate
         live sessions.
@@ -146,19 +146,12 @@ class DaemonSessionManager:
             if not entry.is_dir():
                 continue
             name = entry.name
-            # Match directories like daemon_simone_20260322_051942_f38ff5bf
-            # but NOT the _daemon_archives directory itself or bare daemon_simone
-            if not name.startswith(DAEMON_SESSION_PREFIX):
+            # Match directories like run_daemon_simone_20260322_051942_f38ff5bf.
+            if not name.startswith(f"run_{DAEMON_SESSION_PREFIX}"):
                 continue
             if name == "_daemon_archives":
                 continue
-            # Check if it's a timestamped workspace (has underscores beyond
-            # the agent name part) rather than the stable session ID itself
-            # e.g. "daemon_simone" is the stable ID, but
-            #       "daemon_simone_20260322_051942_f38ff5bf" is a workspace dir
-            suffix = name[len(DAEMON_SESSION_PREFIX):]  # "simone_20260322_..."
-            # If the suffix contains an underscore after the agent name,
-            # it's a timestamped workspace dir, not just "daemon_simone"
+            suffix = name[len(f"run_{DAEMON_SESSION_PREFIX}"):]  # "simone_20260322_..."
             parts = suffix.split("_", 1)
             agent_candidate = parts[0].lower()
             if agent_candidate in {a.lower() for a in self.agent_names} and len(parts) > 1:
@@ -206,7 +199,7 @@ class DaemonSessionManager:
         """Create a fresh timestamped workspace for an agent."""
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         short_id = uuid.uuid4().hex[:8]
-        workspace_name = f"{DAEMON_SESSION_PREFIX}{agent_name}_{ts}_{short_id}"
+        workspace_name = f"run_{DAEMON_SESSION_PREFIX}{agent_name}_{ts}_{short_id}"
         workspace = self.workspaces_dir / workspace_name
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / "work_products").mkdir(exist_ok=True)

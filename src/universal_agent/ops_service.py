@@ -8,11 +8,15 @@ from typing import Any, Dict, List, Optional
 
 from universal_agent.services.daemon_sessions import DAEMON_SESSION_PREFIX
 
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import list_run_attempts
 from universal_agent.gateway import InProcessGateway
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.security_paths import validate_session_id
 from universal_agent.feature_flags import sdk_session_history_enabled
+from universal_agent.run_catalog import RunCatalogService
 from universal_agent.sdk import session_history_adapter
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,7 @@ class OpsService:
     def __init__(self, gateway: InProcessGateway, workspaces_dir: Path):
         self.gateway = gateway
         self.workspaces_dir = workspaces_dir
+        self.run_catalog = RunCatalogService()
 
     def _session_workspace(self, session_id: str) -> Path:
         safe_session_id = validate_session_id(session_id)
@@ -109,9 +114,11 @@ class OpsService:
             return None
 
     def _try_read_checkpoint_description(self, session_path: Path) -> Optional[str]:
-        # Preferred: session_checkpoint.json carries a clean "original_request".
-        checkpoint_path = session_path / "session_checkpoint.json"
-        if checkpoint_path.exists():
+        # Preferred: run/session checkpoint carries a clean "original_request".
+        for checkpoint_name in ("run_checkpoint.json", "session_checkpoint.json"):
+            checkpoint_path = session_path / checkpoint_name
+            if not checkpoint_path.exists():
+                continue
             try:
                 payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
                 if isinstance(payload, dict):
@@ -122,9 +129,13 @@ class OpsService:
             except Exception:
                 pass
 
-        # Fallback: session_checkpoint.md has a "### Original Request" block quote.
-        checkpoint_md_path = session_path / "session_checkpoint.md"
-        md = self._read_text_prefix(checkpoint_md_path)
+        # Fallback: run/session checkpoint markdown has a "### Original Request" block quote.
+        md = None
+        for checkpoint_md_name in ("run_checkpoint.md", "session_checkpoint.md"):
+            checkpoint_md_path = session_path / checkpoint_md_name
+            md = self._read_text_prefix(checkpoint_md_path)
+            if md:
+                break
         if not md:
             return None
 
@@ -396,7 +407,28 @@ class OpsService:
             "has_memory": (session_path / "MEMORY.md").exists() or (session_path / "memory").exists(),
             "last_run_source": str(runtime.get("last_run_source") or ""),
         }
-        
+
+        run_summary = self.run_catalog.find_run_for_workspace(session_path)
+        if run_summary is None:
+            run_summary = self.run_catalog.get_run(session_id)
+        if run_summary:
+            summary["run_id"] = run_summary["run_id"]
+            summary["run_status"] = run_summary["status"]
+            summary["run_kind"] = run_summary.get("run_kind")
+            summary["trigger_source"] = run_summary.get("trigger_source")
+            summary["run_policy"] = run_summary.get("run_policy")
+            summary["interrupt_policy"] = run_summary.get("interrupt_policy")
+            summary["attempt_count"] = int(run_summary.get("attempt_count") or 0)
+            summary["latest_attempt_id"] = run_summary.get("latest_attempt_id")
+            summary["canonical_attempt_id"] = run_summary.get("canonical_attempt_id")
+            summary["last_success_attempt_id"] = run_summary.get("last_success_attempt_id")
+            if run_summary.get("terminal_reason"):
+                summary["terminal_reason"] = run_summary.get("terminal_reason")
+            if run_summary.get("external_origin"):
+                summary["external_origin"] = run_summary.get("external_origin")
+            if run_summary.get("external_origin_id"):
+                summary["external_origin_id"] = run_summary.get("external_origin_id")
+
         # Packet 15: checkpoint diagnostics and rehydrate readiness
         checkpoint_diag = self._read_checkpoint_diagnostics(session_path)
         summary["has_checkpoint"] = checkpoint_diag["has_checkpoint"]
@@ -422,10 +454,68 @@ class OpsService:
             
         return summary
 
+    def list_runs(
+        self,
+        status_filter: str = "all",
+        run_kind_filter: str = "all",
+        trigger_source_filter: str = "all",
+    ) -> List[Dict[str, Any]]:
+        runs = self.run_catalog.list_runs(limit=1000)
+
+        if status_filter != "all":
+            status_norm = status_filter.strip().lower()
+            runs = [
+                item
+                for item in runs
+                if str(item.get("status", "")).strip().lower() == status_norm
+            ]
+
+        if run_kind_filter != "all":
+            kind_norm = run_kind_filter.strip().lower()
+            runs = [
+                item
+                for item in runs
+                if str(item.get("run_kind", "")).strip().lower() == kind_norm
+            ]
+
+        if trigger_source_filter != "all":
+            trigger_norm = trigger_source_filter.strip().lower()
+            runs = [
+                item
+                for item in runs
+                if str(item.get("trigger_source", "")).strip().lower() == trigger_norm
+            ]
+
+        summaries: List[Dict[str, Any]] = []
+        for item in runs:
+            enriched = dict(item)
+            workspace_dir = str(item.get("workspace_dir") or "").strip()
+            workspace_path = Path(workspace_dir) if workspace_dir else None
+            workspace_exists = bool(
+                workspace_path and workspace_path.exists() and workspace_path.is_dir()
+            )
+            enriched["workspace_exists"] = workspace_exists
+            if workspace_exists and workspace_path is not None:
+                try:
+                    enriched["workspace_summary"] = self._build_session_summary(workspace_path)
+                except Exception:
+                    logger.warning(
+                        "Failed to enrich run summary from workspace: %s",
+                        workspace_path,
+                        exc_info=True,
+                    )
+            summaries.append(enriched)
+        return summaries
+
     def _read_checkpoint_diagnostics(self, workspace_path: Path) -> dict:
         """Packet 15: read checkpoint file and return diagnostics."""
-        checkpoint_path = workspace_path / "session_checkpoint.json"
-        if not checkpoint_path.exists():
+        checkpoint_path = None
+        for checkpoint_name in ("run_checkpoint.json", "session_checkpoint.json"):
+            candidate = workspace_path / checkpoint_name
+            if candidate.exists():
+                checkpoint_path = candidate
+                break
+        if checkpoint_path is None:
             return {"has_checkpoint": False}
         try:
             data = json.loads(checkpoint_path.read_text())
@@ -491,6 +581,27 @@ class OpsService:
         if not workspace.exists():
             return None
         return {"session": self._build_session_summary(workspace)}
+
+    def get_run_details(self, run_id: str) -> Optional[Dict[str, Any]]:
+        run = self.run_catalog.get_run(run_id)
+        if not run:
+            return None
+        details = {"run": dict(run)}
+        workspace_dir = str(run.get("workspace_dir") or "").strip()
+        if workspace_dir:
+            workspace_path = Path(workspace_dir)
+            if workspace_path.exists() and workspace_path.is_dir():
+                details["workspace"] = self._build_session_summary(workspace_path)
+        return details
+
+    def list_run_attempt_details(self, run_id: str) -> List[Dict[str, Any]]:
+        conn = connect_runtime_db(get_runtime_db_path())
+        try:
+            ensure_schema(conn)
+            rows = list_run_attempts(conn, run_id)
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
 
     def _capture_session_transition_memory(
         self,

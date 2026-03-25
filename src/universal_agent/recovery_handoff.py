@@ -1,7 +1,7 @@
 """
 recovery_handoff.py
 
-Write a bounded, redacted "handoff packet" to the session workspace when a
+Write a bounded, redacted "handoff packet" to the run workspace when a
 guardrail trips (budget/circuit breaker). The goal is to preserve enough
 actionable context so a fresh SDK client (or even a different model) can resume
 without relying on in-memory chat history.
@@ -217,4 +217,3 @@ def write_recovery_handoff(
     json_path.write_text(json.dumps(redacted_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     return RecoveryHandoffPaths(md_path=str(md_path), json_path=str(json_path))
-

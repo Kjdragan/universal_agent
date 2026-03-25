@@ -71,9 +71,14 @@ function isActiveSession(s: { session_id: string; status: string; active_runs?: 
   return st === "running" || st === "active" || (s.active_runs ?? 0) > 0;
 }
 
+function isLiveAttachableSession(s: { is_live_session?: boolean } | null | undefined): boolean {
+  return s?.is_live_session !== false;
+}
+
 const NOISE_PATTERNS = [
   /^session_hook_simone_heartbeat/i,
   /^session_hook_csi_/i,
+  /^run_session_hook_csi_/i,
   /^cron_/i,
 ];
 
@@ -299,6 +304,12 @@ function SessionsPageInner() {
     setAttaching(true);
     try {
       const sid = String(sessionId || "").trim();
+      const target = sessions.find((item) => item.session_id === sid);
+      const runId = String(target?.run_id || "").trim();
+      if (target && !isLiveAttachableSession(target) && runId) {
+        openOrFocusChatWindow({ runId, role: "viewer" });
+        return;
+      }
       const forceViewer = /^vp_/i.test(sid) || /^session[_-]hook_/i.test(sid) || /^cron_/i.test(sid) || /^worker_/i.test(sid);
       if (typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard")) {
         openOrFocusChatWindow({ sessionId: sid, attachMode: "tail", role: forceViewer ? "viewer" : "writer" });
@@ -310,7 +321,7 @@ function SessionsPageInner() {
       const ws = getWebSocket();
       ws.attachToSession(sessionId);
     } finally { setAttaching(false); }
-  }, []);
+  }, [sessions]);
 
   // ── Rehydrate ──
   const rehydrateSession = useCallback(async (sessionId: string) => {
@@ -334,6 +345,8 @@ function SessionsPageInner() {
     () => sessions.find((s) => s.session_id === selected),
     [sessions, selected],
   );
+  const selectedIsLiveSession = isLiveAttachableSession(selectedSession);
+  const selectedRunViewerId = String(selectedSession?.run_id || "").trim();
 
   // ── Auto-refresh timer for age display ──
   const [, forceRefresh] = useState(0);
@@ -415,9 +428,9 @@ function SessionsPageInner() {
             <button
               onClick={() => attachToChat(selected)}
               className="text-[11px] px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 transition-all"
-              disabled={attaching}
+              disabled={attaching || (!selectedIsLiveSession && !selectedRunViewerId)}
             >
-              {attaching ? "…" : "Open Chat"}
+              {attaching ? "…" : selectedIsLiveSession ? "Open Chat" : "Open Run Viewer"}
             </button>
           )}
         </div>
@@ -620,8 +633,12 @@ function SessionsPageInner() {
 
             {/* Action buttons */}
             <div className="flex gap-2 flex-wrap">
-              <button onClick={() => attachToChat(selected)} className="px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 text-xs transition-all" disabled={attaching}>
-                {attaching ? "…" : isVpSelected ? "Observer Chat" : "Attach Chat (Tail)"}
+              <button
+                onClick={() => attachToChat(selected)}
+                className="px-2.5 py-1 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 text-xs transition-all"
+                disabled={attaching || (!selectedIsLiveSession && !selectedRunViewerId)}
+              >
+                {attaching ? "…" : isVpSelected ? "Observer Chat" : selectedIsLiveSession ? "Attach Chat (Tail)" : "Open Run Viewer"}
               </button>
               {!isVpSelected && (
                 <>

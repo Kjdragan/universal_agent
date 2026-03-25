@@ -21,3 +21,15 @@ def test_resolve_best_task_match_prefers_existing_task_dir(tmp_path: Path):
     resolved = resolve_best_task_match("russia-ukraine-war-jan-2026", workspace_root=workspace)
     assert resolved == "russia_ukraine_war_jan_2026"
 
+
+def test_resolve_best_task_match_uses_current_run_workspace_env(monkeypatch, tmp_path: Path):
+    workspace = tmp_path / "run_123"
+    tasks = workspace / "tasks"
+    tasks.mkdir(parents=True, exist_ok=True)
+    (tasks / "alpha_task").mkdir()
+    monkeypatch.setenv("CURRENT_RUN_WORKSPACE", str(workspace))
+    monkeypatch.delenv("CURRENT_SESSION_WORKSPACE", raising=False)
+
+    resolved = resolve_best_task_match("alpha-task")
+
+    assert resolved == "alpha_task"

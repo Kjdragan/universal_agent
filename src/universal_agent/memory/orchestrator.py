@@ -37,6 +37,7 @@ def _resolve_workspace_dir(workspace_dir: str | None) -> str:
         return str(Path(workspace_dir).resolve())
     candidate = (
         os.getenv("AGENT_WORKSPACE_DIR")
+        or os.getenv("CURRENT_RUN_WORKSPACE")
         or os.getenv("CURRENT_SESSION_WORKSPACE")
         or os.getenv("UA_WORKSPACE_DIR")
         or os.getcwd()

@@ -139,7 +139,7 @@ RESPONSE:
 async def main() -> int:
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("workspace", help="Path to session workspace")
+    parser.add_argument("workspace", help="Path to run workspace")
     parser.add_argument("task_name", help="Task name")
     parser.add_argument("topic", help="Research topic")
     

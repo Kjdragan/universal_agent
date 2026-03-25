@@ -496,7 +496,7 @@ def _workspace_from_transcript_path(input_data: dict) -> str:
         candidate = tp.parent if tp.suffix else tp
         normalized = str(candidate).replace("\\", "/")
 
-        # For subagent transcripts, resolve back to the session workspace root:
+        # For subagent transcripts, resolve back to the run workspace root:
         # .../<workspace>/subagent_outputs/<task>/transcript.md -> .../<workspace>
         marker = "/subagent_outputs/"
         if marker in normalized:
@@ -902,14 +902,15 @@ async def pre_tool_use_schema_guardrail(
             return _policy_guardrail_response(
                 block_response={
                     "systemMessage": (
-                        "⚠️ Cannot run research phase: CURRENT_SESSION_WORKSPACE is not set. "
+                        "⚠️ Cannot run research phase: CURRENT_RUN_WORKSPACE is not set "
+                        "(CURRENT_SESSION_WORKSPACE is the legacy alias). "
                         "Bind the workspace for this phase before calling run_research_phase."
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
-                        "permissionDecisionReason": "Missing CURRENT_SESSION_WORKSPACE.",
+                        "permissionDecisionReason": "Missing CURRENT_RUN_WORKSPACE (CURRENT_SESSION_WORKSPACE legacy alias).",
                     },
                 }
             )
