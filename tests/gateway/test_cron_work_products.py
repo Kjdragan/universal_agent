@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import asyncio
 
 from universal_agent.cron_service import CronService
+from universal_agent.workflow_admission import WorkflowAdmissionService
 
 
 class _OutputGateway:
@@ -35,6 +36,8 @@ class _RetryGateway:
 
 def test_cron_moves_root_outputs_into_work_products(tmp_path: Path):
     service = CronService(_OutputGateway(), tmp_path)
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
     workspace = tmp_path / "cron_outputs"
     job = service.add_job(
         user_id="cron",
@@ -57,6 +60,8 @@ def test_cron_retries_transient_db_lock_errors(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("UA_CRON_DB_LOCK_RETRIES", "3")
     gateway = _RetryGateway()
     service = CronService(gateway, tmp_path)
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
     job = service.add_job(
         user_id="cron",
         workspace_dir=str(tmp_path / "cron_retry"),

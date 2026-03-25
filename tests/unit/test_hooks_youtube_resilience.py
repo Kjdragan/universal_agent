@@ -14,10 +14,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
 from universal_agent.hooks_service import (
     HooksService,
     YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS,
 )
+from universal_agent.workflow_admission import WorkflowAdmissionService
 from universal_agent.gateway import InProcessGateway, GatewaySession
 
 
@@ -35,9 +38,18 @@ def mock_gateway():
 
 
 @pytest.fixture
-def hooks_service(mock_gateway):
-    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+def hooks_service(mock_gateway, tmp_path):
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {"UA_RUNTIME_DB_PATH": runtime_db_path},
+            clear=False,
+        ),
+    ):
         service = HooksService(mock_gateway)
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
     return service
 
 
@@ -159,6 +171,7 @@ class TestZeroToolCallDispatch:
     async def test_zero_tool_call_marks_interrupted(self, hooks_service, mock_gateway, tmp_path, caplog):
         """When agent completes in <30s with 0 tool calls, error is reported."""
         hooks_service._youtube_ingest_mode = ""
+        hooks_service._schedule_youtube_retry_attempt = MagicMock()
         notifications = []
         hooks_service._notification_sink = notifications.append
         hooks_service._run_gateway_execute_with_watchdogs = AsyncMock(
@@ -198,8 +211,16 @@ class TestZeroToolCallDispatch:
 
         # The error "iteration_status:error" should now match interruption tokens
         # so it should be classified as interrupted, not failed
-        marker = workspace / "pending_hook_recovery.json"
-        assert marker.exists()
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-        assert payload["status"] == "dispatch_interrupted"
-        assert payload["reason"] == "hook_dispatch_interrupted"
+        interrupted = next((n for n in notifications if n.get("kind") == "youtube_tutorial_interrupted"), None)
+        assert interrupted is not None
+        assert interrupted["metadata"]["reason"] == "hook_dispatch_interrupted"
+        conn = connect_runtime_db(hooks_service._workflow_admission_service().db_path)
+        ensure_schema(conn)
+        attempts = conn.execute(
+            "SELECT attempt_number, status FROM run_attempts WHERE run_id = ? ORDER BY attempt_number ASC",
+            (str(interrupted["metadata"]["run_id"]),),
+        ).fetchall()
+        conn.close()
+        assert [int(row["attempt_number"]) for row in attempts] == [1, 2]
+        assert str(attempts[0]["status"]) == "failed"
+        assert str(attempts[1]["status"]) in {"queued", "running", "completed"}

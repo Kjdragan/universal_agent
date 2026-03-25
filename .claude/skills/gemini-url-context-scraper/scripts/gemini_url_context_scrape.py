@@ -83,8 +83,12 @@ def _resolve_artifacts_root() -> Path:
     return (_repo_root_from_here() / "artifacts").resolve()
 
 
-def _resolve_session_workspace() -> Path | None:
-    raw = (os.environ.get("CURRENT_SESSION_WORKSPACE") or "").strip()
+def _resolve_run_workspace() -> Path | None:
+    raw = (
+        os.environ.get("CURRENT_RUN_WORKSPACE")
+        or os.environ.get("CURRENT_SESSION_WORKSPACE")
+        or ""
+    ).strip()
     if not raw:
         return None
     return Path(raw).expanduser().resolve()
@@ -109,10 +113,11 @@ def _build_run_paths(*, persist: bool, slug: str) -> RunPaths:
         run_dir = root / "gemini-url-context" / date / f"{safe_slug}__{hhmmss}"
         readme = run_dir / "README.md"
     else:
-        ws = _resolve_session_workspace()
+        ws = _resolve_run_workspace()
         if ws is None:
             raise RuntimeError(
-                "CURRENT_SESSION_WORKSPACE is not set; cannot write interim work_products. "
+                "CURRENT_RUN_WORKSPACE is not set; cannot write interim work_products. "
+                "CURRENT_SESSION_WORKSPACE remains a legacy alias. "
                 "Run via UA (gateway/CLI) or re-run with --persist."
             )
         run_dir = ws / "work_products" / "gemini-url-context" / f"{safe_slug}__{hhmmss}"
@@ -307,7 +312,7 @@ def run(*, urls: list[str], question: str, mode: str, model: str, persist: bool,
         "extraction": extraction,
         "inputs": {"urls": urls, "question": question},
         # Retention map is primarily used for persistent artifacts (UA_ARTIFACTS_DIR).
-        # For interim outputs under CURRENT_SESSION_WORKSPACE, everything is effectively ephemeral.
+        # For interim outputs under CURRENT_RUN_WORKSPACE, everything is effectively ephemeral.
         "retention": (
             {"default": "keep", "answer.md": "keep", "manifest.json": "keep", "README.md": "keep"}
             if persist

@@ -10,6 +10,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import Request
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_run_attempt
 from universal_agent.hooks_service import (
     HookAction,
     HookAuthConfig,
@@ -20,6 +23,7 @@ from universal_agent.hooks_service import (
     HookTransformConfig,
     build_manual_youtube_action,
 )
+from universal_agent.workflow_admission import WorkflowAdmissionService
 from universal_agent.gateway import InProcessGateway, GatewaySession
 
 @pytest.fixture
@@ -54,11 +58,26 @@ def mock_config():
     )
 
 @pytest.fixture
-def hooks_service(mock_gateway, mock_config):
-    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+def hooks_service(mock_gateway, mock_config, tmp_path):
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {"UA_RUNTIME_DB_PATH": runtime_db_path},
+            clear=False,
+        ),
+    ):
         service = HooksService(mock_gateway)
         service.config = mock_config  # Inject mock config directly
+        service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
         return service
+
+
+def _bind_workflow_runtime_db(service: HooksService, tmp_path: Path) -> str:
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+    return runtime_db_path
 
 @pytest.mark.asyncio
 async def test_disabled_service(hooks_service):
@@ -135,26 +154,27 @@ async def test_authorized_create_new(hooks_service, mock_gateway):
     await asyncio.sleep(0.1)
     
     mock_gateway.resume_session.assert_called_once_with("session_hook_test-session")
-    mock_gateway.create_session.assert_called_once_with(
-        user_id="webhook",
-        workspace_dir="AGENT_RUN_WORKSPACES/run_session_hook_test-session",
-        session_id="session_hook_test-session",
+    mock_gateway.create_session.assert_called_once()
+    _, kwargs = mock_gateway.create_session.call_args
+    assert kwargs["user_id"] == "webhook"
+    assert kwargs["session_id"] == "session_hook_test-session"
+    assert str(kwargs["workspace_dir"]).endswith(
+        "AGENT_RUN_WORKSPACES/run_session_hook_test-session"
     )
     mock_gateway.execute.assert_called()
     assert mock_gateway.execute.call_args[0][0] == mock_session
 
 
 @pytest.mark.asyncio
-async def test_resolve_or_create_webhook_session_reuses_run_workspace_from_catalog(hooks_service, mock_gateway):
+async def test_resolve_or_create_webhook_session_uses_explicit_workspace(hooks_service, mock_gateway):
     mock_session = GatewaySession(session_id="session_new", user_id="webhook", workspace_dir="/tmp/new")
     mock_gateway.resume_session = AsyncMock(side_effect=ValueError("Not found"))
     mock_gateway.create_session = AsyncMock(return_value=mock_session)
 
-    with patch(
-        "universal_agent.hooks_service.RunCatalogService.find_latest_run_for_provider_session",
-        return_value={"workspace_dir": "/tmp/run_hook_test_session"},
-    ):
-        result = await hooks_service._resolve_or_create_webhook_session("session_hook_test-session")
+    result = await hooks_service._resolve_or_create_webhook_session(
+        "session_hook_test-session",
+        "/tmp/run_hook_test_session",
+    )
 
     assert result == mock_session
     mock_gateway.resume_session.assert_called_once_with("session_hook_test-session")
@@ -241,71 +261,110 @@ def test_emit_heartbeat_investigation_completion_sanitizes_recommendation_text(m
     assert "VPS host firewall" in metadata["email_summary"]
 
 
-@pytest.mark.asyncio
-async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock_gateway):
-    hooks_service.config.mappings = [
-        HookMappingConfig(
-            id="route-hook",
-            match=HookMatchConfig(path="test"),
-            action="agent",
-            message_template="video_url: https://www.youtube.com/watch?v=abc",
-            name="RouteHook",
-            session_key="yt_route_abc",
-            to="youtube-expert",
+def test_validate_youtube_tutorial_artifacts_accepts_nested_video_id_manifest(mock_gateway, tmp_path):
+    notifications: list[dict] = []
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "2026-03-24" / "nested_video_manifest_case"
+    run_dir.mkdir(parents=True)
+    (run_dir / "README.md").write_text("readme", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("concept", encoding="utf-8")
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "video": {
+                    "video_id": "vid_nested_123",
+                    "title": "Nested Manifest Title",
+                },
+                "mode": "explainer_only",
+                "learning_mode": "concept_only",
+                "artifacts": {
+                    "manifest": "manifest.json",
+                    "readme": "README.md",
+                    "concept": "CONCEPT.md",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    started_at_epoch = manifest_path.stat().st_mtime
+
+    with patch("universal_agent.hooks_service.resolve_artifacts_dir", return_value=artifacts_root):
+        result = service._validate_youtube_tutorial_artifacts(
+            video_id="vid_nested_123",
+            started_at_epoch=started_at_epoch,
         )
-    ]
-    request = MagicMock(spec=Request)
-    request.headers = {"Authorization": "Bearer secret-token"}
-    request.body = AsyncMock(return_value=b"{}")
-    request.query_params = {}
 
-    mock_session = GatewaySession(session_id="session_hook_yt_route_abc", user_id="webhook", workspace_dir="/tmp")
-    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
-
-    response = await hooks_service.handle_request(request, "test")
-    assert response.status_code == 200
-
-    await asyncio.sleep(0.1)
-    gateway_request = mock_gateway.execute.call_args[0][1]
-    assert "Task(subagent_type='youtube-expert'" in gateway_request.user_input
-    assert "Resolved artifacts root (absolute):" in gateway_request.user_input
-    assert "never use a literal UA_ARTIFACTS_DIR folder name" in gateway_request.user_input
-    assert "degraded_transcript_only or failed" in gateway_request.user_input
-    assert "Webhook payload values below are authoritative for this run." in gateway_request.user_input
-    assert "authoritative_video_url: https://www.youtube.com/watch?v=abc" in gateway_request.user_input
-    assert gateway_request.metadata["hook_route_to"] == "youtube-expert"
+    assert result["manifest_path"] == str(manifest_path)
+    assert result["title"] == "Nested Manifest Title"
+    assert result["status"] == "completed"
 
 
-@pytest.mark.asyncio
-async def test_action_to_legacy_alias_still_injects_youtube_routing(hooks_service, mock_gateway):
-    hooks_service.config.mappings = [
-        HookMappingConfig(
-            id="route-hook-legacy",
-            match=HookMatchConfig(path="test"),
-            action="agent",
-            message_template="video_url: https://www.youtube.com/watch?v=def",
-            name="RouteHookLegacy",
-            session_key="yt_route_def",
-            to="youtube-explainer-expert",
-        )
-    ]
-    request = MagicMock(spec=Request)
-    request.headers = {"Authorization": "Bearer secret-token"}
-    request.body = AsyncMock(return_value=b"{}")
-    request.query_params = {}
+def test_emit_youtube_tutorial_ready_notification_mentions_recovery_attempt(mock_gateway):
+    notifications: list[dict] = []
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
 
-    mock_session = GatewaySession(session_id="session_hook_yt_route_def", user_id="webhook", workspace_dir="/tmp")
-    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
+    service._emit_youtube_tutorial_ready_notification(
+        session_id="session_hook_yt_test_retry_vid1234567",
+        session_key="yt_channel_vid1234567",
+        hook_name="PlaylistWatcherYouTubeWebhook",
+        expected_video_id="vid1234567",
+        ingest_status="succeeded",
+        artifact_validation={
+            "title": "Recovered Tutorial",
+            "status": "completed",
+            "run_rel_path": "youtube-tutorial-creation/2026-03-24/recovered_tutorial",
+            "key_files": [{"label": "README", "name": "README.md", "rel_path": "README.md"}],
+        },
+        pending_recovery_payload={"retry_count": 1, "max_retries": 2},
+    )
 
-    response = await hooks_service.handle_request(request, "test")
-    assert response.status_code == 200
+    assert notifications
+    notification = notifications[0]
+    assert notification["kind"] == "youtube_tutorial_ready"
+    assert "attempt 2/3" in notification["message"]
+    metadata = notification["metadata"]
+    assert metadata["recovered_after_retry"] is True
+    assert metadata["attempt_number"] == 2
+    assert metadata["total_attempts_allowed"] == 3
 
-    await asyncio.sleep(0.1)
-    gateway_request = mock_gateway.execute.call_args[0][1]
-    assert "Task(subagent_type='youtube-explainer-expert'" in gateway_request.user_input
-    assert "Resolved artifacts root (absolute):" in gateway_request.user_input
-    assert "authoritative_video_url: https://www.youtube.com/watch?v=def" in gateway_request.user_input
-    assert gateway_request.metadata["hook_route_to"] == "youtube-explainer-expert"
+
+def test_action_to_injects_routing_prompt_and_metadata(hooks_service):
+    action = HookAction(
+        kind="agent",
+        name="RouteHook",
+        session_key="yt_route_abc",
+        to="youtube-expert",
+        message="video_url: https://www.youtube.com/watch?v=abc123xyz00",
+    )
+
+    user_input = hooks_service._build_agent_user_input(action)
+    assert "Task(subagent_type='youtube-expert'" in user_input
+    assert "Resolved artifacts root (absolute):" in user_input
+    assert "never use a literal UA_ARTIFACTS_DIR folder name" in user_input
+    assert "degraded_transcript_only or failed" in user_input
+    assert "Webhook payload values below are authoritative for this run." in user_input
+    assert "authoritative_video_url: https://www.youtube.com/watch?v=abc123xyz00" in user_input
+
+
+def test_action_to_legacy_alias_still_injects_youtube_routing(hooks_service):
+    action = HookAction(
+        kind="agent",
+        name="RouteHookLegacy",
+        session_key="yt_route_def",
+        to="youtube-explainer-expert",
+        message="video_url: https://www.youtube.com/watch?v=def123xyz00",
+    )
+
+    user_input = hooks_service._build_agent_user_input(action)
+    assert "Task(subagent_type='youtube-explainer-expert'" in user_input
+    assert "Resolved artifacts root (absolute):" in user_input
+    assert "authoritative_video_url: https://www.youtube.com/watch?v=def123xyz00" in user_input
 
 
 @pytest.mark.asyncio
@@ -349,7 +408,7 @@ async def test_youtube_started_notification_includes_title_and_video_id(hooks_se
 
     started = next((n for n in notifications if n.get("kind") == "youtube_tutorial_started"), None)
     assert started is not None
-    assert "Processing: Building Better Pipelines (demo123abc4)" in str(started["message"])
+    assert "Processing tutorial pipeline attempt 1." in str(started["message"])
     assert started["metadata"]["video_id"] == "demo123abc4"
     assert started["metadata"]["tutorial_title"] == "Building Better Pipelines"
 
@@ -357,6 +416,7 @@ async def test_youtube_started_notification_includes_title_and_video_id(hooks_se
 @pytest.mark.asyncio
 async def test_youtube_dispatch_interrupted_writes_pending_recovery_marker(hooks_service, mock_gateway, tmp_path):
     hooks_service._youtube_ingest_mode = ""
+    hooks_service._schedule_youtube_retry_attempt = MagicMock()
     notifications = []
     hooks_service._notification_sink = notifications.append
     hooks_service._run_gateway_execute_with_watchdogs = AsyncMock(
@@ -392,17 +452,24 @@ async def test_youtube_dispatch_interrupted_writes_pending_recovery_marker(hooks
 
     await hooks_service._dispatch_action(action)
 
-    marker = workspace / "pending_hook_recovery.json"
-    assert marker.exists()
-    payload = json.loads(marker.read_text(encoding="utf-8"))
-    assert payload["status"] == "dispatch_interrupted"
-    assert payload["video_id"] == "demo123abc4"
-    assert payload["reason"] == "hook_dispatch_interrupted"
-
     interrupted = next((n for n in notifications if n.get("kind") == "youtube_tutorial_interrupted"), None)
     assert interrupted is not None
     assert interrupted["metadata"]["reason"] == "hook_dispatch_interrupted"
+    assert interrupted["metadata"]["run_id"]
+    assert interrupted["metadata"]["attempt_id"]
+    assert interrupted["metadata"]["attempt_number"] == 1
     assert not any(n.get("kind") == "youtube_tutorial_failed" for n in notifications)
+
+    conn = connect_runtime_db(hooks_service._workflow_admission_service().db_path)
+    ensure_schema(conn)
+    attempt_row = get_run_attempt(conn, str(interrupted["metadata"]["attempt_id"]))
+    retry_attempt = conn.execute(
+        "SELECT * FROM run_attempts WHERE run_id = ? AND attempt_number = 2",
+        (str(interrupted["metadata"]["run_id"]),),
+    ).fetchone()
+    conn.close()
+    assert attempt_row is not None
+    assert retry_attempt is not None
 
 
 def test_is_youtube_local_ingest_target_accepts_canonical_and_alias(mock_gateway):
@@ -876,8 +943,14 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
             clear=False,
         ),
     ):
+        runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
         service = HooksService(mock_gateway)
         service.config = config
+        service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+        service._run_gateway_execute_with_watchdogs = AsyncMock(return_value={})
+        service._validate_youtube_tutorial_artifacts = MagicMock(
+            return_value={"title": "Local Ingest Tutorial", "status": "full", "run_rel_path": "", "key_files": []}
+        )
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": True,
@@ -901,7 +974,7 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
         assert response.status_code == 200
         await asyncio.sleep(0.1)
 
-    gateway_request = mock_gateway.execute.call_args[0][1]
+    gateway_request = service._run_gateway_execute_with_watchdogs.call_args.kwargs["request"]
     assert "local_youtube_ingest_status: succeeded" in gateway_request.user_input
     assert "local_youtube_ingest_metadata_status: attempted_failed" in gateway_request.user_input
     assert gateway_request.metadata["hook_youtube_ingest_status"] == "succeeded"
@@ -954,8 +1027,11 @@ async def test_local_ingest_fail_closed_defers_dispatch(mock_gateway, tmp_path):
             clear=False,
         ),
     ):
+        runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
         service = HooksService(mock_gateway)
         service.config = config
+        service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+        service._schedule_youtube_retry_attempt = MagicMock()
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": False,
@@ -1023,6 +1099,8 @@ async def test_local_ingest_cooldown_defers_dispatch(mock_gateway, tmp_path):
     ):
         service = HooksService(mock_gateway)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
+        service._schedule_youtube_retry_attempt = MagicMock()
         service._youtube_ingest_cooldowns["dxlyCPGCvy8"] = {
             "until_epoch": time.time() + 300.0,
             "failure_class": "request_blocked",
@@ -1090,6 +1168,8 @@ async def test_local_ingest_failure_emits_notification(mock_gateway, tmp_path):
     ):
         service = HooksService(mock_gateway, notification_sink=notifications.append)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
+        service._schedule_youtube_retry_attempt = MagicMock()
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": False,
@@ -1162,6 +1242,7 @@ async def test_local_ingest_non_retryable_failure_stops_after_first_attempt(mock
     ):
         service = HooksService(mock_gateway, notification_sink=notifications.append)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": False,
@@ -1238,6 +1319,7 @@ async def test_local_ingest_api_unavailable_allow_degraded_fails_open(mock_gatew
     ):
         service = HooksService(mock_gateway, notification_sink=notifications.append)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": False,
@@ -1317,6 +1399,8 @@ async def test_local_ingest_proxy_failure_emits_proxy_alert_notification(mock_ga
     ):
         service = HooksService(mock_gateway, notification_sink=notifications.append)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
+        service._schedule_youtube_retry_attempt = MagicMock()
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": False,
@@ -1388,6 +1472,8 @@ async def test_local_ingest_proxy_connect_failure_emits_proxy_alert_notification
     ):
         service = HooksService(mock_gateway, notification_sink=notifications.append)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
+        service._schedule_youtube_retry_attempt = MagicMock()
         service._call_local_youtube_ingest_worker = AsyncMock(
             return_value={
                 "ok": False,
@@ -1479,6 +1565,7 @@ async def test_local_ingest_inflight_duplicate_reports_existing_root_cause(mock_
     ):
         service = HooksService(mock_gateway, notification_sink=notifications.append)
         service.config = config
+        _bind_workflow_runtime_db(service, tmp_path)
         video_key = service._youtube_ingest_video_key(
             "https://www.youtube.com/watch?v=dxlyCPGCvy8",
             "dxlyCPGCvy8",
@@ -1642,6 +1729,7 @@ async def test_recover_interrupted_youtube_sessions_queues_recovery(mock_gateway
         ),
     ):
         service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
 
     session_id = "session_hook_yt_UCLIo-9WnXvQcXfXomQvYSOg_km5fvKPRsJw"
     session_dir = tmp_path / session_id
@@ -1687,6 +1775,7 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
         ),
     ):
         service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
 
     session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_3L7wPEB8sEc"
     session_dir = tmp_path / session_id
@@ -1732,6 +1821,7 @@ async def test_recover_interrupted_youtube_sessions_supports_run_workspace_prefi
         ),
     ):
         service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
 
     session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_runprefix123"
     session_dir = tmp_path / f"run_{session_id}"
@@ -1779,6 +1869,7 @@ async def test_recover_interrupted_youtube_sessions_skips_non_retryable_pending_
         ),
     ):
         service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
 
     session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_3L7wPEB8sEc"
     session_dir = tmp_path / session_id
@@ -1821,6 +1912,7 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
         ),
     ):
         service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
 
     session_id = "session_hook_yt_UCYHosdETLPp6dpJEsgIUTmw_3L7wPEB8sEc"
     session_dir = tmp_path / session_id

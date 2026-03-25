@@ -93,8 +93,8 @@ evaluates how to work with it.
 
 Try in order:
 1. User provides explicit path(s) — use directly
-2. User provides a task_name — resolve to `$CURRENT_SESSION_WORKSPACE/tasks/{name}/`
-3. Scan `$CURRENT_SESSION_WORKSPACE/tasks/*/` for directories with `.md` files
+2. User provides a task_name — resolve to `$CURRENT_RUN_WORKSPACE/tasks/{name}/`
+3. Scan `$CURRENT_RUN_WORKSPACE/tasks/*/` for directories with `.md` files
 4. Ask the user
 
 **Step 2: Corpus Evaluation (NEW — Phase 0).**

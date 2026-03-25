@@ -14,8 +14,12 @@ from typing import Optional, Dict, Any, Iterable, Callable
 import pytz
 from croniter import croniter
 
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_run_attempt
 from universal_agent.gateway import InProcessGateway, GatewayRequest, GatewaySession
 from universal_agent.heartbeat_service import _parse_duration_seconds
+from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +341,10 @@ class CronRunRecord:
     status: str
     scheduled_at: Optional[float]
     started_at: float
+    workflow_run_id: Optional[str] = None
+    workflow_attempt_id: Optional[str] = None
+    workflow_attempt_number: Optional[int] = None
+    dispatch_key: Optional[str] = None
     finished_at: Optional[float] = None
     error: Optional[str] = None
     output_preview: Optional[str] = None
@@ -349,6 +357,10 @@ class CronRunRecord:
             "status": self.status,
             "scheduled_at": self.scheduled_at,
             "started_at": self.started_at,
+            "workflow_run_id": self.workflow_run_id,
+            "workflow_attempt_id": self.workflow_attempt_id,
+            "workflow_attempt_number": self.workflow_attempt_number,
+            "dispatch_key": self.dispatch_key,
             "finished_at": self.finished_at,
             "error": self.error,
             "output_preview": self.output_preview,
@@ -408,6 +420,16 @@ class CronStore:
 
 
 class CronService:
+    @staticmethod
+    def _workflow_admission_service() -> WorkflowAdmissionService:
+        return WorkflowAdmissionService()
+
+    @staticmethod
+    def _runtime_db_connect():
+        conn = connect_runtime_db(get_runtime_db_path())
+        ensure_schema(conn)
+        return conn
+
     def __init__(
         self,
         gateway: InProcessGateway,
@@ -581,6 +603,144 @@ class CronService:
     def list_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
         return self.store.read_runs(job_id=job_id, limit=limit)
 
+    @staticmethod
+    def _dispatch_key_for_job(job: CronJob, *, reason: str, scheduled_at: Optional[float]) -> str:
+        if scheduled_at is not None:
+            return f"scheduled:{job.job_id}:{int(float(scheduled_at))}"
+        return f"manual:{job.job_id}:{uuid.uuid4().hex[:12]}"
+
+    def _build_workflow_trigger(self, job: CronJob, *, dispatch_key: str) -> WorkflowTrigger:
+        payload = {
+            "job_id": job.job_id,
+            "command": job.command,
+            "workspace_dir": job.workspace_dir,
+            "reason": dispatch_key.split(":", 1)[0],
+            "metadata": job.metadata or {},
+        }
+        return WorkflowTrigger(
+            run_kind="cron_job_dispatch",
+            trigger_source="cron",
+            dedup_key=dispatch_key,
+            payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+            priority=100,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+            external_origin="cron",
+            external_origin_id=job.job_id,
+            external_correlation_id=dispatch_key,
+        )
+
+    def _attempt_number(self, attempt_id: Optional[str]) -> Optional[int]:
+        if not attempt_id:
+            return None
+        conn = self._runtime_db_connect()
+        try:
+            row = get_run_attempt(conn, attempt_id)
+            if row is None:
+                return None
+            return int(row["attempt_number"] or 0) or None
+        finally:
+            conn.close()
+
+    def _schedule_retry_run(
+        self,
+        *,
+        job: CronJob,
+        scheduled_at: Optional[float],
+        reason: str,
+        dispatch_key: str,
+        workflow_run_id: str,
+        workflow_attempt_id: str,
+    ) -> None:
+        self.running_jobs.add(job.job_id)
+        asyncio.create_task(
+            self._run_job(
+                job,
+                scheduled_at=scheduled_at,
+                reason=reason,
+                dispatch_key=dispatch_key,
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                skip_workflow_admission=True,
+            )
+        )
+
+    def _finalize_workflow_attempt(
+        self,
+        *,
+        job: CronJob,
+        record: CronRunRecord,
+        scheduled_at: Optional[float],
+        reason: str,
+        dispatch_key: str,
+        workflow_run_id: Optional[str],
+        workflow_attempt_id: Optional[str],
+        failure_reason: Optional[str] = None,
+        failure_class: Optional[str] = None,
+        retryable: bool = False,
+    ) -> None:
+        if not workflow_run_id or not workflow_attempt_id:
+            return
+        admission_service = self._workflow_admission_service()
+        if record.status == "success":
+            admission_service.mark_completed(
+                workflow_run_id,
+                attempt_id=workflow_attempt_id,
+                summary={"job_id": job.job_id, "status": "success"},
+            )
+            return
+        if record.status == "auth_required":
+            admission_service.mark_needs_review(
+                workflow_run_id,
+                attempt_id=workflow_attempt_id,
+                reason=failure_reason or "auth_required",
+                failure_class=failure_class or "auth_required",
+                summary={"job_id": job.job_id, "status": "auth_required"},
+            )
+            return
+        if retryable:
+            retry_decision = admission_service.queue_retry(
+                self._build_workflow_trigger(job, dispatch_key=dispatch_key),
+                entrypoint="cron_service._run_job",
+                run_id=workflow_run_id,
+                attempt_id=workflow_attempt_id,
+                workspace_dir=job.workspace_dir,
+                failure_reason=failure_reason or "cron_dispatch_failed",
+                failure_class=failure_class or "cron_dispatch_failed",
+                max_attempts=3,
+            )
+            if retry_decision.action == "start_new_attempt" and retry_decision.attempt_id:
+                next_attempt_number = self._attempt_number(retry_decision.attempt_id)
+                record.status = "retry_queued"
+                record.error = failure_reason or record.error
+                self._emit_event(
+                    {
+                        "type": "cron_run_retry_queued",
+                        "run": {
+                            **record.to_dict(),
+                            "next_attempt_id": retry_decision.attempt_id,
+                            "next_attempt_number": next_attempt_number,
+                        },
+                        "reason": reason,
+                    }
+                )
+                self._schedule_retry_run(
+                    job=job,
+                    scheduled_at=scheduled_at,
+                    reason="retry",
+                    dispatch_key=dispatch_key,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=retry_decision.attempt_id,
+                )
+                return
+        admission_service.mark_needs_review(
+            workflow_run_id,
+            attempt_id=workflow_attempt_id,
+            reason=failure_reason or record.error or "cron_dispatch_failed",
+            failure_class=failure_class or "cron_dispatch_failed",
+            summary={"job_id": job.job_id, "status": record.status},
+        )
+
     async def run_job_now(
         self,
         job_id: str,
@@ -589,7 +749,8 @@ class CronService:
     ) -> CronRunRecord:
         job = self.jobs[job_id]
         self.running_jobs.add(job.job_id)
-        return await self._run_job(job, scheduled_at=scheduled_at, reason=reason)
+        dispatch_key = self._dispatch_key_for_job(job, reason=reason, scheduled_at=scheduled_at)
+        return await self._run_job(job, scheduled_at=scheduled_at, reason=reason, dispatch_key=dispatch_key)
 
     async def _scheduler_loop(self) -> None:
         while self.running:
@@ -613,19 +774,86 @@ class CronService:
                     # _run_job acquires the semaphore.
                     self.running_jobs.add(job.job_id)
                     self.store.save_jobs(self.jobs.values())
-                    asyncio.create_task(self._run_job(job, scheduled_at=scheduled_at, reason="schedule"))
+                    dispatch_key = self._dispatch_key_for_job(job, reason="schedule", scheduled_at=scheduled_at)
+                    asyncio.create_task(
+                        self._run_job(job, scheduled_at=scheduled_at, reason="schedule", dispatch_key=dispatch_key)
+                    )
             await asyncio.sleep(1)
 
-    async def _run_job(self, job: CronJob, scheduled_at: Optional[float], reason: str) -> CronRunRecord:
+    async def _run_job(
+        self,
+        job: CronJob,
+        scheduled_at: Optional[float],
+        reason: str,
+        *,
+        dispatch_key: Optional[str] = None,
+        workflow_run_id: Optional[str] = None,
+        workflow_attempt_id: Optional[str] = None,
+        skip_workflow_admission: bool = False,
+    ) -> CronRunRecord:
         # running_jobs is set by the caller (_scheduler_loop or run_job_now)
         # before dispatching, so no duplicate-guard needed here.
         async with self._semaphore:
+            dispatch_key = dispatch_key or self._dispatch_key_for_job(job, reason=reason, scheduled_at=scheduled_at)
+            admission_service = self._workflow_admission_service()
+            trigger = self._build_workflow_trigger(job, dispatch_key=dispatch_key)
+            if not skip_workflow_admission:
+                decision = admission_service.admit(
+                    trigger,
+                    entrypoint="cron_service._run_job",
+                    workspace_dir=job.workspace_dir,
+                    max_attempts=3,
+                )
+                workflow_run_id = decision.run_id
+                workflow_attempt_id = decision.attempt_id
+                if decision.action in {"attach_to_existing_run", "defer", "skip_duplicate"}:
+                    record = CronRunRecord(
+                        run_id=uuid.uuid4().hex[:12],
+                        job_id=job.job_id,
+                        status="skipped",
+                        scheduled_at=scheduled_at,
+                        started_at=time.time(),
+                        finished_at=time.time(),
+                        error=decision.reason,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                        workflow_attempt_number=self._attempt_number(workflow_attempt_id),
+                        dispatch_key=dispatch_key,
+                    )
+                    self.store.append_run(record)
+                    self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+                    self.running_jobs.discard(job.job_id)
+                    self.running_job_scheduled_at.pop(job.job_id, None)
+                    return record
+                if decision.action == "escalate_review":
+                    record = CronRunRecord(
+                        run_id=uuid.uuid4().hex[:12],
+                        job_id=job.job_id,
+                        status="needs_review",
+                        scheduled_at=scheduled_at,
+                        started_at=time.time(),
+                        finished_at=time.time(),
+                        error=decision.reason,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                        workflow_attempt_number=self._attempt_number(workflow_attempt_id),
+                        dispatch_key=dispatch_key,
+                    )
+                    self.store.append_run(record)
+                    self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+                    self.running_jobs.discard(job.job_id)
+                    self.running_job_scheduled_at.pop(job.job_id, None)
+                    return record
             record = CronRunRecord(
                 run_id=uuid.uuid4().hex[:12],
                 job_id=job.job_id,
                 status="running",
                 scheduled_at=scheduled_at,
                 started_at=time.time(),
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                workflow_attempt_number=self._attempt_number(workflow_attempt_id),
+                dispatch_key=dispatch_key,
             )
             self._emit_event({"type": "cron_run_started", "run": record.to_dict(), "reason": reason})
             timeout_seconds = self._resolve_job_timeout_seconds(job)
@@ -636,6 +864,15 @@ class CronService:
                     record.status = "success"
                     record.finished_at = time.time()
                     record.output_preview = "CRON_OK"
+                    self._finalize_workflow_attempt(
+                        job=job,
+                        record=record,
+                        scheduled_at=scheduled_at,
+                        reason=reason,
+                        dispatch_key=dispatch_key,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                    )
                 else:
                     configured_retries = 2
                     retries_raw = (os.getenv("UA_CRON_DB_LOCK_RETRIES") or "").strip()
@@ -654,11 +891,29 @@ class CronService:
                                 workspace_dir=job.workspace_dir,
                             )
                             record.session_id = str(getattr(session, "session_id", "") or "")
+                            if workflow_run_id and workflow_attempt_id:
+                                admission_service.mark_running(
+                                    workflow_run_id,
+                                    attempt_id=workflow_attempt_id,
+                                    provider_session_id=record.session_id or None,
+                                    summary={
+                                        "job_id": job.job_id,
+                                        "reason": reason,
+                                        "workspace_dir": job.workspace_dir,
+                                    },
+                                )
                             # Tag session so the reaper correctly classifies this as
                             # an admin (short-lived) session with cron TTL.
-                            if isinstance(session.metadata, dict):
-                                session.metadata.setdefault("source", "cron")
-                                session.metadata.setdefault("job_id", job.job_id)
+                            session_metadata = getattr(session, "metadata", None)
+                            if session_metadata is None:
+                                try:
+                                    session_metadata = {}
+                                    setattr(session, "metadata", session_metadata)
+                                except Exception:
+                                    session_metadata = None
+                            if isinstance(session_metadata, dict):
+                                session_metadata.setdefault("source", "cron")
+                                session_metadata.setdefault("job_id", job.job_id)
                             # Build request metadata with optional model override
                             request_metadata: dict[str, Any] = {
                                 "source": "cron",
@@ -705,10 +960,22 @@ class CronService:
                                 class _MockResult:
                                     def __init__(self, text):
                                         self.response_text = text
-                                        self.session_id = session_id
+                                        self.session_id = str(getattr(session, "session_id", "") or "")
                                 result = _MockResult(output_text)
                                 record.finished_at = time.time()
                                 self._persist_run_output(job, record, result)
+                                self._finalize_workflow_attempt(
+                                    job=job,
+                                    record=record,
+                                    scheduled_at=scheduled_at,
+                                    reason=reason,
+                                    dispatch_key=dispatch_key,
+                                    workflow_run_id=workflow_run_id,
+                                    workflow_attempt_id=workflow_attempt_id,
+                                    failure_reason=record.error,
+                                    failure_class="script_exit_error",
+                                    retryable=record.status == "error",
+                                )
                                 break
                             else:
                                 # Standard LLM cron execution
@@ -763,6 +1030,18 @@ class CronService:
                                     record.output_preview = (getattr(result, "response_text", "") or "")[:400]
                                 record.finished_at = time.time()
                                 self._persist_run_output(job, record, result)
+                                self._finalize_workflow_attempt(
+                                    job=job,
+                                    record=record,
+                                    scheduled_at=scheduled_at,
+                                    reason=reason,
+                                    dispatch_key=dispatch_key,
+                                    workflow_run_id=workflow_run_id,
+                                    workflow_attempt_id=workflow_attempt_id,
+                                    failure_reason=record.error or ("auth_required" if record.status == "auth_required" else None),
+                                    failure_class="auth_required" if record.status == "auth_required" else "cron_dispatch_failed",
+                                    retryable=record.status == "error",
+                                )
                                 break
                             record.finished_at = time.time()
                             self._persist_run_output(job, record, result)
@@ -788,14 +1067,40 @@ class CronService:
                 timeout_label = timeout_seconds if timeout_seconds is not None else "configured"
                 record.error = f"execution timed out after {timeout_label}s"
                 logger.error("Chron job %s timed out after %ss", job.job_id, timeout_label)
+                self._finalize_workflow_attempt(
+                    job=job,
+                    record=record,
+                    scheduled_at=scheduled_at,
+                    reason=reason,
+                    dispatch_key=dispatch_key,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    failure_reason=record.error,
+                    failure_class="execution_timeout",
+                    retryable=True,
+                )
             except Exception as exc:
                 record.status = "error"
                 record.finished_at = time.time()
                 record.error = str(exc)
                 logger.error("Chron job %s failed: %s", job.job_id, exc)
+                self._finalize_workflow_attempt(
+                    job=job,
+                    record=record,
+                    scheduled_at=scheduled_at,
+                    reason=reason,
+                    dispatch_key=dispatch_key,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    failure_reason=record.error,
+                    failure_class="cron_dispatch_failed",
+                    retryable=True,
+                )
             finally:
-                self.running_jobs.discard(job.job_id)
-                self.running_job_scheduled_at.pop(job.job_id, None)
+                retry_scheduled = record.status == "retry_queued"
+                if not retry_scheduled:
+                    self.running_jobs.discard(job.job_id)
+                    self.running_job_scheduled_at.pop(job.job_id, None)
                 moved_outputs = self._organize_workspace_outputs(job.workspace_dir)
                 # Finalize one-shot schedule consumption only after run actually started.
                 if reason == "schedule" and job.run_at is not None:

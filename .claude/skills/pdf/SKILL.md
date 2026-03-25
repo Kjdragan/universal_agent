@@ -23,7 +23,7 @@ If HTML conversion via Chrome headless is unavailable, fall back to WeasyPrint.
 > When defining output paths for PDF generation or manipulation, **ALWAYS use ABSOLUTE paths**.
 > **NEVER use relative paths** (e.g., `work_products/output.pdf`). The agent's CWD is unpredictable.
 > Construct paths dynamically using python:
-> `path = os.path.join(os.environ['CURRENT_SESSION_WORKSPACE'], 'work_products', 'output.pdf')`
+> `path = os.path.join(os.environ.get('CURRENT_RUN_WORKSPACE') or os.environ['CURRENT_SESSION_WORKSPACE'], 'work_products', 'output.pdf')`
 
 ```python
 from pypdf import PdfReader, PdfWriter

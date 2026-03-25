@@ -28,8 +28,8 @@ model: opus
   - Prefer `mcp__internal__x_trends_posts` for a fast X-only evidence pull.
   - Fallback: `grok-x-trends` skill in evidence mode (`--posts-only --json`).
   - You infer themes and write the narrative yourself.
-  - Always ensure the interim evidence is discoverable in the session workspace under:
-    - `CURRENT_SESSION_WORKSPACE/work_products/social/x/evidence_posts/<run>/result.json`
+  - Always ensure the interim evidence is discoverable in the run workspace under:
+    - `CURRENT_RUN_WORKSPACE/work_products/social/x/evidence_posts/<run>/result.json`
 
 - For Reddit pulse checks:
   - Prefer `mcp__internal__reddit_top_posts` for compact subreddit evidence.
@@ -59,15 +59,15 @@ model: opus
 
 ## 📦 Interim Work Products (X + Reddit)
 
-When you pull evidence from X or Reddit, it must be saved as an interim work product in the session workspace so other agents can reuse it without re-fetching.
+When you pull evidence from X or Reddit, it must be saved as an interim work product in the run workspace so other agents can reuse it without re-fetching.
 
 Canonical schema:
 
 - X evidence posts:
-  - `CURRENT_SESSION_WORKSPACE/work_products/social/x/evidence_posts/<run_slug>__<YYYYMMDD_HHMMSS>/`
+  - `CURRENT_RUN_WORKSPACE/work_products/social/x/evidence_posts/<run_slug>__<YYYYMMDD_HHMMSS>/`
   - `result.json` contains the structured JSON (posts evidence)
 - Reddit top posts:
-  - `CURRENT_SESSION_WORKSPACE/work_products/social/reddit/top_posts/<run_slug>__<YYYYMMDD_HHMMSS>/`
+  - `CURRENT_RUN_WORKSPACE/work_products/social/reddit/top_posts/<run_slug>__<YYYYMMDD_HHMMSS>/`
   - `result.json` contains the compact structured JSON (posts + engagement)
 
 If you used the internal tools:

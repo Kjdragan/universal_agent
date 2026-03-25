@@ -77,6 +77,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[E2BIG Kernel Limits and Prompt Architecture (2026-03-22)](03_Operations/102_E2BIG_Kernel_Limits_And_Prompt_Architecture_2026-03-22.md)**: Architectural boundary constraints regarding kernel execution limits (`MAX_ARG_STRLEN`), prompt density formatting, and strategies to prevent subprocess prompt float.
 - **[Debugging Lessons Living Document (2026-03-23)](03_Operations/103_Debugging_Lessons_Living_Document.md)**: Living collection of reusable debugging lessons from complex incidents, including target-host verification, fresh-process versus live-service checks, and post-bootstrap env-mutation failures.
 - **[Run/Attempt Lifecycle and Nomenclature Migration Plan (2026-03-24)](03_Operations/104_Run_Attempt_Lifecycle_And_Nomenclature_Migration_Plan_2026-03-24.md)**: Canonical migration plan for moving durable work from session-based terminology to run/attempt/run-workspace terminology, including packet gates, rollback scope, and CSI boundary rules.
+- **[YouTube Tutorial Pipeline Run/Attempt Triage (2026-03-24)](03_Operations/105_YouTube_Tutorial_Pipeline_Run_Attempt_Triage_2026-03-24.md)**: Detailed operational report on the first notification-center audit after the run/attempt refactor, plus the follow-up closure update that moved tutorial hooks and cron admission onto durable run/attempt lifecycle handling.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

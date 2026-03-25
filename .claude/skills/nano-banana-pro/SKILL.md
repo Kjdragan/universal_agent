@@ -55,7 +55,7 @@ Notes
 - Resolutions: `1K` (default), `2K`, `4K`.
 - Use timestamps in filenames: `yyyy-mm-dd-hh-mm-ss-name.png`.
 - Pass only a filename (not an absolute path). The script saves to:
-  - Session output: `$CURRENT_SESSION_WORKSPACE/work_products/media/`
+  - Run output: `$CURRENT_RUN_WORKSPACE/work_products/media/` (`CURRENT_SESSION_WORKSPACE` is the legacy alias)
   - Persistent mirror: `artifacts/media/` (or `UA_ARTIFACTS_DIR/media`)
 - The script prints a `MEDIA:` line for OpenClaw to auto-attach on supported chat providers.
 - Do not read the image back; report the saved path only.

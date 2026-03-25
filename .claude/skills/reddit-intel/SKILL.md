@@ -94,12 +94,12 @@ Returns a compact JSON object — not the raw Reddit Listing:
 
 ---
 
-## Session Workspace Output
+## Run Workspace Output
 
 When `save_to_workspace=true`, files are written to:
 
 ```
-$CURRENT_SESSION_WORKSPACE/work_products/social/reddit/top_posts/r_<subreddit>_<t>__<YYYYMMDD_HHMMSS>/
+$CURRENT_RUN_WORKSPACE/work_products/social/reddit/top_posts/r_<subreddit>_<t>__<YYYYMMDD_HHMMSS>/
 ```
 
 | File | Contents |

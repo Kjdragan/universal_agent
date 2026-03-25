@@ -125,6 +125,23 @@ class TestMessageFormatting:
         assert "README" in text
         assert "main.py" in text
 
+    def test_ready_includes_recovery_attempt_when_retry_succeeds(self) -> None:
+        metadata = {
+            "video_id": "abc123",
+            "tutorial_status": "completed",
+            "recovered_after_retry": True,
+            "attempt_number": 2,
+            "total_attempts_allowed": 3,
+        }
+        text = tutorial_telegram_notifier._build_message(
+            "youtube_tutorial_ready",
+            "Ready",
+            "Artifacts are ready after automatic recovery on attempt 2/3.",
+            metadata,
+        )
+        assert "attempt 2/3" in text
+        assert "Recovery:" in text
+
     def test_failed_includes_error_reason(self) -> None:
         metadata = {"video_id": "vid_fail", "error": "Timeout exceeded"}
         text = tutorial_telegram_notifier._build_message(

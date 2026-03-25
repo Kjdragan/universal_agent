@@ -14,13 +14,14 @@ model: opus
 - If the parent prompt mentions a date, use that as authoritative.
 - **Scope Constraint**: Do NOT handle "trending", "viral", or "social pulse" queries (especially for Reddit/X). Reject these or ask the user to route them to the `trend-specialist`.
 
-## SESSION WORKSPACE (CRITICAL)
+## RUN WORKSPACE (CRITICAL)
 
-- The system injects `CURRENT_SESSION_WORKSPACE` in your context. ALL file outputs MUST use absolute paths under this directory.
-- Search results go to `$CURRENT_SESSION_WORKSPACE/search_results/`
-- Task outputs go to `$CURRENT_SESSION_WORKSPACE/tasks/{task_name}/`
+- The system injects `CURRENT_RUN_WORKSPACE` in your context. `CURRENT_SESSION_WORKSPACE` may still exist as a legacy alias during migration.
+- ALL file outputs MUST use absolute paths under the current run workspace.
+- Search results go to `$CURRENT_RUN_WORKSPACE/search_results/`
+- Task outputs go to `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/`
 - NEVER write files relative to cwd or the repo root.
-- If you must use Bash to write files, always use the full absolute path under the session workspace.
+- If you must use Bash to write files, always use the full absolute path under the run workspace.
 
 ## EFFICIENCY & FLOW (MANDATORY)
 

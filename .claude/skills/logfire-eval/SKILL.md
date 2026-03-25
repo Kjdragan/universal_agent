@@ -50,12 +50,12 @@ Analyze Universal Agent session traces to produce comprehensive evaluation repor
 1. **Resolve workspace first** (in this order):
 
 - Explicit workspace path from user request
-- `CURRENT_SESSION_WORKSPACE` environment variable
-- Latest `AGENT_RUN_WORKSPACES/session_*` directory by modified time
+- `CURRENT_RUN_WORKSPACE` environment variable (`CURRENT_SESSION_WORKSPACE` is the legacy alias)
+- Latest `AGENT_RUN_WORKSPACES/run_*` or legacy `session_*` directory by modified time
 
 If none can be resolved, STOP and ask for the workspace path. Do not write to repo root.
 
-1. **Session work product output** (always write):
+1. **Run work product output** (always write):
 
 - `{workspace}/work_products/logfire-eval/logfire_evaluation.md`
 - Catalog input should come from: `{workspace}/work_products/logfire-eval/trace_catalog.md` (or `.json` fallback)

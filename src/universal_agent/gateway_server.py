@@ -5667,10 +5667,14 @@ def _emit_cron_event(payload: dict) -> None:
     _scheduling_event_bus.publish("cron", event_type, payload)
     _scheduling_counter_inc("event_bus_published")
     run_data = payload.get("run") if isinstance(payload.get("run"), dict) else None
-    if event_type == "cron_run_completed" and run_data:
+    if event_type in {"cron_run_completed", "cron_run_retry_queued"} and run_data:
         run_status = str(run_data.get("status") or "unknown").strip().lower() or "unknown"
         job_id = str(run_data.get("job_id") or "").strip()
         run_id = str(run_data.get("run_id") or "").strip()
+        workflow_run_id = str(run_data.get("workflow_run_id") or "").strip()
+        workflow_attempt_id = str(run_data.get("workflow_attempt_id") or "").strip()
+        workflow_attempt_number = run_data.get("workflow_attempt_number")
+        dispatch_key = str(run_data.get("dispatch_key") or "").strip()
         job = _cron_service.get_job(job_id) if _cron_service and job_id else None
         command = str(getattr(job, "command", "") or "").strip()
         if not command:
@@ -5693,7 +5697,16 @@ def _emit_cron_event(payload: dict) -> None:
         is_autonomous = bool(job_metadata.get("autonomous"))
         system_job = str(job_metadata.get("system_job") or "").strip()
 
-        if run_status == "success":
+        if event_type == "cron_run_retry_queued":
+            title = "Autonomous Task Retrying" if is_autonomous else "Chron Retry Queued"
+            severity = "warning"
+            kind = "cron_run_retry_queued"
+            next_attempt_number = run_data.get("next_attempt_number")
+            message = (
+                f"Cron job {job_id} failed on attempt {workflow_attempt_number or '?'}; "
+                f"retry attempt {next_attempt_number or '?'} has been queued."
+            )
+        elif run_status == "success":
             title = "Autonomous Task Completed" if is_autonomous else "Chron Run Succeeded"
             severity = "info"
             kind = "autonomous_run_completed" if is_autonomous else "cron_run_success"
@@ -5716,6 +5729,10 @@ def _emit_cron_event(payload: dict) -> None:
             metadata={
                 "job_id": job_id,
                 "run_id": run_id,
+                "workflow_run_id": workflow_run_id,
+                "workflow_attempt_id": workflow_attempt_id,
+                "workflow_attempt_number": workflow_attempt_number,
+                "dispatch_key": dispatch_key,
                 "status": run_status,
                 "scheduled_at": run_data.get("scheduled_at"),
                 "started_at": run_data.get("started_at"),

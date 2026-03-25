@@ -21,10 +21,14 @@ from fastapi import Request, Response
 from pydantic import BaseModel, Field
 
 from universal_agent.artifacts import resolve_artifacts_dir
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 from universal_agent.run_catalog import RunCatalogService
+from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 from universal_agent.youtube_ingest import normalize_video_target
 
 logger = logging.getLogger(__name__)
@@ -369,6 +373,16 @@ def build_manual_youtube_action(
 
 
 class HooksService:
+    @staticmethod
+    def _runtime_db_connect():
+        conn = connect_runtime_db(get_runtime_db_path())
+        ensure_schema(conn)
+        return conn
+
+    @staticmethod
+    def _workflow_admission_service() -> WorkflowAdmissionService:
+        return WorkflowAdmissionService()
+
     def __init__(
         self,
         gateway: InProcessGateway,
@@ -824,6 +838,10 @@ class HooksService:
             logger.warning("Failed writing pending hook recovery marker session_id=%s", session_id)
         return marker
 
+    def _read_pending_hook_recovery_marker(self, session_dir: Path) -> dict[str, Any]:
+        marker = self._pending_hook_recovery_marker_path(session_dir)
+        return self._safe_json(marker)
+
     def _clear_pending_hook_recovery_marker(self, session_dir: Path) -> None:
         marker = self._pending_hook_recovery_marker_path(session_dir)
         if not marker.exists():
@@ -899,6 +917,330 @@ class HooksService:
         if self._is_dispatch_interruption_error(detail):
             return "hook_dispatch_interrupted"
         return "hook_dispatch_failed"
+
+    @staticmethod
+    def _is_retryable_youtube_dispatch_failure(reason: str) -> bool:
+        normalized = str(reason or "").strip().lower()
+        if not normalized:
+            return False
+        if normalized in {
+            "hook_dispatch_interrupted",
+            "hook_dispatch_failed",
+            "hook_timeout",
+            "hook_idle_timeout",
+            "proxy_connect_failed",
+        }:
+            return True
+        return normalized.startswith("hook_timeout_") or normalized.startswith("hook_idle_timeout_")
+
+    @staticmethod
+    def _youtube_workflow_workspace_dir(session_key: str) -> str:
+        safe = SESSION_ID_SANITIZE_RE.sub("_", str(session_key or "").strip()).strip("._-")
+        if not safe:
+            safe = hashlib.sha256(str(session_key or "youtube").encode("utf-8", errors="replace")).hexdigest()[:16]
+        return str((Path("AGENT_RUN_WORKSPACES") / f"run_session_hook_{safe}").resolve())
+
+    def _build_youtube_workflow_trigger(
+        self,
+        *,
+        action: HookAction,
+        session_key: str,
+        session_id: str,
+        expected_video_id: str,
+    ) -> WorkflowTrigger:
+        video_url = self._extract_action_field(action.message or "", "video_url")
+        normalized_url, normalized_video_id = normalize_video_target(video_url, expected_video_id)
+        dedup_key = normalized_video_id or normalized_url or session_key
+        payload = {
+            "session_key": session_key,
+            "session_id": session_id,
+            "hook_name": action.name or "Hook",
+            "route_to": action.to or "",
+            "message": action.message or "",
+            "model": action.model,
+            "thinking": action.thinking,
+            "timeout_seconds": action.timeout_seconds,
+            "video_id": normalized_video_id or expected_video_id or "",
+            "video_url": normalized_url or "",
+            "video_title": self._extract_action_field(action.message or "", "title"),
+            "workspace_dir": self._youtube_workflow_workspace_dir(session_key),
+        }
+        return WorkflowTrigger(
+            run_kind="youtube_tutorial_hook",
+            trigger_source="webhook",
+            dedup_key=dedup_key,
+            payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+            priority=100,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+            external_origin="youtube_webhook",
+            external_origin_id=normalized_video_id or expected_video_id or session_id,
+            external_correlation_id=session_id,
+        )
+
+    def _workflow_attempt_context(
+        self,
+        *,
+        run_id: Optional[str],
+        attempt_id: Optional[str],
+    ) -> dict[str, Any]:
+        if not run_id and not attempt_id:
+            return {}
+        conn = self._runtime_db_connect()
+        try:
+            run_row = get_run(conn, run_id) if run_id else None
+            attempt_row = get_run_attempt(conn, attempt_id) if attempt_id else None
+            context: dict[str, Any] = {}
+            if run_row is not None:
+                context["run_id"] = str(run_row["run_id"] or "")
+                context["run_status"] = str(run_row["status"] or "")
+                context["workspace_dir"] = str(run_row["workspace_dir"] or "")
+                context["attempt_count"] = int(run_row["attempt_count"] or 0)
+            if attempt_row is not None:
+                context["attempt_id"] = str(attempt_row["attempt_id"] or "")
+                context["attempt_number"] = int(attempt_row["attempt_number"] or 0)
+                context["attempt_status"] = str(attempt_row["status"] or "")
+                context["provider_session_id"] = str(attempt_row["provider_session_id"] or "")
+            return context
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _merge_workflow_metadata(
+        metadata: dict[str, Any],
+        *,
+        run_id: Optional[str],
+        attempt_id: Optional[str],
+        attempt_number: Optional[int],
+        workspace_dir: Optional[str],
+        provider_session_id: Optional[str],
+        retry_count: Optional[int] = None,
+        max_attempts: Optional[int] = None,
+        recovered_after_retry: Optional[bool] = None,
+        recovered_from_reason: Optional[str] = None,
+        dispatch_issue_resolved: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        enriched = dict(metadata)
+        if run_id:
+            enriched["run_id"] = run_id
+        if attempt_id:
+            enriched["attempt_id"] = attempt_id
+        if attempt_number:
+            enriched["attempt_number"] = int(attempt_number)
+        if workspace_dir:
+            enriched["workspace_dir"] = workspace_dir
+        if provider_session_id:
+            enriched["provider_session_id"] = provider_session_id
+        if retry_count is not None:
+            if "retry_count" in enriched:
+                enriched["workflow_retry_count"] = int(retry_count)
+            else:
+                enriched["retry_count"] = int(retry_count)
+        if max_attempts is not None:
+            if "max_attempts" in enriched:
+                enriched["workflow_max_attempts"] = int(max_attempts)
+            else:
+                enriched["max_attempts"] = int(max_attempts)
+        if recovered_after_retry is not None:
+            enriched["recovered_after_retry"] = bool(recovered_after_retry)
+        if recovered_from_reason:
+            enriched["recovered_from_reason"] = recovered_from_reason
+        if dispatch_issue_resolved is not None:
+            enriched["dispatch_issue_resolved"] = bool(dispatch_issue_resolved)
+        return enriched
+
+    def _build_youtube_action_from_run_spec(self, run_spec: dict[str, Any]) -> Optional[HookAction]:
+        if not isinstance(run_spec, dict):
+            return None
+        payload_json = run_spec.get("payload_json")
+        payload: dict[str, Any] = {}
+        if isinstance(payload_json, str) and payload_json.strip():
+            try:
+                parsed = json.loads(payload_json)
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                payload = {}
+        if not payload:
+            payload = dict(run_spec)
+        session_key = str(payload.get("session_key") or "").strip()
+        message = str(payload.get("message") or "").strip()
+        if not session_key or not message:
+            return None
+        timeout_value = payload.get("timeout_seconds")
+        timeout_seconds = int(timeout_value) if isinstance(timeout_value, (int, float)) and int(timeout_value) > 0 else None
+        return HookAction(
+            kind="agent",
+            name=str(payload.get("hook_name") or "RecoveredYouTubeWebhook"),
+            session_key=session_key,
+            to=str(payload.get("route_to") or YOUTUBE_AGENT_CANONICAL),
+            message=message,
+            deliver=True,
+            model=str(payload.get("model") or "") or None,
+            thinking=str(payload.get("thinking") or "") or None,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _emit_youtube_retry_queued_notification(
+        self,
+        *,
+        session_id: str,
+        session_key: str,
+        hook_name: str,
+        expected_video_id: str,
+        current_attempt_number: int,
+        next_attempt_number: int,
+        max_attempts: int,
+        reason: str,
+        run_id: Optional[str],
+        attempt_id: Optional[str],
+        workspace_dir: Optional[str],
+    ) -> None:
+        self._emit_notification(
+            kind="youtube_tutorial_interrupted",
+            title="YouTube Tutorial Interrupted",
+            message=(
+                f"Tutorial pipeline attempt {current_attempt_number} was interrupted. "
+                f"Automatic retry attempt {next_attempt_number}/{max_attempts} has been queued."
+            ),
+            session_id=session_id,
+            severity="warning",
+            requires_action=True,
+            metadata=self._merge_workflow_metadata(
+                {
+                    "source": "hooks",
+                    "hook_name": hook_name,
+                    "hook_session_key": session_key,
+                    "video_id": expected_video_id or "",
+                    "reason": reason,
+                },
+                run_id=run_id,
+                attempt_id=attempt_id,
+                attempt_number=current_attempt_number,
+                workspace_dir=workspace_dir,
+                provider_session_id=session_id,
+                retry_count=max(0, next_attempt_number - 1),
+                max_attempts=max_attempts,
+            ),
+        )
+
+    def _schedule_youtube_retry_attempt(
+        self,
+        *,
+        action: HookAction,
+        run_id: str,
+        attempt_id: str,
+        workspace_dir: str,
+    ) -> None:
+        asyncio.create_task(
+            self._dispatch_action(
+                action,
+                workflow_run_id=run_id,
+                workflow_attempt_id=attempt_id,
+                workflow_workspace_dir=workspace_dir,
+                skip_workflow_admission=True,
+            )
+        )
+
+    def _queue_or_finalize_youtube_attempt(
+        self,
+        *,
+        action: HookAction,
+        session_id: str,
+        session_key: str,
+        hook_name: str,
+        expected_video_id: str,
+        reason: str,
+        failure_class: str,
+        session_workspace: Optional[Path],
+        started_at_epoch: Optional[float],
+        workflow_run_id: Optional[str],
+        workflow_attempt_id: Optional[str],
+        workflow_attempt_number: Optional[int],
+    ) -> None:
+        if not workflow_run_id or not workflow_attempt_id:
+            self._emit_youtube_tutorial_failure_notification(
+                session_id=session_id,
+                session_key=session_key,
+                hook_name=hook_name,
+                expected_video_id=expected_video_id,
+                reason=reason,
+                started_at_epoch=started_at_epoch,
+                workspace_dir=str(session_workspace) if session_workspace is not None else None,
+                provider_session_id=session_id,
+            )
+            return
+
+        workflow_service = self._workflow_admission_service()
+        workspace_dir = str(session_workspace) if session_workspace is not None else self._youtube_workflow_workspace_dir(session_key)
+        max_attempts = 3
+        if self._is_retryable_youtube_dispatch_failure(reason):
+            retry_decision = workflow_service.queue_retry(
+                self._build_youtube_workflow_trigger(
+                    action=action,
+                    session_key=session_key,
+                    session_id=session_id,
+                    expected_video_id=expected_video_id,
+                ),
+                entrypoint="hooks_service.youtube_tutorial_hook",
+                run_id=workflow_run_id,
+                attempt_id=workflow_attempt_id,
+                workspace_dir=workspace_dir,
+                failure_reason=reason,
+                failure_class=failure_class,
+                max_attempts=max_attempts,
+            )
+            if retry_decision.action == "start_new_attempt" and retry_decision.attempt_id:
+                retry_context = self._workflow_attempt_context(
+                    run_id=workflow_run_id,
+                    attempt_id=retry_decision.attempt_id,
+                )
+                self._emit_youtube_retry_queued_notification(
+                    session_id=session_id,
+                    session_key=session_key,
+                    hook_name=hook_name,
+                    expected_video_id=expected_video_id,
+                    current_attempt_number=workflow_attempt_number or 1,
+                    next_attempt_number=int(retry_context.get("attempt_number") or (workflow_attempt_number or 1) + 1),
+                    max_attempts=max_attempts,
+                    reason=reason,
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                    workspace_dir=workspace_dir,
+                )
+                self._schedule_youtube_retry_attempt(
+                    action=action,
+                    run_id=workflow_run_id,
+                    attempt_id=retry_decision.attempt_id,
+                    workspace_dir=workspace_dir,
+                )
+                return
+
+        workflow_service.mark_needs_review(
+            workflow_run_id,
+            attempt_id=workflow_attempt_id,
+            reason=reason,
+            failure_class=failure_class,
+            summary={
+                "video_id": expected_video_id or "",
+                "hook_name": hook_name,
+                "workspace_dir": workspace_dir,
+            },
+        )
+        self._emit_youtube_tutorial_failure_notification(
+            session_id=session_id,
+            session_key=session_key,
+            hook_name=hook_name,
+            expected_video_id=expected_video_id,
+            reason=reason,
+            started_at_epoch=started_at_epoch,
+            run_id=workflow_run_id,
+            attempt_id=workflow_attempt_id,
+            attempt_number=workflow_attempt_number,
+            workspace_dir=workspace_dir,
+            provider_session_id=session_id,
+            max_attempts=max_attempts,
+        )
 
     @staticmethod
     def _pending_local_ingest_failure_class(pending_payload: dict[str, Any]) -> str:
@@ -1077,6 +1419,106 @@ class HooksService:
 
         recovered: int = 0
         now_epoch = time.time()
+        conn = self._runtime_db_connect()
+        try:
+            runtime_rows = conn.execute(
+                """
+                SELECT r.run_id,
+                       r.run_spec_json,
+                       r.workspace_dir,
+                       r.provider_session_id,
+                       r.latest_attempt_id,
+                       a.status AS attempt_status,
+                       a.attempt_number,
+                       a.failure_reason
+                FROM runs r
+                LEFT JOIN run_attempts a ON a.attempt_id = r.latest_attempt_id
+                WHERE r.run_kind = 'youtube_tutorial_hook'
+                ORDER BY r.updated_at DESC, r.created_at DESC
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+
+        for row in runtime_rows:
+            if recovered >= self._startup_recovery_max_sessions:
+                break
+            attempt_status = str(row["attempt_status"] or "").strip().lower()
+            if attempt_status not in {"queued", "blocked", "running"}:
+                continue
+            try:
+                run_spec = json.loads(str(row["run_spec_json"] or "{}"))
+            except Exception:
+                run_spec = {}
+            action = self._build_youtube_action_from_run_spec(run_spec if isinstance(run_spec, dict) else {})
+            if action is None:
+                continue
+            provider_session_id = str(row["provider_session_id"] or "").strip() or self._session_id_from_key(action.session_key or "")
+            workspace_dir = str(row["workspace_dir"] or self._youtube_workflow_workspace_dir(action.session_key or "")).strip()
+            if attempt_status == "running":
+                try:
+                    await self.gateway.resume_session(provider_session_id)
+                    continue
+                except Exception:
+                    retry_decision = self._workflow_admission_service().queue_retry(
+                        self._build_youtube_workflow_trigger(
+                            action=action,
+                            session_key=str(action.session_key or ""),
+                            session_id=provider_session_id,
+                            expected_video_id=self._extract_action_field(action.message or "", "video_id"),
+                        ),
+                        entrypoint="hooks_service.youtube_tutorial_hook",
+                        run_id=str(row["run_id"] or ""),
+                        attempt_id=str(row["latest_attempt_id"] or ""),
+                        workspace_dir=workspace_dir,
+                        failure_reason="startup_interrupted",
+                        failure_class="startup_interrupted",
+                        max_attempts=3,
+                    )
+                    if retry_decision.action != "start_new_attempt" or not retry_decision.attempt_id:
+                        continue
+                    asyncio.create_task(
+                        self._dispatch_action(
+                            action,
+                            workflow_run_id=str(row["run_id"] or ""),
+                            workflow_attempt_id=retry_decision.attempt_id,
+                            workflow_workspace_dir=workspace_dir,
+                            skip_workflow_admission=True,
+                        )
+                    )
+                    recovered += 1
+                    continue
+
+            asyncio.create_task(
+                self._dispatch_action(
+                    action,
+                    workflow_run_id=str(row["run_id"] or ""),
+                    workflow_attempt_id=str(row["latest_attempt_id"] or ""),
+                    workflow_workspace_dir=workspace_dir,
+                    skip_workflow_admission=True,
+                )
+            )
+            recovered += 1
+            self._emit_notification(
+                kind="youtube_hook_recovery_queued",
+                title="Recovered Interrupted YouTube Hook",
+                message=f"Queued recovery run for session {provider_session_id}",
+                session_id=provider_session_id,
+                severity="warning",
+                metadata=self._merge_workflow_metadata(
+                    {
+                        "source": "hooks",
+                        "reason": "runtime_db_recovery",
+                        "video_id": self._extract_action_field(action.message or "", "video_id"),
+                    },
+                    run_id=str(row["run_id"] or ""),
+                    attempt_id=str(row["latest_attempt_id"] or ""),
+                    attempt_number=int(row["attempt_number"] or 0) or None,
+                    workspace_dir=workspace_dir,
+                    provider_session_id=provider_session_id,
+                ),
+            )
+
         for _, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
@@ -1546,6 +1988,12 @@ class HooksService:
         expected_video_id: str,
         reason: str,
         started_at_epoch: Optional[float],
+        run_id: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+        attempt_number: Optional[int] = None,
+        workspace_dir: Optional[str] = None,
+        provider_session_id: Optional[str] = None,
+        max_attempts: Optional[int] = None,
     ) -> None:
         metadata: dict[str, Any] = {
             "source": "hooks",
@@ -1554,6 +2002,15 @@ class HooksService:
             "video_id": expected_video_id or "",
             "reason": reason,
         }
+        metadata = self._merge_workflow_metadata(
+            metadata,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            attempt_number=attempt_number,
+            workspace_dir=workspace_dir,
+            provider_session_id=provider_session_id,
+            max_attempts=max_attempts,
+        )
         tutorial_title = expected_video_id or session_key
         if expected_video_id and started_at_epoch is not None:
             manifest_path = self._find_recent_tutorial_manifest(
@@ -1587,6 +2044,141 @@ class HooksService:
             ),
             session_id=session_id,
             severity="error",
+            requires_action=True,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _tutorial_manifest_video_id(manifest_payload: dict[str, Any]) -> str:
+        if not isinstance(manifest_payload, dict):
+            return ""
+        top_level = str(manifest_payload.get("video_id") or "").strip()
+        if top_level:
+            return top_level
+        video_block = manifest_payload.get("video")
+        if isinstance(video_block, dict):
+            nested = str(video_block.get("video_id") or "").strip()
+            if nested:
+                return nested
+        return ""
+
+    @staticmethod
+    def _tutorial_manifest_title(manifest_payload: dict[str, Any], fallback: str) -> str:
+        if not isinstance(manifest_payload, dict):
+            return fallback
+        top_level = str(manifest_payload.get("title") or "").strip()
+        if top_level:
+            return top_level
+        video_block = manifest_payload.get("video")
+        if isinstance(video_block, dict):
+            nested = str(video_block.get("title") or "").strip()
+            if nested:
+                return nested
+        return fallback
+
+    @staticmethod
+    def _tutorial_recovery_metadata(pending_payload: Optional[dict[str, Any]]) -> dict[str, Any]:
+        if not isinstance(pending_payload, dict):
+            return {}
+        retry_count = int(pending_payload.get("retry_count") or 0)
+        max_retries = int(pending_payload.get("max_retries") or 0)
+        if retry_count <= 0:
+            return {}
+        total_attempts_allowed = max(1, max_retries + 1) if max_retries > 0 else retry_count + 1
+        return {
+            "recovered_after_retry": True,
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "attempt_number": retry_count + 1,
+            "total_attempts_allowed": total_attempts_allowed,
+        }
+
+    def _emit_youtube_tutorial_ready_notification(
+        self,
+        *,
+        session_id: str,
+        session_key: str,
+        hook_name: str,
+        expected_video_id: str,
+        ingest_status: str,
+        artifact_validation: dict[str, Any],
+        pending_recovery_payload: Optional[dict[str, Any]] = None,
+        recovered_from_reason: Optional[str] = None,
+        run_id: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+        attempt_number: Optional[int] = None,
+        workspace_dir: Optional[str] = None,
+        provider_session_id: Optional[str] = None,
+        max_attempts: Optional[int] = None,
+    ) -> None:
+        tutorial_title = str(artifact_validation.get("title") or expected_video_id or session_key)
+        run_rel_path = str(artifact_validation.get("run_rel_path") or "").strip()
+        tutorial_key_files = artifact_validation.get("key_files")
+        recovery_metadata = self._tutorial_recovery_metadata(pending_recovery_payload)
+        if not recovery_metadata and attempt_number and attempt_number > 1:
+            total_attempts_allowed = max(int(max_attempts or 0), int(attempt_number))
+            recovery_metadata = {
+                "recovered_after_retry": True,
+                "retry_count": max(0, int(attempt_number) - 1),
+                "attempt_number": int(attempt_number),
+                "total_attempts_allowed": total_attempts_allowed or int(attempt_number),
+            }
+        if recovery_metadata:
+            attempt_number = int(recovery_metadata.get("attempt_number") or 0)
+            total_attempts_allowed = int(recovery_metadata.get("total_attempts_allowed") or 0)
+            message = (
+                f"{tutorial_title} artifacts are ready after automatic recovery on "
+                f"attempt {attempt_number}/{total_attempts_allowed}."
+                f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+            )
+        elif recovered_from_reason:
+            message = (
+                f"{tutorial_title} artifacts are ready and the output package validated "
+                f"successfully after an earlier dispatch hiccup."
+                f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+            )
+        else:
+            message = (
+                f"{tutorial_title} artifacts are ready for review."
+                f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+            )
+
+        metadata: dict[str, Any] = {
+            "source": "hooks",
+            "hook_name": hook_name,
+            "hook_session_key": session_key,
+            "video_id": expected_video_id,
+            "tutorial_status": str(artifact_validation.get("status") or "full"),
+            "tutorial_run_path": run_rel_path,
+            "tutorial_manifest_path": (
+                f"{run_rel_path}/manifest.json" if run_rel_path else ""
+            ),
+            "tutorial_key_files": tutorial_key_files
+            if isinstance(tutorial_key_files, list)
+            else [],
+            "ingest_status": ingest_status,
+        }
+        metadata = self._merge_workflow_metadata(
+            metadata,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            attempt_number=attempt_number,
+            workspace_dir=workspace_dir,
+            provider_session_id=provider_session_id,
+            max_attempts=max_attempts,
+        )
+        if recovery_metadata:
+            metadata.update(recovery_metadata)
+        if recovered_from_reason:
+            metadata["dispatch_issue_resolved"] = True
+            metadata["recovered_from_reason"] = str(recovered_from_reason)
+
+        self._emit_notification(
+            kind="youtube_tutorial_ready",
+            title="YouTube Tutorial Artifacts Ready",
+            message=message,
+            session_id=session_id,
+            severity="success",
             requires_action=True,
             metadata=metadata,
         )
@@ -2156,7 +2748,7 @@ class HooksService:
                 payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if str(payload.get("video_id") or "").strip() != video_id:
+            if self._tutorial_manifest_video_id(payload) != video_id:
                 continue
             try:
                 manifest_mtime = manifest_path.stat().st_mtime
@@ -2275,7 +2867,7 @@ class HooksService:
             "run_dir": str(run_dir),
             "manifest_path": str(manifest_path),
             "run_rel_path": run_rel_path,
-            "title": str(manifest_payload.get("title") or run_dir.name),
+            "title": self._tutorial_manifest_title(manifest_payload, run_dir.name),
             "status": str(manifest_payload.get("status") or "full"),
             "implementation_required": implementation_required,
             "bootstrap_scripts": bootstrap_scripts,
@@ -2800,7 +3392,15 @@ class HooksService:
 
         return re.sub(r'\{\{\s*([^}]+)\s*\}\}', replacer, template)
 
-    async def _dispatch_action(self, action: HookAction) -> dict[str, Any]:
+    async def _dispatch_action(
+        self,
+        action: HookAction,
+        *,
+        workflow_run_id: Optional[str] = None,
+        workflow_attempt_id: Optional[str] = None,
+        workflow_workspace_dir: Optional[str] = None,
+        skip_workflow_admission: bool = False,
+    ) -> dict[str, Any]:
         logger.info("Dispatching hook action kind=%s", action.kind)
         if action.kind == "wake":
             logger.info("Wake hook action is not implemented yet; dropping action")
@@ -2823,6 +3423,69 @@ class HooksService:
         is_youtube_tutorial = _is_youtube_agent_route(action.to)
         expected_video_id = self._extract_action_field(action.message or "", "video_id")
         expected_video_title = self._extract_action_field(action.message or "", "title")
+        workflow_attempt_number: Optional[int] = None
+        workflow_service = self._workflow_admission_service() if is_youtube_tutorial else None
+        if is_youtube_tutorial and not skip_workflow_admission and workflow_service is not None:
+            workflow_trigger = self._build_youtube_workflow_trigger(
+                action=action,
+                session_key=session_key,
+                session_id=session_id,
+                expected_video_id=expected_video_id,
+            )
+            workflow_workspace_dir = workflow_workspace_dir or self._youtube_workflow_workspace_dir(session_key)
+            workflow_decision = workflow_service.admit(
+                workflow_trigger,
+                entrypoint="hooks_service.youtube_tutorial_hook",
+                workspace_dir=workflow_workspace_dir,
+                max_attempts=3,
+            )
+            workflow_run_id = workflow_decision.run_id
+            workflow_attempt_id = workflow_decision.attempt_id
+            attempt_context = self._workflow_attempt_context(
+                run_id=workflow_run_id,
+                attempt_id=workflow_attempt_id,
+            )
+            workflow_attempt_number = (
+                int(attempt_context.get("attempt_number") or 0) or None
+            )
+            workflow_workspace_dir = str(
+                attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
+            ) or workflow_workspace_dir
+            if workflow_decision.action in {
+                "attach_to_existing_run",
+                "defer",
+                "skip_duplicate",
+            }:
+                return {
+                    "decision": "skipped",
+                    "reason": workflow_decision.reason,
+                    "session_id": session_id,
+                    "run_id": workflow_run_id,
+                    "attempt_id": workflow_attempt_id,
+                    "workspace_dir": workflow_workspace_dir,
+                }
+            if workflow_decision.action == "escalate_review":
+                self._emit_youtube_tutorial_failure_notification(
+                    session_id=session_id,
+                    session_key=session_key,
+                    hook_name=action.name or "Hook",
+                    expected_video_id=expected_video_id,
+                    reason="needs_review",
+                    started_at_epoch=None,
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                    attempt_number=workflow_attempt_number,
+                    workspace_dir=workflow_workspace_dir,
+                    provider_session_id=session_id,
+                )
+                return {
+                    "decision": "failed",
+                    "reason": workflow_decision.reason,
+                    "session_id": session_id,
+                    "run_id": workflow_run_id,
+                    "attempt_id": workflow_attempt_id,
+                    "workspace_dir": workflow_workspace_dir,
+                }
 
         # --- Video-level dispatch dedup guard ---
         if is_youtube_tutorial and expected_video_id:
@@ -2871,6 +3534,26 @@ class HooksService:
             metadata["hook_thinking"] = action.thinking
         if timeout_seconds is not None:
             metadata["hook_timeout_seconds"] = timeout_seconds
+        if is_youtube_tutorial and workflow_run_id:
+            if workflow_attempt_number is None:
+                attempt_context = self._workflow_attempt_context(
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                )
+                workflow_attempt_number = (
+                    int(attempt_context.get("attempt_number") or 0) or None
+                )
+                workflow_workspace_dir = str(
+                    attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
+                ) or workflow_workspace_dir
+            metadata = self._merge_workflow_metadata(
+                metadata,
+                run_id=workflow_run_id,
+                attempt_id=workflow_attempt_id,
+                attempt_number=workflow_attempt_number,
+                workspace_dir=workflow_workspace_dir,
+                provider_session_id=session_id,
+            )
         run_source = str(metadata.get("source") or "webhook").strip().lower() or "webhook"
         hook_name = action.name or "Hook"
         session_workspace: Optional[Path] = None
@@ -2878,6 +3561,7 @@ class HooksService:
         start_ts: Optional[float] = None
         execution_summary: dict[str, Any] = {}
         terminal_reason: Optional[str] = None
+        pending_recovery_payload: dict[str, Any] = {}
         dispatch_gate_acquired = False
         dispatch_wait_started = time.time()
         pending_admitted = False
@@ -2945,8 +3629,34 @@ class HooksService:
             )
 
         try:
-            session = await self._resolve_or_create_webhook_session(session_id)
+            resolved_workspace_dir = workflow_workspace_dir or self._youtube_workflow_workspace_dir(session_key)
+            session = await self._resolve_or_create_webhook_session(session_id, resolved_workspace_dir)
             session_workspace = Path(str(session.workspace_dir)).resolve()
+            if is_youtube_tutorial and workflow_run_id and workflow_attempt_id and workflow_service is not None:
+                workflow_service.mark_running(
+                    workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                    provider_session_id=session_id,
+                    summary={
+                        "hook_name": hook_name,
+                        "video_id": expected_video_id or "",
+                        "workspace_dir": str(session_workspace),
+                    },
+                )
+                attempt_context = self._workflow_attempt_context(
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                )
+                workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or workflow_attempt_number
+                metadata = self._merge_workflow_metadata(
+                    metadata,
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                    attempt_number=workflow_attempt_number,
+                    workspace_dir=str(session_workspace),
+                    provider_session_id=session_id,
+                )
+            pending_recovery_payload = self._read_pending_hook_recovery_marker(session_workspace)
             self._clear_pending_hook_recovery_marker(session_workspace)
             action, ingest_metadata, should_skip_dispatch = await self._prepare_local_youtube_ingest(
                 action=action,
@@ -2963,6 +3673,89 @@ class HooksService:
                     if failed_local_ingest
                     else None
                 )
+                ingest_failure_class = str(metadata.get("hook_youtube_ingest_failure_class") or "").strip().lower()
+                if is_youtube_tutorial and workflow_run_id and workflow_attempt_id and workflow_service is not None:
+                    if failed_local_ingest:
+                        reason = str(metadata.get("hook_youtube_ingest_reason") or "local_ingest_failed").strip()
+                        retryable_ingest_failure = (
+                            ingest_failure_class
+                            and ingest_failure_class not in YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES
+                            and ingest_failure_class != "inflight_duplicate"
+                        )
+                        if retryable_ingest_failure:
+                            retry_decision = workflow_service.queue_retry(
+                                self._build_youtube_workflow_trigger(
+                                    action=action,
+                                    session_key=session_key,
+                                    session_id=session_id,
+                                    expected_video_id=expected_video_id,
+                                ),
+                                entrypoint="hooks_service.youtube_tutorial_hook",
+                                run_id=workflow_run_id,
+                                attempt_id=workflow_attempt_id,
+                                workspace_dir=str(session_workspace),
+                                failure_reason=reason,
+                                failure_class=ingest_failure_class or "youtube_ingest_failed",
+                                max_attempts=3,
+                            )
+                            retry_context = self._workflow_attempt_context(
+                                run_id=workflow_run_id,
+                                attempt_id=retry_decision.attempt_id,
+                            )
+                            next_attempt_number = int(retry_context.get("attempt_number") or 0)
+                            self._emit_youtube_retry_queued_notification(
+                                session_id=session_id,
+                                session_key=session_key,
+                                hook_name=hook_name,
+                                expected_video_id=expected_video_id,
+                                current_attempt_number=workflow_attempt_number or 1,
+                                next_attempt_number=next_attempt_number,
+                                max_attempts=3,
+                                reason=reason,
+                                run_id=workflow_run_id,
+                                attempt_id=workflow_attempt_id,
+                                workspace_dir=str(session_workspace),
+                            )
+                            if retry_decision.action == "start_new_attempt" and retry_decision.attempt_id:
+                                self._schedule_youtube_retry_attempt(
+                                    action=action,
+                                    run_id=workflow_run_id,
+                                    attempt_id=retry_decision.attempt_id,
+                                    workspace_dir=str(session_workspace),
+                                )
+                        elif ingest_failure_class == "inflight_duplicate":
+                            workflow_service.mark_blocked(
+                                workflow_run_id,
+                                attempt_id=workflow_attempt_id,
+                                reason=reason,
+                                summary={
+                                    "video_id": expected_video_id or "",
+                                    "ingest_status": ingest_status,
+                                    "failure_class": ingest_failure_class,
+                                },
+                            )
+                        else:
+                            workflow_service.mark_needs_review(
+                                workflow_run_id,
+                                attempt_id=workflow_attempt_id,
+                                reason=reason,
+                                failure_class=ingest_failure_class or "youtube_ingest_failed",
+                                summary={
+                                    "video_id": expected_video_id or "",
+                                    "ingest_status": ingest_status,
+                                    "failure_class": ingest_failure_class,
+                                },
+                            )
+                    else:
+                        workflow_service.mark_blocked(
+                            workflow_run_id,
+                            attempt_id=workflow_attempt_id,
+                            reason="pending_local_ingest",
+                            summary={
+                                "video_id": expected_video_id or "",
+                                "ingest_status": ingest_status,
+                            },
+                        )
                 if session_workspace is not None:
                     self._write_sync_ready_marker(
                         session_id=session_id,
@@ -2990,23 +3783,31 @@ class HooksService:
                         session_id=session_id,
                         severity="warning" if is_duplicate else "error",
                         requires_action=not is_duplicate,
-                        metadata={
-                            "source": "hooks",
-                            "hook_name": hook_name,
-                            "hook_session_key": session_key,
-                            "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
-                            "error": str(metadata.get("hook_youtube_ingest_error") or ""),
-                            "failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
-                            "root_error": str(metadata.get("hook_youtube_ingest_root_error") or ""),
-                            "root_failure_class": str(metadata.get("hook_youtube_ingest_root_failure_class") or ""),
-                            "root_reason": str(metadata.get("hook_youtube_ingest_root_reason") or ""),
-                            "owner_session_id": str(metadata.get("hook_youtube_ingest_owner_session_id") or ""),
-                            "attempts": int(metadata.get("hook_youtube_ingest_attempts") or 0),
-                            "max_attempts": int(metadata.get("hook_youtube_ingest_max_attempts") or 0),
-                            "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
-                            "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
-                            "root_result_file": str(metadata.get("hook_youtube_ingest_root_result_file") or ""),
-                        },
+                        metadata=self._merge_workflow_metadata(
+                            {
+                                "source": "hooks",
+                                "hook_name": hook_name,
+                                "hook_session_key": session_key,
+                                "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                                "error": str(metadata.get("hook_youtube_ingest_error") or ""),
+                                "failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                                "root_error": str(metadata.get("hook_youtube_ingest_root_error") or ""),
+                                "root_failure_class": str(metadata.get("hook_youtube_ingest_root_failure_class") or ""),
+                                "root_reason": str(metadata.get("hook_youtube_ingest_root_reason") or ""),
+                                "owner_session_id": str(metadata.get("hook_youtube_ingest_owner_session_id") or ""),
+                                "attempts": int(metadata.get("hook_youtube_ingest_attempts") or 0),
+                                "max_attempts": int(metadata.get("hook_youtube_ingest_max_attempts") or 0),
+                                "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
+                                "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
+                                "root_result_file": str(metadata.get("hook_youtube_ingest_root_result_file") or ""),
+                            },
+                            run_id=workflow_run_id,
+                            attempt_id=workflow_attempt_id,
+                            attempt_number=workflow_attempt_number,
+                            workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                            provider_session_id=session_id,
+                            max_attempts=3,
+                        ),
                     )
                     if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
                         if failure_class == "proxy_not_configured":
@@ -3039,16 +3840,24 @@ class HooksService:
                             session_id=session_id,
                             severity="error",
                             requires_action=True,
-                            metadata={
-                                "source": "hooks",
-                                "hook_name": hook_name,
-                                "hook_session_key": session_key,
-                                "failure_class": failure_class,
-                                "error": str(metadata.get("hook_youtube_ingest_error") or ""),
-                                "reason": reason,
-                                "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
-                                "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
-                            },
+                            metadata=self._merge_workflow_metadata(
+                                {
+                                    "source": "hooks",
+                                    "hook_name": hook_name,
+                                    "hook_session_key": session_key,
+                                    "failure_class": failure_class,
+                                    "error": str(metadata.get("hook_youtube_ingest_error") or ""),
+                                    "reason": reason,
+                                    "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                                    "result_file": str(metadata.get("hook_youtube_ingest_terminal_result_file") or metadata.get("hook_youtube_ingest_result_file") or ""),
+                                },
+                                run_id=workflow_run_id,
+                                attempt_id=workflow_attempt_id,
+                                attempt_number=workflow_attempt_number,
+                                workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                                provider_session_id=session_id,
+                                max_attempts=3,
+                            ),
                         )
                 else:
                     logger.info(
@@ -3057,10 +3866,13 @@ class HooksService:
                         hook_name,
                     )
                 return {
-                    "decision": "failed",
+                    "decision": "failed" if failed_local_ingest else "blocked",
                     "reason": str(metadata.get("hook_youtube_ingest_reason") or "pre_dispatch_deferred"),
                     "error": str(metadata.get("hook_youtube_ingest_error") or metadata.get("hook_youtube_ingest_reason") or "pre_dispatch_deferred"),
                     "failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                    "run_id": workflow_run_id,
+                    "attempt_id": workflow_attempt_id,
+                    "workspace_dir": str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
                 }
 
             user_input = self._build_agent_user_input(action)
@@ -3126,21 +3938,28 @@ class HooksService:
                 self._emit_notification(
                     kind="youtube_tutorial_started",
                     title="YouTube Tutorial Pipeline Started",
-                    message=(
-                        f"{'Processing in degraded mode' if degraded_fail_open else 'Processing'}: {processing_label}"
-                    ),
+                    message=f"Processing tutorial pipeline attempt {workflow_attempt_number or 1}.",
                     session_id=session_id,
                     severity="info",
-                    metadata={
-                        "source": "hooks",
-                        "hook_name": hook_name,
-                        "hook_session_key": session_key,
-                        "video_id": expected_video_id or "",
-                        "tutorial_title": tutorial_title,
-                        "ingest_status": ingest_status,
-                        "ingest_reason": ingest_reason,
-                        "ingest_failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
-                    },
+                    metadata=self._merge_workflow_metadata(
+                        {
+                            "source": "hooks",
+                            "hook_name": hook_name,
+                            "hook_session_key": session_key,
+                            "video_id": expected_video_id or "",
+                            "tutorial_title": tutorial_title,
+                            "processing_label": processing_label,
+                            "ingest_status": ingest_status,
+                            "ingest_reason": ingest_reason,
+                            "ingest_failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                        },
+                        run_id=workflow_run_id,
+                        attempt_id=workflow_attempt_id,
+                        attempt_number=workflow_attempt_number,
+                        workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                        provider_session_id=session_id,
+                        max_attempts=3,
+                    ),
                 )
                 if degraded_fail_open:
                     self._emit_notification(
@@ -3152,16 +3971,24 @@ class HooksService:
                         ),
                         session_id=session_id,
                         severity="warning",
-                        metadata={
-                            "source": "hooks",
-                            "hook_name": hook_name,
-                            "hook_session_key": session_key,
-                            "video_id": expected_video_id or "",
-                            "tutorial_title": tutorial_title,
-                            "ingest_status": ingest_status,
-                            "ingest_reason": ingest_reason,
-                            "ingest_failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
-                        },
+                        metadata=self._merge_workflow_metadata(
+                            {
+                                "source": "hooks",
+                                "hook_name": hook_name,
+                                "hook_session_key": session_key,
+                                "video_id": expected_video_id or "",
+                                "tutorial_title": tutorial_title,
+                                "ingest_status": ingest_status,
+                                "ingest_reason": ingest_reason,
+                                "ingest_failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                            },
+                            run_id=workflow_run_id,
+                            attempt_id=workflow_attempt_id,
+                            attempt_number=workflow_attempt_number,
+                            workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                            provider_session_id=session_id,
+                            max_attempts=3,
+                        ),
                     )
             idle_timeout_seconds = (
                 int(self._youtube_hook_idle_timeout_seconds)
@@ -3190,34 +4017,31 @@ class HooksService:
                 )
                 artifact_validation = execution_summary.get("artifact_validation") or {}
                 if isinstance(artifact_validation, dict):
-                    tutorial_title = str(artifact_validation.get("title") or expected_video_id or session_key)
-                    run_rel_path = str(artifact_validation.get("run_rel_path") or "").strip()
-                    tutorial_key_files = artifact_validation.get("key_files")
-                    self._emit_notification(
-                        kind="youtube_tutorial_ready",
-                        title="YouTube Tutorial Artifacts Ready",
-                        message=(
-                            f"{tutorial_title} artifacts are ready for review."
-                            f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
-                        ),
+                    self._emit_youtube_tutorial_ready_notification(
                         session_id=session_id,
-                        severity="success",
-                        requires_action=True,
-                        metadata={
-                            "source": "hooks",
-                            "hook_name": hook_name,
-                            "hook_session_key": session_key,
-                            "video_id": expected_video_id,
-                            "tutorial_status": str(artifact_validation.get("status") or "full"),
-                            "tutorial_run_path": run_rel_path,
-                            "tutorial_manifest_path": (
-                                f"{run_rel_path}/manifest.json" if run_rel_path else ""
-                            ),
-                            "tutorial_key_files": tutorial_key_files
-                            if isinstance(tutorial_key_files, list)
-                            else [],
-                        },
+                        session_key=session_key,
+                        hook_name=hook_name,
+                        expected_video_id=expected_video_id,
+                        ingest_status=ingest_status,
+                        artifact_validation=artifact_validation,
+                        pending_recovery_payload=pending_recovery_payload,
+                        run_id=workflow_run_id,
+                        attempt_id=workflow_attempt_id,
+                        attempt_number=workflow_attempt_number,
+                        workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                        provider_session_id=session_id,
+                        max_attempts=3,
                     )
+            if is_youtube_tutorial and workflow_run_id and workflow_service is not None:
+                workflow_service.mark_completed(
+                    workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                    summary={
+                        "video_id": expected_video_id or "",
+                        "hook_name": hook_name,
+                        "status": "completed",
+                    },
+                )
             if admitted_turn_id and self._turn_finalizer:
                 await self._turn_finalizer(
                     session_id,
@@ -3252,6 +4076,8 @@ class HooksService:
                 "status": "completed",
                 "session_id": session_id,
                 "execution_summary": execution_summary,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
             }
         except HookReportedTimeout as exc:
             terminal_reason = "agent_reported_timeout"
@@ -3295,13 +4121,19 @@ class HooksService:
                 except Exception:
                     logger.exception("Failed finalizing timeout-reported hook turn session_id=%s", session_id)
             if is_youtube_tutorial:
-                self._emit_youtube_tutorial_failure_notification(
+                self._queue_or_finalize_youtube_attempt(
+                    action=action,
                     session_id=session_id,
                     session_key=session_key,
                     hook_name=hook_name,
                     expected_video_id=expected_video_id,
                     reason="agent_reported_timeout",
+                    failure_class="hook_timeout",
+                    session_workspace=session_workspace,
                     started_at_epoch=start_ts,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    workflow_attempt_number=workflow_attempt_number,
                 )
             return {
                 "decision": "failed",
@@ -3309,6 +4141,8 @@ class HooksService:
                 "reason": "agent_reported_timeout",
                 "error": str(exc),
                 "session_id": session_id,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
             }
         except HookIdleTimeout as exc:
             terminal_reason = f"hook_idle_timeout_{int(self._youtube_hook_idle_timeout_seconds or 0)}s"
@@ -3356,13 +4190,19 @@ class HooksService:
                     logger.exception("Failed finalizing idle-timeout hook turn session_id=%s", session_id)
             if is_youtube_tutorial:
                 idle_seconds = int(self._youtube_hook_idle_timeout_seconds or 0)
-                self._emit_youtube_tutorial_failure_notification(
+                self._queue_or_finalize_youtube_attempt(
+                    action=action,
                     session_id=session_id,
                     session_key=session_key,
                     hook_name=hook_name,
                     expected_video_id=expected_video_id,
                     reason=f"hook_idle_timeout_{idle_seconds}s",
+                    failure_class="hook_idle_timeout",
+                    session_workspace=session_workspace,
                     started_at_epoch=start_ts,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    workflow_attempt_number=workflow_attempt_number,
                 )
             return {
                 "decision": "failed",
@@ -3370,6 +4210,8 @@ class HooksService:
                 "reason": f"hook_idle_timeout_{int(self._youtube_hook_idle_timeout_seconds or 0)}s",
                 "error": str(exc),
                 "session_id": session_id,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
             }
         except asyncio.TimeoutError:
             terminal_reason = f"hook_timeout_{timeout_seconds}s"
@@ -3417,13 +4259,19 @@ class HooksService:
                 except Exception:
                     logger.exception("Failed finalizing timed-out hook turn session_id=%s", session_id)
             if is_youtube_tutorial:
-                self._emit_youtube_tutorial_failure_notification(
+                self._queue_or_finalize_youtube_attempt(
+                    action=action,
                     session_id=session_id,
                     session_key=session_key,
                     hook_name=hook_name,
                     expected_video_id=expected_video_id,
                     reason=f"hook_timeout_{timeout_seconds}s",
+                    failure_class="hook_timeout",
+                    session_workspace=session_workspace,
                     started_at_epoch=start_ts,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    workflow_attempt_number=workflow_attempt_number,
                 )
             return {
                 "decision": "failed",
@@ -3431,11 +4279,101 @@ class HooksService:
                 "reason": f"hook_timeout_{timeout_seconds}s",
                 "error": f"hook_timeout_{timeout_seconds}s",
                 "session_id": session_id,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
             }
         except Exception as exc:
             dispatch_failure_reason = self._dispatch_failure_reason(exc, execution_summary)
             terminal_reason = dispatch_failure_reason
             is_interrupted_dispatch = dispatch_failure_reason == "hook_dispatch_interrupted"
+            recovered_artifact_validation: Optional[dict[str, Any]] = None
+            if (
+                is_youtube_tutorial
+                and expected_video_id
+                and not is_interrupted_dispatch
+                and start_ts is not None
+            ):
+                try:
+                    recovered_artifact_validation = self._validate_youtube_tutorial_artifacts(
+                        video_id=expected_video_id,
+                        started_at_epoch=float(start_ts or 0.0),
+                    )
+                except Exception:
+                    recovered_artifact_validation = None
+            if recovered_artifact_validation:
+                logger.warning(
+                    "Hook dispatch raised %s after validated tutorial artifacts existed; "
+                    "treating session_id=%s video_id=%s as completed",
+                    dispatch_failure_reason,
+                    session_id,
+                    expected_video_id,
+                )
+                execution_summary["artifact_validation"] = recovered_artifact_validation
+                ingest_status = str(metadata.get("hook_youtube_ingest_status") or "").strip().lower()
+                self._emit_youtube_tutorial_ready_notification(
+                    session_id=session_id,
+                    session_key=session_key,
+                    hook_name=hook_name,
+                    expected_video_id=expected_video_id,
+                    ingest_status=ingest_status,
+                    artifact_validation=recovered_artifact_validation,
+                    pending_recovery_payload=pending_recovery_payload,
+                    recovered_from_reason=dispatch_failure_reason,
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                    attempt_number=workflow_attempt_number,
+                    workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                    provider_session_id=session_id,
+                    max_attempts=3,
+                )
+                if workflow_run_id and workflow_service is not None:
+                    workflow_service.mark_completed(
+                        workflow_run_id,
+                        attempt_id=workflow_attempt_id,
+                        summary={
+                            "video_id": expected_video_id or "",
+                            "hook_name": hook_name,
+                            "status": "completed",
+                            "recovered_from_reason": dispatch_failure_reason,
+                        },
+                    )
+                if admitted_turn_id and self._turn_finalizer:
+                    try:
+                        await self._turn_finalizer(
+                            session_id,
+                            admitted_turn_id,
+                            "completed",
+                            None,
+                            execution_summary,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed finalizing recovered hook turn session_id=%s",
+                            session_id,
+                        )
+                if session_workspace is not None:
+                    self._write_sync_ready_marker(
+                        session_id=session_id,
+                        workspace_root=session_workspace,
+                        state="completed",
+                        ready=True,
+                        hook_name=hook_name,
+                        run_source=run_source,
+                        started_at_epoch=start_ts,
+                        completed_at_epoch=time.time(),
+                        execution_summary=execution_summary,
+                    )
+                terminal_reason = "completed"
+                return {
+                    "decision": "accepted",
+                    "turn_id": admitted_turn_id,
+                    "status": "completed",
+                    "session_id": session_id,
+                    "execution_summary": execution_summary,
+                    "recovered_from_reason": dispatch_failure_reason,
+                    "run_id": workflow_run_id,
+                    "attempt_id": workflow_attempt_id,
+                }
             logger.exception(
                 "Failed dispatching hook action session_key=%s session_id=%s reason=%s",
                 session_key,
@@ -3476,86 +4414,28 @@ class HooksService:
                 except Exception:
                     logger.exception("Failed finalizing errored hook turn session_id=%s", session_id)
             if is_youtube_tutorial:
-                if is_interrupted_dispatch:
-                    pending_marker_path = ""
-                    if session_workspace is not None:
-                        marker = self._write_pending_hook_recovery_marker(
-                            session_workspace,
-                            session_id=session_id,
-                            reason=dispatch_failure_reason,
-                            expected_video_id=expected_video_id,
-                        )
-                        pending_marker_path = str(marker)
-                    self._emit_notification(
-                        kind="youtube_tutorial_interrupted",
-                        title="YouTube Tutorial Interrupted",
-                        message=(
-                            f"Run interrupted for {expected_video_id or session_key}; "
-                            "queued for startup recovery/backfill."
-                        ),
-                        session_id=session_id,
-                        severity="warning",
-                        requires_action=True,
-                        metadata={
-                            "source": "hooks",
-                            "hook_name": hook_name,
-                            "hook_session_key": session_key,
-                            "video_id": expected_video_id or "",
-                            "reason": dispatch_failure_reason,
-                            "pending_recovery_file": pending_marker_path,
-                        },
-                    )
-                else:
-                    # ── Configurable retry: check if this hard failure kind has retries left
-                    retry_policy = self._dispatch_retry_policies.get(dispatch_failure_reason, {})
-                    max_retries = int(retry_policy.get("max_retries", 0))
-                    current_retry_count = self._get_current_retry_count(session_workspace) if session_workspace else 0
-                    if max_retries > 0 and current_retry_count < max_retries and session_workspace is not None:
-                        # Convert hard failure to recoverable: write recovery marker with retry count
-                        marker = self._write_pending_hook_recovery_marker(
-                            session_workspace,
-                            session_id=session_id,
-                            reason=dispatch_failure_reason,
-                            expected_video_id=expected_video_id,
-                            retry_count=current_retry_count + 1,
-                            retry_status="dispatch_retry_pending",
-                        )
-                        self._emit_notification(
-                            kind="youtube_tutorial_interrupted",
-                            title="YouTube Tutorial Failed — Retry Queued",
-                            message=(
-                                f"{expected_video_id or session_key}: {dispatch_failure_reason}; "
-                                f"retry {current_retry_count + 1}/{max_retries} queued for startup recovery."
-                            ),
-                            session_id=session_id,
-                            severity="warning",
-                            requires_action=True,
-                            metadata={
-                                "source": "hooks",
-                                "hook_name": hook_name,
-                                "hook_session_key": session_key,
-                                "video_id": expected_video_id or "",
-                                "reason": dispatch_failure_reason,
-                                "retry_count": current_retry_count + 1,
-                                "max_retries": max_retries,
-                                "pending_recovery_file": str(marker),
-                            },
-                        )
-                    else:
-                        self._emit_youtube_tutorial_failure_notification(
-                            session_id=session_id,
-                            session_key=session_key,
-                            hook_name=hook_name,
-                            expected_video_id=expected_video_id,
-                            reason=dispatch_failure_reason,
-                            started_at_epoch=start_ts,
-                        )
+                self._queue_or_finalize_youtube_attempt(
+                    action=action,
+                    session_id=session_id,
+                    session_key=session_key,
+                    hook_name=hook_name,
+                    expected_video_id=expected_video_id,
+                    reason=dispatch_failure_reason,
+                    failure_class=dispatch_failure_reason,
+                    session_workspace=session_workspace,
+                    started_at_epoch=start_ts,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    workflow_attempt_number=workflow_attempt_number,
+                )
             return {
                 "decision": "failed",
                 "turn_id": admitted_turn_id,
                 "reason": dispatch_failure_reason,
                 "error": str(exc),
                 "session_id": session_id,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
             }
         finally:
             if self._run_counter_finish:
@@ -3785,27 +4665,15 @@ class HooksService:
                 reason,
             )
 
-    async def _resolve_or_create_webhook_session(self, session_id: str):
+    async def _resolve_or_create_webhook_session(self, session_id: str, workspace_dir: str):
         try:
             return await self.gateway.resume_session(session_id)
         except ValueError:
-            workspace_dir: Path | None = None
-            try:
-                run_summary = RunCatalogService().find_latest_run_for_provider_session(session_id)
-                resolved_workspace = str((run_summary or {}).get("workspace_dir") or "").strip()
-                if resolved_workspace:
-                    workspace_dir = Path(resolved_workspace)
-            except Exception:
-                logger.exception(
-                    "Failed to resolve webhook workspace from run catalog session_id=%s",
-                    session_id,
-                )
-            if workspace_dir is None:
-                workspace_dir = Path("AGENT_RUN_WORKSPACES") / f"run_{session_id}"
-            logger.info("Creating webhook session session_id=%s workspace=%s", session_id, workspace_dir)
+            resolved_workspace = Path(str(workspace_dir or "")).resolve()
+            logger.info("Creating webhook session session_id=%s workspace=%s", session_id, resolved_workspace)
             return await self.gateway.create_session(
                 user_id="webhook",
-                workspace_dir=str(workspace_dir),
+                workspace_dir=str(resolved_workspace),
                 session_id=session_id,
             )
 

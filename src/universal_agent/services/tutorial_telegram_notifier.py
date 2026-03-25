@@ -212,6 +212,18 @@ def _build_message(kind: str, title: str, message: str, metadata: dict[str, Any]
         if video_id:
             lines.append(f"Video ID: `{video_id}`")
         lines.append(f"Status: `{status}`")
+        recovered_after_retry = bool(metadata.get("recovered_after_retry"))
+        attempt_number = int(metadata.get("attempt_number") or 0)
+        total_attempts_allowed = int(metadata.get("total_attempts_allowed") or 0)
+        if recovered_after_retry and attempt_number > 0:
+            if total_attempts_allowed > 0:
+                lines.append(
+                    f"Recovery: automatic retry attempt `{attempt_number}/{total_attempts_allowed}` succeeded"
+                )
+            else:
+                lines.append(f"Recovery: automatic retry attempt `{attempt_number}` succeeded")
+        elif bool(metadata.get("dispatch_issue_resolved")):
+            lines.append("Recovery: output package validated after an earlier dispatch hiccup")
         if run_path:
             lines.append(f"Path: `{run_path}`")
         key_files = metadata.get("tutorial_key_files")

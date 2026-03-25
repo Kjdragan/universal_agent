@@ -95,6 +95,52 @@ def test_emit_cron_event_labels_autonomous_runs(tmp_path: Path, monkeypatch):
     assert latest["metadata"]["autonomous"] is True
 
 
+def test_emit_cron_event_adds_retry_notification_with_workflow_metadata(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
+
+    cron_ws = tmp_path / "cron_retry_notification_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="retry demo",
+        every_raw="30m",
+        enabled=True,
+    )
+
+    gateway_server._emit_cron_event(
+        {
+            "type": "cron_run_retry_queued",
+            "run": {
+                "run_id": "run_retry_1",
+                "job_id": job.job_id,
+                "status": "retry_queued",
+                "scheduled_at": time.time(),
+                "started_at": time.time(),
+                "finished_at": time.time(),
+                "error": "execution timed out after 60s",
+                "workflow_run_id": "run_cron_dispatch_123",
+                "workflow_attempt_id": "attempt_abc",
+                "workflow_attempt_number": 1,
+                "dispatch_key": f"scheduled:{job.job_id}:1234567890",
+                "next_attempt_id": "attempt_def",
+                "next_attempt_number": 2,
+            },
+        }
+    )
+
+    latest = gateway_server._notifications[-1]
+    assert latest["kind"] == "cron_run_retry_queued"
+    assert latest["title"] == "Chron Retry Queued"
+    assert "retry attempt 2 has been queued" in latest["message"]
+    assert latest["metadata"]["job_id"] == job.job_id
+    assert latest["metadata"]["workflow_run_id"] == "run_cron_dispatch_123"
+    assert latest["metadata"]["workflow_attempt_id"] == "attempt_abc"
+    assert latest["metadata"]["workflow_attempt_number"] == 1
+    assert latest["metadata"]["dispatch_key"] == f"scheduled:{job.job_id}:1234567890"
+
+
 def test_emit_cron_event_daily_briefing_records_autonomous_completion(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")

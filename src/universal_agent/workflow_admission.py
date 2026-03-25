@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
@@ -12,6 +12,7 @@ from universal_agent.durable.state import (
     create_run_attempt,
     get_run,
     get_run_attempt,
+    update_run_provider_session,
     update_run_attempt,
     upsert_run,
 )
@@ -271,6 +272,271 @@ class WorkflowAdmissionService:
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
             conn.commit()
+        finally:
+            conn.close()
+
+    def mark_running(
+        self,
+        run_id: str,
+        *,
+        attempt_id: Optional[str],
+        provider_session_id: Optional[str] = None,
+        summary: Optional[dict[str, Any]] = None,
+    ) -> None:
+        conn = self._connect()
+        try:
+            row = get_run(conn, run_id)
+            if row is None:
+                return
+            upsert_run(
+                conn,
+                run_id=run_id,
+                entrypoint=str(row["entrypoint"] or "workflow_admission"),
+                run_spec=self._parse_run_spec(row),
+                status="running",
+                workspace_dir=row["workspace_dir"],
+                run_kind=row["run_kind"],
+                trigger_source=row["trigger_source"],
+                dedup_key=row["dedup_key"],
+                run_policy=row["run_policy"],
+                interrupt_policy=row["interrupt_policy"],
+                external_origin=row["external_origin"],
+                external_origin_id=row["external_origin_id"],
+                external_correlation_id=row["external_correlation_id"],
+            )
+            if provider_session_id is not None:
+                update_run_provider_session(conn, run_id, provider_session_id)
+            if attempt_id:
+                update_run_attempt(
+                    conn,
+                    attempt_id,
+                    status="running",
+                    provider_session_id=provider_session_id,
+                    summary=summary,
+                )
+                attempt_row = get_run_attempt(conn, attempt_id)
+                if row["workspace_dir"] and attempt_row is not None:
+                    ensure_run_workspace_scaffold(
+                        workspace_dir=row["workspace_dir"],
+                        run_id=run_id,
+                        attempt_id=attempt_id,
+                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                        status="running",
+                        run_kind=str(row["run_kind"] or "") or None,
+                        trigger_source=str(row["trigger_source"] or "") or None,
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def mark_blocked(
+        self,
+        run_id: str,
+        *,
+        attempt_id: Optional[str],
+        reason: str,
+        summary: Optional[dict[str, Any]] = None,
+    ) -> None:
+        conn = self._connect()
+        try:
+            row = get_run(conn, run_id)
+            if row is None:
+                return
+            upsert_run(
+                conn,
+                run_id=run_id,
+                entrypoint=str(row["entrypoint"] or "workflow_admission"),
+                run_spec=self._parse_run_spec(row),
+                status="blocked",
+                workspace_dir=row["workspace_dir"],
+                run_kind=row["run_kind"],
+                trigger_source=row["trigger_source"],
+                dedup_key=row["dedup_key"],
+                run_policy=row["run_policy"],
+                interrupt_policy=row["interrupt_policy"],
+                terminal_reason=reason,
+                external_origin=row["external_origin"],
+                external_origin_id=row["external_origin_id"],
+                external_correlation_id=row["external_correlation_id"],
+            )
+            if attempt_id:
+                update_run_attempt(
+                    conn,
+                    attempt_id,
+                    status="blocked",
+                    failure_reason=reason,
+                    summary=summary,
+                )
+                attempt_row = get_run_attempt(conn, attempt_id)
+                if row["workspace_dir"] and attempt_row is not None:
+                    ensure_run_workspace_scaffold(
+                        workspace_dir=row["workspace_dir"],
+                        run_id=run_id,
+                        attempt_id=attempt_id,
+                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                        status="blocked",
+                        run_kind=str(row["run_kind"] or "") or None,
+                        trigger_source=str(row["trigger_source"] or "") or None,
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def mark_needs_review(
+        self,
+        run_id: str,
+        *,
+        attempt_id: Optional[str],
+        reason: str,
+        failure_class: str,
+        summary: Optional[dict[str, Any]] = None,
+    ) -> None:
+        conn = self._connect()
+        try:
+            row = get_run(conn, run_id)
+            if row is None:
+                return
+            upsert_run(
+                conn,
+                run_id=run_id,
+                entrypoint=str(row["entrypoint"] or "workflow_admission"),
+                run_spec=self._parse_run_spec(row),
+                status="needs_review",
+                workspace_dir=row["workspace_dir"],
+                run_kind=row["run_kind"],
+                trigger_source=row["trigger_source"],
+                dedup_key=row["dedup_key"],
+                run_policy=row["run_policy"],
+                interrupt_policy=row["interrupt_policy"],
+                terminal_reason=reason,
+                external_origin=row["external_origin"],
+                external_origin_id=row["external_origin_id"],
+                external_correlation_id=row["external_correlation_id"],
+            )
+            if attempt_id:
+                update_run_attempt(
+                    conn,
+                    attempt_id,
+                    status="failed",
+                    failure_class=failure_class,
+                    failure_reason=reason,
+                    terminal_reason=reason,
+                    summary=summary,
+                )
+                attempt_row = get_run_attempt(conn, attempt_id)
+                if row["workspace_dir"] and attempt_row is not None:
+                    ensure_run_workspace_scaffold(
+                        workspace_dir=row["workspace_dir"],
+                        run_id=run_id,
+                        attempt_id=attempt_id,
+                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                        status="failed",
+                        run_kind=str(row["run_kind"] or "") or None,
+                        trigger_source=str(row["trigger_source"] or "") or None,
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def queue_retry(
+        self,
+        trigger: WorkflowTrigger,
+        *,
+        entrypoint: str,
+        run_id: str,
+        attempt_id: Optional[str],
+        workspace_dir: Optional[str],
+        failure_reason: str,
+        failure_class: str,
+        max_attempts: int,
+    ) -> WorkflowAdmissionDecision:
+        conn = self._connect()
+        try:
+            row = get_run(conn, run_id)
+            if row is None:
+                return WorkflowAdmissionDecision("escalate_review", run_id, attempt_id, "unknown_run")
+            attempt_row = get_run_attempt(conn, attempt_id) if attempt_id else None
+            existing_attempt_count = int(row["attempt_count"] or 0)
+            current_attempt_number = int(attempt_row["attempt_number"] or 0) if attempt_row is not None else existing_attempt_count
+            effective_attempt_count = max(existing_attempt_count, current_attempt_number)
+            effective_workspace_dir = workspace_dir or str(row["workspace_dir"] or "").strip() or None
+
+            if attempt_id and attempt_row is not None:
+                update_run_attempt(
+                    conn,
+                    attempt_id,
+                    status="failed",
+                    failure_class=failure_class,
+                    failure_reason=failure_reason,
+                    terminal_reason=failure_reason,
+                )
+                if effective_workspace_dir:
+                    ensure_run_workspace_scaffold(
+                        workspace_dir=effective_workspace_dir,
+                        run_id=run_id,
+                        attempt_id=attempt_id,
+                        attempt_number=int(attempt_row["attempt_number"] or 0),
+                        status="failed",
+                        run_kind=str(row["run_kind"] or "") or None,
+                        trigger_source=str(row["trigger_source"] or "") or None,
+                    )
+
+            if effective_attempt_count >= max(1, int(max_attempts)):
+                upsert_run(
+                    conn,
+                    run_id=run_id,
+                    entrypoint=str(row["entrypoint"] or entrypoint or "workflow_admission"),
+                    run_spec=self._parse_run_spec(row),
+                    status="needs_review",
+                    workspace_dir=effective_workspace_dir,
+                    run_kind=trigger.run_kind,
+                    trigger_source=trigger.trigger_source,
+                    dedup_key=trigger.dedup_key,
+                    run_policy=trigger.run_policy,
+                    interrupt_policy=trigger.interrupt_policy,
+                    terminal_reason=failure_reason,
+                    external_origin=trigger.external_origin,
+                    external_origin_id=trigger.external_origin_id,
+                    external_correlation_id=trigger.external_correlation_id,
+                )
+                conn.commit()
+                return WorkflowAdmissionDecision("escalate_review", run_id, attempt_id, "retry_exhausted")
+
+            next_attempt_id = create_run_attempt(
+                conn,
+                run_id,
+                status="queued",
+                retry_reason=failure_reason,
+            )
+            next_attempt_row = get_run_attempt(conn, next_attempt_id)
+            upsert_run(
+                conn,
+                run_id=run_id,
+                entrypoint=str(row["entrypoint"] or entrypoint or "workflow_admission"),
+                run_spec=self._parse_run_spec(row),
+                status="queued",
+                workspace_dir=effective_workspace_dir,
+                run_kind=trigger.run_kind,
+                trigger_source=trigger.trigger_source,
+                dedup_key=trigger.dedup_key,
+                run_policy=trigger.run_policy,
+                interrupt_policy=trigger.interrupt_policy,
+                external_origin=trigger.external_origin,
+                external_origin_id=trigger.external_origin_id,
+                external_correlation_id=trigger.external_correlation_id,
+            )
+            if effective_workspace_dir and next_attempt_row is not None:
+                ensure_run_workspace_scaffold(
+                    workspace_dir=effective_workspace_dir,
+                    run_id=run_id,
+                    attempt_id=next_attempt_id,
+                    attempt_number=int(next_attempt_row["attempt_number"] or 0),
+                    status="queued",
+                    run_kind=str(row["run_kind"] or "") or None,
+                    trigger_source=str(row["trigger_source"] or "") or None,
+                )
+            conn.commit()
+            return WorkflowAdmissionDecision("start_new_attempt", run_id, next_attempt_id, "retry_queued")
         finally:
             conn.close()
 

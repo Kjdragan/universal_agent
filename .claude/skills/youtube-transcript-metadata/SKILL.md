@@ -29,8 +29,8 @@ uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcri
 # Save JSON output + raw transcript text to files
 uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \
   --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" \
-  --json-out "$CURRENT_SESSION_WORKSPACE/work_products/youtube_ingest.json" \
-  --transcript-out "$CURRENT_SESSION_WORKSPACE/work_products/transcript.txt"
+  --json-out "$CURRENT_RUN_WORKSPACE/work_products/youtube_ingest.json" \
+  --transcript-out "$CURRENT_RUN_WORKSPACE/work_products/transcript.txt"
 
 # Verify dependencies are installed
 uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py --self-test
@@ -38,6 +38,9 @@ uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcri
 
 > **Note:** The `on_pre_bash_inject_workspace_env` hook auto-injects `UV_CACHE_DIR=/tmp/uv_cache`.
 > Include it explicitly (`UV_CACHE_DIR=/tmp/uv_cache`) only if calling outside the hook chain.
+>
+> **Workspace note:** `CURRENT_RUN_WORKSPACE` is the canonical durable workspace variable.
+> `CURRENT_SESSION_WORKSPACE` may still exist as a legacy alias during migration.
 
 ---
 

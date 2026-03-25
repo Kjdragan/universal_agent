@@ -36,8 +36,12 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def _resolve_session_media_dir() -> Path:
-    workspace = (os.environ.get("CURRENT_SESSION_WORKSPACE") or "").strip()
+def _resolve_run_media_dir() -> Path:
+    workspace = (
+        os.environ.get("CURRENT_RUN_WORKSPACE")
+        or os.environ.get("CURRENT_SESSION_WORKSPACE")
+        or ""
+    ).strip()
     if workspace:
         return Path(workspace).expanduser().resolve() / "work_products" / "media"
     return Path.cwd().resolve() / "work_products" / "media"
@@ -114,9 +118,9 @@ def main():
     client = genai.Client(api_key=api_key)
 
     # Enforce happy-path output locations:
-    # - session workspace work_products/media (primary)
+    # - run workspace work_products/media (primary)
     # - persistent artifacts/media (mirror copy)
-    session_media_dir = _resolve_session_media_dir()
+    session_media_dir = _resolve_run_media_dir()
     persistent_media_dir = _resolve_persistent_media_dir()
     session_media_dir.mkdir(parents=True, exist_ok=True)
     persistent_media_dir.mkdir(parents=True, exist_ok=True)

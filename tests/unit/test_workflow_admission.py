@@ -2,7 +2,7 @@ from pathlib import Path
 
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.durable.state import create_run_attempt, get_run, list_run_attempts, upsert_run
+from universal_agent.durable.state import create_run_attempt, get_run, get_run_attempt, list_run_attempts, upsert_run
 from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 
 
@@ -171,3 +171,109 @@ def test_workflow_admission_marks_completion_and_failure(tmp_path: Path):
     conn.close()
     assert row is not None
     assert row["status"] == "completed"
+
+
+def test_workflow_admission_mark_running_and_blocked(tmp_path: Path):
+    service = _service(tmp_path)
+    decision = service.admit(
+        WorkflowTrigger(
+            run_kind="youtube_tutorial_hook",
+            trigger_source="webhook",
+            dedup_key="video-1",
+            payload_json='{"video_id":"video-1"}',
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+        ),
+        entrypoint="test_entrypoint",
+        workspace_dir=str((tmp_path / "run_youtube").resolve()),
+    )
+    assert decision.run_id and decision.attempt_id
+
+    service.mark_running(
+        decision.run_id,
+        attempt_id=decision.attempt_id,
+        provider_session_id="session_hook_yt_video_1",
+        summary={"phase": "dispatch"},
+    )
+    service.mark_blocked(
+        decision.run_id,
+        attempt_id=decision.attempt_id,
+        reason="pending_local_ingest",
+        summary={"phase": "ingest"},
+    )
+
+    conn = connect_runtime_db(service.db_path)
+    ensure_schema(conn)
+    run_row = get_run(conn, decision.run_id)
+    attempt_row = get_run_attempt(conn, decision.attempt_id)
+    conn.close()
+    assert run_row is not None
+    assert attempt_row is not None
+    assert run_row["status"] == "blocked"
+    assert attempt_row["status"] == "blocked"
+    assert attempt_row["provider_session_id"] == "session_hook_yt_video_1"
+
+
+def test_workflow_admission_queue_retry_and_needs_review(tmp_path: Path):
+    service = _service(tmp_path)
+    workspace_dir = tmp_path / "run_retry"
+    decision = service.admit(
+        WorkflowTrigger(
+            run_kind="cron_job_dispatch",
+            trigger_source="cron",
+            dedup_key="scheduled:job1:1",
+            payload_json='{"job_id":"job1"}',
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+        ),
+        entrypoint="test_entrypoint",
+        workspace_dir=str(workspace_dir.resolve()),
+    )
+    assert decision.run_id and decision.attempt_id
+
+    service.mark_running(decision.run_id, attempt_id=decision.attempt_id, provider_session_id="session_cron_1")
+    retry_decision = service.queue_retry(
+        WorkflowTrigger(
+            run_kind="cron_job_dispatch",
+            trigger_source="cron",
+            dedup_key="scheduled:job1:1",
+            payload_json='{"job_id":"job1"}',
+            priority=1,
+            run_policy="automation_ephemeral",
+            interrupt_policy="attach_if_same_dedup_key",
+        ),
+        entrypoint="test_entrypoint",
+        run_id=decision.run_id,
+        attempt_id=decision.attempt_id,
+        workspace_dir=str(workspace_dir.resolve()),
+        failure_reason="execution timeout",
+        failure_class="execution_timeout",
+        max_attempts=3,
+    )
+    assert retry_decision.action == "start_new_attempt"
+
+    conn = connect_runtime_db(service.db_path)
+    ensure_schema(conn)
+    attempts = list_run_attempts(conn, decision.run_id)
+    conn.close()
+    assert len(attempts) == 2
+    assert attempts[-1]["status"] == "queued"
+    assert (workspace_dir / "attempts" / "002" / "attempt_meta.json").exists()
+
+    service.mark_needs_review(
+        decision.run_id,
+        attempt_id=retry_decision.attempt_id,
+        reason="auth_required",
+        failure_class="auth_required",
+    )
+    conn = connect_runtime_db(service.db_path)
+    ensure_schema(conn)
+    run_row = get_run(conn, decision.run_id)
+    retry_row = get_run_attempt(conn, retry_decision.attempt_id)
+    conn.close()
+    assert run_row is not None
+    assert retry_row is not None
+    assert run_row["status"] == "needs_review"
+    assert retry_row["status"] == "failed"

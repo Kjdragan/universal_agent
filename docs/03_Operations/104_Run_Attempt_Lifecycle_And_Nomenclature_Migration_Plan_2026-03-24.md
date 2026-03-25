@@ -417,6 +417,27 @@ Exit criteria:
 
 - the architecture reads naturally to outside engineers
 
+## Implementation Status Update
+
+As of the follow-up implementation pass on 2026-03-24, the migration no longer has the two previously confirmed lifecycle holdouts.
+
+Landed in code:
+
+- `src/universal_agent/workflow_admission.py` now provides the lifecycle helpers needed to drive durable run/attempt execution for autonomous workflows:
+  - `mark_running(...)`
+  - `mark_blocked(...)`
+  - `mark_needs_review(...)`
+  - `queue_retry(...)`
+- `src/universal_agent/hooks_service.py` now admits YouTube tutorial webhook work through `WorkflowAdmissionService`, creates durable `youtube_tutorial_hook` runs, advances durable `run_attempts`, and prefers runtime DB state for recovery.
+- `src/universal_agent/cron_service.py` now admits cron execution through `WorkflowAdmissionService`, creates durable `cron_job_dispatch` runs/attempts, and records workflow ids on cron run records/events.
+- `src/universal_agent/gateway_server.py` now emits cron retry notifications with workflow metadata, while tutorial success/recovery events continue to auto-resolve superseded stale failure notifications.
+
+Residual compatibility that still remains by design:
+
+- live provider session ids remain true `session` concepts
+- `pending_local_ingest.json` remains the local-ingest coordination artifact
+- legacy `pending_hook_recovery.json` is still read as a temporary compatibility fallback during migration
+
 ## Required Documentation Updates
 
 At minimum, the migration must update:

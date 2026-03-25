@@ -65,7 +65,7 @@ Never rely on Bash inheriting env vars. Resolve the artifacts root explicitly:
 python3 -c "from universal_agent.artifacts import resolve_artifacts_dir; print(resolve_artifacts_dir())"
 ```
 
-If this fails, **STOP** and report the error. Do not fall back to writing under the session workspace.
+If this fails, **STOP** and report the error. Do not fall back to writing only under transient scratch.
 
 Then:
 
@@ -84,10 +84,14 @@ Run the core ingestion script with parallel transcript + metadata extraction:
 UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \
   --url "<YOUTUBE_URL>" \
   --language en \
-  --json-out "$CURRENT_SESSION_WORKSPACE/downloads/youtube_ingest.json" \
-  --transcript-out "$CURRENT_SESSION_WORKSPACE/downloads/transcript.txt" \
+  --json-out "$CURRENT_RUN_WORKSPACE/downloads/youtube_ingest.json" \
+  --transcript-out "$CURRENT_RUN_WORKSPACE/downloads/transcript.txt" \
   --pretty
 ```
+
+`CURRENT_RUN_WORKSPACE` is the canonical workspace variable. `CURRENT_SESSION_WORKSPACE`
+may still be present as a legacy alias during migration, but new examples should prefer
+the run workspace name.
 
 Read `youtube_ingest.json` and look at `ok`, `failure_class`, `transcript_text`, and `metadata`.
 
@@ -115,7 +119,10 @@ python3 - <<'PY'
 import os
 from pathlib import Path
 
-ws = Path(os.environ["CURRENT_SESSION_WORKSPACE"])
+ws = Path(
+    os.environ.get("CURRENT_RUN_WORKSPACE")
+    or os.environ["CURRENT_SESSION_WORKSPACE"]
+)
 src = ws / "downloads" / "transcript.txt"
 dst = ws / "downloads" / "transcript.clean.txt"
 
@@ -141,7 +148,10 @@ python3 - <<'PY'
 import json, os
 from pathlib import Path
 
-ws = Path(os.environ["CURRENT_SESSION_WORKSPACE"])
+ws = Path(
+    os.environ.get("CURRENT_RUN_WORKSPACE")
+    or os.environ["CURRENT_SESSION_WORKSPACE"]
+)
 src = ws / "downloads" / "transcript.clean.txt"
 dst = ws / "downloads" / "transcript.stats.json"
 
@@ -285,7 +295,7 @@ Requirements:
 
 ## Success Criteria
 
-- All required artifacts live under the resolved `UA_ARTIFACTS_DIR` (never only in session scratch)
+- All required artifacts live under the resolved `UA_ARTIFACTS_DIR` (never only in run scratch)
 - `manifest.json` exists, is accurate, and has a valid `status`
 - `CONCEPT.md` is understandable without watching the video
 - `implementation/` scripts pass `--self-test` (or has clear documented reason if not applicable)

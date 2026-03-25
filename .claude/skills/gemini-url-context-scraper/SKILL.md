@@ -3,7 +3,7 @@ name: gemini-url-context-scraper
 description: |
   Fast URL/PDF/image content extraction using Gemini "URL Context" (built-in web/PDF reader) via google-genai.
   Use when the user wants to: scrape a URL, read/summarize a PDF, extract structured facts from public web content, or create an interim “scraped context” work product for downstream tasks.
-  Writes interim outputs to CURRENT_SESSION_WORKSPACE/work_products by default, and can persist outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run` scripts with dotenv auto-loading (no hardcoded secrets).
+  Writes interim outputs to CURRENT_RUN_WORKSPACE/work_products by default (`CURRENT_SESSION_WORKSPACE` is the legacy alias), and can persist outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run` scripts with dotenv auto-loading (no hardcoded secrets).
 ---
 
 # Gemini URL Context Scraper
@@ -25,7 +25,7 @@ This skill's bundled script is designed to be resilient:
 
 1. **Interim (default)**: if this is part of a larger chain (e.g. “use this PDF as context to do X”), write outputs to:
 
-- `CURRENT_SESSION_WORKSPACE/work_products/gemini-url-context/<slug>__<HHMMSS>/`
+- `CURRENT_RUN_WORKSPACE/work_products/gemini-url-context/<slug>__<HHMMSS>/`
 
 1. **Persistent (only if user asks to save)**: write outputs to:
 
@@ -66,7 +66,7 @@ This skill's bundled script is designed to be resilient:
   - format: Markdown (default) or JSON-ish Markdown
 - Persistence:
   - If user says “save”, use `--persist` (writes under `UA_ARTIFACTS_DIR`).
-  - Otherwise, write interim work product under session `work_products/`.
+  - Otherwise, write interim work product under run `work_products/`.
 
 1. Run the scraper script
 
@@ -101,4 +101,4 @@ uv run .claude/skills/gemini-url-context-scraper/scripts/gemini_url_context_scra
 
 - Prefer models like `gemini-2.5-flash` by default (override with `--model` if needed).
 - Do not install dependencies into the repo environment (`pip install`, `uv pip install`, `uv add`). If something is missing, fix PEP 723 deps and rerun with `uv run`.
-- If `CURRENT_SESSION_WORKSPACE` is missing and `--persist` is not set, STOP and ask the user to run via UA (session workspace required) or use `--persist`.
+- If `CURRENT_RUN_WORKSPACE` is missing and `--persist` is not set, STOP and ask the user to run via UA (`CURRENT_SESSION_WORKSPACE` remains a legacy alias) or use `--persist`.

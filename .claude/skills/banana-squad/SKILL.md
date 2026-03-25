@@ -34,8 +34,8 @@ uv run .claude/skills/banana-squad/scripts/bananasquad_prompts.py \
 ```
 
 Outputs:
-- `$CURRENT_SESSION_WORKSPACE/work_products/banana_squad/runs/<timestamp>/prompts.json`
-- `$CURRENT_SESSION_WORKSPACE/work_products/banana_squad/runs/<timestamp>/prompts.md`
+- `$CURRENT_RUN_WORKSPACE/work_products/banana_squad/runs/<timestamp>/prompts.json`
+- `$CURRENT_RUN_WORKSPACE/work_products/banana_squad/runs/<timestamp>/prompts.md`
 
 ### 2) Collect VisualCapitalist Style Inspiration (Capped + Rate Limited)
 

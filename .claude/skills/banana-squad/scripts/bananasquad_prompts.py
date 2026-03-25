@@ -76,7 +76,7 @@ def _slugify(s: str) -> str:
 
 
 def _default_run_dir() -> Path:
-    ws = os.environ.get("CURRENT_SESSION_WORKSPACE")
+    ws = os.environ.get("CURRENT_RUN_WORKSPACE") or os.environ.get("CURRENT_SESSION_WORKSPACE")
     if not ws:
         # Fallback for local ad-hoc runs.
         ws = str(Path.cwd())
