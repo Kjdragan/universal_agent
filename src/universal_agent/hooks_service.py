@@ -2725,40 +2725,56 @@ class HooksService:
 
         workflow_service = self._workflow_admission_service()
         workflow_workspace_dir = str(workflow_profile.get("workspace_dir") or "")
-        try:
-            workflow_decision = workflow_service.admit(
-                workflow_profile["trigger"],
-                entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
-                workspace_dir=workflow_workspace_dir,
-                retryable_failure=bool(workflow_profile.get("retryable_failure")),
-                max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
-            )
-            workflow_run_id = workflow_decision.run_id
-            workflow_attempt_id = workflow_decision.attempt_id
-            workflow_attempt_number: Optional[int] = None
-            attempt_context = self._workflow_attempt_context(
-                run_id=workflow_run_id,
-                attempt_id=workflow_attempt_id,
-            )
-            workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
-            workflow_workspace_dir = str(
-                attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
-            ) or workflow_workspace_dir
-        except sqlite3.OperationalError as exc:
-            if not _is_sqlite_lock_error(exc):
-                raise
-            logger.warning(
-                "Hook admission runtime DB contention action=%s session_key=%s: %s",
-                str(action.name or action.to or action.kind or "unknown").strip(),
-                session_key,
-                exc,
-            )
-            return {
-                "decision": "failed",
-                "reason": "runtime_db_locked",
-                "retryable": True,
-                "session_id": session_id,
-            }
+        _HOOK_ADMIT_RETRIES = 3
+        _HOOK_ADMIT_RETRY_DELAY = 5.0
+        for _admit_attempt in range(1, _HOOK_ADMIT_RETRIES + 1):
+            try:
+                workflow_decision = workflow_service.admit(
+                    workflow_profile["trigger"],
+                    entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
+                    workspace_dir=workflow_workspace_dir,
+                    retryable_failure=bool(workflow_profile.get("retryable_failure")),
+                    max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
+                )
+                workflow_run_id = workflow_decision.run_id
+                workflow_attempt_id = workflow_decision.attempt_id
+                workflow_attempt_number: Optional[int] = None
+                attempt_context = self._workflow_attempt_context(
+                    run_id=workflow_run_id,
+                    attempt_id=workflow_attempt_id,
+                )
+                workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
+                workflow_workspace_dir = str(
+                    attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
+                ) or workflow_workspace_dir
+                break  # success — exit retry loop
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc):
+                    raise
+                if _admit_attempt < _HOOK_ADMIT_RETRIES:
+                    logger.warning(
+                        "Hook admission DB contention (attempt %d/%d) action=%s session_key=%s: %s — retrying in %.0fs",
+                        _admit_attempt,
+                        _HOOK_ADMIT_RETRIES,
+                        str(action.name or action.to or action.kind or "unknown").strip(),
+                        session_key,
+                        exc,
+                        _HOOK_ADMIT_RETRY_DELAY,
+                    )
+                    await asyncio.sleep(_HOOK_ADMIT_RETRY_DELAY)
+                    continue
+                logger.warning(
+                    "Hook admission runtime DB contention action=%s session_key=%s: %s",
+                    str(action.name or action.to or action.kind or "unknown").strip(),
+                    session_key,
+                    exc,
+                )
+                return {
+                    "decision": "failed",
+                    "reason": "runtime_db_locked",
+                    "retryable": True,
+                    "session_id": session_id,
+                }
 
         if workflow_decision.action in {"attach_to_existing_run", "defer", "skip_duplicate"}:
             return {

@@ -6,7 +6,7 @@ DEFAULT_DB_FILENAME = "runtime_state.db"
 DEFAULT_CODER_VP_DB_FILENAME = "coder_vp_state.db"
 DEFAULT_VP_DB_FILENAME = "vp_state.db"
 DEFAULT_ACTIVITY_DB_FILENAME = "activity_state.db"
-DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 2000
+DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 15000
 
 
 def get_sqlite_busy_timeout_ms() -> int:
