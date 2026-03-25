@@ -532,13 +532,18 @@ function RecentEventsPanel() {
   }
 
   const clearedTs = clearedBefore ? new Date(clearedBefore).getTime() : null;
+  const isHidden = (e: ActivityEvent) => {
+    const st = (e.status || "").toLowerCase();
+    return st === "dismissed" || st === "resolved";
+  };
   const items = clearedTs
     ? events.filter((e) => {
+        if (isHidden(e)) return false;
         const ts = e.created_at_utc || e.updated_at_utc || "";
         if (!ts) return false;
         return new Date(ts).getTime() > clearedTs;
       })
-    : events;
+    : events.filter((e) => !isHidden(e));
 
   return (
     <div className="rounded-xl border border-border bg-background/70 p-4">

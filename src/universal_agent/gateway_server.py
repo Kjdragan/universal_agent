@@ -19746,7 +19746,7 @@ def _heartbeat_findings_signature(findings: dict[str, Any]) -> str:
 def _classify_heartbeat_mediation(findings: dict[str, Any]) -> dict[str, Any]:
     findings_list = [row for row in findings.get("findings", []) if isinstance(row, dict)]
     severity_rank = {"ok": 0, "info": 0, "warn": 1, "warning": 1, "critical": 2, "error": 2}
-    highest = "warn"
+    highest = "ok" if not findings_list else "warn"
     primary_runbook_command = ""
     known_rule_count = 0
     unknown_rule_count = 0
@@ -19766,9 +19766,21 @@ def _classify_heartbeat_mediation(findings: dict[str, Any]) -> dict[str, Any]:
         overall = "warn"
     if overall in {"error"}:
         overall = "critical"
+
+    # Map to classification status/severity — preserve ok/info for clean heartbeats
+    if overall in {"ok", "info"} and highest in {"ok", "info"}:
+        _cls_status = "ok"
+        _cls_severity = "info"
+    elif overall == "critical" or highest == "critical":
+        _cls_status = "critical"
+        _cls_severity = "error"
+    else:
+        _cls_status = "warn"
+        _cls_severity = "warning"
+
     return {
-        "status": "critical" if overall == "critical" or highest == "critical" else "warn",
-        "severity": "error" if overall == "critical" or highest == "critical" else "warning",
+        "status": _cls_status,
+        "severity": _cls_severity,
         "findings_count": len(findings_list),
         "known_rule_count": known_rule_count,
         "unknown_rule_count": unknown_rule_count,

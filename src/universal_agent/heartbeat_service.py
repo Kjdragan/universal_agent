@@ -294,6 +294,13 @@ def _build_heartbeat_environment_context(workspace_dir: str) -> str:
         "- Do NOT write to paths outside the run workspace (they will be blocked by workspace guards).",
         "- Issue file write calls SEQUENTIALLY, not in parallel — sibling failures cascade and waste tool budget.",
         "",
+        "### Structured Findings Output (MANDATORY)",
+        f"- You MUST always write `{workspace_dir}/work_products/heartbeat_findings_latest.json`.",
+        "- If everything is healthy and no issues are found, write:",
+        '  `{"version": 1, "overall_status": "ok", "summary": "200 OK", "findings": []}`',
+        "- If issues are found, write the full findings with overall_status set to 'warn' or 'critical'.",
+        "- This file must be written at the END of every heartbeat run, no exceptions.",
+        "",
         "### Health Check Efficiency",
         "- Combine multiple shell health checks into a single compound Bash command where possible.",
         "- Example: `uptime && echo '---' && free -h && echo '---' && df -h /`",
@@ -2153,31 +2160,38 @@ class HeartbeatService:
                         exc,
                     )
 
-            if not _findings_written and not ok_only and not should_skip_agent_run:
+            # ------------------------------------------------------------------
+            # Always-write contract: every heartbeat run must produce a
+            # structured findings JSON.  This ensures that the gateway can
+            # always parse the result, and *absence* of the file reliably
+            # signals a genuine failure.
+            #
+            #   ok_only  + not run_failed  →  "ok"       / "200 OK"
+            #   not ok   + not run_failed  →  "ok"       / preview of response
+            #   run_failed                 →  "critical"  / error details
+            # ------------------------------------------------------------------
+            if not _findings_written and not should_skip_agent_run:
                 try:
                     _wp_dir = Path(session.workspace_dir) / "work_products"
                     _wp_dir.mkdir(parents=True, exist_ok=True)
-                    _synthetic = {
-                        "version": 1,
-                        "overall_status": "warn" if not run_failed else "critical",
-                        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-                        "source": "heartbeat_synthetic",
-                        "summary": (
-                            f"Heartbeat completed with activity but the agent did not "
-                            f"write structured findings. Response preview: "
+
+                    if run_failed:
+                        _synth_status = "critical"
+                        _synth_summary = (
+                            f"Heartbeat run failed. Response preview: "
                             f"{(response_text or full_response)[:200]}"
-                        ),
-                        "findings": [
+                        )
+                        _synth_findings = [
                             {
                                 "finding_id": "synthetic_missing_findings_artifact",
                                 "category": "gateway",
-                                "severity": "warn" if not run_failed else "critical",
+                                "severity": "critical",
                                 "metric_key": "heartbeat_findings_artifact_written",
                                 "observed_value": False,
                                 "threshold_text": "agent should write findings JSON",
-                                "known_rule_match": False,
+                                "known_rule_match": True,
                                 "confidence": "medium",
-                                "title": "Synthetic Findings (Agent Omitted Artifact)",
+                                "title": "Heartbeat Run Failed Without Structured Output",
                                 "recommendation": (
                                     "Review heartbeat response text for details. "
                                     "The agent did not produce a structured findings "
@@ -2192,7 +2206,22 @@ class HeartbeatService:
                                     "work_product_count": len(work_product_paths),
                                 },
                             }
-                        ],
+                        ]
+                    else:
+                        # Successful run — either ok_only or non-ok text output.
+                        # Both are healthy; write an "ok" status so the gateway
+                        # sees a clean bill of health.
+                        _synth_status = "ok"
+                        _synth_summary = "200 OK"
+                        _synth_findings = []
+
+                    _synthetic = {
+                        "version": 1,
+                        "overall_status": _synth_status,
+                        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "source": "heartbeat_synthetic",
+                        "summary": _synth_summary,
+                        "findings": _synth_findings,
                     }
                     _synthetic_path = _wp_dir / _findings_filename
                     _synthetic_path.write_text(
@@ -2201,7 +2230,8 @@ class HeartbeatService:
                     )
                     work_product_paths.append(str(_synthetic_path))
                     logger.info(
-                        "Wrote synthetic heartbeat findings for %s → %s",
+                        "Wrote synthetic heartbeat findings (%s) for %s → %s",
+                        _synth_status,
                         session.session_id,
                         _synthetic_path,
                     )
