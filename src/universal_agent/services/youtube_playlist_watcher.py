@@ -173,6 +173,9 @@ class YouTubePlaylistWatcher:
         # Track videos that already sent a "Dispatch Delayed" notification
         # to suppress duplicate Telegram messages on consecutive poll cycles.
         self._notified_delayed_videos: set[str] = set()
+        # Videos whose dispatch failed with a retryable reason (DB lock).
+        # Kept here so next poll retries silently without re-notification.
+        self._pending_dispatch_items: dict[str, dict[str, Any]] = {}
         # Mutex that serialises the inflight/seen transition so _loop and
         # poll_now cannot both dispatch the same unseen video simultaneously.
         self._dispatch_lock: asyncio.Lock = asyncio.Lock()
@@ -295,7 +298,30 @@ class YouTubePlaylistWatcher:
                 new_items = [i for i in items if i.get("video_id") and i["video_id"] not in seen]
                 self._last_poll_ok = True
                 self._last_error = ""
+
+                # ── Retry pending (previously failed) dispatches silently ──
+                for vid in list(self._pending_dispatch_items):
+                    if vid in seen:
+                        self._pending_dispatch_items.pop(vid, None)
+                        continue
+                    pending_item = self._pending_dispatch_items[vid]
+                    logger.info("📺 Retrying pending dispatch video_id=%s", vid)
+                    dispatched = await self._dispatch(pending_item)
+                    if dispatched:
+                        async with self._dispatch_lock:
+                            seen.add(vid)
+                            self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                            self._dispatched_total += 1
+                        self._pending_dispatch_items.pop(vid, None)
+                        self._notified_delayed_videos.discard(vid)
+                        logger.info("📺 Pending dispatch succeeded video_id=%s", vid)
+                    # else: stays in pending for next cycle (no new notification)
+
+                # ── Process truly new (never-seen, never-pending) items ──
                 for item in reversed(new_items):
+                    vid = item.get("video_id", "")
+                    if vid in self._pending_dispatch_items:
+                        continue  # already tracked as pending, skip
                     dispatched = await self._process_new_video(
                         item, seen, current_ids, playlist_id
                     )
@@ -685,6 +711,10 @@ class YouTubePlaylistWatcher:
                     seen.add(vid)
                     self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
                     self._dispatched_total += 1
+                    self._pending_dispatch_items.pop(vid, None)
+                elif vid not in seen:
+                    # Track for silent retry on next poll — no new notification
+                    self._pending_dispatch_items[vid] = item
         return accepted
 
 

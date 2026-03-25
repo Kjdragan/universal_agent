@@ -4406,7 +4406,25 @@ def _ensure_current_run_attempt(
             _set_current_run_attempt_id(latest_attempt_id)
             return latest_attempt_id
 
-    attempt_id = create_run_attempt(runtime_db_conn, run_id, status=status)
+    # Guard: ensure the parent runs row exists before creating an attempt.
+    # After a gateway restart daemon sessions may carry a run_id that was
+    # never persisted to the runs table, causing a FOREIGN KEY error.
+    if not run_row:
+        try:
+            upsert_run(runtime_db_conn, run_id, status=status)
+        except Exception:
+            logging.getLogger(__name__).warning("Failed to upsert parent run row for %s", run_id)
+            return None
+
+    try:
+        attempt_id = create_run_attempt(runtime_db_conn, run_id, status=status)
+    except sqlite3.IntegrityError:
+        logging.getLogger(__name__).warning(
+            "FOREIGN KEY constraint creating run_attempt for run_id=%s — "
+            "parent row may be missing; skipping attempt creation.",
+            run_id,
+        )
+        return None
     effective_workspace_dir = (
         str(run_row["workspace_dir"] or "").strip()
         if run_row is not None and "workspace_dir" in run_row.keys()
