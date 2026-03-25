@@ -306,7 +306,7 @@ class YouTubePlaylistWatcher:
                         continue
                     pending_item = self._pending_dispatch_items[vid]
                     logger.info("📺 Retrying pending dispatch video_id=%s", vid)
-                    dispatched = await self._dispatch(pending_item)
+                    dispatched = await self._dispatch(pending_item, silent=True)
                     if dispatched:
                         async with self._dispatch_lock:
                             seen.add(vid)
@@ -489,7 +489,7 @@ class YouTubePlaylistWatcher:
     # Dispatch + notification helpers
     # ------------------------------------------------------------------
 
-    async def _dispatch(self, item: dict[str, Any]) -> bool:
+    async def _dispatch(self, item: dict[str, Any], *, silent: bool = False) -> bool:
         mode = _infer_youtube_mode(
             item.get("title"),
             item.get("channel_id"),
@@ -565,37 +565,41 @@ class YouTubePlaylistWatcher:
                     or bool(details.get("retryable"))
                 )
                 _vid = item.get("video_id", "")
-                # Suppress duplicate delayed notifications (only one per video)
-                if _is_retryable and _vid in self._notified_delayed_videos:
-                    logger.debug(
-                        "📺 Suppressed duplicate Dispatch Delayed for video_id=%s", _vid,
-                    )
+                # In silent mode (pending retry), skip ALL notifications
+                if not silent:
+                    # Suppress duplicate delayed notifications (only one per video)
+                    if _is_retryable and _vid in self._notified_delayed_videos:
+                        logger.debug(
+                            "📺 Suppressed duplicate Dispatch Delayed for video_id=%s", _vid,
+                        )
+                    else:
+                        if _is_retryable:
+                            self._notified_delayed_videos.add(_vid)
+                        self._emit_notification(
+                            kind="youtube_playlist_dispatch_failed",
+                            title=(
+                                "Tutorial Dispatch Delayed" if _is_retryable
+                                else "Tutorial Dispatch Rejected"
+                            ),
+                            message=(
+                                f"{item.get('title') or _vid}: "
+                                "runtime storage is temporarily busy; automatic retry will occur on the next playlist poll."
+                                if _is_retryable
+                                else f"{item.get('title') or _vid}: {reason}"
+                            ),
+                            severity="warning",
+                            metadata={
+                                "video_id": item.get("video_id", ""),
+                                "reason": reason,
+                                "retryable": bool(details.get("retryable")),
+                                "run_id": str(details.get("run_id") or "").strip(),
+                                "attempt_id": str(details.get("attempt_id") or "").strip(),
+                                "attempt_number": details.get("attempt_number"),
+                                "workspace_dir": str(details.get("workspace_dir") or "").strip(),
+                            },
+                        )
                 else:
-                    if _is_retryable:
-                        self._notified_delayed_videos.add(_vid)
-                    self._emit_notification(
-                        kind="youtube_playlist_dispatch_failed",
-                        title=(
-                            "Tutorial Dispatch Delayed" if _is_retryable
-                            else "Tutorial Dispatch Rejected"
-                        ),
-                        message=(
-                            f"{item.get('title') or _vid}: "
-                            "runtime storage is temporarily busy; automatic retry will occur on the next playlist poll."
-                            if _is_retryable
-                            else f"{item.get('title') or _vid}: {reason}"
-                        ),
-                        severity="warning",
-                        metadata={
-                            "video_id": item.get("video_id", ""),
-                            "reason": reason,
-                            "retryable": bool(details.get("retryable")),
-                            "run_id": str(details.get("run_id") or "").strip(),
-                            "attempt_id": str(details.get("attempt_id") or "").strip(),
-                            "attempt_number": details.get("attempt_number"),
-                            "workspace_dir": str(details.get("workspace_dir") or "").strip(),
-                        },
-                    )
+                    logger.debug("📺 Silent retry failed for video_id=%s reason=%s", _vid, reason)
                 return False
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
