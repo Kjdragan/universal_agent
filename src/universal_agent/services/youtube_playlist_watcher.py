@@ -170,6 +170,9 @@ class YouTubePlaylistWatcher:
         # watcher to retry naturally after crashes or rejected dispatch attempts,
         # with durable run admission acting as the authoritative dedupe layer.
         self._inflight_dispatches: set[str] = set()
+        # Track videos that already sent a "Dispatch Delayed" notification
+        # to suppress duplicate Telegram messages on consecutive poll cycles.
+        self._notified_delayed_videos: set[str] = set()
         # Mutex that serialises the inflight/seen transition so _loop and
         # poll_now cannot both dispatch the same unseen video simultaneously.
         self._dispatch_lock: asyncio.Lock = asyncio.Lock()
@@ -522,6 +525,8 @@ class YouTubePlaylistWatcher:
                             "workspace_dir": workspace_dir,
                         },
                     )
+                # Clear delayed notification dedup on success
+                self._notified_delayed_videos.discard(item.get("video_id", ""))
                 return True
             else:
                 logger.warning(
@@ -529,32 +534,42 @@ class YouTubePlaylistWatcher:
                     item.get("video_id"),
                     reason,
                 )
-                self._emit_notification(
-                    kind="youtube_playlist_dispatch_failed",
-                    title=(
-                        "Tutorial Dispatch Delayed"
-                        if str(reason or "").strip().lower() == "runtime_db_locked"
-                        or bool(details.get("retryable"))
-                        else "Tutorial Dispatch Rejected"
-                    ),
-                    message=(
-                        f"{item.get('title') or item.get('video_id')}: "
-                        "runtime storage is temporarily busy; automatic retry will occur on the next playlist poll."
-                        if str(reason or "").strip().lower() == "runtime_db_locked"
-                        or bool(details.get("retryable"))
-                        else f"{item.get('title') or item.get('video_id')}: {reason}"
-                    ),
-                    severity="warning",
-                    metadata={
-                        "video_id": item.get("video_id", ""),
-                        "reason": reason,
-                        "retryable": bool(details.get("retryable")),
-                        "run_id": str(details.get("run_id") or "").strip(),
-                        "attempt_id": str(details.get("attempt_id") or "").strip(),
-                        "attempt_number": details.get("attempt_number"),
-                        "workspace_dir": str(details.get("workspace_dir") or "").strip(),
-                    },
+                _is_retryable = (
+                    str(reason or "").strip().lower() == "runtime_db_locked"
+                    or bool(details.get("retryable"))
                 )
+                _vid = item.get("video_id", "")
+                # Suppress duplicate delayed notifications (only one per video)
+                if _is_retryable and _vid in self._notified_delayed_videos:
+                    logger.debug(
+                        "📺 Suppressed duplicate Dispatch Delayed for video_id=%s", _vid,
+                    )
+                else:
+                    if _is_retryable:
+                        self._notified_delayed_videos.add(_vid)
+                    self._emit_notification(
+                        kind="youtube_playlist_dispatch_failed",
+                        title=(
+                            "Tutorial Dispatch Delayed" if _is_retryable
+                            else "Tutorial Dispatch Rejected"
+                        ),
+                        message=(
+                            f"{item.get('title') or _vid}: "
+                            "runtime storage is temporarily busy; automatic retry will occur on the next playlist poll."
+                            if _is_retryable
+                            else f"{item.get('title') or _vid}: {reason}"
+                        ),
+                        severity="warning",
+                        metadata={
+                            "video_id": item.get("video_id", ""),
+                            "reason": reason,
+                            "retryable": bool(details.get("retryable")),
+                            "run_id": str(details.get("run_id") or "").strip(),
+                            "attempt_id": str(details.get("attempt_id") or "").strip(),
+                            "attempt_number": details.get("attempt_number"),
+                            "workspace_dir": str(details.get("workspace_dir") or "").strip(),
+                        },
+                    )
                 return False
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"

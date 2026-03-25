@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional, TypeVar
@@ -82,43 +81,26 @@ class WorkflowAdmissionService:
         return conn
 
     def _run_with_retry(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
-        base_delay = max(0.1, float(_SQLITE_LOCK_RETRY_BASE_SECONDS))
-        max_delay = max(base_delay, float(_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS))
-        ceiling = max(1.0, float(_SQLITE_LOCK_RETRY_CEILING_SECONDS))
-        last_exc: Optional[sqlite3.OperationalError] = None
-        attempt = 0
-        elapsed = 0.0
-        while elapsed < ceiling:
-            attempt += 1
-            conn = self._connect()
+        """Execute a DB operation with a single attempt.
+
+        Retry logic is handled at the async caller level (hooks_service)
+        using proper ``await asyncio.sleep()`` to avoid blocking the event loop.
+        The SQLite busy_timeout (15s) provides initial wait-for-lock at the
+        connection level.
+        """
+        conn = self._connect()
+        try:
+            return operation(conn)
+        except sqlite3.OperationalError as exc:
             try:
-                return operation(conn)
-            except sqlite3.OperationalError as exc:
-                last_exc = exc
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                if not _is_sqlite_lock_error(exc):
-                    raise
-                delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-                if attempt <= 3:
-                    logger.debug(
-                        "Workflow admission DB locked (attempt %d, %.1fs elapsed), retrying in %.1fs",
-                        attempt, elapsed, delay,
-                    )
-                else:
-                    logger.warning(
-                        "Workflow admission DB locked (attempt %d, %.1fs elapsed), retrying in %.1fs",
-                        attempt, elapsed, delay,
-                    )
-                time.sleep(delay)
-                elapsed += delay
-            finally:
-                conn.close()
-        if last_exc is not None:
-            raise last_exc
-        raise RuntimeError("workflow admission retry exhausted without result")
+                conn.rollback()
+            except Exception:
+                pass
+            if _is_sqlite_lock_error(exc):
+                logger.warning("Workflow admission DB locked: %s", exc)
+            raise
+        finally:
+            conn.close()
 
     @staticmethod
     def _parse_run_spec(row: sqlite3.Row | None) -> dict:

@@ -2733,13 +2733,17 @@ class HooksService:
         while _admit_elapsed < _HOOK_ADMIT_CEILING:
             _admit_attempt += 1
             try:
-                workflow_decision = workflow_service.admit(
+                import functools
+                _admit_fn = functools.partial(
+                    workflow_service.admit,
                     workflow_profile["trigger"],
                     entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
                     workspace_dir=workflow_workspace_dir,
                     retryable_failure=bool(workflow_profile.get("retryable_failure")),
                     max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
                 )
+                loop = asyncio.get_event_loop()
+                workflow_decision = await loop.run_in_executor(None, _admit_fn)
                 workflow_run_id = workflow_decision.run_id
                 workflow_attempt_id = workflow_decision.attempt_id
                 workflow_attempt_number: Optional[int] = None
