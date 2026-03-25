@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import { useAgentStore } from "@/lib/store";
 import { getWebSocket } from "@/lib/websocket";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
-import { formatDateKeyTz, formatDateTimeTz, formatTimeTz, getDisplayTimezone } from "@/lib/timezone";
+import { formatDateKeyTz, formatDateTimeTz, formatTimeTz, getDisplayTimezone, toEpochMs } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 const VPS_API_BASE = "";
@@ -2106,7 +2106,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
   const isFull = variant === "full";
   /* ── Local state for system-wide heartbeat aggregation ──────────────── */
   type VpEntry = { vp_id: string; session_id?: string; status?: string; effective_status?: string; last_heartbeat_at?: string; lease_expires_at?: string };
-  type SessionEntry = { session_id: string; last_run?: string; busy: boolean; last_summary?: unknown };
+  type SessionEntry = { session_id: string; last_run?: string | number; busy: boolean; last_summary?: unknown };
 
   const [vpSessions, setVpSessions] = useState<VpEntry[]>([]);
   const [sessionHeartbeats, setSessionHeartbeats] = useState<SessionEntry[]>([]);
@@ -2129,7 +2129,7 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
       }
       if (hbRes.ok) {
         const d = await hbRes.json();
-        const hbs: Record<string, { last_run?: string; last_summary?: unknown; busy: boolean }> = d.heartbeats || {};
+        const hbs: Record<string, { last_run?: string | number; last_summary?: unknown; busy: boolean }> = d.heartbeats || {};
         setSessionHeartbeats(
           Object.entries(hbs).map(([sid, v]) => ({ session_id: sid, last_run: v.last_run, busy: v.busy, last_summary: v.last_summary })),
         );
@@ -2153,11 +2153,13 @@ export function HeartbeatsSection({ variant = "compact" }: { variant?: SectionVa
   }, [fetchAll]);
 
   /* ── Helpers ───────────────────────────────────────────────────────── */
-  const ageSeconds = (ts?: string | null) => {
-    if (!ts) return Infinity;
-    return Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  const ageSeconds = (ts?: any) => {
+    if (ts == null) return Infinity;
+    const ms = toEpochMs(ts);
+    if (!ms) return Infinity;
+    return Math.max(0, (Date.now() - ms) / 1000);
   };
-  const ageLabel = (ts?: string | null) => {
+  const ageLabel = (ts?: string | number | null) => {
     if (!ts) return "--";
     const s = ageSeconds(ts);
     if (s < 60) return `${Math.round(s)}s ago`;

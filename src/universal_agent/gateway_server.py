@@ -6144,18 +6144,20 @@ def _emit_heartbeat_event(payload: dict) -> None:
                 "heartbeat_operator_review_required": False,
                 "primary_runbook_command": str(classification["primary_runbook_command"] or ""),
             }
-            record = _add_notification(
-                kind="autonomous_heartbeat_completed",
-                title="Autonomous Heartbeat Activity Completed",
-                message=(
-                    f"Heartbeat detected {classification['status']} findings for {session_id or 'session'}: "
-                    f"{str(classification['summary'] or 'investigation required').strip()}"
-                ),
-                session_id=session_id,
-                severity=str(classification["severity"] or "warning"),
-                requires_action=True,
-                metadata=metadata,
-            )
+            record = {}
+            if classification["status"] not in ("ok", "info"):
+                record = _add_notification(
+                    kind="autonomous_heartbeat_completed",
+                    title="Autonomous Heartbeat Activity Completed",
+                    message=(
+                        f"Heartbeat detected {classification['status']} findings for {session_id or 'session'}: "
+                        f"{str(classification['summary'] or 'investigation required').strip()}"
+                    ),
+                    session_id=session_id,
+                    severity=str(classification["severity"] or "warning"),
+                    requires_action=True,
+                    metadata=metadata,
+                )
             # Only emit a parse-failed notification when the artifact *exists*
             # but is corrupt/invalid.  A missing artifact is normal for many
             # heartbeat run types (Task Hub dispatch, exec completions, etc.)
