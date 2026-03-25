@@ -148,6 +148,138 @@ When a production service claims a secret-backed feature is "not configured":
    ambiguous
 6. remove those diagnostics immediately after confirmation
 
+---
+
+## 2026-03-25: Nightly Documentation Pipeline Audit
+
+### How The Pipeline Works
+
+The nightly doc maintenance pipeline has two stages triggered by the
+`nightly-doc-drift-audit.yml` GitHub Actions workflow (runs at 08:17 UTC):
+
+1. **Stage 1 — Drift Auditor** (GHA runner, deterministic Python):
+   - Runs `doc_drift_auditor.py` which scans last 24h of git history
+   - Produces `artifacts/doc-drift-reports/<YYYY-MM-DD>/drift_report.json`
+   - Auto-creates and squash-merges a PR with the report into `develop`
+   - Sets `exit_code` output: 0 = no issues, 1 = issues found
+
+2. **Stage 2 — VP Mission Dispatch** (GHA → VPS via Tailscale SSH):
+   - Only runs if Stage 1 found issues (`exit_code != 0`)
+   - Copies drift report to VPS via SCP
+   - Runs `doc_maintenance_agent.py` on VPS
+   - This script dispatches VP missions to `vp.coder.primary` via gateway API
+   - Missions are batched by severity (P0 → P1 → P2, max 15 issues/batch)
+
+3. **VP Worker Loop** (VPS background service):
+   - `worker_loop.py` polls the `vp_missions` SQLite table
+   - Claims and executes missions via `ClaudeCodeClient` (SDK mode)
+   - On completion, `_post_mission_push_pr_merge()` checks if the agent
+     created a `docs/*` branch with commits and pushes + creates + merges a PR
+
+### Audit Checklist
+
+When investigating whether the nightly doc pipeline worked:
+
+1. **Check GHA run status:**
+   ```bash
+   gh run list --workflow="nightly-doc-drift-audit.yml" --limit 3 \
+     --json status,conclusion,createdAt,databaseId
+   ```
+
+2. **Check all steps completed (including Stage 2):**
+   ```bash
+   gh api repos/Kjdragan/universal_agent/actions/runs/<RUN_ID>/jobs \
+     --jq '.jobs[] | {name, conclusion, steps: [.steps[] | {name, conclusion}]}'
+   ```
+
+3. **Read the Stage 2 dispatch log (VP missions dispatched):**
+   ```bash
+   gh api repos/Kjdragan/universal_agent/actions/jobs/<JOB_ID>/logs 2>&1 \
+     | grep -iE "dispatch|mission|issues|batch|✅|❌"
+   ```
+
+4. **Check drift report content (what issues were found):**
+   ```bash
+   git show origin/chore/drift-report-<YYYY-MM-DD>:artifacts/doc-drift-reports/<YYYY-MM-DD>/drift_report.json \
+     | python3 -c "import json,sys; r=json.load(sys.stdin); print(f'Issues: {r[\"total_issues\"]}'); [print(f'  {i[\"severity\"]} {i[\"category\"]}: {i[\"file\"]}') for i in r['issues']]"
+   ```
+
+5. **Check VP mission status via gateway API:**
+   ```bash
+   curl -s "http://uaonvps:8002/api/v1/ops/vp/missions?vp_id=vp.coder.primary&limit=5" \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+   Look for: `status`, `duration_seconds`, `result_ref`.
+
+6. **Check if doc fix PRs exist:**
+   ```bash
+   gh pr list --search "nightly drift <YYYY-MM-DD>" --state all \
+     --json number,title,state,mergedAt
+   ```
+
+7. **Check remote branches for VP-created doc branches:**
+   ```bash
+   git fetch origin --prune && git branch -r | grep "docs.*<YYYY-MM-DD>"
+   ```
+
+### Why No Doc PRs May Be Created (Correct Behavior)
+
+The VP agent is instructed to "verify before fixing." If all flagged issues
+turn out to be false positives (docs are already accurate), the agent
+correctly skips all changes. The post-mission hook then sees "not on a docs/
+branch" or "no new commits vs develop" and skips the push/PR/merge step.
+
+Common false-positive scenarios:
+- `glossary_candidate` for generic programming terms (SQL keywords, etc.)
+- `agentic_drift` when AGENTS.md was already updated manually
+- `code_doc_drift` when docs were updated in a separate PR outside the audit
+  window
+
+### Lesson: VP Worker Loop Has No Logfire Instrumentation
+
+The VP worker loop (`vp/worker_loop.py`) and VP client modules
+(`vp/clients/`) contain **zero Logfire spans**. All VP logging goes through
+Python's `logging` module only, which means:
+
+- Logfire queries for VP mission execution return **nothing**
+- Mission status must be checked via the gateway API (`/api/v1/ops/vp/missions`)
+- Mission execution traces are only available through the gateway's
+  `gateway_request` span in `execution_engine.py`, which is the outermost
+  wrapper around `process_turn()`
+- The actual VP worker lifecycle (claim, heartbeat, finalize, post-mission hook)
+  is invisible to Logfire
+
+**Implication for future debugging:** If VP mission observability is needed,
+either check the VP mission DB via API, or consider adding minimal Logfire
+spans to the worker loop for critical lifecycle events.
+
+### Lesson: Logfire Query Patterns For This System
+
+When querying Logfire for system telemetry:
+
+1. **Logfire primarily instruments**: `execution_engine.py` (gateway_request
+   spans), `agent_core.py` (conversation turns), `hooks.py` (tool calls),
+   and HTTP request/response spans.
+
+2. **Logfire does NOT instrument**: VP worker loop, VP clients, cron service
+   lifecycle, heartbeat scheduling, doc maintenance dispatch, or notification
+   dispatch.
+
+3. **Effective query patterns**:
+   - Filter by `service_name = 'universal-agent'`
+   - Filter by `span_name` for specific operations (e.g., `gateway_request`,
+     `tool_use`, `claude.assistant.turn`)
+   - Use `attributes->>'trace_id'` to follow request chains
+   - Messages are generic span names, not descriptive — use `start_timestamp`
+     ranges to narrow scope
+
+4. **What to use instead of Logfire** for uninstrumented subsystems:
+   - VP missions: gateway API (`/api/v1/ops/vp/missions`)
+   - Heartbeats: gateway API or check `heartbeat_findings_latest.json`
+   - Cron/scheduling: gateway health endpoint or VPS service logs
+
+---
+
 ## Seed Questions For Future Entries
 
 When adding a new lesson, answer these:

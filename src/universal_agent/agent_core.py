@@ -922,17 +922,61 @@ def configure_logfire():
     except Exception:
         pass
 
-    # Configure Claude SDK tracking via Langsmith OTel
+    # Configure Claude SDK tracking via Langsmith → Logfire OTel pipeline
     try:
         import os
 
-        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
-        os.environ["LANGSMITH_OTEL_ONLY"] = "true"
-        os.environ["LANGSMITH_TRACING"] = "true"
-        from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
+        # Langsmith API key must be set BEFORE importing the integration.
+        # The key is loaded from Infisical during runtime bootstrap.
+        langsmith_api_key = os.getenv("LANGSMITH_API_KEY", "").strip()
+        if langsmith_api_key:
+            os.environ["LANGSMITH_API_KEY"] = langsmith_api_key
+            os.environ["LANGSMITH_ENDPOINT"] = os.getenv(
+                "LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"
+            ).strip()
+            os.environ["LANGSMITH_PROJECT"] = os.getenv(
+                "LANGSMITH_PROJECT", "Universal Agent"
+            ).strip()
+            # Route Langsmith traces through OTel → Logfire (not directly to Langsmith)
+            os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+            os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+            os.environ["LANGSMITH_TRACING"] = "true"
 
-        configure_claude_agent_sdk()
+            import threading
+
+            def _configure_langsmith():
+                try:
+                    from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
+                    configure_claude_agent_sdk()
+                except Exception:
+                    pass
+
+            # Guard against hanging import/configure with a timeout
+            t = threading.Thread(target=_configure_langsmith, daemon=True)
+            t.start()
+            t.join(timeout=5.0)
+            if t.is_alive():
+                import logging
+                logging.getLogger(__name__).warning(
+                    "configure_claude_agent_sdk() timed out after 5s — Langsmith tracing may not be active"
+                )
+        else:
+            import logging
+            logging.getLogger(__name__).info(
+                "LANGSMITH_API_KEY not set — Claude SDK Langsmith tracing disabled"
+            )
     except Exception as e:
+        pass
+
+    # Auto-trace VP worker loop, scripts, and other previously uninstrumented modules.
+    # Only functions taking > 50ms are traced to avoid overhead on hot paths.
+    try:
+        logfire.install_auto_tracing(
+            modules=["universal_agent.vp", "universal_agent.scripts"],
+            min_duration=0.05,
+            check_imported_modules="warn",
+        )
+    except Exception:
         pass
 
     return True

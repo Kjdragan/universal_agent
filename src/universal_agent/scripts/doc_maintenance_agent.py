@@ -151,7 +151,7 @@ def _build_batched_objectives(report: dict) -> list[dict]:
         "index_dead_entry": "Remove stale entry from both index files. If file was moved, update the link.",
         "index_orphan": "Add to both docs/README.md and docs/Documentation_Status.md in the correct section.",
         "broken_link": "Fix the broken link or remove if target was intentionally deleted.",
-        "glossary_candidate": "Add project-specific terms to docs/Glossary.md. Skip generic terms.",
+        "glossary_candidate": "Only add genuinely project-specific terms to docs/Glossary.md. SKIP generic programming terms (SQL keywords, common infra words, standard library names). A good glossary term is unique to this project (e.g. 'Brain Transplant', 'VP Worker', 'Heartbeat Service').",
         "deploy_cochange_violation": "Update docs/deployment/ to reflect current deployment behavior.",
         "agentic_drift": "Update AGENTS.md or workflow/SKILL.md files to match code changes.",
         "code_doc_drift": "Update docs to accurately reflect current code behavior.",
@@ -256,6 +256,19 @@ def _dispatch_via_gateway(
             "### Your Task\n"
             "Verify and fix documentation drift issues identified by an automated audit.\n"
             "Each issue includes a file path, line reference, and suspected staleness.\n\n"
+            "### Fast-Skip Rules (Apply FIRST to Save Time)\n"
+            "Some issue categories have high false-positive rates. Check these BEFORE "
+            "reading source code:\n\n"
+            "- **glossary_candidate**: SKIP any term that is a generic programming keyword "
+            "(SQL: SELECT/INSERT/UPDATE/TABLE/COLUMN/WHERE, infra: deploy/staging/service/"
+            "config, standard library names). Only add terms genuinely unique to THIS project "
+            "(e.g. 'Brain Transplant', 'VP Worker', 'Heartbeat Service', 'CSI Pipeline'). "
+            "If the term would appear in any generic software project, skip it immediately.\n"
+            "- **code_doc_drift**: Read the CURRENT docs first. If they already accurately "
+            "describe code behavior, skip. The audit flags co-change absence, not actual "
+            "staleness.\n"
+            "- **agentic_drift**: Check if AGENTS.md was recently updated. If the current "
+            "content is accurate, skip.\n\n"
             "### Verification Rules\n"
             "1. **Read the source** before making changes — some 'drift' may be a false positive.\n"
             "2. If the documentation is actually correct, skip the issue and note it as verified.\n"

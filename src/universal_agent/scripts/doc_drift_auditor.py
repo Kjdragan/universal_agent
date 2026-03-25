@@ -296,6 +296,20 @@ GLOSSARY_STOPWORDS = {
     "index", "mode", "binary", "rename", "copy",
     # Common Python/tech but not project-specific
     "todo", "fixme", "hack", "note", "bug", "feat", "docs", "fix",
+    # SQL keywords (appear frequently in migration/query code changes)
+    "select", "insert", "update", "delete", "create", "alter", "drop",
+    "table", "column", "values", "where", "join", "left", "right", "inner",
+    "outer", "group", "order", "limit", "offset", "having", "distinct",
+    "union", "exists", "between", "primary", "foreign", "references",
+    "constraint", "default", "integer", "varchar", "boolean", "timestamp",
+    "index", "unique", "cascade", "replace", "begin", "commit", "rollback",
+    # Common infrastructure/deployment terms
+    "deploy", "staging", "production", "service", "server", "client",
+    "config", "setup", "build", "start", "stop", "restart", "health",
+    "status", "check", "port", "host", "timeout", "retry", "cache",
+    "queue", "worker", "task", "batch", "process", "output", "input",
+    "result", "response", "request", "token", "secret", "key", "value",
+    "param", "option", "flag", "enable", "disable",
 }
 
 
