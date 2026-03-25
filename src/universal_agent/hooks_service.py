@@ -10,6 +10,7 @@ import os
 import random
 import re
 import shlex
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -32,6 +33,14 @@ from universal_agent.workflow_admission import WorkflowAdmissionService, Workflo
 from universal_agent.youtube_ingest import normalize_video_target
 
 logger = logging.getLogger(__name__)
+
+_RUNTIME_DB_LOCK_RETRY_ATTEMPTS = 4
+_RUNTIME_DB_LOCK_RETRY_BASE_SECONDS = 0.25
+
+
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    detail = str(exc or "").strip().lower()
+    return "database is locked" in detail or "database table is locked" in detail
 
 DEFAULT_HOOKS_PATH = "/hooks"
 DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024
@@ -378,6 +387,30 @@ class HooksService:
         conn = connect_runtime_db(get_runtime_db_path())
         ensure_schema(conn)
         return conn
+
+    @staticmethod
+    def _run_with_runtime_db_retry(operation: Callable[[Any], Any]) -> Any:
+        attempts = max(1, int(_RUNTIME_DB_LOCK_RETRY_ATTEMPTS))
+        base_delay = max(0.0, float(_RUNTIME_DB_LOCK_RETRY_BASE_SECONDS))
+        last_exc: Optional[sqlite3.OperationalError] = None
+        for attempt in range(1, attempts + 1):
+            conn = HooksService._runtime_db_connect()
+            try:
+                return operation(conn)
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                if not _is_sqlite_lock_error(exc) or attempt >= attempts:
+                    raise
+                time.sleep(base_delay * attempt)
+            finally:
+                conn.close()
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("runtime DB retry exhausted without result")
 
     @staticmethod
     def _workflow_admission_service() -> WorkflowAdmissionService:
@@ -1212,8 +1245,7 @@ class HooksService:
     ) -> dict[str, Any]:
         if not run_id and not attempt_id:
             return {}
-        conn = self._runtime_db_connect()
-        try:
+        def _operation(conn: Any) -> dict[str, Any]:
             run_row = get_run(conn, run_id) if run_id else None
             attempt_row = get_run_attempt(conn, attempt_id) if attempt_id else None
             context: dict[str, Any] = {}
@@ -1228,8 +1260,7 @@ class HooksService:
                 context["attempt_status"] = str(attempt_row["status"] or "")
                 context["provider_session_id"] = str(attempt_row["provider_session_id"] or "")
             return context
-        finally:
-            conn.close()
+        return self._run_with_runtime_db_retry(_operation)
 
     @staticmethod
     def _merge_workflow_metadata(
@@ -2685,24 +2716,40 @@ class HooksService:
 
         workflow_service = self._workflow_admission_service()
         workflow_workspace_dir = str(workflow_profile.get("workspace_dir") or "")
-        workflow_decision = workflow_service.admit(
-            workflow_profile["trigger"],
-            entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
-            workspace_dir=workflow_workspace_dir,
-            retryable_failure=bool(workflow_profile.get("retryable_failure")),
-            max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
-        )
-        workflow_run_id = workflow_decision.run_id
-        workflow_attempt_id = workflow_decision.attempt_id
-        workflow_attempt_number: Optional[int] = None
-        attempt_context = self._workflow_attempt_context(
-            run_id=workflow_run_id,
-            attempt_id=workflow_attempt_id,
-        )
-        workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
-        workflow_workspace_dir = str(
-            attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
-        ) or workflow_workspace_dir
+        try:
+            workflow_decision = workflow_service.admit(
+                workflow_profile["trigger"],
+                entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
+                workspace_dir=workflow_workspace_dir,
+                retryable_failure=bool(workflow_profile.get("retryable_failure")),
+                max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
+            )
+            workflow_run_id = workflow_decision.run_id
+            workflow_attempt_id = workflow_decision.attempt_id
+            workflow_attempt_number: Optional[int] = None
+            attempt_context = self._workflow_attempt_context(
+                run_id=workflow_run_id,
+                attempt_id=workflow_attempt_id,
+            )
+            workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
+            workflow_workspace_dir = str(
+                attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
+            ) or workflow_workspace_dir
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_lock_error(exc):
+                raise
+            logger.warning(
+                "Hook admission runtime DB contention action=%s session_key=%s: %s",
+                str(action.name or action.to or action.kind or "unknown").strip(),
+                session_key,
+                exc,
+            )
+            return {
+                "decision": "failed",
+                "reason": "runtime_db_locked",
+                "retryable": True,
+                "session_id": session_id,
+            }
 
         if workflow_decision.action in {"attach_to_existing_run", "defer", "skip_duplicate"}:
             return {

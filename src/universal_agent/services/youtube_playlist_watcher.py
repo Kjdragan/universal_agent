@@ -531,12 +531,24 @@ class YouTubePlaylistWatcher:
                 )
                 self._emit_notification(
                     kind="youtube_playlist_dispatch_failed",
-                    title="Tutorial Dispatch Rejected",
-                    message=f"{item.get('title') or item.get('video_id')}: {reason}",
+                    title=(
+                        "Tutorial Dispatch Delayed"
+                        if str(reason or "").strip().lower() == "runtime_db_locked"
+                        or bool(details.get("retryable"))
+                        else "Tutorial Dispatch Rejected"
+                    ),
+                    message=(
+                        f"{item.get('title') or item.get('video_id')}: "
+                        "runtime storage is temporarily busy; automatic retry will occur on the next playlist poll."
+                        if str(reason or "").strip().lower() == "runtime_db_locked"
+                        or bool(details.get("retryable"))
+                        else f"{item.get('title') or item.get('video_id')}: {reason}"
+                    ),
                     severity="warning",
                     metadata={
                         "video_id": item.get("video_id", ""),
                         "reason": reason,
+                        "retryable": bool(details.get("retryable")),
                         "run_id": str(details.get("run_id") or "").strip(),
                         "attempt_id": str(details.get("attempt_id") or "").strip(),
                         "attempt_number": details.get("attempt_number"),

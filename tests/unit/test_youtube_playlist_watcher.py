@@ -295,3 +295,39 @@ async def test_poll_now_retries_same_video_after_rejected_dispatch(monkeypatch, 
     saved = json.loads(_state_path().read_text(encoding="utf-8"))
     assert saved["seen_ids"] == ["retryVid123"]
     assert dispatch_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_db_locked_dispatch_is_reported_as_delayed_and_left_retryable(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    notifications: list[dict] = []
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=AsyncMock(
+            return_value={
+                "decision": "failed",
+                "reason": "runtime_db_locked",
+                "retryable": True,
+            }
+        ),
+        notification_sink=notifications.append,
+    )
+
+    ok = await watcher._dispatch(
+        {
+            "video_id": "locked123",
+            "url": "https://www.youtube.com/watch?v=locked123",
+            "title": "Runtime DB lock test",
+            "channel_id": "chan1",
+            "playlist_id": "PLdemo",
+        }
+    )
+
+    assert ok is False
+    failed = next((n for n in notifications if n.get("kind") == "youtube_playlist_dispatch_failed"), None)
+    assert failed is not None
+    assert failed["title"] == "Tutorial Dispatch Delayed"
+    assert "automatic retry will occur on the next playlist poll" in str(failed.get("message") or "").lower()
+    assert (failed.get("metadata") or {}).get("retryable") is True

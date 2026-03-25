@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -251,3 +252,33 @@ async def test_dispatch_internal_action_background_with_admission_enqueues_gener
     await asyncio.sleep(0.05)
 
     assert gateway.execute_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_action_background_with_admission_returns_retryable_when_runtime_db_locked(tmp_path, monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service = HooksService(gateway)
+    service.config.enabled = True
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+
+    def _locked_context(*, run_id=None, attempt_id=None):
+        raise sqlite3.OperationalError("database is locked")
+
+    service._workflow_attempt_context = _locked_context
+
+    result = await service.dispatch_internal_action_background_with_admission(
+        {
+            "kind": "agent",
+            "name": "AutoHeartbeatInvestigation",
+            "session_key": "simone_heartbeat_ntf_lock",
+            "message": "activity_id: ntf_lock\nPlease investigate heartbeat findings.",
+        }
+    )
+
+    assert result["decision"] == "failed"
+    assert result["reason"] == "runtime_db_locked"
+    assert result["retryable"] is True
