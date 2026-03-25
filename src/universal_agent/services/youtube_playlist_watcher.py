@@ -163,6 +163,9 @@ class YouTubePlaylistWatcher:
         self._last_error: str = ""
         self._seen_count: int = 0
         self._dispatched_total: int = 0
+        # Shared reference to the authoritative seen set so poll_now can
+        # access the same set as the background _loop.
+        self._seen_ids: set[str] = set()
         self._poll_count: int = 0
         # In-process dedup guard for inflight dispatches only. We intentionally
         # do NOT treat "detected" as "processed"; a video is persisted to the
@@ -219,6 +222,7 @@ class YouTubePlaylistWatcher:
         )
         state = _load_state()
         seen: set[str] = set(state.get("seen_ids", []))
+        self._seen_ids = seen
         self._seen_count = len(seen)
         self._task = asyncio.create_task(self._loop(playlist_id, api_key, seen))
 
@@ -655,8 +659,11 @@ class YouTubePlaylistWatcher:
         The critical section (inflight check/add, then seen update on success) is
         protected by _dispatch_lock so that concurrent calls from _loop and poll_now
         never both dispatch the same unseen video at the same time.
-        A video is persisted to seen only after dispatch admission succeeds; failed
-        or crashed dispatch attempts are left eligible for retry on the next poll.
+
+        The video is persisted to seen BEFORE dispatch so that restarts / manual
+        polls never re-discover the same video and re-emit 'Dispatch Delayed'
+        notifications.  If dispatch fails the video is also tracked in the
+        in-memory _pending_dispatch_items for silent retry on the next poll.
         """
         vid = item["video_id"]
         async with self._dispatch_lock:
@@ -665,6 +672,12 @@ class YouTubePlaylistWatcher:
             if vid in self._inflight_dispatches:
                 return False
             self._inflight_dispatches.add(vid)
+            # ── Persist to seen immediately so restarts/manual polls
+            #    never re-discover this video.  If dispatch subsequently
+            #    fails, the video stays seen (no re-notification) and is
+            #    tracked in _pending_dispatch_items for silent retry.
+            seen.add(vid)
+            self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
 
         # Emit notification and dispatch outside the lock (slow operations).
         logger.info(
@@ -712,11 +725,9 @@ class YouTubePlaylistWatcher:
             async with self._dispatch_lock:
                 self._inflight_dispatches.discard(vid)
                 if accepted:
-                    seen.add(vid)
-                    self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
                     self._dispatched_total += 1
                     self._pending_dispatch_items.pop(vid, None)
-                elif vid not in seen:
+                else:
                     # Track for silent retry on next poll — no new notification
                     self._pending_dispatch_items[vid] = item
         return accepted
@@ -738,7 +749,15 @@ class YouTubePlaylistWatcher:
         self._last_poll_ok = True
         self._last_error = ""
         current_ids = [i["video_id"] for i in items if i.get("video_id")]
-        new_items = [i for i in items if i.get("video_id") and i["video_id"] not in seen]
+        # Merge watcher's in-memory seen set + pending items so manual polls
+        # never re-discover videos already tracked by the background loop.
+        seen.update(self._seen_ids)
+        new_items = [
+            i for i in items
+            if i.get("video_id")
+            and i["video_id"] not in seen
+            and i["video_id"] not in self._pending_dispatch_items
+        ]
         dispatched = []
         for item in reversed(new_items):
             vid = item["video_id"]
