@@ -46,6 +46,27 @@ def test_creates_task_hub_item_with_recommended_step(_activity_db):
     assert "Fix the regex" in result.get("description", "")
 
 
+def test_heartbeat_remediation_description_includes_workflow_lineage(_activity_db):
+    from universal_agent import gateway_server as gs
+
+    result = gs._create_heartbeat_remediation_task(
+        origin_id="ntf_test_lineage",
+        classification="heartbeat_timeout",
+        recommended_next_step="Restart the worker and verify health.",
+        proposed_changes=["Restart worker process"],
+        email_summary="Heartbeat execution timed out twice.",
+        session_id="session_heartbeat_1",
+        run_id="run_heartbeat_1",
+        attempt_id="attempt_heartbeat_2",
+    )
+
+    assert result is not None
+    description = str(result.get("description") or "")
+    assert "Workflow run: run_heartbeat_1" in description
+    assert "Workflow attempt: attempt_heartbeat_2" in description
+    assert "Provider session: session_heartbeat_1" in description
+
+
 def test_deterministic_task_id_upserts_not_duplicates(_activity_db):
     """Calling twice with the same classification should upsert, not create a new task."""
     from universal_agent import gateway_server as gs

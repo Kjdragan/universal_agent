@@ -1200,6 +1200,9 @@ class AgentMailService:
         subject: str,
         reply_text: str,
         session_key: str,
+        workflow_run_id: str = "",
+        workflow_attempt_id: str = "",
+        provider_session_id: str = "",
     ) -> Optional[dict[str, Any]]:
         """Materialize an inbound trusted email as a tracked task.
 
@@ -1219,11 +1222,43 @@ class AgentMailService:
                 subject=subject,
                 reply_text=reply_text,
                 session_key=session_key,
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                provider_session_id=provider_session_id,
             )
         except Exception as exc:
             logger.warning(
                 "📧→📋 Email task materialization failed thread=%s: %s",
                 thread_id, exc,
+            )
+            return None
+
+    def _link_email_task_workflow(
+        self,
+        *,
+        thread_id: str,
+        workflow_run_id: str = "",
+        workflow_attempt_id: str = "",
+        provider_session_id: str = "",
+    ) -> Optional[dict[str, Any]]:
+        """Backfill durable workflow lineage onto an already materialized email task."""
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return None
+        if not any((workflow_run_id, workflow_attempt_id, provider_session_id)):
+            return None
+        try:
+            return bridge.link_workflow(
+                thread_id=thread_id,
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                provider_session_id=provider_session_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "📧→📋 Email task workflow linkage failed thread=%s: %s",
+                thread_id,
+                exc,
             )
             return None
 
@@ -1720,24 +1755,42 @@ class AgentMailService:
                 continue
 
             decision = str(result.get("decision") or "").strip().lower()
-            if decision == "accepted":
+            if decision in {"accepted", "skipped"}:
                 subject = str(payload.get("subject") or "").strip() or "(no subject)"
                 sender_email = str(payload.get("sender_email") or "").strip()
                 session_id = str(result.get("session_id") or result.get("session_key") or "").strip()
-                self._emit_notification(
-                    kind="simone_session_started",
-                    title="Simone Started Work",
-                    message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
-                    severity="info",
-                    metadata={
-                        "queue_id": str(payload.get("queue_id") or ""),
-                        "message_id": str(payload.get("message_id") or ""),
-                        "subject": subject,
-                        "sender_email": sender_email,
-                        "session_id": session_id,
-                        "trigger": "trusted_email",
-                    },
-                )
+                workflow_run_id = str(result.get("run_id") or "").strip()
+                workflow_attempt_id = str(result.get("attempt_id") or "").strip()
+                thread_id = str(payload.get("thread_id") or "").strip()
+                metadata = {
+                    "queue_id": str(payload.get("queue_id") or ""),
+                    "message_id": str(payload.get("message_id") or ""),
+                    "subject": subject,
+                    "sender_email": sender_email,
+                    "session_id": session_id,
+                    "trigger": "trusted_email",
+                    "workflow_decision": decision,
+                    "workflow_reason": str(result.get("reason") or decision),
+                }
+                if workflow_run_id:
+                    metadata["run_id"] = workflow_run_id
+                if workflow_attempt_id:
+                    metadata["attempt_id"] = workflow_attempt_id
+                if thread_id:
+                    self._link_email_task_workflow(
+                        thread_id=thread_id,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                        provider_session_id=session_id,
+                    )
+                if decision == "accepted":
+                    self._emit_notification(
+                        kind="simone_session_started",
+                        title="Simone Started Work",
+                        message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
+                        severity="info",
+                        metadata=metadata,
+                    )
                 self._complete_queue_item(str(payload["queue_id"]), attempts=attempts)
                 continue
             if decision in {"busy", "duplicate_in_progress"}:

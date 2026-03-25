@@ -863,9 +863,14 @@ def test_dashboard_activity_send_to_simone_dispatches_hook_action(client, monkey
         def __init__(self) -> None:
             self.calls: list[dict] = []
 
-        async def dispatch_internal_action(self, action_payload: dict):
+        async def dispatch_internal_action_background_with_admission(self, action_payload: dict):
             self.calls.append(action_payload)
-            return True, "agent"
+            return {
+                "decision": "accepted",
+                "reason": "accepted",
+                "run_id": "run_simone_123",
+                "attempt_id": "attempt_simone_1",
+            }
 
     hook_stub = _HookDispatchStub()
     monkeypatch.setattr(gateway_server, "_hooks_service", hook_stub)
@@ -885,11 +890,16 @@ def test_dashboard_activity_send_to_simone_dispatches_hook_action(client, monkey
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["ok"] is True
+    assert payload["run_id"] == "run_simone_123"
+    assert payload["attempt_id"] == "attempt_simone_1"
     assert hook_stub.calls
     assert "Please investigate and propose actions." in str(hook_stub.calls[0].get("message") or "")
     kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
     assert "simone_handoff_requested" in kinds
     assert "simone_handoff_completed" in kinds
+    completed = next(item for item in reversed(gateway_server._notifications) if item["kind"] == "simone_handoff_completed")
+    assert completed["metadata"]["run_id"] == "run_simone_123"
+    assert completed["metadata"]["attempt_id"] == "attempt_simone_1"
 
 
 def test_heartbeat_investigation_completion_updates_origin_and_sends_operator_email(client, monkeypatch):

@@ -51,6 +51,40 @@ def _deterministic_task_id(thread_id: str) -> str:
     return f"email:{h}"
 
 
+def _workflow_lineage_lines(
+    *,
+    workflow_run_id: str = "",
+    workflow_attempt_id: str = "",
+    provider_session_id: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    if workflow_run_id:
+        lines.append(f"Workflow Run: {workflow_run_id}")
+    if workflow_attempt_id:
+        lines.append(f"Workflow Attempt: {workflow_attempt_id}")
+    if provider_session_id:
+        lines.append(f"Provider Session: {provider_session_id}")
+    return lines
+
+
+def _workflow_lineage_comment(
+    *,
+    workflow_run_id: str = "",
+    workflow_attempt_id: str = "",
+    provider_session_id: str = "",
+) -> str:
+    parts: list[str] = []
+    if workflow_run_id:
+        parts.append(f"run={workflow_run_id}")
+    if workflow_attempt_id:
+        parts.append(f"attempt={workflow_attempt_id}")
+    if provider_session_id:
+        parts.append(f"provider_session={provider_session_id}")
+    if not parts:
+        return ""
+    return f"**Workflow linkage:** {' | '.join(parts)}"
+
+
 # ── Database Schema ──────────────────────────────────────────────────────────
 
 _SCHEMA_SQL = """\
@@ -64,6 +98,9 @@ CREATE TABLE IF NOT EXISTS email_task_mappings (
     sender_email TEXT NOT NULL DEFAULT '',
     sender_trusted INTEGER NOT NULL DEFAULT 1,
     security_classification TEXT NOT NULL DEFAULT '',
+    workflow_run_id TEXT NOT NULL DEFAULT '',
+    workflow_attempt_id TEXT NOT NULL DEFAULT '',
+    provider_session_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     last_message_id TEXT NOT NULL DEFAULT '',
     message_count INTEGER NOT NULL DEFAULT 1,
@@ -88,6 +125,9 @@ def ensure_email_task_schema(conn: sqlite3.Connection) -> None:
         ("master_key", "''"),
         ("sender_trusted", "1"),
         ("security_classification", "''"),
+        ("workflow_run_id", "''"),
+        ("workflow_attempt_id", "''"),
+        ("provider_session_id", "''"),
     ]:
         try:
             conn.execute(
@@ -155,6 +195,9 @@ class EmailTaskBridge:
         session_key: str = "",
         sender_trusted: bool = True,
         security_classification: str = "",
+        workflow_run_id: str = "",
+        workflow_attempt_id: str = "",
+        provider_session_id: str = "",
     ) -> dict[str, Any]:
         """Convert an inbound email into a tracked task.
 
@@ -174,6 +217,10 @@ class EmailTaskBridge:
         master_key = self._classify_master_key(subject)
         existing = self._get_mapping(thread_id)
         is_update = existing is not None
+        existing_mapping = existing or {}
+        resolved_workflow_run_id = str(workflow_run_id or existing_mapping.get("workflow_run_id") or "").strip()
+        resolved_workflow_attempt_id = str(workflow_attempt_id or existing_mapping.get("workflow_attempt_id") or "").strip()
+        resolved_provider_session_id = str(provider_session_id or existing_mapping.get("provider_session_id") or "").strip()
 
         # Determine labels based on trust level
         email_labels = list(_EMAIL_TASK_DEFAULT_LABELS)
@@ -199,11 +246,14 @@ class EmailTaskBridge:
                 UPDATE email_task_mappings
                 SET subject = ?, sender_email = ?, last_message_id = ?,
                     message_count = ?, updated_at = ?, master_key = ?,
-                    sender_trusted = ?, security_classification = ?
+                    sender_trusted = ?, security_classification = ?,
+                    workflow_run_id = ?, workflow_attempt_id = ?, provider_session_id = ?
                 WHERE thread_id = ?
                 """,
                 (subject, sender_email, message_id, message_count, now,
-                 master_key, int(sender_trusted), security_classification, thread_id),
+                 master_key, int(sender_trusted), security_classification,
+                 resolved_workflow_run_id, resolved_workflow_attempt_id, resolved_provider_session_id,
+                 thread_id),
             )
         else:
             message_count = 1
@@ -212,12 +262,14 @@ class EmailTaskBridge:
                 INSERT OR IGNORE INTO email_task_mappings
                     (thread_id, task_id, todoist_task_id, todoist_master_id,
                      master_key, subject, sender_email, sender_trusted,
-                     security_classification, status, last_message_id,
+                     security_classification, workflow_run_id, workflow_attempt_id,
+                     provider_session_id, status, last_message_id,
                      message_count, created_at, updated_at)
-                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)
+                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)
                 """,
                 (thread_id, task_id, master_key, subject, sender_email,
                  int(sender_trusted), security_classification,
+                 resolved_workflow_run_id, resolved_workflow_attempt_id, resolved_provider_session_id,
                  message_id, now, now),
             )
         self._conn.commit()
@@ -231,6 +283,9 @@ class EmailTaskBridge:
             thread_id=thread_id,
             message_count=message_count,
             session_key=session_key,
+            workflow_run_id=resolved_workflow_run_id,
+            workflow_attempt_id=resolved_workflow_attempt_id,
+            provider_session_id=resolved_provider_session_id,
             labels=email_labels,
         )
 
@@ -247,6 +302,9 @@ class EmailTaskBridge:
                 master_key=master_key,
                 message_count=message_count,
                 existing_todoist_id=str(existing.get("todoist_task_id", "")) if existing else "",
+                workflow_run_id=resolved_workflow_run_id,
+                workflow_attempt_id=resolved_workflow_attempt_id,
+                provider_session_id=resolved_provider_session_id,
                 labels=email_labels,
             )
             if todoist_task_id:
@@ -271,12 +329,98 @@ class EmailTaskBridge:
             "status": "active",
             "thread_id": thread_id,
             "sender_trusted": sender_trusted,
+            "workflow_run_id": resolved_workflow_run_id,
+            "workflow_attempt_id": resolved_workflow_attempt_id,
+            "provider_session_id": resolved_provider_session_id,
         }
         logger.info(
             "📧→📋 Email task materialized: task_id=%s thread=%s master=%s is_update=%s messages=%d trusted=%s",
             task_id, thread_id, master_key, is_update, message_count, sender_trusted,
         )
         return result
+
+    def link_workflow(
+        self,
+        *,
+        thread_id: str,
+        workflow_run_id: str = "",
+        workflow_attempt_id: str = "",
+        provider_session_id: str = "",
+    ) -> dict[str, Any]:
+        """Backfill durable workflow lineage onto an already materialized email task."""
+        mapping = self._get_mapping(thread_id)
+        if not mapping:
+            return {}
+
+        resolved_workflow_run_id = str(workflow_run_id or mapping.get("workflow_run_id") or "").strip()
+        resolved_workflow_attempt_id = str(workflow_attempt_id or mapping.get("workflow_attempt_id") or "").strip()
+        resolved_provider_session_id = str(provider_session_id or mapping.get("provider_session_id") or "").strip()
+        if not any((resolved_workflow_run_id, resolved_workflow_attempt_id, resolved_provider_session_id)):
+            return mapping
+
+        now = _now_iso()
+        self._conn.execute(
+            """
+            UPDATE email_task_mappings
+            SET workflow_run_id = ?, workflow_attempt_id = ?, provider_session_id = ?, updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (
+                resolved_workflow_run_id,
+                resolved_workflow_attempt_id,
+                resolved_provider_session_id,
+                now,
+                str(thread_id or "").strip(),
+            ),
+        )
+        self._conn.commit()
+
+        try:
+            from universal_agent.task_hub import upsert_item, ensure_schema
+
+            ensure_schema(self._conn)
+            metadata: dict[str, Any] = {}
+            if resolved_workflow_run_id:
+                metadata["workflow_run_id"] = resolved_workflow_run_id
+            if resolved_workflow_attempt_id:
+                metadata["workflow_attempt_id"] = resolved_workflow_attempt_id
+            if resolved_provider_session_id:
+                metadata["provider_session_id"] = resolved_provider_session_id
+            if metadata:
+                upsert_item(
+                    self._conn,
+                    {
+                        "task_id": str(mapping.get("task_id") or ""),
+                        "metadata": metadata,
+                    },
+                )
+        except Exception as exc:
+            logger.warning(
+                "📧→📋 Email task workflow linkage update failed thread=%s: %s",
+                thread_id,
+                exc,
+            )
+
+        todoist_task_id = str(mapping.get("todoist_task_id") or "").strip()
+        if self._todoist and todoist_task_id:
+            lineage_comment = _workflow_lineage_comment(
+                workflow_run_id=resolved_workflow_run_id,
+                workflow_attempt_id=resolved_workflow_attempt_id,
+                provider_session_id=resolved_provider_session_id,
+            )
+            if lineage_comment:
+                try:
+                    self._todoist.add_comment(todoist_task_id, lineage_comment)
+                except Exception as exc:
+                    logger.warning(
+                        "📧→📋 Todoist workflow linkage comment failed thread=%s task=%s: %s",
+                        thread_id,
+                        todoist_task_id,
+                        exc,
+                    )
+
+        updated = self._get_mapping(thread_id)
+        return updated or mapping
 
     def get_active_email_tasks(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return all active email-driven task mappings."""
@@ -422,6 +566,9 @@ class EmailTaskBridge:
         thread_id: str,
         message_count: int,
         session_key: str,
+        workflow_run_id: str = "",
+        workflow_attempt_id: str = "",
+        provider_session_id: str = "",
         labels: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create or update a Task Hub entry for this email task."""
@@ -437,6 +584,20 @@ class EmailTaskBridge:
 
             task_labels = labels or list(_EMAIL_TASK_DEFAULT_LABELS)
 
+            metadata: dict[str, Any] = {
+                "email_thread_id": thread_id,
+                "sender_email": sender_email,
+                "message_count": message_count,
+                "session_key": session_key,
+                "source_system": "agentmail",
+            }
+            if workflow_run_id:
+                metadata["workflow_run_id"] = workflow_run_id
+            if workflow_attempt_id:
+                metadata["workflow_attempt_id"] = workflow_attempt_id
+            if provider_session_id:
+                metadata["provider_session_id"] = provider_session_id
+
             item = {
                 "task_id": task_id,
                 "source_kind": _EMAIL_TASK_SOURCE_KIND,
@@ -449,13 +610,7 @@ class EmailTaskBridge:
                 "status": "open",
                 "agent_ready": "agent-ready" in task_labels,
                 "must_complete": False,
-                "metadata": {
-                    "email_thread_id": thread_id,
-                    "sender_email": sender_email,
-                    "message_count": message_count,
-                    "session_key": session_key,
-                    "source_system": "agentmail",
-                },
+                "metadata": metadata,
             }
             return upsert_item(self._conn, item)
         except Exception as exc:
@@ -473,6 +628,9 @@ class EmailTaskBridge:
         master_key: str,
         message_count: int,
         existing_todoist_id: str,
+        workflow_run_id: str = "",
+        workflow_attempt_id: str = "",
+        provider_session_id: str = "",
         labels: list[str] | None = None,
     ) -> tuple[str, str]:
         """Create/update a Todoist subtask under a master task.
@@ -497,6 +655,24 @@ class EmailTaskBridge:
                 return "", ""
 
             task_labels = labels or list(_EMAIL_TASK_DEFAULT_LABELS)
+            lineage_lines = _workflow_lineage_lines(
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                provider_session_id=provider_session_id,
+            )
+            lineage_comment = _workflow_lineage_comment(
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                provider_session_id=provider_session_id,
+            )
+            description_lines = [
+                f"From: {sender_email}",
+                f"Thread: {thread_id}",
+                *lineage_lines,
+                "---",
+                f"{reply_text[:1500]}",
+            ]
+            description = "\n".join(line for line in description_lines if line)
 
             if existing_todoist_id:
                 # ② Update existing subtask
@@ -504,21 +680,18 @@ class EmailTaskBridge:
                 self._todoist.update_task(
                     existing_todoist_id,
                     content=content,
+                    description=description,
                 )
                 self._todoist.add_comment(
                     existing_todoist_id,
                     f"**Email update #{message_count}** from {sender_email}:\n{reply_text[:800]}",
                 )
+                if lineage_comment:
+                    self._todoist.add_comment(existing_todoist_id, lineage_comment)
                 return existing_todoist_id, master_id
             else:
                 # ③ Create new subtask under the master task
                 content = f"📧 {subject}" if subject else "📧 Email Task"
-                description = (
-                    f"From: {sender_email}\n"
-                    f"Thread: {thread_id}\n"
-                    f"---\n"
-                    f"{reply_text[:1500]}"
-                )
                 result = self._todoist.create_subtask(
                     parent_id=master_id,
                     content=content,
@@ -532,6 +705,8 @@ class EmailTaskBridge:
                         subtask_id,
                         f"**Email from {sender_email}:**\n{reply_text[:800]}",
                     )
+                    if lineage_comment:
+                        self._todoist.add_comment(subtask_id, lineage_comment)
                 return subtask_id, master_id
         except Exception as exc:
             logger.warning("📧→📋 Todoist subtask upsert failed for thread=%s: %s", thread_id, exc)

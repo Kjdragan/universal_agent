@@ -6,6 +6,7 @@ untrusted sender handling, heartbeat updates, and edge cases.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import textwrap
@@ -222,6 +223,76 @@ class TestThreadDeduplication:
         assert result1["task_id"] != result2["task_id"]
 
 
+class TestWorkflowLineage:
+    def test_materialize_persists_workflow_lineage(self, bridge, db_conn):
+        result = bridge.materialize(
+            thread_id="thd_lineage_001",
+            message_id="msg_lineage_001",
+            sender_email="kevin@example.com",
+            subject="Run-aware email task",
+            reply_text="Track this under the current run",
+            session_key="agentmail_thd_lineage_001",
+            workflow_run_id="run_email_001",
+            workflow_attempt_id="attempt_email_001",
+            provider_session_id="session_email_001",
+        )
+
+        mapping = db_conn.execute(
+            "SELECT workflow_run_id, workflow_attempt_id, provider_session_id FROM email_task_mappings WHERE thread_id = ?",
+            ("thd_lineage_001",),
+        ).fetchone()
+        assert mapping is not None
+        assert mapping["workflow_run_id"] == "run_email_001"
+        assert mapping["workflow_attempt_id"] == "attempt_email_001"
+        assert mapping["provider_session_id"] == "session_email_001"
+
+        task = db_conn.execute(
+            "SELECT metadata_json FROM task_hub_items WHERE task_id = ?",
+            (result["task_id"],),
+        ).fetchone()
+        assert task is not None
+        metadata = json.loads(str(task["metadata_json"] or "{}"))
+        assert metadata["workflow_run_id"] == "run_email_001"
+        assert metadata["workflow_attempt_id"] == "attempt_email_001"
+        assert metadata["provider_session_id"] == "session_email_001"
+
+    def test_link_workflow_backfills_existing_task(self, bridge, db_conn):
+        result = bridge.materialize(
+            thread_id="thd_lineage_002",
+            message_id="msg_lineage_002",
+            sender_email="kevin@example.com",
+            subject="Backfill run lineage",
+            reply_text="Create first, link later",
+            session_key="agentmail_thd_lineage_002",
+        )
+
+        bridge.link_workflow(
+            thread_id="thd_lineage_002",
+            workflow_run_id="run_email_backfill",
+            workflow_attempt_id="attempt_email_backfill",
+            provider_session_id="session_email_backfill",
+        )
+
+        mapping = db_conn.execute(
+            "SELECT workflow_run_id, workflow_attempt_id, provider_session_id FROM email_task_mappings WHERE thread_id = ?",
+            ("thd_lineage_002",),
+        ).fetchone()
+        assert mapping is not None
+        assert mapping["workflow_run_id"] == "run_email_backfill"
+        assert mapping["workflow_attempt_id"] == "attempt_email_backfill"
+        assert mapping["provider_session_id"] == "session_email_backfill"
+
+        task = db_conn.execute(
+            "SELECT metadata_json FROM task_hub_items WHERE task_id = ?",
+            (result["task_id"],),
+        ).fetchone()
+        assert task is not None
+        metadata = json.loads(str(task["metadata_json"] or "{}"))
+        assert metadata["workflow_run_id"] == "run_email_backfill"
+        assert metadata["workflow_attempt_id"] == "attempt_email_backfill"
+        assert metadata["provider_session_id"] == "session_email_backfill"
+
+
 # ── Todoist Subtask Hierarchy ─────────────────────────────────────────────
 
 
@@ -243,6 +314,27 @@ class TestTodoistSubtaskHierarchy:
         # Verify subtask was created with correct parent_id
         call_kwargs = bridge_with_todoist._todoist.create_subtask.call_args
         assert call_kwargs.kwargs.get("parent_id") == "master_task_100"
+
+    def test_todoist_subtask_description_includes_workflow_lineage(self, bridge_with_todoist):
+        bridge_with_todoist.materialize(
+            thread_id="thd_todoist_lineage_001",
+            message_id="msg_t_lineage_001",
+            sender_email="kevin@clearspringcg.com",
+            subject="Please fix proxy",
+            reply_text="The proxy is failing",
+            workflow_run_id="run_email_todoist_1",
+            workflow_attempt_id="attempt_email_todoist_1",
+            provider_session_id="session_email_todoist_1",
+        )
+
+        create_call = bridge_with_todoist._todoist.create_subtask.call_args
+        description = str(create_call.kwargs.get("description") or "")
+        assert "Workflow Run: run_email_todoist_1" in description
+        assert "Workflow Attempt: attempt_email_todoist_1" in description
+        assert "Provider Session: session_email_todoist_1" in description
+        comments = [str(call.args[1]) for call in bridge_with_todoist._todoist.add_comment.call_args_list]
+        assert any("run=run_email_todoist_1" in comment for comment in comments)
+        assert any("attempt=attempt_email_todoist_1" in comment for comment in comments)
 
     def test_updates_todoist_on_thread_followup(self, bridge_with_todoist, db_conn):
         # First email → creates subtask
@@ -267,6 +359,29 @@ class TestTodoistSubtaskHierarchy:
         bridge_with_todoist._todoist.update_task.assert_called_once()
         # add_comment is called once for initial subtask creation + once for update
         assert bridge_with_todoist._todoist.add_comment.call_count == 2
+
+    def test_link_workflow_adds_todoist_lineage_comment(self, bridge_with_todoist):
+        bridge_with_todoist.materialize(
+            thread_id="thd_todoist_lineage_002",
+            message_id="msg_t_lineage_002",
+            sender_email="kevin@clearspringcg.com",
+            subject="Deploy issue",
+            reply_text="Check the deploy",
+        )
+        initial_comment_calls = bridge_with_todoist._todoist.add_comment.call_count
+
+        bridge_with_todoist.link_workflow(
+            thread_id="thd_todoist_lineage_002",
+            workflow_run_id="run_email_backfill_2",
+            workflow_attempt_id="attempt_email_backfill_2",
+            provider_session_id="session_email_backfill_2",
+        )
+
+        assert bridge_with_todoist._todoist.add_comment.call_count == initial_comment_calls + 1
+        latest_comment = str(bridge_with_todoist._todoist.add_comment.call_args.args[1] or "")
+        assert "run=run_email_backfill_2" in latest_comment
+        assert "attempt=attempt_email_backfill_2" in latest_comment
+        assert "provider_session=session_email_backfill_2" in latest_comment
 
     def test_same_subject_produces_same_master_key(self, bridge_with_todoist):
         """Two emails about the same topic should group under the same master task."""

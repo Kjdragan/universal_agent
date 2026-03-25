@@ -539,6 +539,87 @@ class TestTrustedInboundHandling:
         mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_trusted_inbound_queue_completes_when_work_is_already_deduped(
+        self, service_with_queue, mock_agentmail_client
+    ):
+        service_with_queue._dispatch_with_admission_fn = AsyncMock(
+            return_value={
+                "decision": "skipped",
+                "reason": "active_run_exists",
+                "run_id": "run_agentmail_123",
+                "attempt_id": "attempt_agentmail_1",
+            }
+        )
+
+        class _Message:
+            from_ = "Kevin Dragan <kevin.dragan@outlook.com>"
+            subject = "Already running"
+            thread_id = "thd_queue_003"
+            message_id = "msg_queue_003"
+            text = "hello again"
+            html = "<p>hello again</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service_with_queue._handle_inbound_email(_Event())
+        await asyncio.sleep(0.2)
+
+        item = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)[0]
+        assert item["status"] == "completed"
+        assert service_with_queue._dispatch_with_admission_fn.await_count == 1
+        mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_queue_backfills_email_task_workflow_lineage(
+        self, service_with_queue, mock_agentmail_client
+    ):
+        service_with_queue._dispatch_with_admission_fn = AsyncMock(
+            return_value={
+                "decision": "accepted",
+                "reason": "started",
+                "run_id": "run_agentmail_456",
+                "attempt_id": "attempt_agentmail_2",
+                "session_id": "session_agentmail_3",
+            }
+        )
+        fake_bridge = MagicMock()
+        fake_bridge.materialize.return_value = {
+            "task_id": "email:abc123",
+            "message_count": 1,
+            "status": "active",
+        }
+        fake_bridge.link_workflow.return_value = {"workflow_run_id": "run_agentmail_456"}
+        service_with_queue._email_task_bridge_initialized = True
+        service_with_queue._email_task_bridge = fake_bridge
+
+        class _Message:
+            from_ = "Kevin Dragan <kevin.dragan@outlook.com>"
+            subject = "Link this email task"
+            thread_id = "thd_queue_004"
+            message_id = "msg_queue_004"
+            text = "please keep the task lineage"
+            html = "<p>please keep the task lineage</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service_with_queue._handle_inbound_email(_Event())
+        await asyncio.sleep(0.2)
+
+        fake_bridge.link_workflow.assert_called_once_with(
+            thread_id="thd_queue_004",
+            workflow_run_id="run_agentmail_456",
+            workflow_attempt_id="attempt_agentmail_2",
+            provider_session_id="session_agentmail_3",
+        )
+        item = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)[0]
+        assert item["status"] == "completed"
+        mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_trusted_inbound_calls_trusted_ingress_hook_immediately(
         self, mock_agentmail_client
     ):

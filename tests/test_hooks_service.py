@@ -559,7 +559,9 @@ async def test_dispatch_internal_payload_agent_dispatch(hooks_service):
             session_key="internal-session",
         )
     ]
-    hooks_service._dispatch_action = AsyncMock(return_value=None)
+    hooks_service.dispatch_internal_action_background_with_admission = AsyncMock(
+        return_value={"decision": "accepted", "reason": "dispatched"}
+    )
 
     ok, reason = await hooks_service.dispatch_internal_payload(
         subpath="youtube/manual",
@@ -568,11 +570,10 @@ async def test_dispatch_internal_payload_agent_dispatch(hooks_service):
     )
     assert ok is True
     assert reason == "agent"
-    await asyncio.sleep(0.05)
-    hooks_service._dispatch_action.assert_called_once()
-    action = hooks_service._dispatch_action.call_args[0][0]
-    assert action.kind == "agent"
-    assert "video=https://www.youtube.com/watch?v=abc123xyz00" in (action.message or "")
+    hooks_service.dispatch_internal_action_background_with_admission.assert_called_once()
+    action_payload = hooks_service.dispatch_internal_action_background_with_admission.call_args[0][0]
+    assert action_payload["kind"] == "agent"
+    assert "video=https://www.youtube.com/watch?v=abc123xyz00" in str(action_payload.get("message") or "")
 
 
 @pytest.mark.asyncio
@@ -589,7 +590,9 @@ async def test_dispatch_internal_payload_skipped_when_transform_returns_none(hoo
         )
     ]
     hooks_service._build_action = AsyncMock(return_value=None)
-    hooks_service._dispatch_action = AsyncMock(return_value=None)
+    hooks_service.dispatch_internal_action_background_with_admission = AsyncMock(
+        return_value={"decision": "accepted", "reason": "dispatched"}
+    )
 
     ok, reason = await hooks_service.dispatch_internal_payload(
         subpath="youtube/manual",
@@ -597,7 +600,7 @@ async def test_dispatch_internal_payload_skipped_when_transform_returns_none(hoo
     )
     assert ok is True
     assert reason == "skipped"
-    hooks_service._dispatch_action.assert_not_called()
+    hooks_service.dispatch_internal_action_background_with_admission.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -613,7 +616,9 @@ async def test_dispatch_internal_payload_no_match(hooks_service):
             session_key="internal-no-match",
         )
     ]
-    hooks_service._dispatch_action = AsyncMock(return_value=None)
+    hooks_service.dispatch_internal_action_background_with_admission = AsyncMock(
+        return_value={"decision": "accepted", "reason": "dispatched"}
+    )
 
     ok, reason = await hooks_service.dispatch_internal_payload(
         subpath="youtube/other",
@@ -621,7 +626,52 @@ async def test_dispatch_internal_payload_no_match(hooks_service):
     )
     assert ok is False
     assert reason == "no_match"
-    hooks_service._dispatch_action.assert_not_called()
+    hooks_service.dispatch_internal_action_background_with_admission.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_payload_agentmail_route_uses_admitted_background_dispatch(hooks_service, tmp_path):
+    runtime_db_path = _bind_workflow_runtime_db(hooks_service, tmp_path)
+    hooks_service.config.enabled = True
+    hooks_service._dispatch_action = AsyncMock(return_value={"decision": "accepted"})
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="internal-agentmail",
+            match=HookMatchConfig(path="gmail/new_message"),
+            action="agent",
+            message_template="thread_id: {{ payload.thread_id }}\nmessage_id: {{ payload.message_id }}\nsender_email: {{ payload.sender_email }}",
+            name="GwsInboundMail",
+            session_key="agentmail_{{ payload.thread_id }}",
+            to="email-handler",
+        )
+    ]
+
+    ok, reason = await hooks_service.dispatch_internal_payload(
+        subpath="gmail/new_message",
+        payload={
+            "thread_id": "thd_payload_1",
+            "message_id": "msg_payload_1",
+            "sender_email": "kevin@example.com",
+        },
+        headers={"x-ua-source": "gws_event_listener"},
+    )
+
+    assert ok is True
+    assert reason == "agent"
+    await asyncio.sleep(0.05)
+    hooks_service._dispatch_action.assert_called()
+
+    conn = connect_runtime_db(runtime_db_path)
+    ensure_schema(conn)
+    try:
+        run_row = conn.execute(
+            "SELECT * FROM runs WHERE run_kind = 'agentmail_inbound_hook' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert run_row is not None
+    assert str(run_row["trigger_source"] or "") == "agentmail"
 
 @pytest.mark.asyncio
 async def test_template_rendering(hooks_service):

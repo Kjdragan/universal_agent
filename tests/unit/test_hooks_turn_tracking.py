@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.hooks_service import HookAction, HooksService
+from universal_agent.workflow_admission import WorkflowAdmissionService
 
 
 class _FakeGateway:
@@ -111,4 +117,137 @@ async def test_dispatch_internal_action_with_admission_returns_structured_result
 
     assert result["decision"] == "accepted"
     assert result["turn_id"] == "turn_hook_direct"
+    assert gateway.execute_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_action_routes_agent_actions_through_background_admission(monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+    service = HooksService(gateway)
+    service.config.enabled = True
+    service.dispatch_internal_action_background_with_admission = AsyncMock(
+        return_value={"decision": "accepted", "reason": "dispatched"}
+    )
+
+    ok, reason = await service.dispatch_internal_action(
+        {
+            "kind": "agent",
+            "name": "ManualSimoneHandoff",
+            "session_key": "simone_handoff_direct_1",
+            "message": "activity_id: ntf_direct_1\nPlease investigate.",
+        }
+    )
+
+    assert ok is True
+    assert reason == "agent"
+    service.dispatch_internal_action_background_with_admission.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_action_with_admission_creates_generic_hook_run(tmp_path, monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+
+    async def admit(session_id: str, request):
+        return {"decision": "accepted", "turn_id": "turn_hook_generic"}
+
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service = HooksService(gateway, turn_admitter=admit)
+    service.config.enabled = True
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+
+    result = await service.dispatch_internal_action_with_admission(
+        {
+            "kind": "agent",
+            "name": "AutoHeartbeatInvestigation",
+            "session_key": "simone_heartbeat_ntf_123",
+            "message": "activity_id: ntf_123\nPlease investigate heartbeat findings.",
+        }
+    )
+
+    assert result["decision"] == "accepted"
+    assert result["run_id"]
+    assert result["attempt_id"]
+    assert gateway.execute_calls == 1
+
+    conn = connect_runtime_db(runtime_db_path)
+    ensure_schema(conn)
+    try:
+        run_row = get_run(conn, result["run_id"])
+        attempt_row = get_run_attempt(conn, result["attempt_id"])
+    finally:
+        conn.close()
+
+    assert run_row is not None
+    assert attempt_row is not None
+    assert str(run_row["run_kind"]) == "heartbeat_investigation_hook"
+    assert str(run_row["status"]) == "completed"
+    assert str(attempt_row["status"]) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_action_with_admission_skips_duplicate_generic_hook(tmp_path, monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+
+    async def admit(session_id: str, request):
+        return {"decision": "accepted", "turn_id": "turn_hook_generic"}
+
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service = HooksService(gateway, turn_admitter=admit)
+    service.config.enabled = True
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+
+    payload = {
+        "kind": "agent",
+        "name": "ManualSimoneHandoff",
+        "session_key": "simone_handoff_ntf_123",
+        "message": "activity_id: ntf_123\nPlease investigate and propose actions.",
+    }
+    first = await service.dispatch_internal_action_with_admission(payload)
+    second = await service.dispatch_internal_action_with_admission(payload)
+
+    assert first["decision"] == "accepted"
+    assert second["decision"] == "skipped"
+    assert second["reason"] == "existing_completed_run"
+    assert gateway.execute_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_action_background_with_admission_enqueues_generic_hook(tmp_path, monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+
+    async def admit(session_id: str, request):
+        return {"decision": "accepted", "turn_id": "turn_hook_background"}
+
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    service = HooksService(gateway, turn_admitter=admit)
+    service.config.enabled = True
+    service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+
+    result = await service.dispatch_internal_action_background_with_admission(
+        {
+            "kind": "agent",
+            "name": "AutoHeartbeatInvestigation",
+            "session_key": "simone_heartbeat_ntf_456",
+            "message": "activity_id: ntf_456\nPlease investigate heartbeat findings.",
+        }
+    )
+
+    assert result["decision"] == "accepted"
+    assert result["run_id"]
+    assert result["attempt_id"]
+
+    await asyncio.sleep(0.05)
+
     assert gateway.execute_calls == 1

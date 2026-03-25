@@ -844,6 +844,8 @@ class TodoService:
         description: str = "",
         dedupe_key: str | None = None,
         source_session_id: str | None = None,
+        source_run_id: str | None = None,
+        source_attempt_id: str | None = None,
         source_trace_id: str | None = None,
         impact: str = "M",
         effort: str = "M",
@@ -855,6 +857,8 @@ class TodoService:
             description=description,
             dedupe_key=clean_key,
             source_session_id=source_session_id,
+            source_run_id=source_run_id,
+            source_attempt_id=source_attempt_id,
             source_trace_id=source_trace_id,
             impact=impact,
             effort=effort,
@@ -874,6 +878,10 @@ class TodoService:
                 comment_parts.append(f"dedupe_key={clean_key}")
                 if source_session_id:
                     comment_parts.append(f"source_session={source_session_id}")
+                if source_run_id:
+                    comment_parts.append(f"source_run={source_run_id}")
+                if source_attempt_id:
+                    comment_parts.append(f"source_attempt={source_attempt_id}")
                 if source_trace_id:
                     comment_parts.append(f"source_trace={source_trace_id}")
                 if description:
@@ -1193,6 +1201,8 @@ def _format_idea_description(
     description: str,
     dedupe_key: Optional[str],
     source_session_id: Optional[str],
+    source_run_id: Optional[str],
+    source_attempt_id: Optional[str],
     source_trace_id: Optional[str],
     impact: str,
     effort: str,
@@ -1201,6 +1211,8 @@ def _format_idea_description(
     frontmatter: dict[str, Any] = {
         "dedupe_key": dedupe_key,
         "source_session": source_session_id,
+        "source_run": source_run_id,
+        "source_attempt": source_attempt_id,
         "source_trace": source_trace_id,
         "impact": (impact or "M").strip() or "M",
         "effort": (effort or "M").strip() or "M",

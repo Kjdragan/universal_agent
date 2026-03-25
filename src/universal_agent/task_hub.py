@@ -220,6 +220,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             assignment_id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
             agent_id TEXT NOT NULL,
+            workflow_run_id TEXT,
+            workflow_attempt_id TEXT,
+            provider_session_id TEXT,
             state TEXT NOT NULL,
             started_at TEXT NOT NULL,
             ended_at TEXT,
@@ -265,6 +268,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    for ddl in (
+        "ALTER TABLE task_hub_assignments ADD COLUMN workflow_run_id TEXT",
+        "ALTER TABLE task_hub_assignments ADD COLUMN workflow_attempt_id TEXT",
+        "ALTER TABLE task_hub_assignments ADD COLUMN provider_session_id TEXT",
+    ):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
 
 
@@ -968,7 +980,15 @@ def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[st
     }
 
 
-def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent_id: str = "heartbeat") -> list[dict[str, Any]]:
+def claim_next_dispatch_tasks(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 1,
+    agent_id: str = "heartbeat",
+    workflow_run_id: Optional[str] = None,
+    workflow_attempt_id: Optional[str] = None,
+    provider_session_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
     ensure_schema(conn)
     rebuild_summary = rebuild_dispatch_queue(conn)
     queue_build_id = str(rebuild_summary.get("queue_build_id") or "")
@@ -1010,13 +1030,42 @@ def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent
             continue
 
         assignment_id = f"asg_{uuid.uuid4().hex[:16]}"
+        resolved_provider_session_id = str(provider_session_id or "").strip() or _session_id_from_agent_id(agent_id)
+        resolved_workflow_run_id = str(workflow_run_id or "").strip() or None
+        resolved_workflow_attempt_id = str(workflow_attempt_id or "").strip() or None
         conn.execute(
-            "INSERT INTO task_hub_assignments (assignment_id, task_id, agent_id, state, started_at) VALUES (?, ?, ?, ?, ?)",
-            (assignment_id, task_id, agent_id, "seized", _now_iso()),
+            """
+            INSERT INTO task_hub_assignments (
+                assignment_id, task_id, agent_id, workflow_run_id, workflow_attempt_id, provider_session_id, state, started_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                assignment_id,
+                task_id,
+                agent_id,
+                resolved_workflow_run_id,
+                resolved_workflow_attempt_id,
+                resolved_provider_session_id,
+                "seized",
+                _now_iso(),
+            ),
         )
+        metadata = dict(current.get("metadata") or {})
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta.update(
+            {
+                "active_assignment_id": assignment_id,
+                "active_agent_id": agent_id,
+                "active_provider_session_id": resolved_provider_session_id,
+                "active_workflow_run_id": resolved_workflow_run_id,
+                "active_workflow_attempt_id": resolved_workflow_attempt_id,
+                "last_assignment_started_at": _now_iso(),
+            }
+        )
+        metadata["dispatch"] = dispatch_meta
         conn.execute(
-            "UPDATE task_hub_items SET status=?, seizure_state=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_IN_PROGRESS, "seized", _now_iso(), task_id),
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_IN_PROGRESS, "seized", _json_dumps(metadata), _now_iso(), task_id),
         )
         _record_evaluation(
             conn,
@@ -1031,6 +1080,7 @@ def claim_next_dispatch_tasks(conn: sqlite3.Connection, *, limit: int = 1, agent
         item["assignment_id"] = assignment_id
         item["status"] = TASK_STATUS_IN_PROGRESS
         item["seizure_state"] = "seized"
+        item["metadata"] = metadata
         item["rank"] = _safe_int(item.get("rank"), 0)
         item["eligible"] = True
         item["skip_reason"] = None
@@ -1047,6 +1097,24 @@ def _session_id_from_agent_id(agent_id: Any) -> str:
     if raw.startswith("heartbeat:"):
         return raw.split(":", 1)[1].strip()
     return ""
+
+
+def _assignment_lineage(
+    item: dict[str, Any],
+    *,
+    agent_id: str,
+    workflow_run_id: Any = None,
+    workflow_attempt_id: Any = None,
+    provider_session_id: Any = None,
+) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+    return {
+        "session_id": str(provider_session_id or dispatch_meta.get("last_provider_session_id") or dispatch_meta.get("active_provider_session_id") or _session_id_from_agent_id(agent_id)),
+        "workflow_run_id": str(workflow_run_id or dispatch_meta.get("last_workflow_run_id") or dispatch_meta.get("active_workflow_run_id") or "").strip() or None,
+        "workflow_attempt_id": str(workflow_attempt_id or dispatch_meta.get("last_workflow_attempt_id") or dispatch_meta.get("active_workflow_attempt_id") or "").strip() or None,
+        "provider_session_id": str(provider_session_id or dispatch_meta.get("last_provider_session_id") or dispatch_meta.get("active_provider_session_id") or "").strip() or None,
+    }
 
 
 def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[dict[str, Any]]:
@@ -1068,7 +1136,7 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
         task_id = str(item.get("task_id") or "")
         assignment_row = conn.execute(
             """
-            SELECT assignment_id, agent_id, state, started_at, ended_at, result_summary
+            SELECT assignment_id, agent_id, workflow_run_id, workflow_attempt_id, provider_session_id, state, started_at, ended_at, result_summary
             FROM task_hub_assignments
             WHERE task_id = ?
             ORDER BY COALESCE(ended_at, started_at) DESC
@@ -1078,6 +1146,13 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
         ).fetchone()
         if assignment_row:
             agent_id = str(assignment_row["agent_id"] or "")
+            lineage = _assignment_lineage(
+                item,
+                agent_id=agent_id,
+                workflow_run_id=assignment_row["workflow_run_id"],
+                workflow_attempt_id=assignment_row["workflow_attempt_id"],
+                provider_session_id=assignment_row["provider_session_id"],
+            )
             item["last_assignment"] = {
                 "assignment_id": str(assignment_row["assignment_id"] or ""),
                 "agent_id": agent_id,
@@ -1085,7 +1160,10 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
                 "started_at": str(assignment_row["started_at"] or ""),
                 "ended_at": str(assignment_row["ended_at"] or ""),
                 "result_summary": str(assignment_row["result_summary"] or ""),
-                "session_id": _session_id_from_agent_id(agent_id),
+                "session_id": lineage["session_id"],
+                "workflow_run_id": lineage["workflow_run_id"],
+                "workflow_attempt_id": lineage["workflow_attempt_id"],
+                "provider_session_id": lineage["provider_session_id"],
             }
         else:
             item["last_assignment"] = None
@@ -1108,7 +1186,7 @@ def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80)
     cap = max(1, min(int(limit), 500))
     assignments_rows = conn.execute(
         """
-        SELECT assignment_id, task_id, agent_id, state, started_at, ended_at, result_summary
+        SELECT assignment_id, task_id, agent_id, workflow_run_id, workflow_attempt_id, provider_session_id, state, started_at, ended_at, result_summary
         FROM task_hub_assignments
         WHERE task_id = ?
         ORDER BY COALESCE(ended_at, started_at) DESC
@@ -1130,12 +1208,22 @@ def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80)
     assignments: list[dict[str, Any]] = []
     for row in assignments_rows:
         agent_id = str(row["agent_id"] or "")
+        lineage = _assignment_lineage(
+            item,
+            agent_id=agent_id,
+            workflow_run_id=row["workflow_run_id"],
+            workflow_attempt_id=row["workflow_attempt_id"],
+            provider_session_id=row["provider_session_id"],
+        )
         assignments.append(
             {
                 "assignment_id": str(row["assignment_id"] or ""),
                 "task_id": str(row["task_id"] or ""),
                 "agent_id": agent_id,
-                "session_id": _session_id_from_agent_id(agent_id),
+                "session_id": lineage["session_id"],
+                "workflow_run_id": lineage["workflow_run_id"],
+                "workflow_attempt_id": lineage["workflow_attempt_id"],
+                "provider_session_id": lineage["provider_session_id"],
                 "state": str(row["state"] or ""),
                 "started_at": str(row["started_at"] or ""),
                 "ended_at": str(row["ended_at"] or ""),
@@ -1250,8 +1338,16 @@ def finalize_assignments(
             {
                 "last_assignment_state": state,
                 "last_assignment_ended_at": now_iso,
+                "last_provider_session_id": dispatch_meta.get("active_provider_session_id"),
+                "last_workflow_run_id": dispatch_meta.get("active_workflow_run_id"),
+                "last_workflow_attempt_id": dispatch_meta.get("active_workflow_attempt_id"),
             }
         )
+        dispatch_meta.pop("active_assignment_id", None)
+        dispatch_meta.pop("active_agent_id", None)
+        dispatch_meta.pop("active_provider_session_id", None)
+        dispatch_meta.pop("active_workflow_run_id", None)
+        dispatch_meta.pop("active_workflow_attempt_id", None)
 
         if task_status == TASK_STATUS_COMPLETED:
             completed += 1

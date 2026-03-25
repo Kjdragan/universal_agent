@@ -16384,6 +16384,14 @@ async def dashboard_todolist_email_tasks(limit: int = 50):
                             f"https://app.todoist.com/app/task/{todoist_id}"
                             if todoist_id else ""
                         ),
+                        "workflow_run_id": str(r.get("workflow_run_id") or ""),
+                        "workflow_attempt_id": str(r.get("workflow_attempt_id") or ""),
+                        "provider_session_id": str(r.get("provider_session_id") or ""),
+                        "run_href": (
+                            f"/api/v1/runs/{str(r.get('workflow_run_id') or '').strip()}"
+                            if str(r.get("workflow_run_id") or "").strip()
+                            else ""
+                        ),
                         "subject": str(r.get("subject") or ""),
                         "sender_email": str(r.get("sender_email") or ""),
                         "message_count": int(r.get("message_count") or 1),
@@ -16952,7 +16960,7 @@ async def dashboard_activity_send_to_simone(activity_id: str, payload: ActivityS
         },
     )
 
-    ok, reason = await _hooks_service.dispatch_internal_action(
+    result = await _hooks_service.dispatch_internal_action_background_with_admission(
         {
             "kind": "agent",
             "name": "ManualSimoneHandoff",
@@ -16962,14 +16970,24 @@ async def dashboard_activity_send_to_simone(activity_id: str, payload: ActivityS
             "timeout_seconds": 900,
         }
     )
-    if not ok:
+    decision = str(result.get("decision") or "").strip().lower()
+    reason = str(result.get("reason") or decision or "dispatch_failed")
+    workflow_metadata = {
+        "workflow_decision": decision,
+        "workflow_reason": reason,
+    }
+    if result.get("run_id"):
+        workflow_metadata["run_id"] = str(result.get("run_id") or "")
+    if result.get("attempt_id"):
+        workflow_metadata["attempt_id"] = str(result.get("attempt_id") or "")
+    if decision == "failed":
         _record_activity_audit(
             event_id=activity_id,
             action="send_to_simone",
             actor=actor,
             outcome="failed",
             note=str(reason or "dispatch failed"),
-            metadata={"session_key": session_key},
+            metadata={"session_key": session_key, **workflow_metadata},
         )
         failed = _add_notification(
             kind="simone_handoff_failed",
@@ -16977,13 +16995,16 @@ async def dashboard_activity_send_to_simone(activity_id: str, payload: ActivityS
             message=f"Handoff dispatch failed for activity {activity_id}: {reason}",
             severity="error",
             requires_action=True,
-            metadata={"activity_id": activity_id, "session_key": session_key, "reason": reason},
+            metadata={"activity_id": activity_id, "session_key": session_key, "reason": reason, **workflow_metadata},
         )
         return JSONResponse(
             status_code=502,
             content={
                 "ok": False,
                 "reason": reason,
+                "decision": decision,
+                "run_id": result.get("run_id"),
+                "attempt_id": result.get("attempt_id"),
                 "requested_notification": requested,
                 "failed_notification": failed,
             },
@@ -16995,17 +17016,30 @@ async def dashboard_activity_send_to_simone(activity_id: str, payload: ActivityS
         actor=actor,
         outcome="completed",
         note=str(reason or "dispatched"),
-        metadata={"session_key": session_key},
+        metadata={"session_key": session_key, **workflow_metadata},
     )
     completed = _add_notification(
         kind="simone_handoff_completed",
         title="Simone Handoff Dispatched",
-        message=f"Handoff dispatched to Simone session {session_key}.",
+        message=(
+            f"Handoff dispatched to Simone session {session_key}."
+            if decision == "accepted"
+            else f"Handoff already routed to Simone session {session_key} ({reason})."
+        ),
         severity="success",
         requires_action=False,
-        metadata={"activity_id": activity_id, "session_key": session_key, "reason": reason},
+        metadata={"activity_id": activity_id, "session_key": session_key, "reason": reason, **workflow_metadata},
     )
-    return {"ok": True, "session_key": session_key, "requested_notification": requested, "completed_notification": completed}
+    return {
+        "ok": True,
+        "session_key": session_key,
+        "decision": decision,
+        "reason": reason,
+        "run_id": result.get("run_id"),
+        "attempt_id": result.get("attempt_id"),
+        "requested_notification": requested,
+        "completed_notification": completed,
+    }
 
 
 @app.post("/api/v1/dashboard/activity/{activity_id}/action")
@@ -17380,6 +17414,8 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     timezone_name = str(payload.timezone or "").strip() or "UTC"
     dry_run = bool(payload.dry_run)
     source_session_id = _system_context_session_id(source_context)
+    source_run_id = _system_context_run_id(source_context)
+    source_attempt_id = _system_context_attempt_id(source_context)
     task_description = _build_system_command_task_description(
         source_page=source_page,
         source_context=source_context,
@@ -17466,6 +17502,8 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         "repeat_schedule": repeat_schedule,
         "source_page": source_page,
         "source_context": source_context,
+        "source_run_id": source_run_id,
+        "source_attempt_id": source_attempt_id,
     }
     if dry_run:
         return {
@@ -17484,6 +17522,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         content=content,
         schedule_text=schedule_text,
         source_page=source_page,
+        source_run_id=source_run_id,
         source_session_id=source_session_id,
         intent=intent,
         repeat_schedule=repeat_schedule,
@@ -17499,7 +17538,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                 {
                     "task_id": task_id,
                     "source_kind": "system_command",
-                    "source_ref": source_session_id or "",
+                    "source_ref": source_run_id or source_session_id or "",
                     "title": content,
                     "description": task_description,
                     "project_key": project_key,
@@ -17514,6 +17553,8 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                         "source_page": source_page,
                         "source_context": source_context,
                         "source_session_id": source_session_id or "",
+                        "source_run_id": source_run_id or "",
+                        "source_attempt_id": source_attempt_id or "",
                         "schedule_text": schedule_text or "",
                         "repeat_schedule": repeat_schedule,
                         "intent": intent,
@@ -17527,6 +17568,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                 content=content,
                 schedule_text=schedule_text,
                 source_page=source_page,
+                source_run_id=source_run_id,
                 source_session_id=source_session_id,
                 intent=intent,
                 repeat_schedule=repeat_schedule,
@@ -18913,6 +18955,34 @@ def _system_context_session_id(source_context: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _system_context_run_id(source_context: dict[str, Any]) -> Optional[str]:
+    for key in ("run_id", "workflow_run_id"):
+        value = source_context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    selection = source_context.get("selection")
+    if isinstance(selection, dict):
+        for key in ("run_id", "workflow_run_id"):
+            value = selection.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _system_context_attempt_id(source_context: dict[str, Any]) -> Optional[str]:
+    for key in ("attempt_id", "workflow_attempt_id"):
+        value = source_context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    selection = source_context.get("selection")
+    if isinstance(selection, dict):
+        for key in ("attempt_id", "workflow_attempt_id"):
+            value = selection.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def _source_context_snippet(source_context: dict[str, Any], *, max_chars: int = 800) -> str:
     if not source_context:
         return ""
@@ -18927,6 +18997,15 @@ def _source_context_snippet(source_context: dict[str, Any], *, max_chars: int = 
 
 def _build_system_command_task_description(*, source_page: str, source_context: dict[str, Any]) -> str:
     parts = [f"source_page: {source_page or 'unknown'}"]
+    source_run_id = _system_context_run_id(source_context)
+    source_attempt_id = _system_context_attempt_id(source_context)
+    source_session_id = _system_context_session_id(source_context)
+    if source_run_id:
+        parts.append(f"source_run_id: {source_run_id}")
+    if source_attempt_id:
+        parts.append(f"source_attempt_id: {source_attempt_id}")
+    if source_session_id:
+        parts.append(f"source_session_id: {source_session_id}")
     context_snippet = _source_context_snippet(source_context)
     if context_snippet:
         parts.append(f"source_context: {context_snippet}")
@@ -19772,7 +19851,7 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
         note=str(metadata.get("heartbeat_mediation_summary") or "")[:500],
         metadata={"session_key": session_key},
     )
-    ok, reason = await _hooks_service.dispatch_internal_action(
+    result = await _hooks_service.dispatch_internal_action_background_with_admission(
         {
             "kind": "agent",
             "name": "AutoHeartbeatInvestigation",
@@ -19782,14 +19861,24 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
             "timeout_seconds": 900,
         }
     )
-    if not ok:
+    decision = str(result.get("decision") or "").strip().lower()
+    reason = str(result.get("reason") or decision or "dispatch_failed")
+    workflow_metadata = {
+        "workflow_decision": decision,
+        "workflow_reason": reason,
+    }
+    if result.get("run_id"):
+        workflow_metadata["run_id"] = str(result.get("run_id") or "")
+    if result.get("attempt_id"):
+        workflow_metadata["attempt_id"] = str(result.get("attempt_id") or "")
+    if decision == "failed":
         _record_activity_audit(
             event_id=notification_id,
             action="heartbeat_auto_route",
             actor=actor,
             outcome="failed",
             note=str(reason or "dispatch failed"),
-            metadata={"session_key": session_key},
+            metadata={"session_key": session_key, **workflow_metadata},
         )
         _update_notification_record(
             notification_id,
@@ -19797,6 +19886,8 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
                 "heartbeat_mediation_status": "dispatch_failed",
                 "heartbeat_mediation_failure_reason": str(reason or "dispatch_failed"),
                 "heartbeat_mediation_session_key": session_key,
+                "heartbeat_workflow_run_id": workflow_metadata.get("run_id", ""),
+                "heartbeat_workflow_attempt_id": workflow_metadata.get("attempt_id", ""),
             },
         )
         _add_notification(
@@ -19811,6 +19902,7 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
                 "activity_id": notification_id,
                 "session_key": session_key,
                 "reason": reason,
+                **workflow_metadata,
             },
         )
         return
@@ -19821,7 +19913,7 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
         actor=actor,
         outcome="completed",
         note=str(reason or "dispatched"),
-        metadata={"session_key": session_key},
+        metadata={"session_key": session_key, **workflow_metadata},
     )
     _update_notification_record(
         notification_id,
@@ -19829,6 +19921,9 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
             "heartbeat_mediation_status": "dispatched",
             "heartbeat_mediation_session_key": session_key,
             "heartbeat_mediation_dispatched_at": _utc_now_iso(),
+            "heartbeat_workflow_run_id": workflow_metadata.get("run_id", ""),
+            "heartbeat_workflow_attempt_id": workflow_metadata.get("attempt_id", ""),
+            "heartbeat_mediation_dispatch_reason": reason,
             "heartbeat_operator_review_required": bool(metadata.get("heartbeat_unknown_rule_count") or 0)
             and bool(config.get("notify_operator_for_unknown_findings", True)),
         },
@@ -19836,7 +19931,11 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
     _add_notification(
         kind="heartbeat_mediation_dispatched",
         title="Heartbeat Auto-Triage Dispatched",
-        message=f"Automatic heartbeat routing dispatched to Simone session {session_key}.",
+        message=(
+            f"Automatic heartbeat routing dispatched to Simone session {session_key}."
+            if decision == "accepted"
+            else f"Automatic heartbeat routing already has active Simone work ({reason}) in session {session_key}."
+        ),
         session_id=session_id,
         severity="success",
         requires_action=False,
@@ -19845,6 +19944,7 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
             "activity_id": notification_id,
             "session_key": session_key,
             "classification": classification,
+            **workflow_metadata,
         },
     )
 
@@ -19918,6 +20018,8 @@ def _create_heartbeat_remediation_task(
     proposed_changes: Any,
     email_summary: str,
     session_id: Optional[str],
+    run_id: Optional[str] = None,
+    attempt_id: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Create a Task Hub item for autonomous remediation of a heartbeat finding.
 
@@ -19943,6 +20045,12 @@ def _create_heartbeat_remediation_task(
         if changes_text:
             description_parts.append(f"**Proposed Changes**:\n{changes_text}")
     description_parts.append(f"\nSource notification: {origin_id}")
+    if run_id:
+        description_parts.append(f"Workflow run: {run_id}")
+    if attempt_id:
+        description_parts.append(f"Workflow attempt: {attempt_id}")
+    if session_id:
+        description_parts.append(f"Provider session: {session_id}")
     description_parts.append(
         "This task was auto-created from a heartbeat investigation. "
         "Apply the recommended fix and verify the issue is resolved."
@@ -19978,6 +20086,8 @@ def _create_heartbeat_remediation_task(
                 "proposed_changes": proposed_changes if isinstance(proposed_changes, list) else [],
                 "auto_remediation": True,
                 "session_id": session_id,
+                "run_id": run_id,
+                "attempt_id": attempt_id,
             },
         })
         logger.info(
@@ -20059,6 +20169,8 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
             proposed_changes=metadata.get("proposed_changes"),
             email_summary=email_summary,
             session_id=str(payload.get("session_id") or "").strip() or None,
+            run_id=str(payload.get("run_id") or metadata.get("run_id") or "").strip() or None,
+            attempt_id=str(payload.get("attempt_id") or metadata.get("attempt_id") or "").strip() or None,
         )
 
     if not should_notify:
@@ -20219,15 +20331,20 @@ def _system_command_task_id(
     content: str,
     schedule_text: Optional[str],
     source_page: str,
+    source_run_id: str,
     source_session_id: str,
     intent: str,
     repeat_schedule: bool,
 ) -> str:
+    normalized_source_run_id = str(source_run_id or "").strip().lower()
+    normalized_source_session_id = str(source_session_id or "").strip().lower()
+    source_identity = normalized_source_run_id or normalized_source_session_id
     signature = {
         "content": str(content or "").strip().lower(),
         "schedule_text": str(schedule_text or "").strip().lower(),
         "source_page": str(source_page or "").strip().lower(),
-        "source_session_id": str(source_session_id or "").strip().lower(),
+        "source_identity": source_identity,
+        "source_identity_type": "run" if normalized_source_run_id else "session",
         "intent": str(intent or "").strip().lower(),
         "repeat_schedule": bool(repeat_schedule),
     }
@@ -20242,6 +20359,7 @@ def _park_duplicate_system_command_tasks(
     content: str,
     schedule_text: Optional[str],
     source_page: str,
+    source_run_id: str,
     source_session_id: str,
     intent: str,
     repeat_schedule: bool,
@@ -20261,6 +20379,7 @@ def _park_duplicate_system_command_tasks(
     now_iso = _utc_now_iso()
     target_schedule = str(schedule_text or "").strip().lower()
     target_source_page = str(source_page or "").strip().lower()
+    target_source_run = str(source_run_id or "").strip().lower()
     target_source_session = str(source_session_id or "").strip().lower()
     target_intent = str(intent or "").strip().lower()
     for row in rows:
@@ -20275,7 +20394,15 @@ def _park_duplicate_system_command_tasks(
             continue
         if str(metadata.get("source_page") or "").strip().lower() != target_source_page:
             continue
-        if str(metadata.get("source_session_id") or "").strip().lower() != target_source_session:
+        existing_source_run = str(metadata.get("source_run_id") or "").strip().lower()
+        existing_source_session = str(metadata.get("source_session_id") or "").strip().lower()
+        if target_source_run:
+            if existing_source_run:
+                if existing_source_run != target_source_run:
+                    continue
+            elif existing_source_session != target_source_session:
+                continue
+        elif existing_source_session != target_source_session:
             continue
         if str(metadata.get("intent") or "").strip().lower() != target_intent:
             continue

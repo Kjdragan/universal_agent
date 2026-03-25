@@ -40,7 +40,12 @@ class FakeTodoService:
         return True
 
     def record_idea(self, **kwargs):
-        return {"id": "idea1", "content": kwargs.get("content")}
+        return {
+            "id": "idea1",
+            "content": kwargs.get("content"),
+            "source_run_id": kwargs.get("source_run_id"),
+            "source_attempt_id": kwargs.get("source_attempt_id"),
+        }
 
     def promote_idea(self, task_id: str, target_section: str = "approved"):
         return True
@@ -95,3 +100,21 @@ async def test_todoist_idea_action_record_requires_content(monkeypatch):
     monkeypatch.setattr(mod, "_service", lambda: FakeTodoService())
     res = await mod._todoist_idea_action_impl({"action": "record"})
     assert "error:" in res["content"][0]["text"]
+
+
+async def test_todoist_idea_action_record_passes_run_lineage(monkeypatch):
+    from universal_agent.tools import todoist_bridge as mod
+
+    monkeypatch.setattr(mod, "_service", lambda: FakeTodoService())
+    res = await mod._todoist_idea_action_impl(
+        {
+            "action": "record",
+            "content": "Capture proactive idea",
+            "source_session_id": "session-heartbeat",
+            "source_run_id": "run-heartbeat-1",
+            "source_attempt_id": "attempt-heartbeat-1",
+        }
+    )
+    payload = json.loads(res["content"][0]["text"])
+    assert payload["task"]["source_run_id"] == "run-heartbeat-1"
+    assert payload["task"]["source_attempt_id"] == "attempt-heartbeat-1"

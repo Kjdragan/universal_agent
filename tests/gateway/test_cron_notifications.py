@@ -208,9 +208,14 @@ def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkey
         def __init__(self) -> None:
             self.calls: list[dict] = []
 
-        async def dispatch_internal_action(self, action_payload: dict):
+        async def dispatch_internal_action_background_with_admission(self, action_payload: dict):
             self.calls.append(action_payload)
-            return True, "agent"
+            return {
+                "decision": "accepted",
+                "reason": "accepted",
+                "run_id": "run_heartbeat_123",
+                "attempt_id": "attempt_heartbeat_1",
+            }
 
     hook_stub = _HookDispatchStub()
     monkeypatch.setattr(gateway_server, "_hooks_service", hook_stub)
@@ -287,6 +292,8 @@ def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkey
     assert heartbeat["metadata"]["heartbeat_findings_status"] == "warn"
     assert heartbeat["metadata"]["heartbeat_findings_count"] == 1
     assert heartbeat["metadata"]["heartbeat_mediation_status"] == "dispatched"
+    assert heartbeat["metadata"]["heartbeat_workflow_run_id"] == "run_heartbeat_123"
+    assert heartbeat["metadata"]["heartbeat_workflow_attempt_id"] == "attempt_heartbeat_1"
     assert heartbeat["metadata"]["primary_runbook_command"].startswith("journalctl -u universal-agent-gateway")
     assert hook_stub.calls
     assert hook_stub.calls[0]["name"] == "AutoHeartbeatInvestigation"
@@ -305,8 +312,8 @@ def test_emit_heartbeat_event_falls_back_when_findings_missing(tmp_path: Path, m
     monkeypatch.setattr(gateway_server, "_heartbeat_mediation_cooldowns", {})
 
     class _HookDispatchStub:
-        async def dispatch_internal_action(self, action_payload: dict):
-            return True, "agent"
+        async def dispatch_internal_action_background_with_admission(self, action_payload: dict):
+            return {"decision": "accepted", "reason": "accepted"}
 
     monkeypatch.setattr(gateway_server, "_hooks_service", _HookDispatchStub())
 
@@ -355,8 +362,8 @@ def test_emit_heartbeat_event_accepts_legacy_findings_filename(tmp_path: Path, m
     monkeypatch.setattr(gateway_server, "_heartbeat_mediation_cooldowns", {})
 
     class _HookDispatchStub:
-        async def dispatch_internal_action(self, action_payload: dict):
-            return True, "agent"
+        async def dispatch_internal_action_background_with_admission(self, action_payload: dict):
+            return {"decision": "accepted", "reason": "accepted"}
 
     monkeypatch.setattr(gateway_server, "_hooks_service", _HookDispatchStub())
 

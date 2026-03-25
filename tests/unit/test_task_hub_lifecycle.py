@@ -719,7 +719,14 @@ def test_completed_list_and_task_history_include_session_links() -> None:
                 "agent_ready": True,
             },
         )
-        claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:sess-history")
+        claimed = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id="heartbeat:sess-history",
+            workflow_run_id="run-heartbeat-1",
+            workflow_attempt_id="attempt-heartbeat-1",
+            provider_session_id="sess-history",
+        )
         assert len(claimed) == 1
         assignment_id = str(claimed[0]["assignment_id"])
         task_hub.perform_task_action(
@@ -743,10 +750,16 @@ def test_completed_list_and_task_history_include_session_links() -> None:
         assert target is not None
         assignment = target.get("last_assignment") if isinstance(target.get("last_assignment"), dict) else {}
         assert assignment.get("session_id") == "sess-history"
+        assert assignment.get("workflow_run_id") == "run-heartbeat-1"
+        assert assignment.get("workflow_attempt_id") == "attempt-heartbeat-1"
+        assert assignment.get("provider_session_id") == "sess-history"
 
         history = task_hub.get_task_history(conn, task_id="task:completed-history", limit=20)
         assignments = history.get("assignments") if isinstance(history.get("assignments"), list) else []
         assert len(assignments) >= 1
         assert assignments[0]["session_id"] == "sess-history"
+        assert assignments[0]["workflow_run_id"] == "run-heartbeat-1"
+        assert assignments[0]["workflow_attempt_id"] == "attempt-heartbeat-1"
+        assert assignments[0]["provider_session_id"] == "sess-history"
     finally:
         conn.close()

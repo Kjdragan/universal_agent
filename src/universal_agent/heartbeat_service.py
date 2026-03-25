@@ -1424,6 +1424,16 @@ class HeartbeatService:
         should_schedule_continuation = False
         continuation_reason: Optional[str] = None
         task_hub_agent_id = f"heartbeat:{session.session_id}"
+        task_hub_workflow_run_id = (
+            str(session.metadata.get("run_id") or session.metadata.get("workflow_run_id") or "").strip()
+            if isinstance(session.metadata, dict)
+            else ""
+        )
+        task_hub_workflow_attempt_id = (
+            str(session.metadata.get("attempt_id") or session.metadata.get("workflow_attempt_id") or "").strip()
+            if isinstance(session.metadata, dict)
+            else ""
+        )
         task_hub_claimed: list[dict] = []
         task_hub_finalize_result: dict[str, int] = {
             "finalized": 0,
@@ -1601,6 +1611,9 @@ class HeartbeatService:
                         conn,
                         limit=max(1, max_proactive_per_cycle),
                         agent_id=task_hub_agent_id,
+                        workflow_run_id=task_hub_workflow_run_id or None,
+                        workflow_attempt_id=task_hub_workflow_attempt_id or None,
+                        provider_session_id=session.session_id,
                     )
                     dispatch_claimed_count = len(task_hub_claimed)
                     task_hub_claimed_count = dispatch_claimed_count
@@ -1637,6 +1650,8 @@ class HeartbeatService:
                                 "eligible_total": int(queue.get("eligible_total") or 0),
                                 "claimed_count": len(task_hub_claimed),
                                 "claimed": task_hub_claimed,
+                                "workflow_run_id": task_hub_workflow_run_id or None,
+                                "workflow_attempt_id": task_hub_workflow_attempt_id or None,
                             },
                             "created_at": datetime.now().isoformat(),
                             "session_id": session.session_id,

@@ -320,6 +320,28 @@ def test_record_idea_dedupe_reuses_task_and_bumps_confidence():
     assert api.comments[first["id"]]
 
 
+def test_record_idea_persists_run_lineage_in_frontmatter():
+    from universal_agent.services.todoist_service import TodoService
+
+    api = FakeTodoistAPI()
+    svc = TodoService(api_token="test", api=api)
+    svc.ensure_taxonomy()
+
+    created = svc.record_idea(
+        content="Run-aware idea",
+        description="Investigate follow-up",
+        dedupe_key="run-aware-idea",
+        source_session_id="session-heartbeat",
+        source_run_id="run-heartbeat-1",
+        source_attempt_id="attempt-heartbeat-2",
+    )
+
+    task = api.get_task(created["id"])
+    assert "source_session: session-heartbeat" in task.description
+    assert "source_run: run-heartbeat-1" in task.description
+    assert "source_attempt: attempt-heartbeat-2" in task.description
+
+
 def test_pipeline_promote_park_and_summary_counts():
     from universal_agent.services.todoist_service import TodoService
 

@@ -934,11 +934,15 @@ class HooksService:
         return normalized.startswith("hook_timeout_") or normalized.startswith("hook_idle_timeout_")
 
     @staticmethod
-    def _youtube_workflow_workspace_dir(session_key: str) -> str:
+    def _hook_workflow_workspace_dir(session_key: str) -> str:
         safe = SESSION_ID_SANITIZE_RE.sub("_", str(session_key or "").strip()).strip("._-")
         if not safe:
             safe = hashlib.sha256(str(session_key or "youtube").encode("utf-8", errors="replace")).hexdigest()[:16]
         return str((Path("AGENT_RUN_WORKSPACES") / f"run_session_hook_{safe}").resolve())
+
+    @staticmethod
+    def _youtube_workflow_workspace_dir(session_key: str) -> str:
+        return HooksService._hook_workflow_workspace_dir(session_key)
 
     def _build_youtube_workflow_trigger(
         self,
@@ -976,6 +980,228 @@ class HooksService:
             external_origin="youtube_webhook",
             external_origin_id=normalized_video_id or expected_video_id or session_id,
             external_correlation_id=session_id,
+        )
+
+    @staticmethod
+    def _is_retryable_generic_hook_failure(reason: str) -> bool:
+        normalized = str(reason or "").strip().lower()
+        if not normalized:
+            return False
+        if normalized in {
+            "hook_dispatch_interrupted",
+            "hook_dispatch_failed",
+            "hook_timeout",
+            "hook_idle_timeout",
+            "agent_reported_timeout",
+        }:
+            return True
+        return normalized.startswith("hook_timeout_") or normalized.startswith("hook_idle_timeout_")
+
+    def _build_generic_hook_workflow_profile(
+        self,
+        *,
+        action: HookAction,
+        session_key: str,
+        session_id: str,
+    ) -> Optional[dict[str, Any]]:
+        hook_name = str(action.name or "").strip()
+        workspace_dir = self._hook_workflow_workspace_dir(session_key)
+        payload = {
+            "session_key": session_key,
+            "session_id": session_id,
+            "hook_name": hook_name or "Hook",
+            "route_to": action.to or "",
+            "message": action.message or "",
+            "model": action.model,
+            "thinking": action.thinking,
+            "timeout_seconds": action.timeout_seconds,
+            "workspace_dir": workspace_dir,
+        }
+
+        if hook_name == "AutoHeartbeatInvestigation":
+            activity_id = self._extract_action_field(action.message or "", "activity_id")
+            payload["activity_id"] = activity_id
+            trigger = WorkflowTrigger(
+                run_kind="heartbeat_investigation_hook",
+                trigger_source="heartbeat",
+                dedup_key=activity_id or session_key,
+                payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                priority=90,
+                run_policy="automation_ephemeral",
+                interrupt_policy="attach_if_same_dedup_key",
+                external_origin="heartbeat_mediation",
+                external_origin_id=activity_id or session_id,
+                external_correlation_id=activity_id or session_key,
+            )
+            return {
+                "trigger": trigger,
+                "workspace_dir": workspace_dir,
+                "entrypoint": "hooks_service.heartbeat_investigation",
+                "max_attempts": 3,
+                "retryable_failure": True,
+            }
+
+        if hook_name == "ManualSimoneHandoff":
+            activity_id = self._extract_action_field(action.message or "", "activity_id")
+            payload["activity_id"] = activity_id
+            trigger = WorkflowTrigger(
+                run_kind="simone_handoff_hook",
+                trigger_source="dashboard",
+                dedup_key=activity_id or session_key,
+                payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                priority=80,
+                run_policy="automation_ephemeral",
+                interrupt_policy="attach_if_same_dedup_key",
+                external_origin="dashboard_activity",
+                external_origin_id=activity_id or session_id,
+                external_correlation_id=activity_id or session_key,
+            )
+            return {
+                "trigger": trigger,
+                "workspace_dir": workspace_dir,
+                "entrypoint": "hooks_service.simone_handoff",
+                "max_attempts": 3,
+                "retryable_failure": True,
+            }
+
+        if (
+            hook_name in {"AgentMailInbound", "AgentMailWebhook"}
+            or str(action.to or "").strip().lower() == "email-handler"
+            or session_key.startswith("agentmail_")
+        ):
+            thread_id = self._extract_action_field(action.message or "", "thread_id")
+            message_id = self._extract_action_field(action.message or "", "message_id")
+            sender_email = self._extract_action_field(action.message or "", "sender_email")
+            payload.update(
+                {
+                    "thread_id": thread_id,
+                    "message_id": message_id,
+                    "sender_email": sender_email,
+                }
+            )
+            trigger = WorkflowTrigger(
+                run_kind="agentmail_inbound_hook",
+                trigger_source="agentmail",
+                dedup_key=message_id or thread_id or session_key,
+                payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                priority=85,
+                run_policy="automation_ephemeral",
+                interrupt_policy="attach_if_same_dedup_key",
+                external_origin="agentmail",
+                external_origin_id=message_id or thread_id or session_id,
+                external_correlation_id=thread_id or session_key,
+            )
+            return {
+                "trigger": trigger,
+                "workspace_dir": workspace_dir,
+                "entrypoint": "hooks_service.agentmail_inbound",
+                "max_attempts": 3,
+                "retryable_failure": True,
+            }
+
+        return None
+
+    def _workflow_profile_for_action(
+        self,
+        *,
+        action: HookAction,
+        session_key: str,
+        session_id: str,
+        expected_video_id: str,
+    ) -> Optional[dict[str, Any]]:
+        if _is_youtube_agent_route(action.to):
+            return {
+                "trigger": self._build_youtube_workflow_trigger(
+                    action=action,
+                    session_key=session_key,
+                    session_id=session_id,
+                    expected_video_id=expected_video_id,
+                ),
+                "workspace_dir": self._youtube_workflow_workspace_dir(session_key),
+                "entrypoint": "hooks_service.youtube_tutorial_hook",
+                "max_attempts": 3,
+                "retryable_failure": True,
+            }
+        return self._build_generic_hook_workflow_profile(
+            action=action,
+            session_key=session_key,
+            session_id=session_id,
+        )
+
+    def _schedule_generic_hook_retry_attempt(
+        self,
+        *,
+        action: HookAction,
+        run_id: str,
+        attempt_id: str,
+        workspace_dir: str,
+    ) -> None:
+        asyncio.create_task(
+            self._dispatch_action(
+                action,
+                workflow_run_id=run_id,
+                workflow_attempt_id=attempt_id,
+                workflow_workspace_dir=workspace_dir,
+                skip_workflow_admission=True,
+            )
+        )
+
+    def _queue_or_finalize_generic_hook_attempt(
+        self,
+        *,
+        action: HookAction,
+        hook_name: str,
+        reason: str,
+        failure_class: str,
+        session_workspace: Optional[Path],
+        workflow_profile: Optional[dict[str, Any]],
+        workflow_run_id: Optional[str],
+        workflow_attempt_id: Optional[str],
+    ) -> None:
+        if (
+            workflow_profile is None
+            or not workflow_run_id
+            or not workflow_attempt_id
+        ):
+            return
+        workflow_service = self._workflow_admission_service()
+        workspace_dir = str(session_workspace) if session_workspace is not None else str(
+            workflow_profile.get("workspace_dir") or ""
+        )
+        max_attempts = max(1, int(workflow_profile.get("max_attempts") or 1))
+        trigger = workflow_profile.get("trigger")
+        entrypoint = str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook")
+        retryable_failure = bool(workflow_profile.get("retryable_failure"))
+
+        if retryable_failure and self._is_retryable_generic_hook_failure(reason) and isinstance(trigger, WorkflowTrigger):
+            retry_decision = workflow_service.queue_retry(
+                trigger,
+                entrypoint=entrypoint,
+                run_id=workflow_run_id,
+                attempt_id=workflow_attempt_id,
+                workspace_dir=workspace_dir,
+                failure_reason=reason,
+                failure_class=failure_class,
+                max_attempts=max_attempts,
+            )
+            if retry_decision.action == "start_new_attempt" and retry_decision.attempt_id:
+                self._schedule_generic_hook_retry_attempt(
+                    action=action,
+                    run_id=workflow_run_id,
+                    attempt_id=retry_decision.attempt_id,
+                    workspace_dir=workspace_dir,
+                )
+                return
+
+        workflow_service.mark_needs_review(
+            workflow_run_id,
+            attempt_id=workflow_attempt_id,
+            reason=reason,
+            failure_class=failure_class,
+            summary={
+                "hook_name": hook_name,
+                "status": "needs_review",
+            },
         )
 
     def _workflow_attempt_context(
@@ -2375,6 +2601,13 @@ class HooksService:
             action = await self._build_action(mapping, context)
             if action is None:
                 return True, "skipped"
+            if str(action.kind or "").strip().lower() == "agent":
+                result = await self.dispatch_internal_action_background_with_admission(
+                    action.model_dump()
+                )
+                if str(result.get("decision") or "").strip().lower() == "failed":
+                    return False, str(result.get("reason") or "dispatch_failed")
+                return True, action.kind
             asyncio.create_task(self._dispatch_action(action))
             return True, action.kind
         return False, "no_match"
@@ -2392,6 +2625,13 @@ class HooksService:
             action = HookAction.model_validate(action_payload)
         except Exception:
             return False, "invalid_action"
+        if str(action.kind or "").strip().lower() == "agent":
+            result = await self.dispatch_internal_action_background_with_admission(
+                action.model_dump()
+            )
+            if str(result.get("decision") or "").strip().lower() == "failed":
+                return False, str(result.get("reason") or "dispatch_failed")
+            return True, action.kind
         asyncio.create_task(self._dispatch_action(action))
         return True, action.kind
 
@@ -2407,6 +2647,102 @@ class HooksService:
         except Exception:
             return {"decision": "failed", "reason": "invalid_action", "error": "invalid_action"}
         return await self._dispatch_action(action)
+
+    async def dispatch_internal_action_background_with_admission(
+        self,
+        action_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Admit a trusted in-process hook action and dispatch it in the background."""
+        if not self.config.enabled:
+            return {"decision": "failed", "reason": "hooks_disabled", "error": "hooks_disabled"}
+        try:
+            action = HookAction.model_validate(action_payload)
+        except Exception:
+            return {"decision": "failed", "reason": "invalid_action", "error": "invalid_action"}
+
+        if str(action.kind or "").strip().lower() != "agent":
+            return await self._dispatch_action(action)
+
+        session_key = str(action.session_key or "").strip()
+        if not session_key:
+            return await self._dispatch_action(action)
+
+        session_id = self._session_id_from_key(session_key)
+        expected_video_id = self._extract_action_field(action.message or "", "video_id")
+        workflow_profile = self._workflow_profile_for_action(
+            action=action,
+            session_key=session_key,
+            session_id=session_id,
+            expected_video_id=expected_video_id,
+        )
+        if workflow_profile is None:
+            asyncio.create_task(self._dispatch_action(action))
+            return {
+                "decision": "accepted",
+                "reason": "background_dispatched",
+                "session_id": session_id,
+            }
+
+        workflow_service = self._workflow_admission_service()
+        workflow_workspace_dir = str(workflow_profile.get("workspace_dir") or "")
+        workflow_decision = workflow_service.admit(
+            workflow_profile["trigger"],
+            entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
+            workspace_dir=workflow_workspace_dir,
+            retryable_failure=bool(workflow_profile.get("retryable_failure")),
+            max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
+        )
+        workflow_run_id = workflow_decision.run_id
+        workflow_attempt_id = workflow_decision.attempt_id
+        workflow_attempt_number: Optional[int] = None
+        attempt_context = self._workflow_attempt_context(
+            run_id=workflow_run_id,
+            attempt_id=workflow_attempt_id,
+        )
+        workflow_attempt_number = int(attempt_context.get("attempt_number") or 0) or None
+        workflow_workspace_dir = str(
+            attempt_context.get("workspace_dir") or workflow_workspace_dir or ""
+        ) or workflow_workspace_dir
+
+        if workflow_decision.action in {"attach_to_existing_run", "defer", "skip_duplicate"}:
+            return {
+                "decision": "skipped",
+                "reason": workflow_decision.reason,
+                "session_id": session_id,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
+                "attempt_number": workflow_attempt_number,
+                "workspace_dir": workflow_workspace_dir,
+            }
+        if workflow_decision.action == "escalate_review":
+            return {
+                "decision": "failed",
+                "reason": workflow_decision.reason,
+                "session_id": session_id,
+                "run_id": workflow_run_id,
+                "attempt_id": workflow_attempt_id,
+                "attempt_number": workflow_attempt_number,
+                "workspace_dir": workflow_workspace_dir,
+            }
+
+        asyncio.create_task(
+            self._dispatch_action(
+                action,
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                workflow_workspace_dir=workflow_workspace_dir,
+                skip_workflow_admission=True,
+            )
+        )
+        return {
+            "decision": "accepted",
+            "reason": "dispatched",
+            "session_id": session_id,
+            "run_id": workflow_run_id,
+            "attempt_id": workflow_attempt_id,
+            "attempt_number": workflow_attempt_number,
+            "workspace_dir": workflow_workspace_dir,
+        }
 
     def _extract_action_field(self, message: str, key: str) -> str:
         if not message:
@@ -3424,20 +3760,22 @@ class HooksService:
         expected_video_id = self._extract_action_field(action.message or "", "video_id")
         expected_video_title = self._extract_action_field(action.message or "", "title")
         workflow_attempt_number: Optional[int] = None
-        workflow_service = self._workflow_admission_service() if is_youtube_tutorial else None
-        if is_youtube_tutorial and not skip_workflow_admission and workflow_service is not None:
-            workflow_trigger = self._build_youtube_workflow_trigger(
-                action=action,
-                session_key=session_key,
-                session_id=session_id,
-                expected_video_id=expected_video_id,
-            )
-            workflow_workspace_dir = workflow_workspace_dir or self._youtube_workflow_workspace_dir(session_key)
+        workflow_profile = self._workflow_profile_for_action(
+            action=action,
+            session_key=session_key,
+            session_id=session_id,
+            expected_video_id=expected_video_id,
+        )
+        workflow_service = self._workflow_admission_service() if workflow_profile is not None else None
+        if workflow_profile is not None and not skip_workflow_admission and workflow_service is not None:
+            workflow_trigger = workflow_profile["trigger"]
+            workflow_workspace_dir = workflow_workspace_dir or str(workflow_profile.get("workspace_dir") or "")
             workflow_decision = workflow_service.admit(
                 workflow_trigger,
-                entrypoint="hooks_service.youtube_tutorial_hook",
+                entrypoint=str(workflow_profile.get("entrypoint") or "hooks_service.generic_hook"),
                 workspace_dir=workflow_workspace_dir,
-                max_attempts=3,
+                retryable_failure=bool(workflow_profile.get("retryable_failure")),
+                max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
             )
             workflow_run_id = workflow_decision.run_id
             workflow_attempt_id = workflow_decision.attempt_id
@@ -3534,7 +3872,7 @@ class HooksService:
             metadata["hook_thinking"] = action.thinking
         if timeout_seconds is not None:
             metadata["hook_timeout_seconds"] = timeout_seconds
-        if is_youtube_tutorial and workflow_run_id:
+        if workflow_profile is not None and workflow_run_id:
             if workflow_attempt_number is None:
                 attempt_context = self._workflow_attempt_context(
                     run_id=workflow_run_id,
@@ -3629,18 +3967,18 @@ class HooksService:
             )
 
         try:
-            resolved_workspace_dir = workflow_workspace_dir or self._youtube_workflow_workspace_dir(session_key)
+            resolved_workspace_dir = workflow_workspace_dir or self._hook_workflow_workspace_dir(session_key)
             session = await self._resolve_or_create_webhook_session(session_id, resolved_workspace_dir)
             session_workspace = Path(str(session.workspace_dir)).resolve()
-            if is_youtube_tutorial and workflow_run_id and workflow_attempt_id and workflow_service is not None:
+            if workflow_profile is not None and workflow_run_id and workflow_attempt_id and workflow_service is not None:
                 workflow_service.mark_running(
                     workflow_run_id,
                     attempt_id=workflow_attempt_id,
                     provider_session_id=session_id,
                     summary={
                         "hook_name": hook_name,
-                        "video_id": expected_video_id or "",
                         "workspace_dir": str(session_workspace),
+                        **({"video_id": expected_video_id or ""} if expected_video_id else {}),
                     },
                 )
                 attempt_context = self._workflow_attempt_context(
@@ -4032,14 +4370,14 @@ class HooksService:
                         provider_session_id=session_id,
                         max_attempts=3,
                     )
-            if is_youtube_tutorial and workflow_run_id and workflow_service is not None:
+            if workflow_profile is not None and workflow_run_id and workflow_service is not None:
                 workflow_service.mark_completed(
                     workflow_run_id,
                     attempt_id=workflow_attempt_id,
                     summary={
-                        "video_id": expected_video_id or "",
                         "hook_name": hook_name,
                         "status": "completed",
+                        **({"video_id": expected_video_id or ""} if expected_video_id else {}),
                     },
                 )
             if admitted_turn_id and self._turn_finalizer:
@@ -4135,6 +4473,17 @@ class HooksService:
                     workflow_attempt_id=workflow_attempt_id,
                     workflow_attempt_number=workflow_attempt_number,
                 )
+            elif workflow_profile is not None:
+                self._queue_or_finalize_generic_hook_attempt(
+                    action=action,
+                    hook_name=hook_name,
+                    reason="agent_reported_timeout",
+                    failure_class="hook_timeout",
+                    session_workspace=session_workspace,
+                    workflow_profile=workflow_profile,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                )
             return {
                 "decision": "failed",
                 "turn_id": admitted_turn_id,
@@ -4203,6 +4552,18 @@ class HooksService:
                     workflow_run_id=workflow_run_id,
                     workflow_attempt_id=workflow_attempt_id,
                     workflow_attempt_number=workflow_attempt_number,
+                )
+            elif workflow_profile is not None:
+                idle_seconds = int(self._youtube_hook_idle_timeout_seconds or 0)
+                self._queue_or_finalize_generic_hook_attempt(
+                    action=action,
+                    hook_name=hook_name,
+                    reason=f"hook_idle_timeout_{idle_seconds}s",
+                    failure_class="hook_idle_timeout",
+                    session_workspace=session_workspace,
+                    workflow_profile=workflow_profile,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
                 )
             return {
                 "decision": "failed",
@@ -4273,6 +4634,17 @@ class HooksService:
                     workflow_attempt_id=workflow_attempt_id,
                     workflow_attempt_number=workflow_attempt_number,
                 )
+            elif workflow_profile is not None:
+                self._queue_or_finalize_generic_hook_attempt(
+                    action=action,
+                    hook_name=hook_name,
+                    reason=f"hook_timeout_{timeout_seconds}s",
+                    failure_class="hook_timeout",
+                    session_workspace=session_workspace,
+                    workflow_profile=workflow_profile,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                )
             return {
                 "decision": "failed",
                 "turn_id": admitted_turn_id,
@@ -4331,10 +4703,10 @@ class HooksService:
                         workflow_run_id,
                         attempt_id=workflow_attempt_id,
                         summary={
-                            "video_id": expected_video_id or "",
                             "hook_name": hook_name,
                             "status": "completed",
                             "recovered_from_reason": dispatch_failure_reason,
+                            **({"video_id": expected_video_id or ""} if expected_video_id else {}),
                         },
                     )
                 if admitted_turn_id and self._turn_finalizer:
@@ -4427,6 +4799,17 @@ class HooksService:
                     workflow_run_id=workflow_run_id,
                     workflow_attempt_id=workflow_attempt_id,
                     workflow_attempt_number=workflow_attempt_number,
+                )
+            elif workflow_profile is not None:
+                self._queue_or_finalize_generic_hook_attempt(
+                    action=action,
+                    hook_name=hook_name,
+                    reason=dispatch_failure_reason,
+                    failure_class=dispatch_failure_reason,
+                    session_workspace=session_workspace,
+                    workflow_profile=workflow_profile,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
                 )
             return {
                 "decision": "failed",
