@@ -7,3 +7,7 @@ whisper dfeployment
 create a /btw  feature so i can have fast response dide channel
 
 devin as the code pr check?
+
+unsloth studio
+
+google turboquant kv cache compression

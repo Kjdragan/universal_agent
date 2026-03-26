@@ -133,6 +133,12 @@ from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendatio
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
+from universal_agent.services.dispatch_service import (
+    dispatch_immediate, dispatch_on_approval, dispatch_scheduled_due, DispatchError,
+)
+from universal_agent.services.decomposition_agent import (
+    decompose_with_llm, DecompositionError,
+)
 
 from universal_agent import process_heartbeat
 from universal_agent.workflow_admission import (
@@ -11998,6 +12004,29 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed starting idle dispatch loop")
 
+    # --- Scheduled dispatch timer (Phase 2 — multi-trigger dispatch) ---
+    _scheduled_dispatch_stop = asyncio.Event()
+
+    async def _scheduled_dispatch_loop(stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            try:
+                await asyncio.sleep(60)
+                if stop_event.is_set():
+                    break
+                with _activity_store_lock:
+                    conn = _task_hub_open_conn()
+                    try:
+                        claimed = dispatch_scheduled_due(conn)
+                        if claimed:
+                            logger.info("⏰ Scheduled dispatch: dispatched %d task(s)", len(claimed))
+                    finally:
+                        conn.close()
+            except Exception:
+                logger.exception("Scheduled dispatch loop error")
+
+    asyncio.create_task(_scheduled_dispatch_loop(_scheduled_dispatch_stop))
+    logger.info("⏰ Scheduled dispatch timer enabled (interval=60s)")
+
     if _vp_event_bridge_enabled:
         _vp_event_bridge_prime_cursor_to_latest()
 
@@ -16438,6 +16467,108 @@ async def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRe
             return {"status": "ok", "item": updated}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/dispatch")
+async def dashboard_todolist_dispatch(task_id: str):
+    """Immediately dispatch a task (dashboard 'Start Now')."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = dispatch_immediate(conn, tid)
+            return {"status": "dispatched", "assignment": result}
+        except DispatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/approve")
+async def dashboard_todolist_approve(task_id: str):
+    """Approve and dispatch a review task (dashboard 'Approve')."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = dispatch_on_approval(conn, tid)
+            return {"status": "approved_and_dispatched", "assignment": result}
+        except DispatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/decompose")
+async def dashboard_todolist_decompose(task_id: str):
+    """Use LLM to decompose a task into subtasks."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    # 1. Read parent task
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            parent = task_hub.get_item(conn, tid)
+            if parent is None:
+                raise HTTPException(status_code=404, detail="Task not found")
+        finally:
+            conn.close()
+    # 2. Call LLM (outside the lock — may take seconds)
+    try:
+        subtask_specs = await decompose_with_llm(
+            title=parent.get("title", ""),
+            description=parent.get("description", ""),
+        )
+    except DecompositionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    # 3. Create subtasks in task hub (re-acquire lock)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            created = task_hub.decompose_task(
+                conn, parent_task_id=tid, subtasks=subtask_specs,
+            )
+            tree = task_hub.get_decomposition_tree(conn, tid)
+            return {"status": "decomposed", "parent": tree, "subtasks": created}
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/complete-subtask")
+async def dashboard_todolist_complete_subtask(task_id: str):
+    """Mark a subtask complete and auto-complete parent if all siblings done."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = task_hub.complete_subtask_and_check_parent(conn, tid)
+            return {"status": "completed", **result}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/subtasks")
+async def dashboard_todolist_get_subtasks(task_id: str):
+    """Return decomposition tree for a task."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            tree = task_hub.get_decomposition_tree(conn, tid)
+            return tree
         finally:
             conn.close()
 

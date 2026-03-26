@@ -1799,8 +1799,15 @@ def decompose_task(
     parent_task_id: str,
     subtasks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Create child tasks under a parent. Each dict in subtasks should have title, description, etc."""
+    """Create child tasks under a parent and mark parent as 'decomposed'.
+
+    Each dict in *subtasks* should have at minimum ``title``.  Optional keys:
+    ``description``, ``priority``, ``labels``, ``trigger_type``.
+    """
     ensure_schema(conn)
+    parent = get_item(conn, parent_task_id)
+    if parent is None:
+        raise ValueError(f"Parent task not found: {parent_task_id}")
     created = []
     for idx, sub in enumerate(subtasks):
         sub_id = sub.get("task_id") or f"{parent_task_id}:sub:{idx + 1}"
@@ -1810,7 +1817,7 @@ def decompose_task(
             "source_kind": sub.get("source_kind", "decomposition"),
             "title": sub.get("title", f"Sub-task {idx + 1}"),
             "description": sub.get("description", ""),
-            "project_key": sub.get("project_key", "immediate"),
+            "project_key": sub.get("project_key", parent.get("project_key", "immediate")),
             "priority": sub.get("priority", 2),
             "labels": sub.get("labels", ["agent-ready"]),
             "status": sub.get("status", TASK_STATUS_OPEN),
@@ -1819,7 +1826,58 @@ def decompose_task(
         }
         result = upsert_item(conn, sub_item)
         created.append(result)
+    # Mark parent as decomposed
+    now = _now_iso()
+    conn.execute(
+        "UPDATE task_hub_items SET refinement_stage = ?, updated_at = ? WHERE task_id = ?",
+        ("decomposed", now, parent_task_id),
+    )
+    conn.commit()
     return created
+
+
+def complete_subtask_and_check_parent(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> dict[str, Any]:
+    """Mark *task_id* as completed; auto-complete its parent when all siblings are done.
+
+    Returns a dict with:
+    - ``task``: the updated subtask
+    - ``parent_completed``: ``True`` if parent was auto-completed
+    - ``parent_progress``: progress snapshot of siblings
+    """
+    ensure_schema(conn)
+    item = get_item(conn, task_id)
+    if item is None:
+        raise ValueError(f"Task not found: {task_id}")
+    # Mark this subtask complete
+    now = _now_iso()
+    conn.execute(
+        "UPDATE task_hub_items SET status = ?, updated_at = ? WHERE task_id = ?",
+        (TASK_STATUS_COMPLETED, now, task_id),
+    )
+    conn.commit()
+    updated_item = get_item(conn, task_id) or {}
+    parent_completed = False
+    parent_progress: dict[str, Any] = {}
+    parent_task_id = item.get("parent_task_id")
+    if parent_task_id:
+        progress = get_parent_progress(conn, parent_task_id)
+        parent_progress = progress
+        if progress["total"] > 0 and progress["completed"] == progress["total"]:
+            # All siblings done — auto-complete the parent
+            conn.execute(
+                "UPDATE task_hub_items SET status = ?, updated_at = ? WHERE task_id = ?",
+                (TASK_STATUS_COMPLETED, now, parent_task_id),
+            )
+            conn.commit()
+            parent_completed = True
+    return {
+        "task": updated_item,
+        "parent_completed": parent_completed,
+        "parent_progress": parent_progress,
+    }
 
 
 # ---------------------------------------------------------------------------
