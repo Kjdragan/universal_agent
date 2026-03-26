@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import asyncio
+import os
 import time
 from pathlib import Path
 import pytest
@@ -2112,6 +2113,53 @@ async def test_recover_interrupted_youtube_sessions_clears_stale_legacy_pending_
         ),
         encoding="utf-8",
     )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+
+    assert recovered == 0
+    service._dispatch_action.assert_not_called()
+    assert pending_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_clears_stale_workspace_pending_marker_without_created_epoch(
+    mock_gateway,
+    tmp_path,
+):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSION_AGE_SECONDS": "60",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
+
+    session_id = "session_hook_yt_demo__legacyNoCreatedEpoch"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_local_ingest.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "failed_local_ingest",
+                "session_id": session_id,
+                "video_id": "legacyNoCreatedEpoch",
+                "reason": "local_ingest_failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_epoch = time.time() - 7200
+    os.utime(session_dir, (old_epoch, old_epoch))
+    os.utime(pending_path, (old_epoch, old_epoch))
 
     service._dispatch_action = AsyncMock(return_value=None)
     recovered = await service.recover_interrupted_youtube_sessions(tmp_path)

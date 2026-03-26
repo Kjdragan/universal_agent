@@ -682,6 +682,12 @@ class HooksService:
             300,
             self._safe_int_env("UA_HOOKS_STARTUP_RECOVERY_COOLDOWN_SECONDS", 1800),
         )
+        # Run-based recovery is authoritative; legacy workspace scans are a
+        # fallback only for recent sessions. This bounds startup replay noise.
+        self._startup_recovery_max_session_age_seconds = max(
+            0,
+            self._safe_int_env("UA_HOOKS_STARTUP_RECOVERY_MAX_SESSION_AGE_SECONDS", 21600),
+        )
         self._startup_warmup_delay_seconds = max(
             0,
             self._safe_int_env("UA_HOOKS_STARTUP_WARMUP_DELAY_SECONDS", 15),
@@ -835,6 +841,9 @@ class HooksService:
             "startup_recovery_max_sessions": int(self._startup_recovery_max_sessions),
             "startup_recovery_min_age_seconds": int(self._startup_recovery_min_age_seconds),
             "startup_recovery_cooldown_seconds": int(self._startup_recovery_cooldown_seconds),
+            "startup_recovery_max_session_age_seconds": int(
+                self._startup_recovery_max_session_age_seconds
+            ),
             "startup_warmup_delay_seconds": int(self._startup_warmup_delay_seconds),
         }
 
@@ -978,6 +987,24 @@ class HooksService:
         if attempted_at_epoch is None:
             return True
         return (time.time() - attempted_at_epoch) >= float(self._startup_recovery_cooldown_seconds)
+
+    def _startup_recovery_session_is_stale(
+        self,
+        *,
+        session_dir: Path,
+        session_mtime: float,
+        now_epoch: float,
+    ) -> bool:
+        max_age_seconds = float(self._startup_recovery_max_session_age_seconds)
+        if max_age_seconds <= 0:
+            return False
+        effective_mtime = float(session_mtime or 0.0)
+        if effective_mtime <= 0:
+            try:
+                effective_mtime = float(session_dir.stat().st_mtime)
+            except Exception:
+                return False
+        return (now_epoch - effective_mtime) >= max_age_seconds
 
     def _record_startup_recovery_attempt(self, session_dir: Path, *, session_id: str) -> None:
         marker = self._startup_recovery_marker_path(session_dir)
@@ -2054,9 +2081,20 @@ class HooksService:
                 ),
             )
 
-        for _, session_dir, session_id in candidates:
+        for session_mtime, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
+            if self._startup_recovery_session_is_stale(
+                session_dir=session_dir,
+                session_mtime=session_mtime,
+                now_epoch=now_epoch,
+            ):
+                logger.info(
+                    "Skipping startup recovery for stale workspace session_id=%s age_limit_seconds=%s",
+                    session_id,
+                    int(self._startup_recovery_max_session_age_seconds),
+                )
+                continue
             turns_dir = session_dir / "turns"
             if not turns_dir.exists() or not turns_dir.is_dir():
                 continue
@@ -2100,9 +2138,22 @@ class HooksService:
                 metadata={"source": "hooks", "reason": "startup_recovery"},
             )
 
-        for _, session_dir, session_id in candidates:
+        for session_mtime, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
+            if self._startup_recovery_session_is_stale(
+                session_dir=session_dir,
+                session_mtime=session_mtime,
+                now_epoch=now_epoch,
+            ):
+                self._clear_pending_hook_recovery_marker(session_dir)
+                self._clear_pending_local_ingest_marker(session_dir)
+                logger.info(
+                    "Cleared startup recovery markers for stale workspace session_id=%s age_limit_seconds=%s",
+                    session_id,
+                    int(self._startup_recovery_max_session_age_seconds),
+                )
+                continue
             pending_dispatch_path = self._pending_hook_recovery_marker_path(session_dir)
             if not pending_dispatch_path.is_file():
                 continue
@@ -2194,9 +2245,21 @@ class HooksService:
                 metadata={"source": "hooks", "reason": "startup_dispatch_interrupted_backfill"},
             )
 
-        for _, session_dir, session_id in candidates:
+        for session_mtime, session_dir, session_id in candidates:
             if recovered >= self._startup_recovery_max_sessions:
                 break
+            if self._startup_recovery_session_is_stale(
+                session_dir=session_dir,
+                session_mtime=session_mtime,
+                now_epoch=now_epoch,
+            ):
+                self._clear_pending_local_ingest_marker(session_dir)
+                logger.info(
+                    "Cleared pending local ingest marker for stale workspace session_id=%s age_limit_seconds=%s",
+                    session_id,
+                    int(self._startup_recovery_max_session_age_seconds),
+                )
+                continue
             pending_path = session_dir / "pending_local_ingest.json"
             if not pending_path.is_file():
                 continue
