@@ -1948,6 +1948,151 @@ class HooksService:
             deliver=True,
         )
 
+    async def finalize_stale_youtube_runs(self) -> int:
+        """Sweep the durable DB for YouTube runs stuck in active status.
+
+        For each run with ``run_kind = 'youtube_tutorial_hook'`` and an active
+        attempt status (running / queued / blocked):
+        - If the gateway session is still alive, skip it.
+        - If tutorial artifacts already exist, mark it ``completed``.
+        - Otherwise mark it ``failed`` with reason ``session_crashed``.
+
+        Also deregisters stale sessions from the heartbeat service.
+
+        Returns the number of finalized runs.
+        """
+        conn = self._runtime_db_connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT r.run_id,
+                       r.run_spec_json,
+                       r.workspace_dir,
+                       r.provider_session_id,
+                       r.latest_attempt_id,
+                       a.status AS attempt_status
+                FROM runs r
+                LEFT JOIN run_attempts a ON a.attempt_id = r.latest_attempt_id
+                WHERE r.run_kind = 'youtube_tutorial_hook'
+                ORDER BY r.updated_at DESC
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+
+        finalized = 0
+        for row in rows:
+            attempt_status = str(row["attempt_status"] or "").strip().lower()
+            if attempt_status not in {"running", "queued", "blocked"}:
+                continue
+
+            run_id = str(row["run_id"] or "").strip()
+            attempt_id = str(row["latest_attempt_id"] or "").strip() or None
+            provider_session_id = str(row["provider_session_id"] or "").strip()
+
+            # Check if the gateway session is still alive
+            session_alive = False
+            if provider_session_id:
+                try:
+                    from universal_agent.gateway_server import get_session as _get_session
+                    session = _get_session(provider_session_id)
+                    if session is not None:
+                        session_alive = True
+                except Exception:
+                    pass
+
+            if session_alive:
+                continue
+
+            # Session is dead — determine outcome
+            try:
+                run_spec = json.loads(str(row["run_spec_json"] or "{}"))
+            except Exception:
+                run_spec = {}
+            if not isinstance(run_spec, dict):
+                run_spec = {}
+
+            video_id = ""
+            try:
+                payload = json.loads(str(run_spec.get("payload_json") or "{}"))
+                if isinstance(payload, dict):
+                    video_id = str(payload.get("video_id") or "").strip()
+            except Exception:
+                pass
+
+            # Check if artifacts already exist (session completed but DB wasn't updated)
+            has_artifacts = False
+            if video_id:
+                try:
+                    result = self._validate_youtube_tutorial_artifacts(
+                        video_id=video_id,
+                        started_at_epoch=0.0,
+                    )
+                    # Method raises RuntimeError if artifacts are missing/incomplete
+                    # If we reach here, artifacts exist
+                    has_artifacts = isinstance(result, dict)
+                except Exception:
+                    pass
+
+            try:
+                was = self._workflow_admission_service()
+                if has_artifacts:
+                    was.mark_completed(
+                        run_id,
+                        attempt_id=attempt_id,
+                        summary={
+                            "status": "completed",
+                            "video_id": video_id,
+                            "reason": "stale_run_finalized_with_artifacts",
+                        },
+                    )
+                    logger.info(
+                        "📺 Finalized stale YouTube run as completed run_id=%s video_id=%s",
+                        run_id,
+                        video_id,
+                    )
+                else:
+                    was.mark_failed(
+                        run_id,
+                        attempt_id=attempt_id,
+                        failure_reason="session_crashed",
+                        failure_class="session_crashed",
+                    )
+                    logger.warning(
+                        "📺 Finalized stale YouTube run as failed run_id=%s video_id=%s session_id=%s",
+                        run_id,
+                        video_id,
+                        provider_session_id,
+                    )
+                finalized += 1
+            except Exception as exc:
+                logger.warning(
+                    "📺 Failed to finalize stale run run_id=%s: %s",
+                    run_id,
+                    exc,
+                )
+
+            # Deregister the stale session from heartbeat service
+            if provider_session_id:
+                try:
+                    from universal_agent.gateway_server import _heartbeat_service
+                    if _heartbeat_service:
+                        _heartbeat_service.unregister_session(provider_session_id)
+                        logger.info(
+                            "📺 Deregistered stale heartbeat session session_id=%s",
+                            provider_session_id,
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "📺 Could not deregister heartbeat session %s: %s",
+                        provider_session_id,
+                        exc,
+                    )
+
+        if finalized:
+            logger.info("📺 Finalized %d stale YouTube runs", finalized)
+        return finalized
+
     async def recover_interrupted_youtube_sessions(self, workspace_root: Path) -> int:
         if not self._startup_recovery_enabled:
             return 0

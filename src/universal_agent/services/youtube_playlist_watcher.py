@@ -12,6 +12,10 @@ Env vars:
     YOUTUBE_API_KEY             — YouTube Data API key (required)
     YT_TUTORIALS_POLL_INTERVAL_SECONDS — poll cadence, default 120
     UA_YT_PLAYLIST_WATCHER_ENABLED — set to "0" / "false" to disable
+    YT_TUTORIALS_RUN_GRACE_SECONDS  — time to wait before treating a dispatched
+                                       video without artifacts as failed (default: 2400)
+    YT_TUTORIALS_MAX_RUN_RETRIES    — max re-dispatch attempts for crashed runs
+                                       (default: 2)
 """
 
 from __future__ import annotations
@@ -197,6 +201,22 @@ DispatchFn = Callable[[str, dict[str, Any]], Coroutine[Any, Any, DispatchResult]
 NotifyFn = Callable[[dict[str, Any]], None]
 
 
+def _run_grace_seconds() -> float:
+    """Grace period before treating a dispatched video without artifacts as failed."""
+    try:
+        return max(120.0, float(os.getenv("YT_TUTORIALS_RUN_GRACE_SECONDS", "2400")))
+    except Exception:
+        return 2400.0
+
+
+def _max_run_retries() -> int:
+    """Max re-dispatch attempts for videos whose hook sessions crashed."""
+    try:
+        return max(1, min(5, int(os.getenv("YT_TUTORIALS_MAX_RUN_RETRIES", "2"))))
+    except Exception:
+        return 2
+
+
 class YouTubePlaylistWatcher:
     """Async polling service for a single YouTube tutorial playlist."""
 
@@ -237,6 +257,13 @@ class YouTubePlaylistWatcher:
         # Mutex that serialises the inflight/seen transition so _loop and
         # poll_now cannot both dispatch the same unseen video simultaneously.
         self._dispatch_lock: asyncio.Lock = asyncio.Lock()
+        # ── Post-dispatch run monitoring state ──
+        # Tracks when each video was first dispatched (epoch timestamp).
+        self._dispatch_timestamps: dict[str, float] = {}
+        # Counts how many times a seen-but-unprocessed video has been retried.
+        self._run_retry_counts: dict[str, int] = {}
+        # Videos that exhausted all retry attempts and are permanently failed.
+        self._permanently_failed_videos: set[str] = set()
 
     @staticmethod
     def _sanitize_pending_state(raw_pending: Any) -> dict[str, dict[str, Any]]:
@@ -301,6 +328,25 @@ class YouTubePlaylistWatcher:
             for v in list(state.get("notified_delayed_video_ids") or [])
             if str(v or "").strip()
         )
+        # Restore post-dispatch monitoring state
+        raw_timestamps = state.get("dispatch_timestamps")
+        if isinstance(raw_timestamps, dict):
+            self._dispatch_timestamps = {
+                str(k): float(v) for k, v in raw_timestamps.items()
+                if str(k or "").strip() and isinstance(v, (int, float))
+            }
+        raw_retry_counts = state.get("run_retry_counts")
+        if isinstance(raw_retry_counts, dict):
+            self._run_retry_counts = {
+                str(k): int(v) for k, v in raw_retry_counts.items()
+                if str(k or "").strip() and isinstance(v, (int, float))
+            }
+        raw_perm_failed = state.get("permanently_failed_video_ids")
+        if isinstance(raw_perm_failed, list):
+            self._permanently_failed_videos = {
+                str(v or "").strip() for v in raw_perm_failed
+                if str(v or "").strip()
+            }
         # Prune stale pending entries that already produced artifacts while the
         # watcher was offline (for example recovered by another route).
         for video_id in list(self._pending_dispatch_items):
@@ -308,6 +354,8 @@ class YouTubePlaylistWatcher:
                 continue
             self._pending_dispatch_items.pop(video_id, None)
             self._notified_delayed_videos.discard(video_id)
+            self._dispatch_timestamps.pop(video_id, None)
+            self._run_retry_counts.pop(video_id, None)
             seen.add(video_id)
         seen.update(self._pending_dispatch_items.keys())
         self._seen_ids = seen
@@ -363,6 +411,9 @@ class YouTubePlaylistWatcher:
                 "seen_ids": list(seen),
                 "pending_dispatch_items": serialized_pending,
                 "notified_delayed_video_ids": sorted(self._notified_delayed_videos),
+                "dispatch_timestamps": dict(self._dispatch_timestamps),
+                "run_retry_counts": dict(self._run_retry_counts),
+                "permanently_failed_video_ids": sorted(self._permanently_failed_videos),
                 timestamp_key: _iso_now(),
             }
         )
@@ -443,6 +494,17 @@ class YouTubePlaylistWatcher:
                             "📺 Skipping duplicate dispatch video_id=%s (already dispatched this session)",
                             item["video_id"],
                         )
+
+                # ── Post-dispatch run monitoring: detect crashed runs ──
+                await self._check_failed_seen_videos(seen, current_ids)
+
+                # ── Finalize stale YouTube runs in the durable DB ──
+                try:
+                    from universal_agent.gateway_server import _hooks_service
+                    if _hooks_service is not None:
+                        await _hooks_service.finalize_stale_youtube_runs()
+                except Exception:
+                    pass  # best-effort; don't break the poll loop
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -451,6 +513,95 @@ class YouTubePlaylistWatcher:
                 self._last_poll_at = _iso_now()
                 logger.exception("📺 Playlist watcher poll error: %s", exc)
             await self._sleep_or_stop(_poll_interval())
+
+    async def _check_failed_seen_videos(
+        self,
+        seen: set[str],
+        current_ids: list[str],
+    ) -> None:
+        """Detect dispatched videos that never produced artifacts and retry or fail them.
+
+        Called at the end of each poll cycle. For each video that was dispatched
+        more than ``_run_grace_seconds()`` ago without producing tutorial
+        artifacts, either:
+        - Move it back to ``_pending_dispatch_items`` for re-dispatch (if within
+          ``_max_run_retries()``), or
+        - Mark it permanently failed with a notification.
+        """
+        grace = _run_grace_seconds()
+        max_retries = _max_run_retries()
+        now = time.time()
+
+        # Build candidate set: videos in seen_ids that have a dispatch_timestamp
+        # but are NOT already tracked in _pending_dispatch_items, NOT permanently
+        # failed, and NOT already confirmed to have artifacts.
+        candidates = [
+            vid for vid, ts in list(self._dispatch_timestamps.items())
+            if vid in seen
+            and vid not in self._pending_dispatch_items
+            and vid not in self._permanently_failed_videos
+            and (now - ts) > grace
+        ]
+
+        for vid in candidates:
+            # Double-check: maybe artifacts appeared since the last check
+            if _video_has_processed_tutorial_artifacts(vid):
+                # Artifacts exist — clean up monitoring state
+                self._dispatch_timestamps.pop(vid, None)
+                self._run_retry_counts.pop(vid, None)
+                logger.info(
+                    "📺 Run monitoring: video_id=%s has artifacts, clearing monitoring state",
+                    vid,
+                )
+                continue
+
+            retries_so_far = self._run_retry_counts.get(vid, 0)
+            elapsed = now - self._dispatch_timestamps[vid]
+
+            if retries_so_far >= max_retries:
+                # Exhausted all retries → permanent failure
+                self._permanently_failed_videos.add(vid)
+                self._dispatch_timestamps.pop(vid, None)
+                self._run_retry_counts.pop(vid, None)
+                logger.warning(
+                    "📺 Run monitoring: video_id=%s permanently failed after %d retries (%.0fs since dispatch)",
+                    vid,
+                    retries_so_far,
+                    elapsed,
+                )
+                self._emit_notification(
+                    kind="youtube_tutorial_permanently_failed",
+                    title="Tutorial Permanently Failed",
+                    message=f"Video {vid} failed after {retries_so_far} retries ({elapsed / 60:.0f}m since first dispatch)",
+                    severity="error",
+                    metadata={
+                        "video_id": vid,
+                        "retries": retries_so_far,
+                        "elapsed_seconds": elapsed,
+                    },
+                )
+            else:
+                # Move back to pending for re-dispatch
+                self._run_retry_counts[vid] = retries_so_far + 1
+                # Reset dispatch timestamp for the new attempt grace window
+                self._dispatch_timestamps[vid] = now
+                # Remove from seen so it gets re-dispatched on next cycle
+                seen.discard(vid)
+                # We don't have the original item dict, so create a minimal one
+                self._pending_dispatch_items[vid] = {"video_id": vid}
+                logger.warning(
+                    "📺 Run monitoring: video_id=%s still has no artifacts after %.0fs, "
+                    "scheduling re-dispatch (retry %d/%d)",
+                    vid,
+                    elapsed,
+                    retries_so_far + 1,
+                    max_retries,
+                )
+
+        # Persist state changes
+        if candidates:
+            self._seen_ids = seen
+            self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
 
     async def _sleep_or_stop(self, seconds: float) -> None:
         try:
@@ -861,9 +1012,15 @@ class YouTubePlaylistWatcher:
                 if accepted:
                     self._dispatched_total += 1
                     self._pending_dispatch_items.pop(vid, None)
+                    # Record dispatch timestamp for post-dispatch monitoring
+                    if vid not in self._dispatch_timestamps:
+                        self._dispatch_timestamps[vid] = time.time()
                 else:
                     # Track for silent retry on next poll — no new notification
                     self._pending_dispatch_items[vid] = item
+                    # Record dispatch timestamp if this is the first attempt
+                    if vid not in self._dispatch_timestamps:
+                        self._dispatch_timestamps[vid] = time.time()
                 self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
         return accepted
 
