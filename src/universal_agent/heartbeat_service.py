@@ -14,6 +14,7 @@ from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent import task_hub
+from universal_agent.services.dispatch_service import dispatch_sweep
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 import shutil
@@ -1576,7 +1577,7 @@ class HeartbeatService:
                         )
                     queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
                     dispatch_actionable_count = int(queue.get("eligible_total") or 0)
-                    task_hub_claimed = task_hub.claim_next_dispatch_tasks(
+                    task_hub_claimed = dispatch_sweep(
                         conn,
                         limit=max(1, max_proactive_per_cycle),
                         agent_id=task_hub_agent_id,

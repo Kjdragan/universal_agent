@@ -3,3 +3,7 @@ scan discord for eventts. notify me.  if i cant attentd (or iven if i do? watch 
 get up top speed on autoresearch and program.md file with it
 
 whisper dfeployment
+
+create a /btw  feature so i can have fast response dide channel
+
+devin as the code pr check?

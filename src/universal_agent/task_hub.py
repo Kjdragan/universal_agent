@@ -422,6 +422,10 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
     if status == TASK_STATUS_OPEN and seizure_state == "seized":
         seizure_state = "unseized"
 
+    trigger_type = str(item.get("trigger_type") or existing.get("trigger_type") or DEFAULT_TRIGGER_TYPE).strip()
+    if trigger_type not in TRIGGER_TYPES:
+        trigger_type = DEFAULT_TRIGGER_TYPE
+
     payload = {
         "task_id": task_id,
         "source_kind": str(item.get("source_kind") or existing.get("source_kind") or "internal"),
@@ -444,6 +448,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         "stale_state": str(item.get("stale_state") or existing.get("stale_state") or "fresh"),
         "seizure_state": seizure_state,
         "mirror_status": str(item.get("mirror_status") or existing.get("mirror_status") or "internal"),
+        "trigger_type": trigger_type,
         "metadata_json": _json_dumps(metadata),
         "created_at": str(existing.get("created_at") or item.get("created_at") or now_iso),
         "updated_at": now_iso,
@@ -455,12 +460,12 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             task_id, source_kind, source_ref, title, description, project_key, priority, due_at,
             labels_json, status, must_complete, incident_key, workstream_id, subtask_role,
             parent_task_id, agent_ready, score, score_confidence, stale_state, seizure_state,
-            mirror_status, metadata_json, created_at, updated_at
+            mirror_status, trigger_type, metadata_json, created_at, updated_at
         ) VALUES (
             :task_id, :source_kind, :source_ref, :title, :description, :project_key, :priority, :due_at,
             :labels_json, :status, :must_complete, :incident_key, :workstream_id, :subtask_role,
             :parent_task_id, :agent_ready, :score, :score_confidence, :stale_state, :seizure_state,
-            :mirror_status, :metadata_json, :created_at, :updated_at
+            :mirror_status, :trigger_type, :metadata_json, :created_at, :updated_at
         )
         ON CONFLICT(task_id) DO UPDATE SET
             source_kind=excluded.source_kind,
@@ -483,6 +488,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             stale_state=excluded.stale_state,
             seizure_state=excluded.seizure_state,
             mirror_status=excluded.mirror_status,
+            trigger_type=excluded.trigger_type,
             metadata_json=excluded.metadata_json,
             updated_at=excluded.updated_at
         """,
@@ -843,6 +849,8 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         scored.append(item)
 
     def _sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+        trigger = str(row.get("trigger_type") or DEFAULT_TRIGGER_TYPE)
+        is_immediate = 1 if trigger == "immediate" else 0
         system_schedule = 1 if _is_system_schedule_task(row) else 0
         must_complete = 1 if bool(row.get("must_complete")) else 0
         approval = 1 if str(row.get("project_key") or "") == "approval" else 0
@@ -850,7 +858,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         priority = _safe_int(row.get("priority"), 1)
         due_sort = str(row.get("due_at") or "9999-12-31T23:59:59+00:00")
         updated_sort = str(row.get("updated_at") or "")
-        return (-system_schedule, -must_complete, -approval, -score, -priority, due_sort, updated_sort)
+        return (-is_immediate, -system_schedule, -must_complete, -approval, -score, -priority, due_sort, updated_sort)
 
     scored.sort(key=_sort_key)
 
@@ -943,6 +951,7 @@ def claim_next_dispatch_tasks(
     workflow_run_id: Optional[str] = None,
     workflow_attempt_id: Optional[str] = None,
     provider_session_id: Optional[str] = None,
+    trigger_types: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     ensure_schema(conn)
     rebuild_summary = rebuild_dispatch_queue(conn)
@@ -955,18 +964,29 @@ def claim_next_dispatch_tasks(
     if not queue_build_id:
         return []
     claim_limit = max(1, int(limit))
+
+    # Build trigger_type filter clause
+    if trigger_types:
+        placeholders = ",".join("?" for _ in trigger_types)
+        trigger_filter = f"AND i.trigger_type IN ({placeholders})"
+        params: tuple = (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW) + tuple(trigger_types) + (claim_limit,)
+    else:
+        trigger_filter = ""
+        params = (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW, claim_limit)
+
     rows = conn.execute(
-        """
+        f"""
         SELECT q.task_id, q.rank, q.skip_reason, i.*
         FROM task_hub_dispatch_queue q
         JOIN task_hub_items i ON i.task_id = q.task_id
         WHERE q.queue_build_id = ?
           AND q.eligible = 1
           AND i.status IN (?, ?)
+          {trigger_filter}
         ORDER BY q.rank ASC
         LIMIT ?
         """,
-        (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW, claim_limit),
+        params,
     ).fetchall()
     queue_items = [hydrate_item(dict(row)) for row in rows]
     claimed: list[dict[str, Any]] = []
@@ -1052,6 +1072,28 @@ def _session_id_from_agent_id(agent_id: Any) -> str:
     if raw.startswith("heartbeat:"):
         return raw.split(":", 1)[1].strip()
     return ""
+
+
+def list_due_scheduled_tasks(
+    conn: sqlite3.Connection,
+    *,
+    as_of_iso: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Return open tasks with trigger_type='scheduled' whose due_at has arrived."""
+    ensure_schema(conn)
+    cutoff = as_of_iso or _now_iso()
+    rows = conn.execute(
+        """
+        SELECT * FROM task_hub_items
+        WHERE trigger_type = 'scheduled'
+          AND status = ?
+          AND due_at IS NOT NULL
+          AND due_at <= ?
+        ORDER BY due_at ASC
+        """,
+        (TASK_STATUS_OPEN, cutoff),
+    ).fetchall()
+    return [hydrate_item(dict(row)) for row in rows]
 
 
 def _assignment_lineage(
