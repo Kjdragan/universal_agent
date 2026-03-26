@@ -1024,6 +1024,70 @@ class HooksService:
         except Exception:
             logger.warning("Failed removing pending hook recovery marker path=%s", marker)
 
+    def _pending_local_ingest_marker_path(self, session_dir: Path) -> Path:
+        return session_dir / "pending_local_ingest.json"
+
+    def _clear_pending_local_ingest_marker(self, session_dir: Path) -> None:
+        marker = self._pending_local_ingest_marker_path(session_dir)
+        if not marker.exists():
+            return
+        try:
+            marker.unlink()
+        except Exception:
+            logger.warning("Failed removing pending local ingest marker path=%s", marker)
+
+    def _finalize_startup_recovery_if_already_processed(
+        self,
+        *,
+        video_id: str,
+        run_id: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+        session_dir: Optional[Path] = None,
+    ) -> bool:
+        clean_video_id = str(video_id or "").strip()
+        if not clean_video_id:
+            return False
+        try:
+            artifact_validation = self._validate_youtube_tutorial_artifacts(
+                video_id=clean_video_id,
+                started_at_epoch=0.0,
+            )
+        except Exception:
+            return False
+
+        run_path = str(artifact_validation.get("run_rel_path") or "").strip()
+        logger.info(
+            "Startup recovery skipped for already-processed tutorial video_id=%s run_id=%s run_path=%s",
+            clean_video_id,
+            run_id or "",
+            run_path,
+        )
+
+        if run_id:
+            try:
+                self._workflow_admission_service().mark_completed(
+                    run_id,
+                    attempt_id=attempt_id,
+                    summary={
+                        "status": "completed",
+                        "video_id": clean_video_id,
+                        "reason": "startup_recovery_artifacts_already_ready",
+                        "tutorial_run_path": run_path,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Startup recovery failed to mark run completed run_id=%s video_id=%s: %s",
+                    run_id,
+                    clean_video_id,
+                    exc,
+                )
+
+        if session_dir is not None:
+            self._clear_pending_hook_recovery_marker(session_dir)
+            self._clear_pending_local_ingest_marker(session_dir)
+        return True
+
     def _parse_dispatch_retry_policies(self) -> dict[str, dict[str, Any]]:
         """Parse UA_HOOKS_DISPATCH_RETRY_POLICIES env var (JSON dict).
 
@@ -1872,8 +1936,24 @@ class HooksService:
             action = self._build_youtube_action_from_run_spec(run_spec if isinstance(run_spec, dict) else {})
             if action is None:
                 continue
+            run_id = str(row["run_id"] or "").strip()
+            latest_attempt_id = str(row["latest_attempt_id"] or "").strip()
+            expected_video_id = self._extract_action_field(action.message or "", "video_id")
             provider_session_id = str(row["provider_session_id"] or "").strip() or self._session_id_from_key(action.session_key or "")
             workspace_dir = str(row["workspace_dir"] or self._youtube_workflow_workspace_dir(action.session_key or "")).strip()
+            workspace_path: Optional[Path] = None
+            if workspace_dir:
+                try:
+                    workspace_path = Path(workspace_dir).expanduser().resolve()
+                except Exception:
+                    workspace_path = Path(workspace_dir)
+            if expected_video_id and self._finalize_startup_recovery_if_already_processed(
+                video_id=expected_video_id,
+                run_id=run_id or None,
+                attempt_id=latest_attempt_id or None,
+                session_dir=workspace_path,
+            ):
+                continue
             if attempt_status == "running":
                 try:
                     await self.gateway.resume_session(provider_session_id)
@@ -1884,11 +1964,11 @@ class HooksService:
                             action=action,
                             session_key=str(action.session_key or ""),
                             session_id=provider_session_id,
-                            expected_video_id=self._extract_action_field(action.message or "", "video_id"),
+                            expected_video_id=expected_video_id,
                         ),
                         entrypoint="hooks_service.youtube_tutorial_hook",
-                        run_id=str(row["run_id"] or ""),
-                        attempt_id=str(row["latest_attempt_id"] or ""),
+                        run_id=run_id,
+                        attempt_id=latest_attempt_id,
                         workspace_dir=workspace_dir,
                         failure_reason="startup_interrupted",
                         failure_class="startup_interrupted",
@@ -1899,7 +1979,7 @@ class HooksService:
                     asyncio.create_task(
                         self._dispatch_action(
                             action,
-                            workflow_run_id=str(row["run_id"] or ""),
+                            workflow_run_id=run_id,
                             workflow_attempt_id=retry_decision.attempt_id,
                             workflow_workspace_dir=workspace_dir,
                             skip_workflow_admission=True,
@@ -1911,8 +1991,8 @@ class HooksService:
             asyncio.create_task(
                 self._dispatch_action(
                     action,
-                    workflow_run_id=str(row["run_id"] or ""),
-                    workflow_attempt_id=str(row["latest_attempt_id"] or ""),
+                    workflow_run_id=run_id,
+                    workflow_attempt_id=latest_attempt_id,
                     workflow_workspace_dir=workspace_dir,
                     skip_workflow_admission=True,
                 )
@@ -1928,10 +2008,10 @@ class HooksService:
                     {
                         "source": "hooks",
                         "reason": "runtime_db_recovery",
-                        "video_id": self._extract_action_field(action.message or "", "video_id"),
+                        "video_id": expected_video_id,
                     },
-                    run_id=str(row["run_id"] or ""),
-                    attempt_id=str(row["latest_attempt_id"] or ""),
+                    run_id=run_id,
+                    attempt_id=latest_attempt_id,
                     attempt_number=int(row["attempt_number"] or 0) or None,
                     workspace_dir=workspace_dir,
                     provider_session_id=provider_session_id,
@@ -1962,6 +2042,12 @@ class HooksService:
             action = self._build_youtube_recovery_action(session_id=session_id)
             if action is None:
                 continue
+            expected_video_id = self._extract_action_field(action.message or "", "video_id")
+            if expected_video_id and self._finalize_startup_recovery_if_already_processed(
+                video_id=expected_video_id,
+                session_dir=session_dir,
+            ):
+                continue
             self._record_startup_recovery_attempt(session_dir, session_id=session_id)
             asyncio.create_task(self._dispatch_action(action))
             recovered += 1
@@ -1989,6 +2075,12 @@ class HooksService:
                 continue
             pending_status = str(pending_payload.get("status") or "").strip().lower()
             if pending_status not in {"dispatch_interrupted", "dispatch_retry_pending"}:
+                continue
+            marker_video_id = str(pending_payload.get("video_id") or "").strip()
+            if marker_video_id and self._finalize_startup_recovery_if_already_processed(
+                video_id=marker_video_id,
+                session_dir=session_dir,
+            ):
                 continue
             # ── Retry limit check for retry-pending markers ──────────
             if pending_status == "dispatch_retry_pending":
@@ -2062,6 +2154,12 @@ class HooksService:
                 continue
             pending_status = str(pending_payload.get("status") or "").strip().lower()
             if pending_status not in {"failed_local_ingest", "pending_local_ingest"}:
+                continue
+            marker_video_id = str(pending_payload.get("video_id") or "").strip()
+            if marker_video_id and self._finalize_startup_recovery_if_already_processed(
+                video_id=marker_video_id,
+                session_dir=session_dir,
+            ):
                 continue
             created_epoch = float(pending_payload.get("created_at_epoch") or 0.0)
             if created_epoch > 0 and (now_epoch - created_epoch) < float(self._startup_recovery_min_age_seconds):

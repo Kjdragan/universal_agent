@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Request
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.durable.state import get_run_attempt
+from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.hooks_service import (
     HookAction,
     HookAuthConfig,
@@ -23,7 +23,7 @@ from universal_agent.hooks_service import (
     HookTransformConfig,
     build_manual_youtube_action,
 )
-from universal_agent.workflow_admission import WorkflowAdmissionService
+from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 from universal_agent.gateway import InProcessGateway, GatewaySession
 
 @pytest.fixture
@@ -78,6 +78,36 @@ def _bind_workflow_runtime_db(service: HooksService, tmp_path: Path) -> str:
     runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
     service._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
     return runtime_db_path
+
+
+def _create_processed_tutorial_artifacts(
+    *,
+    artifacts_root: Path,
+    video_id: str,
+    title: str = "Recovered Tutorial",
+) -> Path:
+    run_dir = (
+        artifacts_root
+        / "youtube-tutorial-creation"
+        / "2026-03-26"
+        / f"{video_id}__010101"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "README.md").write_text("# README\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# CONCEPT\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": video_id,
+                "title": title,
+                "status": "ready",
+                "learning_mode": "concept_only",
+                "mode": "explainer_only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
 
 @pytest.mark.asyncio
 async def test_disabled_service(hooks_service):
@@ -1813,6 +1843,8 @@ async def test_recover_interrupted_youtube_sessions_queues_recovery(mock_gateway
 
 @pytest.mark.asyncio
 async def test_recover_interrupted_youtube_sessions_backfills_pending_local_ingest(mock_gateway, tmp_path):
+    isolated_artifacts_root = tmp_path / "artifacts"
+    isolated_artifacts_root.mkdir(parents=True, exist_ok=True)
     with (
         patch("universal_agent.hooks_service.load_ops_config", return_value={}),
         patch.dict(
@@ -1820,6 +1852,7 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
             {
                 "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
                 "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+                "UA_ARTIFACTS_DIR": str(isolated_artifacts_root),
             },
             clear=False,
         ),
@@ -1845,7 +1878,8 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
     )
 
     service._dispatch_action = AsyncMock(return_value=None)
-    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    with patch.dict("os.environ", {"UA_ARTIFACTS_DIR": str(isolated_artifacts_root)}, clear=False):
+        recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
     assert recovered == 1
     await asyncio.sleep(0.05)
     service._dispatch_action.assert_called_once()
@@ -1950,6 +1984,8 @@ async def test_recover_interrupted_youtube_sessions_skips_non_retryable_pending_
 
 @pytest.mark.asyncio
 async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_interrupt(mock_gateway, tmp_path):
+    isolated_artifacts_root = tmp_path / "artifacts"
+    isolated_artifacts_root.mkdir(parents=True, exist_ok=True)
     with (
         patch("universal_agent.hooks_service.load_ops_config", return_value={}),
         patch.dict(
@@ -1957,6 +1993,7 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
             {
                 "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
                 "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+                "UA_ARTIFACTS_DIR": str(isolated_artifacts_root),
             },
             clear=False,
         ),
@@ -1982,7 +2019,8 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
     )
 
     service._dispatch_action = AsyncMock(return_value=None)
-    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    with patch.dict("os.environ", {"UA_ARTIFACTS_DIR": str(isolated_artifacts_root)}, clear=False):
+        recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
     assert recovered == 1
     await asyncio.sleep(0.05)
     service._dispatch_action.assert_called_once()
@@ -1991,6 +2029,156 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
     assert "3L7wPEB8sEc" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_clears_stale_pending_dispatch_for_processed_video(
+    mock_gateway,
+    tmp_path,
+):
+    artifacts_root = tmp_path / "artifacts"
+    video_id = "alreadyReady123"
+    _create_processed_tutorial_artifacts(
+        artifacts_root=artifacts_root,
+        video_id=video_id,
+        title="Already Ready Tutorial",
+    )
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+                "UA_ARTIFACTS_DIR": str(artifacts_root),
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
+
+    session_id = f"session_hook_yt_demo__{video_id}"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_hook_recovery.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "dispatch_interrupted",
+                "session_id": session_id,
+                "video_id": video_id,
+                "reason": "hook_dispatch_interrupted",
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    with patch.dict("os.environ", {"UA_ARTIFACTS_DIR": str(artifacts_root)}, clear=False):
+        recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+
+    assert recovered == 0
+    service._dispatch_action.assert_not_called()
+    assert pending_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_marks_blocked_runtime_row_completed_when_artifacts_exist(
+    mock_gateway,
+    tmp_path,
+):
+    artifacts_root = tmp_path / "artifacts"
+    video_id = "runtimeReady321"
+    _create_processed_tutorial_artifacts(
+        artifacts_root=artifacts_root,
+        video_id=video_id,
+        title="Runtime Row Ready Tutorial",
+    )
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+                "UA_ARTIFACTS_DIR": str(artifacts_root),
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        runtime_db_path = _bind_workflow_runtime_db(service, tmp_path)
+
+    workspace_dir = tmp_path / f"session_hook_yt_demo__{video_id}"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    trigger = WorkflowTrigger(
+        run_kind="youtube_tutorial_hook",
+        trigger_source="hook:webhook",
+        dedup_key=f"youtube_video:{video_id}",
+        payload_json=json.dumps(
+            {
+                "session_key": f"yt_demo__{video_id}",
+                "message": (
+                    f"video_url: https://www.youtube.com/watch?v={video_id}\n"
+                    f"video_id: {video_id}\n"
+                    "mode: auto"
+                ),
+                "route_to": "youtube-expert",
+                "hook_name": "RecoveredYouTubeWebhook",
+            }
+        ),
+        priority=100,
+        run_policy="allow_parallel",
+        interrupt_policy="defer_if_foreground",
+    )
+    workflow_service = WorkflowAdmissionService(runtime_db_path)
+    decision = workflow_service.admit(
+        trigger,
+        entrypoint="hooks_service.youtube_tutorial_hook",
+        workspace_dir=str(workspace_dir),
+        retryable_failure=True,
+        max_attempts=3,
+    )
+    assert decision.run_id
+    assert decision.attempt_id
+    workflow_service.mark_blocked(
+        decision.run_id,
+        attempt_id=decision.attempt_id,
+        reason="hook_dispatch_interrupted",
+        summary={"video_id": video_id},
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    with patch.dict(
+        "os.environ",
+        {
+            "UA_ARTIFACTS_DIR": str(artifacts_root),
+            "UA_RUNTIME_DB_PATH": str(runtime_db_path),
+        },
+        clear=False,
+    ):
+        recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+
+    assert recovered == 0
+    service._dispatch_action.assert_not_called()
+
+    conn = connect_runtime_db(runtime_db_path)
+    ensure_schema(conn)
+    try:
+        run_row = get_run(conn, decision.run_id)
+        attempt_row = get_run_attempt(conn, decision.attempt_id)
+    finally:
+        conn.close()
+
+    assert run_row is not None
+    assert attempt_row is not None
+    assert str(run_row["status"]) == "completed"
+    assert str(attempt_row["status"]) == "completed"
 
 
 def test_build_manual_youtube_action_builds_direct_agent_payload():
