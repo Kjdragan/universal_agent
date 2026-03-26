@@ -279,6 +279,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             value_json TEXT NOT NULL DEFAULT '{}',
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS task_hub_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            event_key TEXT NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'dashboard',
+            sent_at TEXT NOT NULL,
+            UNIQUE(task_id, event_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_hub_notifications_task ON task_hub_notifications(task_id, sent_at DESC);
         """
     )
     for ddl in (
@@ -1725,6 +1735,45 @@ def answer_question(
     conn.commit()
     row = conn.execute("SELECT * FROM task_hub_question_queue WHERE question_id = ?", (question_id,)).fetchone()
     return dict(row) if row else {"question_id": question_id, "answered": True}
+
+
+# ---------------------------------------------------------------------------
+# Notification Dedup
+# ---------------------------------------------------------------------------
+
+def record_notification(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    event_key: str,
+    channel: str = "dashboard",
+) -> bool:
+    """Record that a notification was sent.  Returns True if new, False if already sent."""
+    ensure_schema(conn)
+    now = _now_iso()
+    try:
+        conn.execute(
+            "INSERT INTO task_hub_notifications (task_id, event_key, channel, sent_at) VALUES (?, ?, ?, ?)",
+            (task_id, event_key, channel, now),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def has_notification(
+    conn: sqlite3.Connection,
+    task_id: str,
+    event_key: str,
+) -> bool:
+    """Check whether a notification has already been sent."""
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT 1 FROM task_hub_notifications WHERE task_id = ? AND event_key = ? LIMIT 1",
+        (task_id, event_key),
+    ).fetchone()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------
