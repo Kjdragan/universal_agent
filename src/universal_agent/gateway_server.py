@@ -133,7 +133,7 @@ from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendatio
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
-from universal_agent.services import tutorial_telegram_notifier
+# tutorial_telegram_notifier REMOVED — rebuilding notification system
 from universal_agent import process_heartbeat
 from universal_agent.workflow_admission import (
     WorkflowAdmissionService,
@@ -9413,7 +9413,7 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
                 }
             )
         )
-    tutorial_telegram_notifier.maybe_send(payload)
+    # tutorial_telegram_notifier.maybe_send(payload)  # REMOVED
 
 
 def _normalize_notification_status(status: str) -> str:
@@ -13381,7 +13381,7 @@ async def ops_telegram_status(request: Request):
     _require_ops_auth(request)
 
     # Tutorial notifier config
-    notifier_status = tutorial_telegram_notifier.configured_status()
+    notifier_status = {"enabled": False, "reason": "removed_for_rebuild"}
 
     bot_status = await _resolve_telegram_service_status()
 
@@ -18595,7 +18595,7 @@ async def ops_yt_playlist_watcher_status(request: Request):
     if _yt_playlist_watcher is None:
         return {"enabled": False, "reason": "not_initialized"}
     status = _yt_playlist_watcher.status()
-    status["telegram"] = tutorial_telegram_notifier.configured_status()
+    status["telegram"] = {"enabled": False, "reason": "removed_for_rebuild"}
     return status
 
 
