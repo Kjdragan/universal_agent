@@ -89,7 +89,7 @@ async def idle_dispatch_loop(
             # 3. Check if the task queue has pending work
             #    We use the heartbeat's own task scanning logic by simply
             #    requesting a heartbeat run. The heartbeat itself checks
-            #    Task Hub, Todoist, etc. and only dispatches if there's work.
+            #    Task Hub, etc. and only dispatches if there's work.
             #    This is intentionally simple — we don't duplicate task scanning.
             now = time.time()
 

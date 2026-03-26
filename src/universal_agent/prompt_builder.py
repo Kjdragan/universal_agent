@@ -261,7 +261,7 @@ def build_system_prompt(
         "**Tool Namespaces:**\n"
         "- `mcp__composio__*` - Remote tools (Slack, YouTube, GitHub, CodeInterpreter, etc.) -> Call directly\n"
         
-        "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, Todoist, etc.) -> Call directly\n"
+        "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, Task Hub, etc.) -> Call directly\n"
         "- `memory_search` / `memory_get` - Canonical memory retrieval tools -> Call directly\n"
         "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
         "**External VP control-plane rule (mandatory):**\n"
@@ -273,10 +273,9 @@ def build_system_prompt(
         "If one sibling fails (non-zero exit, blocked by a hook, network error), other siblings may be auto-failed with\n"
         "`<tool_use_error>Sibling tool call errored</tool_use_error>`.\n"
         "Prefer sequential tool calls when any step is likely to fail or needs error handling.\n\n"
-        "**Todoist routing policy:**\n"
-        "- For reminders, personal todos, and brainstorm capture, prefer INTERNAL Todoist tools first (`mcp__internal__todoist_*`).\n"
-        "- Use Composio Todoist discovery/connector flow only when explicitly requested, or when internal Todoist tools are unavailable.\n"
-        "- Do NOT route general engineering/research implementation work into Todoist. Keep those on the standard decomposition + execution pipeline."
+        "**Task management policy:**\n"
+        "- All tasks, reminders, brainstorm capture, and backlog items go through the Task Hub (`mcp__internal__task_hub_task_action`).\n"
+        "- Do NOT route general engineering/research implementation work into simple task capture. Keep those on the standard decomposition + execution pipeline."
     )
 
     # ── 6. CAPABILITY DOMAINS ─────────────────────────────────────────
@@ -292,11 +291,10 @@ def build_system_prompt(
         "- **Real-World Actions**: GoPlaces, Google Maps directions (`mcp__composio__GOOGLEMAPS_*`), authenticated website actions, form filling\n"
         "- **Engineering**: GitHub (`mcp__composio__GITHUB_*`), code analysis, test execution\n"
         "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive (`gws` CLI skills)\n"
-        "- **Reminders & Brainstorm Progression**: Internal Todoist tools for quick capture, dedupe, and heartbeat-visible backlog movement\n"
+        "- **Reminders & Brainstorm Progression**: Task Hub tools for quick capture, dedupe, and heartbeat-visible backlog movement\n"
         "- **System Ops**: Cron scheduling, heartbeat config, monitoring via `system-configuration-agent`\n"
         "- **...and many more**: You have 250+ Composio integrations available. Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover tools for ANY service not listed above.\n"
-        "  Exception: **Never** use Composio for X/Twitter. Always use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n"
-        "  Exception: For Todoist reminder/brainstorm intents, prefer internal Todoist tools before Composio Todoist."
+        "  Exception: **Never** use Composio for X/Twitter. Always use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback)."
     )
 
     # ── 7. EXECUTION STRATEGY ─────────────────────────────────────────
@@ -306,9 +304,8 @@ def build_system_prompt(
         "   - For non-trivial tasks, quickly score candidate domains/lanes before committing.\n"
         "   - Do not default to research/report if direct execution, automation, analysis, or delivery lanes are a better fit.\n"
         "2. **Choose the right atomic-action lane**:\n"
-        "   - Todoist reminders/brainstorm capture -> use INTERNAL Todoist tools first (`mcp__internal__todoist_*`).\n"
+        "   - Task capture/brainstorm/reminders -> use Task Hub tool (`mcp__internal__task_hub_task_action`).\n"
         "   - Email: Simone's own messages -> `agentmail` skill; Kevin's Gmail -> `gmail` skill. NEVER use Composio Gmail tools.\n"
-        "   - Use Composio Todoist only when explicitly asked for connector-level behavior or internal Todoist tools fail.\n"
         "3. **Delegate to specialists** for complex multi-step workflows:\n"
         "   - Deep research pipeline? -> `research-specialist`\n"
         "   - HTML/PDF report? -> `report-writer`\n"
@@ -322,7 +319,7 @@ def build_system_prompt(
         "   - YouTube transcript/metadata/tutorial tasks? -> `youtube-expert`\n"
         "   - Slack interactions? -> `slack-expert`\n"
         "   - System/cron config? -> `system-configuration-agent`\n"
-        "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
+        "   - IMPORTANT: Do NOT substitute simple task capture for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
         "need handoff for delivery (e.g., gws Gmail send, Slack post, or AgentMail).\n"
         "5. **First-action rule (mandatory)**: Your FIRST tool call in response to any user request "
@@ -482,7 +479,7 @@ def build_system_prompt(
     # ── 14b. TASK QUEUE EXECUTION ─────────────────────────────────────
     sections.append(
         "## 📋 TASK QUEUE EXECUTION\n"
-        "You have an active Todoist task queue. During heartbeat cycles, "
+        "You have an active Task Hub task queue. During heartbeat cycles, "
         "scan for actionable tasks and execute them.\n\n"
         "### Task Labels\n"
         "| Label | Meaning |\n"
@@ -498,14 +495,12 @@ def build_system_prompt(
         "2. Execute the highest-priority task\n"
         "3. If stuck, call `check_escalation_memory(issue_pattern)` first\n"
         "4. If still stuck, call `escalate_task(task_id, reason, issue_pattern)`\n"
-        "5. Mark completed tasks done via Todoist\n\n"
-        "### MCP Tools (todoist-ai)\n"
-        "For batch operations, search, and stats, use the `todoist-ai` MCP tools:\n"
-        "- `add-tasks` — batch create (up to 25)\n"
-        "- `find-tasks` — search by text, labels, dates\n"
-        "- `get-productivity-stats` — dashboard metrics\n"
-        "- `find-comments` — read task context\n"
-        "- `add-comments` — add execution notes"
+        "5. Mark completed tasks done via Task Hub\n\n"
+        "### Task Hub Tools\n"
+        "Use `mcp__internal__task_hub_task_action` for task operations:\n"
+        "- Create, update, complete, and park tasks\n"
+        "- Search by labels, status, and priority\n"
+        "- Add comments and execution notes"
     )
 
     # ── 15. REPORT DELEGATION ─────────────────────────────────────────
@@ -695,7 +690,7 @@ def build_vp_system_prompt(
         "**Tool Namespaces:**\n"
         "- `mcp__composio__*` - Remote tools (Slack, YouTube, GitHub, CodeInterpreter, etc.)\n"
         
-        "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, Todoist, etc.)\n"
+        "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, Task Hub, etc.)\n"
         "- `memory_search` / `memory_get` - Memory retrieval tools\n"
         "- `Task` - Delegate to specialist sub-agents\n\n"
         "**Reliability note:** If you issue multiple tool calls in the same message, they are siblings.\n"

@@ -59,14 +59,7 @@ from universal_agent.tools.csi_bridge import (
     csi_watchlist_snapshot_wrapper,
 )
 
-# Todoist task + brainstorm pipeline tools
-from universal_agent.tools.todoist_bridge import (
-    todoist_setup_wrapper,
-    todoist_query_wrapper,
-    todoist_get_task_wrapper,
-    todoist_task_action_wrapper,
-    todoist_idea_action_wrapper,
-)
+# Task Hub tools (Todoist decommissioned — Task Hub is sole task surface)
 from universal_agent.tools.task_hub_bridge import task_hub_task_action_wrapper
 from universal_agent.tools.vp_orchestration import (
     vp_cancel_mission_wrapper,
@@ -114,11 +107,6 @@ def get_core_internal_tools() -> List[Callable]:
         csi_opportunity_bundles_wrapper,
         csi_source_health_wrapper,
         csi_watchlist_snapshot_wrapper,
-        todoist_setup_wrapper,
-        todoist_query_wrapper,
-        todoist_get_task_wrapper,
-        todoist_task_action_wrapper,
-        todoist_idea_action_wrapper,
         task_hub_task_action_wrapper,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,

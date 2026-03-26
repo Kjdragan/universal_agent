@@ -90,8 +90,6 @@ _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS email_task_mappings (
     thread_id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL DEFAULT '',
-    todoist_task_id TEXT NOT NULL DEFAULT '',
-    todoist_master_id TEXT NOT NULL DEFAULT '',
     master_key TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL DEFAULT '',
     sender_email TEXT NOT NULL DEFAULT '',
@@ -120,7 +118,6 @@ def ensure_email_task_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
     # Migrate existing tables: add new columns if they don't exist yet
     for col, default in [
-        ("todoist_master_id", "''"),
         ("master_key", "''"),
         ("sender_trusted", "1"),
         ("security_classification", "''"),
@@ -159,7 +156,6 @@ class EmailTaskBridge:
         self,
         *,
         db_conn: sqlite3.Connection,
-        todoist_service: Any = None,  # deprecated, ignored (kept for compat)
         heartbeat_path: Optional[str] = None,
     ) -> None:
         self._conn = db_conn
@@ -258,12 +254,12 @@ class EmailTaskBridge:
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO email_task_mappings
-                    (thread_id, task_id, todoist_task_id, todoist_master_id,
+                    (thread_id, task_id,
                      master_key, subject, sender_email, sender_trusted,
                      security_classification, workflow_run_id, workflow_attempt_id,
                      provider_session_id, status, last_message_id,
                      message_count, created_at, updated_at)
-                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)
                 """,
                 (thread_id, task_id, master_key, subject, sender_email,
                  int(sender_trusted), security_classification,

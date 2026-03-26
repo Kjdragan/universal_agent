@@ -13,7 +13,6 @@ type SystemCommandResponse = {
   lane?: string;
   interpreted?: Record<string, unknown>;
   task_hub?: Record<string, unknown> | null;
-  todoist?: Record<string, unknown> | null;
   cron?: Record<string, unknown> | null;
   dry_run?: boolean;
 };
@@ -26,7 +25,7 @@ type CommandHistoryEntry = {
   ok: boolean;
   intent?: string;
   lane?: string;
-  todoist_task_id?: string;
+
   task_hub_task_id?: string;
   cron_job_id?: string;
   error?: string;
@@ -188,10 +187,7 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
       if (!response.ok) {
         throw new Error(asText(payload.detail) || `Command failed (${response.status})`);
       }
-      const payloadTodoistTask =
-        payload.todoist && typeof payload.todoist === "object" && (payload.todoist as Record<string, unknown>).task
-          ? ((payload.todoist as Record<string, unknown>).task as Record<string, unknown>)
-          : undefined;
+
       const payloadCronJob =
         payload.cron && typeof payload.cron === "object" && (payload.cron as Record<string, unknown>).job
           ? ((payload.cron as Record<string, unknown>).job as Record<string, unknown>)
@@ -210,7 +206,7 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
         lane: asText(payload.lane),
         intent: asText(payload.intent),
         task_hub_task_id: asText(payloadTaskHub?.task_id),
-        todoist_task_id: asText(payloadTodoistTask?.id),
+
         cron_job_id: asText(payloadCronJob?.job_id),
       });
       setText("");
@@ -245,12 +241,7 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
   const taskHubTask = taskHubBlock.task && typeof taskHubBlock.task === "object"
     ? (taskHubBlock.task as Record<string, unknown>)
     : {};
-  const todoistBlock = result?.todoist && typeof result.todoist === "object"
-    ? (result.todoist as Record<string, unknown>)
-    : {};
-  const todoistTask = todoistBlock.task && typeof todoistBlock.task === "object"
-    ? (todoistBlock.task as Record<string, unknown>)
-    : {};
+
   const cronBlock = result?.cron && typeof result.cron === "object"
     ? (result.cron as Record<string, unknown>)
     : {};
@@ -258,7 +249,7 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
     ? (cronBlock.job as Record<string, unknown>)
     : {};
   const taskHubTaskId = asText(taskHubTask.task_id);
-  const todoistTaskId = asText(todoistTask.id);
+
   const cronJobId = asText(cronJob.job_id);
   const historyRows = history.slice(0, 5);
 
@@ -313,7 +304,7 @@ export default function SystemCommandBar({ sourcePage, onSuccess }: SystemComman
           {interpretedContent && <div>task={interpretedContent}</div>}
           {interpretedSchedule && <div>schedule={interpretedSchedule}</div>}
           {taskHubTaskId && <div>task_hub_task_id={taskHubTaskId}</div>}
-          {todoistTaskId && <div>todoist_task_id={todoistTaskId}</div>}
+
           {cronJobId && <div>cron_job_id={cronJobId}</div>}
         </div>
       )}

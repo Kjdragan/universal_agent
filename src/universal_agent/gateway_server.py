@@ -4357,7 +4357,7 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         "requires_action": requires_action,
         "escalates_to_ua": bool(should_escalate),
         "escalation_reason": escalation_reason,
-        "todoist_sync": task_hub_sync,  # legacy key name preserved for downstream compat
+        "task_hub_sync": task_hub_sync,
     }
 
 
@@ -5890,7 +5890,7 @@ def _emit_cron_event(payload: dict) -> None:
                 "source": "cron",
                 "autonomous": is_autonomous,
                 "system_job": system_job,
-                "todoist_task_id": "",  # deprecated — Todoist decommissioned
+
             },
         )
         _maybe_wake_heartbeat_after_autonomous_cron(
@@ -12051,15 +12051,7 @@ async def lifespan(app: FastAPI):
             pass
         _vp_event_bridge_task = None
     _vp_event_bridge_stop_event = None
-    if _todoist_chron_reconcile_stop_event is not None:
-        _todoist_chron_reconcile_stop_event.set()
-    if _todoist_chron_reconcile_task is not None:
-        try:
-            await _todoist_chron_reconcile_task
-        except Exception:
-            pass
-        _todoist_chron_reconcile_task = None
-    _todoist_chron_reconcile_stop_event = None
+
     if _factory_staleness_stop is not None:
         _factory_staleness_stop.set()
     if _factory_staleness_task is not None:
@@ -13789,10 +13781,6 @@ async def dashboard_summary():
         jobs = _cron_service.list_jobs()
         cron_total = len(jobs)
         cron_enabled = sum(1 for job in jobs if bool(getattr(job, "enabled", False)))
-    reconcile_metrics = (
-        _scheduling_runtime_metrics_snapshot()
-        .get("todoist_chron_reconciliation", {})
-    )
 
     return {
         "sessions": {
@@ -13806,12 +13794,6 @@ async def dashboard_summary():
         "cron": {
             "total": cron_total,
             "enabled": cron_enabled,
-        },
-        "todoist_chron_reconciliation": {
-            "runs": int((reconcile_metrics or {}).get("runs", 0) or 0),
-            "last_run_at": (reconcile_metrics or {}).get("last_run_at"),
-            "last_error": (reconcile_metrics or {}).get("last_error"),
-            "last_result": (reconcile_metrics or {}).get("last_result") or {},
         },
         "notifications": {
             "unread": unread_notifications,
@@ -16552,15 +16534,9 @@ async def dashboard_todolist_email_tasks(limit: int = 50):
                 items = []
                 for row in rows:
                     r = dict(row)
-                    todoist_id = str(r.get("todoist_task_id") or "").strip()
                     items.append({
                         "thread_id": str(r.get("thread_id") or ""),
                         "task_id": str(r.get("task_id") or ""),
-                        "todoist_task_id": todoist_id,
-                        "todoist_href": (
-                            f"https://app.todoist.com/app/task/{todoist_id}"
-                            if todoist_id else ""
-                        ),
                         "workflow_run_id": str(r.get("workflow_run_id") or ""),
                         "workflow_attempt_id": str(r.get("workflow_attempt_id") or ""),
                         "provider_session_id": str(r.get("provider_session_id") or ""),
@@ -17701,9 +17677,6 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         }
 
     hub_task: dict[str, Any] = {}
-    mirror_policy: dict[str, Any] = {}
-    mirror_class = "personal" if is_personal else "internal_only"
-    should_mirror = False
     task_id = _system_command_task_id(
         content=content,
         schedule_text=schedule_text,
@@ -17717,8 +17690,6 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
-            mirror_policy = task_hub.get_mirror_policy(conn)
-            should_mirror = _task_hub_should_mirror(mirror_policy, mirror_class)
             hub_task = task_hub.upsert_item(
                 conn,
                 {
@@ -17764,56 +17735,6 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         finally:
             conn.close()
 
-    mirrored_task: Optional[dict[str, Any]] = None
-    mirror_state = "not_attempted"
-    mirror_error = ""
-    if should_mirror:
-        mirror_state = "skipped"
-        try:
-            from universal_agent.services.todoist_service import TodoService
-
-            todoist = TodoService()
-            mirror_labels = sorted({*labels, "ua-mirror"})
-            mirror_project_key = "proactive" if is_brainstorm else "immediate"
-            mirror_section = "inbox" if is_brainstorm else ("scheduled" if schedule_text else "background")
-            mirrored_task = todoist.create_personal_task(
-                content=content,
-                description=task_description,
-                priority=priority_text,
-                section=mirror_section,
-                labels=mirror_labels,
-                due_string=schedule_text or None,
-                project_key=mirror_project_key,
-                upsert_key=str(hub_task.get("task_id") or ""),
-            )
-            mirror_state = "synced"
-        except Exception as exc:
-            mirror_state = "sync_failed"
-            mirror_error = str(exc)
-            logger.warning("System command Todoist mirror failed: %s", exc)
-
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            task_hub.upsert_mirror_map(
-                conn,
-                task_id=str(hub_task.get("task_id") or ""),
-                todoist_task_id=str((mirrored_task or {}).get("id") or "").strip() or None,
-                mirror_class=mirror_class,
-                mirror_state=mirror_state,
-                last_error=mirror_error or None,
-            )
-            hub_task = task_hub.upsert_item(
-                conn,
-                {
-                    "task_id": str(hub_task.get("task_id") or ""),
-                    "mirror_status": mirror_state,
-                },
-            )
-            task_hub.rebuild_dispatch_queue(conn)
-        finally:
-            conn.close()
-
     cron_job: Optional[dict[str, Any]] = None
     cron_bridge_status: Optional[str] = None
     enable_cron_bridge = (
@@ -17834,7 +17755,6 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                 "source": "system_command",
                 "autonomous": not is_personal,
                 "task_hub_task_id": str(hub_task.get("task_id") or ""),
-                "todoist_task_id": str((mirrored_task or {}).get("id") or "").strip() or None,
                 "source_page": source_page,
                 "source_context": source_context,
             }
@@ -17868,7 +17788,6 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
             "source": "system_command",
             "source_page": source_page,
             "task_hub_task_id": str(hub_task.get("task_id") or ""),
-            "todoist_task_id": str((mirrored_task or {}).get("id") or ""),
             "schedule_text": schedule_text or "",
             "cron_job_id": str((cron_job or {}).get("job_id") or ""),
             "cron_bridge_status": cron_bridge_status or "",
@@ -17896,14 +17815,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         "task_hub": {
             "task": hub_task,
             "duplicates_parked": int(duplicate_parked),
-            "mirror": {
-                "class": mirror_class,
-                "requested": should_mirror,
-                "status": mirror_state,
-                "policy_mode": str(mirror_policy.get("mode") or "selective"),
-            },
         },
-        "todoist": {"task": mirrored_task} if mirrored_task else None,
         "cron": {"job": cron_job, "status": cron_bridge_status} if cron_job or cron_bridge_status else None,
         "dry_run": False,
     }
@@ -19212,286 +19124,8 @@ def _build_system_command_task_description(*, source_page: str, source_context: 
     return "\n".join(parts)
 
 
-def _todoist_chron_mapping_store_path() -> Path:
-    return WORKSPACES_DIR / TODOIST_CHRON_MAPPING_FILENAME
-
-
-def _load_todoist_chron_mapping_store() -> dict[str, Any]:
-    path = _todoist_chron_mapping_store_path()
-    default_store = {
-        "version": TODOIST_CHRON_MAPPING_STORE_VERSION,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "task_map": {},
-    }
-    if not path.exists():
-        return default_store
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default_store
-    if not isinstance(payload, dict):
-        return default_store
-    task_map = payload.get("task_map")
-    if not isinstance(task_map, dict):
-        task_map = {}
-    return {
-        "version": TODOIST_CHRON_MAPPING_STORE_VERSION,
-        "updated_at": str(payload.get("updated_at") or datetime.now(timezone.utc).isoformat()),
-        "task_map": task_map,
-    }
-
-
-def _save_todoist_chron_mapping_store(store: dict[str, Any]) -> None:
-    path = _todoist_chron_mapping_store_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    task_map = store.get("task_map")
-    if not isinstance(task_map, dict):
-        task_map = {}
-    if len(task_map) > TODOIST_CHRON_MAPPING_MAX_ENTRIES:
-        entries = sorted(
-            (
-                str(task_id),
-                value if isinstance(value, dict) else {},
-            )
-            for task_id, value in task_map.items()
-        )
-        kept: dict[str, dict[str, Any]] = {}
-        for task_id, row in entries[-TODOIST_CHRON_MAPPING_MAX_ENTRIES:]:
-            kept[task_id] = row
-        task_map = kept
-    payload = {
-        "version": TODOIST_CHRON_MAPPING_STORE_VERSION,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "task_map": task_map,
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
-
-
-def _todoist_chron_mapping_get(task_id: str) -> Optional[dict[str, Any]]:
-    clean_task_id = str(task_id or "").strip()
-    if not clean_task_id:
-        return None
-    with _todoist_chron_mapping_lock:
-        store = _load_todoist_chron_mapping_store()
-        task_map = store.get("task_map")
-        if not isinstance(task_map, dict):
-            return None
-        row = task_map.get(clean_task_id)
-        if not isinstance(row, dict):
-            return None
-        return dict(row)
-
-
-def _todoist_chron_mapping_upsert(task_id: str, entry: dict[str, Any]) -> dict[str, Any]:
-    clean_task_id = str(task_id or "").strip()
-    if not clean_task_id:
-        return {}
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with _todoist_chron_mapping_lock:
-        store = _load_todoist_chron_mapping_store()
-        task_map = store.setdefault("task_map", {})
-        if not isinstance(task_map, dict):
-            task_map = {}
-            store["task_map"] = task_map
-        previous = task_map.get(clean_task_id)
-        created_at = now_iso
-        if isinstance(previous, dict) and str(previous.get("created_at") or "").strip():
-            created_at = str(previous.get("created_at")).strip()
-        merged = {
-            **(previous if isinstance(previous, dict) else {}),
-            **(entry if isinstance(entry, dict) else {}),
-            "task_id": clean_task_id,
-            "created_at": created_at,
-            "updated_at": now_iso,
-        }
-        task_map[clean_task_id] = merged
-        _save_todoist_chron_mapping_store(store)
-        return dict(merged)
-
-
-def _todoist_chron_mapping_reconciliation_metrics_update(
-    *,
-    result: dict[str, Any],
-    duration_ms: float,
-    error: Optional[str],
-) -> None:
-    bucket = _scheduling_runtime_metrics.setdefault("todoist_chron_reconciliation", {})
-    if not isinstance(bucket, dict):
-        bucket = {}
-        _scheduling_runtime_metrics["todoist_chron_reconciliation"] = bucket
-    bucket["runs"] = int(bucket.get("runs", 0) or 0) + 1
-    bucket["last_run_at"] = datetime.now(timezone.utc).isoformat()
-    bucket["last_duration_ms"] = round(max(0.0, duration_ms), 3)
-    bucket["last_error"] = str(error or "") or None
-    bucket["last_result"] = result if isinstance(result, dict) else {}
-
-
-def _todoist_chron_task_index() -> dict[str, Any]:
-    index: dict[str, Any] = {}
-    if not _cron_service:
-        return index
-    jobs = sorted(
-        list(_cron_service.list_jobs()),
-        key=lambda job: float(getattr(job, "created_at", 0.0) or 0.0),
-        reverse=True,
-    )
-    for job in jobs:
-        metadata = getattr(job, "metadata", {}) or {}
-        if not isinstance(metadata, dict):
-            continue
-        task_id = str(metadata.get("todoist_task_id") or "").strip()
-        if not task_id or task_id in index:
-            continue
-        index[task_id] = job
-    return index
-
-
-def _reconcile_todoist_chron_mappings(*, remove_stale: bool = True, dry_run: bool = False) -> dict[str, Any]:
-    started = time.time()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    stats: dict[str, Any] = {
-        "ok": True,
-        "remove_stale": bool(remove_stale),
-        "dry_run": bool(dry_run),
-        "started_at": now_iso,
-        "inspected": 0,
-        "unchanged": 0,
-        "relinked": 0,
-        "removed": 0,
-        "stale_flagged": 0,
-        "metadata_repairs": 0,
-        "mapping_entries_before": 0,
-        "mapping_entries_after": 0,
-    }
-    error_text: Optional[str] = None
-    try:
-        task_index = _todoist_chron_task_index()
-        with _todoist_chron_mapping_lock:
-            store = _load_todoist_chron_mapping_store()
-            task_map = store.get("task_map")
-            if not isinstance(task_map, dict):
-                task_map = {}
-                store["task_map"] = task_map
-            stats["mapping_entries_before"] = len(task_map)
-            changed = False
-
-            for task_id in sorted(list(task_map.keys())):
-                row = task_map.get(task_id)
-                if not isinstance(row, dict):
-                    if not dry_run:
-                        task_map.pop(task_id, None)
-                        changed = True
-                    stats["removed"] = int(stats.get("removed", 0) or 0) + 1
-                    continue
-                stats["inspected"] = int(stats.get("inspected", 0) or 0) + 1
-                mapped_job_id = str(row.get("cron_job_id") or "").strip()
-                mapped_job = _cron_service.get_job(mapped_job_id) if _cron_service and mapped_job_id else None
-
-                if mapped_job is not None:
-                    metadata = getattr(mapped_job, "metadata", {}) or {}
-                    if isinstance(metadata, dict) and str(metadata.get("todoist_task_id") or "").strip() != task_id:
-                        if not dry_run and _cron_service:
-                            try:
-                                _cron_service.update_job(
-                                    mapped_job.job_id,
-                                    {"metadata": {"todoist_task_id": task_id}},
-                                )
-                                stats["metadata_repairs"] = int(stats.get("metadata_repairs", 0) or 0) + 1
-                            except Exception:
-                                logger.exception(
-                                    "Failed repairing todoist_task_id metadata for cron job %s",
-                                    mapped_job.job_id,
-                                )
-                    if row.get("stale"):
-                        if not dry_run:
-                            row.pop("stale", None)
-                            row.pop("stale_detected_at", None)
-                            row["updated_at"] = now_iso
-                            changed = True
-                    stats["unchanged"] = int(stats.get("unchanged", 0) or 0) + 1
-                    continue
-
-                candidate_job = task_index.get(task_id)
-                if candidate_job is not None:
-                    stats["relinked"] = int(stats.get("relinked", 0) or 0) + 1
-                    if not dry_run:
-                        row["cron_job_id"] = str(candidate_job.job_id)
-                        row["relinked_at"] = now_iso
-                        row["updated_at"] = now_iso
-                        row.pop("stale", None)
-                        row.pop("stale_detected_at", None)
-                        changed = True
-                    continue
-
-                if remove_stale:
-                    stats["removed"] = int(stats.get("removed", 0) or 0) + 1
-                    if not dry_run:
-                        task_map.pop(task_id, None)
-                        changed = True
-                else:
-                    stats["stale_flagged"] = int(stats.get("stale_flagged", 0) or 0) + 1
-                    if not dry_run and not row.get("stale"):
-                        row["stale"] = True
-                        row["stale_detected_at"] = now_iso
-                        row["updated_at"] = now_iso
-                        changed = True
-
-            if changed and not dry_run:
-                _save_todoist_chron_mapping_store(store)
-            stats["mapping_entries_after"] = len(task_map)
-    except Exception as exc:
-        error_text = str(exc)
-        stats["ok"] = False
-        stats["error"] = error_text
-        logger.exception("Todoist<->Chron mapping reconciliation failed")
-    finally:
-        duration_ms = (time.time() - started) * 1000.0
-        _todoist_chron_mapping_reconciliation_metrics_update(
-            result=stats,
-            duration_ms=duration_ms,
-            error=error_text,
-        )
-        stats["duration_ms"] = round(duration_ms, 3)
-    return stats
-
-
-async def _todoist_chron_reconcile_loop() -> None:
-    stop_event = _todoist_chron_reconcile_stop_event or asyncio.Event()
-    while not stop_event.is_set():
-        try:
-            _reconcile_todoist_chron_mappings(
-                remove_stale=TODOIST_CHRON_RECONCILE_REMOVE_STALE,
-                dry_run=False,
-            )
-        except Exception:
-            logger.exception("Todoist<->Chron periodic reconciliation loop iteration failed")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS)
-        except asyncio.TimeoutError:
-            continue
-        except Exception:
-            await asyncio.sleep(1.0)
-
-
-def _todoist_chron_schedule_signature(
-    *,
-    schedule_text: str,
-    timezone_name: str,
-    every_raw: Optional[str],
-    cron_expr: Optional[str],
-    run_at_ts: Optional[float],
-    delete_after_run: bool,
-) -> str:
-    payload = {
-        "schedule_text": str(schedule_text or "").strip().lower(),
-        "timezone": str(timezone_name or "UTC").strip() or "UTC",
-        "every": str(every_raw or "").strip().lower(),
-        "cron_expr": str(cron_expr or "").strip(),
-        "run_at": round(float(run_at_ts), 3) if run_at_ts is not None else None,
-        "delete_after_run": bool(delete_after_run),
-    }
-    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+# -- Todoist<->Chron mapping store, reconciliation functions, and schedule
+# -- signature helpers removed (Todoist fully decommissioned). --
 
 
 def _autonomous_notification_timestamp(item: dict[str, Any]) -> Optional[float]:
@@ -20482,7 +20116,7 @@ def _strip_system_command_prefix(text: str) -> str:
     for pattern in patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = re.sub(
-        r"\bto\s+(my\s+)?(todoist|to-?do\s+list|todo\s+list)\b",
+        r"\bto\s+(my\s+)?(to-?do\s+list|todo\s+list|task\s+hub)\b",
         "",
         cleaned,
         flags=re.IGNORECASE,
@@ -20527,7 +20161,7 @@ def _system_command_is_status_query(text: str) -> bool:
     if not lowered:
         return False
     has_query_verb = bool(re.search(r"\b(status|show|list|what|summary|summarize)\b", lowered))
-    return has_query_verb and bool(re.search(r"\b(todo|todoist|to-?do)\b", lowered))
+    return has_query_verb and bool(re.search(r"\b(todo|to-?do|task\s+hub|task\s+list)\b", lowered))
 
 
 def _system_command_is_personal_task(text: str) -> bool:
@@ -20792,7 +20426,7 @@ def _collect_autonomous_runs_from_cron(
                     "created_at": created_at,
                     "job_id": job_id,
                     "run_id": str(run.get("run_id") or ""),
-                    "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
+
                     "error": "",
                     "system_job": system_job,
                     "report_api_url": "",
@@ -20815,7 +20449,7 @@ def _collect_autonomous_runs_from_cron(
                 "created_at": created_at,
                 "job_id": job_id,
                 "run_id": str(run.get("run_id") or ""),
-                "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
+
                 "error": error_text,
                 "system_job": system_job,
                 "report_api_url": "",
@@ -20857,9 +20491,7 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         "signals_ingest_enabled": (
             str(os.getenv("UA_SIGNALS_INGEST_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
         ),
-        "todoist_credentials_present": bool(
-            (os.getenv("TODOIST_API_TOKEN") or "").strip() or (os.getenv("TODOIST_API_KEY") or "").strip()
-        ),
+
     }
     for item in _notifications:
         if not isinstance(item, dict):
@@ -20882,7 +20514,7 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
             "created_at": str(item.get("created_at") or ""),
             "job_id": str(metadata.get("job_id") or ""),
             "run_id": str(metadata.get("run_id") or ""),
-            "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
+
             "error": str(metadata.get("error") or ""),
             "system_job": str(metadata.get("system_job") or ""),
             "report_api_url": str(metadata.get("report_api_url") or ""),
@@ -20956,10 +20588,7 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         warnings.append(
             "CSI signals ingest is disabled (`UA_SIGNALS_INGEST_ENABLED` is not enabled), so CSI-driven autonomous work may be absent."
         )
-    if not bool(diagnostics.get("todoist_credentials_present")):
-        warnings.append(
-            "Todoist credentials are not configured in this runtime (`TODOIST_API_TOKEN`/`TODOIST_API_KEY`), so sync-backed task flows may fail."
-        )
+
 
     return {
         "window_seconds": window_seconds,
@@ -21050,9 +20679,7 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
     lines.append(
         f"- CSI signals ingest enabled: {'yes' if bool(source_diagnostics.get('signals_ingest_enabled')) else 'no'}"
     )
-    lines.append(
-        f"- Todoist credentials present: {'yes' if bool(source_diagnostics.get('todoist_credentials_present')) else 'no'}"
-    )
+
     lines.append(
         f"- Cron backfill applied: {'yes' if bool(source_diagnostics.get('cron_backfill_applied')) else 'no'}"
     )
@@ -21109,11 +20736,11 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
     lines.append("## Items Requiring User Decision")
     if requires_decision:
         for row in requires_decision:
-            task_id = str(row.get("todoist_task_id") or "").strip()
+            task_id = str(row.get("task_id") or "").strip()
             error_text = str(row.get("error") or "").strip()
             message = str(row.get("message") or "").strip()
             if task_id:
-                lines.append(f"- Todoist task `{task_id}`: {message}")
+                lines.append(f"- Task `{task_id}`: {message}")
             else:
                 lines.append(f"- {message}")
             if error_text:
@@ -22959,22 +22586,7 @@ async def ops_activity_events_metrics(request: Request):
     return {"metrics": _activity_runtime_metrics_snapshot()}
 
 
-@app.post("/api/v1/ops/reconcile/todoist-chron")
-async def ops_reconcile_todoist_chron(
-    request: Request,
-    dry_run: bool = False,
-    remove_stale: Optional[bool] = None,
-):
-    _require_ops_auth(request)
-    effective_remove_stale = (
-        TODOIST_CHRON_RECONCILE_REMOVE_STALE if remove_stale is None else bool(remove_stale)
-    )
-    result = _reconcile_todoist_chron_mappings(
-        remove_stale=effective_remove_stale,
-        dry_run=bool(dry_run),
-    )
-    metrics = _scheduling_runtime_metrics_snapshot().get("todoist_chron_reconciliation", {})
-    return {"status": "ok", "reconciliation": result, "metrics": metrics}
+# -- /api/v1/ops/reconcile/todoist-chron endpoint removed (Todoist decommissioned) --
 
 
 @app.get("/api/v1/ops/metrics/vp-bridge")
@@ -23616,39 +23228,7 @@ async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequ
     }
 
 
-@app.get("/api/v1/ops/todoist/mirror-policy")
-async def ops_todoist_mirror_policy_get(request: Request):
-    _require_ops_auth(request)
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            return {"status": "ok", "policy": task_hub.get_mirror_policy(conn)}
-        finally:
-            conn.close()
-
-
-@app.patch("/api/v1/ops/todoist/mirror-policy")
-async def ops_todoist_mirror_policy_patch(request: Request, payload: TodoistMirrorPolicyPatchRequest):
-    _require_ops_auth(request)
-    patch = payload.model_dump(exclude_none=True)
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            policy = task_hub.update_mirror_policy(conn, patch)
-            return {"status": "ok", "policy": policy}
-        finally:
-            conn.close()
-
-
-@app.get("/api/v1/ops/todoist/mirror-metrics")
-async def ops_todoist_mirror_metrics(request: Request):
-    _require_ops_auth(request)
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            return {"status": "ok", "metrics": task_hub.get_mirror_metrics(conn)}
-        finally:
-            conn.close()
+# -- /api/v1/ops/todoist/mirror-policy and mirror-metrics endpoints removed (Todoist decommissioned) --
 
 
 @app.post("/api/v1/ops/memory/compact-task-intel")
