@@ -16697,6 +16697,21 @@ async def dashboard_todolist_get_subtasks(task_id: str):
                 conn.close()
 
 
+    @app.get("/api/v1/dashboard/todolist/morning-report")
+    async def dashboard_todolist_morning_report():
+        """Return the morning report snapshot for the dashboard."""
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                from universal_agent.services.proactive_advisor import build_morning_report
+                report = build_morning_report(conn)
+                return {"status": "ok", "report": report}
+            except Exception as e:
+                return {"status": "error", "error": str(e), "report": None}
+            finally:
+                conn.close()
+
+
 def _task_history_links_for_session(session_id: str) -> dict[str, str]:
     sid = str(session_id or "").strip()
     if not sid:

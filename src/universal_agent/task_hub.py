@@ -1737,6 +1737,95 @@ def answer_question(
     return dict(row) if row else {"question_id": question_id, "answered": True}
 
 
+def list_expiring_questions(
+    conn: sqlite3.Connection,
+    *,
+    within_minutes: int = 30,
+) -> list[dict[str, Any]]:
+    """List unanswered questions whose expiry is within *within_minutes* from now.
+
+    These are candidates for a proactive re-ask before they silently expire.
+    """
+    ensure_schema(conn)
+    now_dt = datetime.now(timezone.utc)
+    from datetime import timedelta
+    horizon = (now_dt + timedelta(minutes=within_minutes)).isoformat()
+    now = now_dt.isoformat()
+    rows = conn.execute(
+        "SELECT * FROM task_hub_question_queue "
+        "WHERE answered = 0 AND expires_at IS NOT NULL AND expires_at > ? AND expires_at <= ? "
+        "ORDER BY expires_at ASC",
+        (now, horizon),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def requeue_expired_question(
+    conn: sqlite3.Connection,
+    *,
+    question_id: str,
+    fresh_expires_minutes: int = 60,
+) -> dict[str, Any] | None:
+    """Re-create an expired/expiring question with a fresh TTL.
+
+    Appends "(re-asked)" to the question text.  Uses notification dedup
+    (event_key = ``reask:<original_question_id>``) to prevent infinite loops —
+    returns ``None`` if this question has already been re-asked.
+    """
+    ensure_schema(conn)
+    original = conn.execute(
+        "SELECT * FROM task_hub_question_queue WHERE question_id = ?",
+        (question_id,),
+    ).fetchone()
+    if not original:
+        return None
+    original = dict(original)
+
+    # Dedup guard — only re-ask once per original question
+    event_key = f"reask:{question_id}"
+    task_id = str(original.get("task_id") or "")
+    if has_notification(conn, task_id, event_key):
+        return None
+
+    # Mark original as answered so it's no longer pending
+    conn.execute(
+        "UPDATE task_hub_question_queue SET answered = 1, answer_text = '[expired — re-asked]' WHERE question_id = ?",
+        (question_id,),
+    )
+
+    # Create the re-asked question
+    text = str(original.get("question_text") or "")
+    if not text.endswith("(re-asked)"):
+        text = f"{text} (re-asked)"
+    result = enqueue_question(
+        conn,
+        task_id=task_id,
+        question_text=text,
+        channel=str(original.get("channel") or "dashboard"),
+        expires_minutes=fresh_expires_minutes,
+    )
+
+    # Record dedup so we don't re-ask again
+    record_notification(conn, task_id=task_id, event_key=event_key, channel="system")
+    return result
+
+
+def list_brainstorm_tasks(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List active tasks that have a refinement_stage (i.e. brainstorm tasks)."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM task_hub_items "
+        "WHERE refinement_stage IS NOT NULL AND status NOT IN ('done', 'parked', 'cancelled') "
+        "ORDER BY updated_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # Notification Dedup
 # ---------------------------------------------------------------------------

@@ -315,6 +315,8 @@ def _compose_heartbeat_prompt(
     investigation_only: bool,
     task_hub_claims: list[dict[str, Any]],
     workspace_dir: str = "",
+    brainstorm_context_text: str = "",
+    morning_report_text: str = "",
 ) -> str:
     prompt = (base_prompt or DEFAULT_HEARTBEAT_PROMPT).strip()
     if "{ok_token}" in prompt:
@@ -341,6 +343,12 @@ def _compose_heartbeat_prompt(
             "Do not leave claimed tasks in `in_progress`. If work is not completed, use `review`.\n"
             f"Claimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}"
         )
+    # Inject brainstorm context so the agent is aware of refinement stages
+    if brainstorm_context_text:
+        prompt = f"{prompt}\n\n{brainstorm_context_text}"
+    # Inject morning report if this is the first tick of the day
+    if morning_report_text:
+        prompt = f"{prompt}\n\n{morning_report_text}"
     return prompt
 
 
@@ -546,6 +554,7 @@ def _heartbeat_guard_policy(
     system_event_count: int,
     has_exec_completion: bool,
     has_heartbeat_content: bool = False,
+    pending_question_count: int = 0,
 ) -> dict[str, object]:
     autonomous_enabled = _parse_bool(
         os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED"),
@@ -575,6 +584,7 @@ def _heartbeat_guard_policy(
         not autonomous_enabled
         and not has_exec_completion
         and system_event_count <= 0
+        and pending_question_count <= 0
         and (actionable > 0 or brainstorm_candidate_count > 0)
     ):
         skip_reason = "autonomous_disabled"
@@ -585,6 +595,7 @@ def _heartbeat_guard_policy(
         and system_event_count <= 0
         and not has_exec_completion
         and not has_heartbeat_content
+        and pending_question_count <= 0
     ):
         skip_reason = "no_actionable_work"
 
@@ -593,6 +604,7 @@ def _heartbeat_guard_policy(
         "max_actionable": max_actionable,
         "max_system_events": max_system_events,
         "max_proactive_per_cycle": max_proactive_per_cycle,
+        "pending_question_count": pending_question_count,
         "skip_reason": skip_reason,
     }
 
@@ -1555,6 +1567,11 @@ class HeartbeatService:
             max_proactive_per_cycle = int(guard_policy.get("max_proactive_per_cycle") or 1)
             max_system_events = int(guard_policy.get("max_system_events") or 1)
 
+            # Proactive advisor variables (set inside Task Hub block, used after)
+            _brainstorm_ctx_text = ""
+            _pending_q_count = 0
+            _morning_text = ""
+
             # Deterministic Task Hub pre-step: heartbeat consumes prepared dispatch queue.
             try:
                 conn = connect_runtime_db(get_activity_db_path())
@@ -1649,6 +1666,49 @@ class HeartbeatService:
                         except Exception:
                             pass  # memory context is advisory, never block heartbeat
 
+                    # Phase 5: Proactive Advisor — brainstorm context + morning report
+                    try:
+                        from universal_agent.services.proactive_advisor import (
+                            build_brainstorm_context,
+                            format_brainstorm_context_prompt,
+                            build_morning_report,
+                        )
+                        _brainstorm_ctx = build_brainstorm_context(conn)
+                        _brainstorm_ctx_text = format_brainstorm_context_prompt(_brainstorm_ctx)
+                        _pending_q_count = len(task_hub.list_pending_questions(conn, limit=100))
+
+                        # Morning report: trigger on first tick of the day
+                        _morning_text = ""
+                        last_run_ts = getattr(state, "last_run", None)
+                        now_date = datetime.now().date()
+                        last_date = None
+                        if last_run_ts:
+                            try:
+                                last_date = last_run_ts.date()
+                            except Exception:
+                                pass
+                        if last_date is None or last_date < now_date:
+                            report = build_morning_report(conn)
+                            _morning_text = str(report.get("report_text") or "")
+                            if _morning_text:
+                                logger.info(
+                                    "Morning report generated for %s (%d active, %d brainstorm)",
+                                    session.session_id,
+                                    report.get("total_active", 0),
+                                    len(report.get("brainstorm_tasks") or []),
+                                )
+
+                        metadata["proactive_advisor"] = {
+                            "brainstorm_task_count": len(_brainstorm_ctx),
+                            "pending_question_count": _pending_q_count,
+                            "morning_report": bool(_morning_text),
+                        }
+                    except Exception as pa_exc:
+                        logger.debug("Proactive advisor unavailable: %s", pa_exc)
+                        _brainstorm_ctx_text = ""
+                        _pending_q_count = 0
+                        _morning_text = ""
+
                 finally:
                     conn.close()
             except Exception as exc:
@@ -1664,6 +1724,7 @@ class HeartbeatService:
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
                 has_heartbeat_content=bool(heartbeat_content.strip()),
+                pending_question_count=_pending_q_count,
             )
             guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
             metadata["heartbeat_guard"] = {
@@ -1694,6 +1755,8 @@ class HeartbeatService:
                 investigation_only=heartbeat_investigation_only,
                 task_hub_claims=task_hub_claimed,
                 workspace_dir=str(session.workspace_dir),
+                brainstorm_context_text=_brainstorm_ctx_text,
+                morning_report_text=_morning_text,
             )
             
             full_response = ""
