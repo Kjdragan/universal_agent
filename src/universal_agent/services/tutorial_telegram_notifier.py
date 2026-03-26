@@ -58,6 +58,7 @@ _SUPPRESSED_KINDS = {
     "youtube_playlist_new_video",
     "youtube_playlist_dispatch_failed",
     "youtube_tutorial_started",
+    "youtube_hook_recovery_queued",
 }
 
 # Global system-health alert kinds: not tied to a specific video.
