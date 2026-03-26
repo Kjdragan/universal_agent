@@ -8,32 +8,16 @@ import { formatDistanceToNow, parseISO } from "date-fns";
 const API_BASE = "/api/dashboard/gateway";
 const AUTO_REFRESH_SECONDS = 30;
 
-/* ── Design Tokens (Stitch: Kinetic Command Deck) ────────────────── */
+/* ── KCD accent color class mapping helpers ──────────────────────── */
 
-const T = {
-  bg: "#0b1326",
-  surfaceDim: "#0f1a33",
-  surfaceLow: "#131f3d",
-  surfaceHigh: "#1a2847",
-  surfaceBright: "#223054",
-  cyan: "#22D3EE",
-  cyanDim: "rgba(34,211,238,0.12)",
-  cyanGhost: "rgba(34,211,238,0.20)",
-  amber: "#EE9800",
-  amberDim: "rgba(238,152,0,0.12)",
-  green: "#4ADE80",
-  greenDim: "rgba(74,222,128,0.12)",
-  red: "#EF4444",
-  redDim: "rgba(239,68,68,0.12)",
-  indigo: "#818CF8",
-  indigoDim: "rgba(129,140,248,0.12)",
-  textPrimary: "#E2E8F0",
-  textSecondary: "#BBC9CD",
-  textMuted: "#64748B",
-  ghostBorder: "rgba(187,201,205,0.15)",
-  fontMono: "'JetBrains Mono', 'Fira Code', monospace",
-  fontUi: "'Inter', system-ui, sans-serif",
-};
+/** Map a priority number to a Tailwind text-color class */
+function priorityColorClass(priority?: number): string {
+  const p = Number(priority || 1);
+  if (p >= 4) return "text-kcd-red";
+  if (p === 3) return "text-kcd-amber";
+  if (p === 2) return "text-kcd-cyan";
+  return "text-kcd-text-muted";
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -250,27 +234,16 @@ function priorityColor(priority?: number): string {
 
 function sourceKindPill(kind?: string) {
   const k = String(kind || "internal").toLowerCase();
-  const colors: Record<string, string> = {
-    task_hub: T.cyan,
-    internal: T.cyan,
-    approval: T.amber,
-    email: T.indigo,
-    csi: T.textMuted,
+  const colorMap: Record<string, string> = {
+    task_hub: "bg-kcd-cyan/10 text-kcd-cyan",
+    internal: "bg-kcd-cyan/10 text-kcd-cyan",
+    approval: "bg-kcd-amber/10 text-kcd-amber",
+    email: "bg-kcd-indigo/10 text-kcd-indigo",
+    csi: "bg-kcd-text-muted/10 text-kcd-text-muted",
   };
-  const c = colors[k] ?? T.textMuted;
+  const cls = colorMap[k] ?? "bg-kcd-text-muted/10 text-kcd-text-muted";
   return (
-    <span
-      style={{
-        fontFamily: T.fontMono,
-        fontSize: 9,
-        fontWeight: 700,
-        letterSpacing: "0.08em",
-        padding: "2px 6px",
-        background: `${c}18`,
-        color: c,
-        textTransform: "uppercase",
-      }}
-    >
+    <span className={`font-mono text-[9px] font-bold tracking-[0.08em] px-1.5 py-0.5 uppercase ${cls}`}>
       {k}
     </span>
   );
@@ -692,46 +665,17 @@ export default function ToDoListDashboardPage() {
     );
   }
 
-  // ── Inline style helpers for action buttons ────────────────────────────────
-
-  const actionBtn = (color: string, bg: string): React.CSSProperties => ({
-    background: bg,
-    color,
-    border: "none",
-    padding: "4px 10px",
-    fontFamily: T.fontMono,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: "0.05em",
-    cursor: "pointer",
-    textTransform: "uppercase",
-  });
-
-  const menuBtn = (color: string): React.CSSProperties => ({
-    background: "transparent",
-    color,
-    border: "none",
-    padding: "4px 10px",
-    fontFamily: T.fontMono,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: "0.05em",
-    cursor: "pointer",
-    textTransform: "uppercase",
-    textAlign: "left" as const,
-    width: "100%",
-  });
+  // (actionBtn / menuBtn helpers removed — all buttons now use Tailwind classes)
 
   // ── Sub-renders ───────────────────────────────────────────────────────────────
 
   const renderTaskCard = (item: AgentQueueItem, idx: number, showActions = true, onDelete?: (id: string) => void) => {
     const isPending = actionPendingTaskId === item.task_id;
-    const pColor = (() => { const p = Number(item.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })();
+    const pCls = priorityColorClass(item.priority);
     return (
       <article
         key={item.task_id}
-        className={`group relative rounded-md p-3 transition-all duration-200 hover:bg-kcd-surface-high/80 hover:-translate-y-[1px] hover:shadow-glow-cyan ${item.must_complete ? "border-l-2 border-l-kcd-red" : ""}`}
-        style={{ background: T.surfaceLow, border: `1px solid ${T.ghostBorder}` }}
+        className={`group relative rounded-md p-3 transition-all duration-200 bg-kcd-surface-low border border-white/[0.15] hover:bg-kcd-surface-high/80 hover:-translate-y-[1px] hover:shadow-glow-cyan ${item.must_complete ? "border-l-2 border-l-kcd-red" : ""}`}
       >
         {onDelete && (
           <button onClick={() => onDelete(item.task_id)} disabled={isPending} title="Remove from queue"
@@ -763,7 +707,7 @@ export default function ToDoListDashboardPage() {
             )}
           </div>
           <div className="text-right shrink-0">
-            <div className="font-mono text-[10px] font-bold" style={{ color: pColor }}>{priorityText(item.priority)}</div>
+            <div className={`font-mono text-[10px] font-bold ${pCls}`}>{priorityText(item.priority)}</div>
             {item.score !== undefined && <div className="font-mono text-[9px] text-kcd-text-muted mt-0.5">score {item.score} · Q{item.score_confidence ?? 0}</div>}
           </div>
         </div>
@@ -804,11 +748,10 @@ export default function ToDoListDashboardPage() {
   };
 
   const renderCompletedCard = (item: CompletedTaskItem) => {
-    const pColor = (() => { const p = Number(item.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })();
+    const pCls = priorityColorClass(item.priority);
     return (
       <article key={`completed-${item.task_id}`}
-        className="group relative rounded-md p-3 transition-all duration-200 hover:bg-kcd-surface-high/80"
-        style={{ background: T.surfaceLow, border: `1px solid ${T.ghostBorder}` }}>
+        className="group relative rounded-md p-3 transition-all duration-200 bg-kcd-surface-low border border-white/[0.15] hover:bg-kcd-surface-high/80">
         <button onClick={() => void handleDeleteCompletedTask(item.task_id)} title="Delete"
           className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
           <span className="material-symbols-outlined text-base">delete</span>
@@ -830,7 +773,7 @@ export default function ToDoListDashboardPage() {
             </h3>
             {item.description && <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>}
           </div>
-          <div className="font-mono text-[10px] font-bold shrink-0 text-right" style={{ color: pColor }}>{priorityText(item.priority)}</div>
+          <div className={`font-mono text-[10px] font-bold shrink-0 text-right ${pCls}`}>{priorityText(item.priority)}</div>
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
           {item.project_key && <span>{item.project_key}</span>}
@@ -1161,17 +1104,16 @@ export default function ToDoListDashboardPage() {
         {/* ── Summary Cards ── */}
         <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {[
-            { label: `Dispatch Eligible${dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}`, value: overview?.queue_health?.dispatch_eligible || 0, sub: `${overview?.queue_health?.dispatch_queue_size || 0} in queue`, color: T.textPrimary },
-            { label: "Active Agents", value: agentActivity?.active_agents || 0, sub: `${(agentActivity?.active_assignments || []).length} assignments`, color: T.cyan },
-            { label: "Backlog Open", value: agentActivity?.backlog_open || 0, sub: "total queued", color: T.textPrimary },
-            { label: "Approvals Pending", value: approvalsHighlight?.pending_count || 0, sub: "awaiting decision", color: T.amber },
-            { label: "Completion Rate", value: completionRate24h !== null ? `${completionRate24h}%` : "—", sub: "24h completed / rejected", color: completionRate24h !== null ? (completionRate24h >= 70 ? T.green : completionRate24h >= 40 ? T.amber : T.red) : T.textMuted },
+            { label: `Dispatch Eligible${dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}`, value: overview?.queue_health?.dispatch_eligible || 0, sub: `${overview?.queue_health?.dispatch_queue_size || 0} in queue`, cls: "text-kcd-text" },
+            { label: "Active Agents", value: agentActivity?.active_agents || 0, sub: `${(agentActivity?.active_assignments || []).length} assignments`, cls: "text-kcd-cyan" },
+            { label: "Backlog Open", value: agentActivity?.backlog_open || 0, sub: "total queued", cls: "text-kcd-text" },
+            { label: "Approvals Pending", value: approvalsHighlight?.pending_count || 0, sub: "awaiting decision", cls: "text-kcd-amber" },
+            { label: "Completion Rate", value: completionRate24h !== null ? `${completionRate24h}%` : "—", sub: "24h completed / rejected", cls: completionRate24h !== null ? (completionRate24h >= 70 ? "text-kcd-green" : completionRate24h >= 40 ? "text-kcd-amber" : "text-kcd-red") : "text-kcd-text-muted" },
           ].map((card, i) => (
             <article key={card.label}
-              className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-3 hover:border-kcd-cyan/20 hover:shadow-glow-cyan transition-all duration-300 group animate-fade-in-stagger"
-              style={{ animationDelay: `${i * 80}ms` }}>
+              className={`backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-3 hover:border-kcd-cyan/20 hover:shadow-glow-cyan transition-all duration-300 group animate-fade-in-stagger [animation-delay:${i * 80}ms]`}>
               <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0">{card.label}</p>
-              <p className="text-xl font-semibold mt-1 m-0 transition-colors group-hover:brightness-110" style={{ color: card.color }}>{card.value}</p>
+              <p className={`text-xl font-semibold mt-1 m-0 transition-colors group-hover:brightness-110 ${card.cls}`}>{card.value}</p>
               <p className="text-[10px] text-kcd-text-muted mt-1 m-0">{card.sub}</p>
             </article>
           ))}
@@ -1188,7 +1130,7 @@ export default function ToDoListDashboardPage() {
         ) : (
           <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
             {(agentActivity?.active_assignments || []).map((a) => {
-              const pColor = (() => { const p = Number(a.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })();
+              const aPCls = priorityColorClass(a.priority);
               return (
                 <div key={a.assignment_id} className="bg-kcd-cyan/[0.08] border border-kcd-cyan/20 rounded-md p-3 hover:bg-kcd-cyan/[0.12] transition-colors">
                   <div className="flex items-start justify-between gap-2">
@@ -1196,7 +1138,7 @@ export default function ToDoListDashboardPage() {
                       <div className="font-mono text-[9px] font-bold tracking-wider text-kcd-cyan uppercase">{a.agent_id}</div>
                       <div className="text-[13px] font-medium text-kcd-text mt-1 leading-snug">{a.title}</div>
                     </div>
-                    <span className="font-mono text-[10px] font-bold shrink-0" style={{ color: pColor }}>{priorityText(a.priority)}</span>
+                    <span className={`font-mono text-[10px] font-bold shrink-0 ${aPCls}`}>{priorityText(a.priority)}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
                     {a.project_key && <span>{a.project_key}</span>}
@@ -1221,13 +1163,13 @@ export default function ToDoListDashboardPage() {
 
       {/* ── Kanban Time Horizon Board ── */}
       <div className="grid gap-3 grid-cols-1 lg:grid-cols-3" onClick={(e) => e.stopPropagation()}>
-        <KanbanCol label="Future" icon="schedule" count={futureItems.length} accentColor={T.cyan} emptyText="No queued tasks.">
+        <KanbanCol label="Future" icon="schedule" count={futureItems.length} accentColor="#22D3EE" emptyText="No queued tasks.">
           {futureItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
-        <KanbanCol label="In Progress" icon="bolt" count={nowItems.length} accentColor={T.green} emptyText="Nothing actively in progress.">
+        <KanbanCol label="In Progress" icon="bolt" count={nowItems.length} accentColor="#4ADE80" emptyText="Nothing actively in progress.">
           {nowItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
         </KanbanCol>
-        <KanbanCol label="Past" icon="check_circle" count={visibleCompletedRows.length} accentColor={T.textMuted} emptyText="No completed tasks yet.">
+        <KanbanCol label="Past" icon="check_circle" count={visibleCompletedRows.length} accentColor="#64748B" emptyText="No completed tasks yet.">
           <>
             {visibleCompletedRows.length > 1 && (
               <div className="flex justify-end">
