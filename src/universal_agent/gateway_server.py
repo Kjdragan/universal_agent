@@ -19780,21 +19780,30 @@ def _heartbeat_fallback_findings(
     action_match = re.search(r"^Action:\s*(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
     run_match = re.search(r"^Run\s+(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
     is_missing = "missing" in parse_error
+
+    # ── Missing artifact with no warning markers = healthy (200 OK) ──
+    # The agent simply didn't write the file — common for short-circuit
+    # heartbeat runs where everything was fine.  Only escalate when
+    # the markdown report contains actual WARN/CRITICAL/ERROR markers
+    # or the artifact *existed* but couldn't be parsed.
+    if is_missing and not warning_match:
+        return {
+            "version": 1,
+            "overall_status": "ok",
+            "generated_at_utc": _utc_now_iso(),
+            "source": "heartbeat_fallback",
+            "summary": "200 OK",
+            "parse_error": parse_error,
+            "findings": [],
+        }
+
     summary = (
         warning_match.group(2).strip()
         if warning_match
-        else (
-            "Heartbeat completed; structured findings artifact was not produced for this run."
-            if is_missing
-            else "Heartbeat completed with non-OK findings, but the structured findings artifact could not be parsed."
-        )
+        else "Heartbeat completed with non-OK findings, but the structured findings artifact could not be parsed."
     )
     severity = "critical" if warning_match and warning_match.group(1).strip().lower() in {"critical", "error"} else "warn"
-    recommendation = action_match.group(1).strip() if action_match else (
-        "Findings artifact absent; review heartbeat response text for details."
-        if is_missing
-        else parse_error
-    )
+    recommendation = action_match.group(1).strip() if action_match else parse_error
     runbook_command = run_match.group(0).strip() if run_match else ""
     return {
         "version": 1,
