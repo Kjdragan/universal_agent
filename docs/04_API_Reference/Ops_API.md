@@ -330,33 +330,30 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 - CSI signal processing
 - Custom webhook handlers
 
-## 10. Continuity APIs
+## 10. Session Continuity Metrics
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/continuity/notifications` | GET | Get continuity notifications |
-| `/api/v1/continuity/alerts` | GET | Get continuity alerts |
-| `/api/v1/continuity/window-counts` | GET | Get window-based counts |
+| `/api/v1/ops/metrics/session-continuity` | GET | Get session continuity metrics (resume/attach rates, window counts) |
 
-## 11. Memory APIs
+## 11. Session MCP Management
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/memory/index/search` | GET | Search memory index |
-| `/api/v1/memory/index/refresh` | POST | Refresh memory index |
+| `/api/v1/ops/sessions/{session_id}/mcp` | GET | List MCP servers for session |
+| `/api/v1/ops/sessions/{session_id}/mcp` | POST | Add MCP server to session |
+| `/api/v1/ops/sessions/{session_id}/mcp` | DELETE | Remove MCP server from session |
 
-## 12. MCP Server Management
+## 12. Memory Operations
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/ops/mcp/servers` | GET | List MCP servers |
-| `/api/v1/ops/mcp/servers` | POST | Add MCP server |
-| `/api/v1/ops/mcp/servers/{name}` | DELETE | Remove MCP server |
+| `/api/v1/ops/memory/compact-task-intel` | POST | Compact task intelligence memory |
 
 ## 13. Work Threads
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/ops/work-threads` | GET | List work threads |
 | `/api/v1/ops/work-threads` | POST | Create work thread |
-| `/api/v1/ops/work-threads/{id}` | PUT | Update work thread |
-| `/api/v1/ops/work-threads/{id}/decisions` | POST | Add decision to thread |
+| `/api/v1/ops/work-threads/decide` | POST | Submit decision for work thread |
+| `/api/v1/ops/work-threads/{thread_id}` | PATCH | Update work thread |
 
 ## 14. Session Operations
 | Endpoint | Method | Description |
