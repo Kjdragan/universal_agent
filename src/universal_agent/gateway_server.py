@@ -7657,6 +7657,10 @@ _SUPERSEDE_TRIGGER_KINDS = frozenset({
 _SUPERSEDED_FAILURE_KINDS = frozenset({
     "youtube_tutorial_failed",
     "youtube_tutorial_interrupted",
+    "youtube_playlist_dispatch_failed",
+    "youtube_playlist_new_video",
+    "youtube_tutorial_started",
+    "youtube_tutorial_progress",
 })
 
 

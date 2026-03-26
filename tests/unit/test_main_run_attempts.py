@@ -164,3 +164,29 @@ def test_default_urw_workspace_path_uses_run_prefix():
     path = agent_main._default_urw_workspace_path()
     assert path.name.startswith("run_")
     assert path.parent.name == "urw_sessions"
+
+
+def test_ensure_current_run_attempt_bootstraps_missing_parent_run():
+    conn = _conn()
+
+    token = set_ctx(
+        SessionContext(
+            run_id="run-missing-main",
+            runtime_db_conn=conn,
+            observer_workspace_dir="/tmp/missing-parent-run",
+            trace={},
+        )
+    )
+    try:
+        attempt_id = agent_main._ensure_current_run_attempt(status="running")
+    finally:
+        reset_ctx(token)
+
+    assert attempt_id is not None
+    run_row = get_run(conn, "run-missing-main")
+    assert run_row is not None
+    assert run_row["status"] == "running"
+    assert run_row["workspace_dir"] == "/tmp/missing-parent-run"
+    attempt_row = get_run_attempt(conn, attempt_id)
+    assert attempt_row is not None
+    assert attempt_row["run_id"] == "run-missing-main"

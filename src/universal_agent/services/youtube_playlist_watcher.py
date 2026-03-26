@@ -301,6 +301,14 @@ class YouTubePlaylistWatcher:
             for v in list(state.get("notified_delayed_video_ids") or [])
             if str(v or "").strip()
         )
+        # Prune stale pending entries that already produced artifacts while the
+        # watcher was offline (for example recovered by another route).
+        for video_id in list(self._pending_dispatch_items):
+            if not _video_has_processed_tutorial_artifacts(video_id):
+                continue
+            self._pending_dispatch_items.pop(video_id, None)
+            self._notified_delayed_videos.discard(video_id)
+            seen.add(video_id)
         seen.update(self._pending_dispatch_items.keys())
         self._seen_ids = seen
         self._seen_count = len(seen)
@@ -399,6 +407,17 @@ class YouTubePlaylistWatcher:
                 # ── Retry pending (previously failed) dispatches silently ──
                 for vid in list(self._pending_dispatch_items):
                     pending_item = self._pending_dispatch_items[vid]
+                    if _video_has_processed_tutorial_artifacts(vid):
+                        async with self._dispatch_lock:
+                            seen.add(vid)
+                            self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                        self._pending_dispatch_items.pop(vid, None)
+                        self._notified_delayed_videos.discard(vid)
+                        logger.info(
+                            "📺 Cleared stale pending dispatch for already-processed video_id=%s",
+                            vid,
+                        )
+                        continue
                     logger.info("📺 Retrying pending dispatch video_id=%s", vid)
                     dispatched = await self._dispatch(pending_item, silent=True)
                     if dispatched:
@@ -659,41 +678,38 @@ class YouTubePlaylistWatcher:
                     or bool(details.get("retryable"))
                 )
                 _vid = item.get("video_id", "")
-                # In silent mode (pending retry), skip ALL notifications
-                if not silent:
-                    # Suppress duplicate delayed notifications (only one per video)
-                    if _is_retryable and _vid in self._notified_delayed_videos:
-                        logger.debug(
-                            "📺 Suppressed duplicate Dispatch Delayed for video_id=%s", _vid,
-                        )
+                if _is_retryable:
+                    # Retryable admission/contention should not create user-facing
+                    # notices. The video stays pending and is retried on next poll.
+                    self._notified_delayed_videos.add(_vid)
+                    if silent:
+                        logger.debug("📺 Silent retry failed for video_id=%s reason=%s", _vid, reason)
                     else:
-                        if _is_retryable:
-                            self._notified_delayed_videos.add(_vid)
-                        self._emit_notification(
-                            kind="youtube_playlist_dispatch_failed",
-                            title=(
-                                "Tutorial Dispatch Delayed" if _is_retryable
-                                else "Tutorial Dispatch Rejected"
-                            ),
-                            message=(
-                                f"{item.get('title') or _vid}: "
-                                "runtime storage is temporarily busy; automatic retry will occur on the next playlist poll."
-                                if _is_retryable
-                                else f"{item.get('title') or _vid}: {reason}"
-                            ),
-                            severity="warning",
-                            metadata={
-                                "video_id": item.get("video_id", ""),
-                                "reason": reason,
-                                "retryable": bool(details.get("retryable")),
-                                "run_id": str(details.get("run_id") or "").strip(),
-                                "attempt_id": str(details.get("attempt_id") or "").strip(),
-                                "attempt_number": details.get("attempt_number"),
-                                "workspace_dir": str(details.get("workspace_dir") or "").strip(),
-                            },
+                        logger.info(
+                            "📺 Retryable dispatch defer video_id=%s reason=%s (no notification emitted)",
+                            _vid,
+                            reason,
                         )
+                    return False
+                # Non-retryable rejections remain user-visible.
+                if not silent:
+                    self._emit_notification(
+                        kind="youtube_playlist_dispatch_failed",
+                        title="Tutorial Dispatch Rejected",
+                        message=f"{item.get('title') or _vid}: {reason}",
+                        severity="warning",
+                        metadata={
+                            "video_id": item.get("video_id", ""),
+                            "reason": reason,
+                            "retryable": bool(details.get("retryable")),
+                            "run_id": str(details.get("run_id") or "").strip(),
+                            "attempt_id": str(details.get("attempt_id") or "").strip(),
+                            "attempt_number": details.get("attempt_number"),
+                            "workspace_dir": str(details.get("workspace_dir") or "").strip(),
+                        },
+                    )
                 else:
-                    logger.debug("📺 Silent retry failed for video_id=%s reason=%s", _vid, reason)
+                    logger.debug("📺 Silent non-retryable rejection video_id=%s reason=%s", _vid, reason)
                 return False
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -780,23 +796,13 @@ class YouTubePlaylistWatcher:
             seen.add(vid)
             self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
 
-        # Emit notification and dispatch outside the lock (slow operations).
+        # Dispatch outside the lock (slow operation). We intentionally do not
+        # emit detection-only notifications here; user-facing updates begin
+        # when the run is admitted.
         logger.info(
             "📺 New playlist video detected video_id=%s title=%r",
             vid,
             item.get("title", ""),
-        )
-        self._emit_notification(
-            kind="youtube_playlist_new_video",
-            title="New Tutorial Video Detected",
-            message=f"{item.get('title') or vid} — queued for processing",
-            severity="info",
-            metadata={
-                "video_id": vid,
-                "video_url": item.get("url", f"https://www.youtube.com/watch?v={vid}"),
-                "title": item.get("title", ""),
-                "playlist_id": playlist_id,
-            },
         )
         accepted = False
         try:
@@ -880,6 +886,17 @@ class YouTubePlaylistWatcher:
         dispatched = []
         for vid in list(self._pending_dispatch_items):
             pending_item = self._pending_dispatch_items[vid]
+            if _video_has_processed_tutorial_artifacts(vid):
+                async with self._dispatch_lock:
+                    seen.add(vid)
+                    self._persist_seen_state(seen, current_ids, timestamp_key="updated_at")
+                self._pending_dispatch_items.pop(vid, None)
+                self._notified_delayed_videos.discard(vid)
+                logger.info(
+                    "📺 poll_now: cleared stale pending dispatch for already-processed video_id=%s",
+                    vid,
+                )
+                continue
             logger.info("📺 poll_now: retrying pending dispatch video_id=%s", vid)
             ok = await self._dispatch(pending_item, silent=True)
             if ok:

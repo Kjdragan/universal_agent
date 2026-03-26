@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 import time
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -100,10 +101,11 @@ async def test_hook_dispatch_skips_when_turn_not_admitted(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_internal_action_with_admission_returns_structured_result(monkeypatch):
+async def test_dispatch_internal_action_with_admission_returns_structured_result(monkeypatch, tmp_path):
     import universal_agent.hooks_service as hs
 
     monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
     gateway = _FakeGateway()
 
     async def admit(session_id: str, request):
@@ -348,3 +350,67 @@ async def test_background_admission_serializes_concurrent_workflow_admissions(mo
     assert second["decision"] == "accepted"
     assert admission_service.max_active == 1
     assert service._dispatch_action.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_background_admission_releases_lock_between_retry_backoffs(monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+    service = HooksService(gateway)
+    service.config.enabled = True
+    service._dispatch_action = AsyncMock(return_value={"decision": "accepted"})
+    service._workflow_attempt_context = lambda **_: {"attempt_number": 1, "workspace_dir": "/tmp/workflow"}
+    service._workflow_admission_retry_base_seconds = 0.2
+    service._workflow_admission_retry_max_delay_seconds = 0.2
+    service._workflow_admission_retry_ceiling_seconds = 0.5
+
+    class _RetryFirstAdmissionService:
+        def __init__(self) -> None:
+            self.calls: dict[str, int] = {}
+
+        def admit(self, trigger, *args, **kwargs):
+            dedup_key = str(getattr(trigger, "dedup_key", "") or "")
+            self.calls[dedup_key] = int(self.calls.get(dedup_key) or 0) + 1
+            if dedup_key.endswith("retry_first") and self.calls[dedup_key] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return WorkflowAdmissionDecision(
+                "start_new_run",
+                f"run_{dedup_key}_{self.calls[dedup_key]}",
+                f"attempt_{dedup_key}_{self.calls[dedup_key]}",
+                "new_run_created",
+            )
+
+    service._workflow_admission_service = lambda: _RetryFirstAdmissionService()
+
+    payload_first = {
+        "kind": "agent",
+        "name": "AutoHeartbeatInvestigation",
+        "session_key": "simone_heartbeat_ntf_retry_first",
+        "message": "activity_id: ntf_retry_first\nPlease investigate heartbeat findings.",
+    }
+    payload_second = {
+        "kind": "agent",
+        "name": "AutoHeartbeatInvestigation",
+        "session_key": "simone_heartbeat_ntf_fast_path",
+        "message": "activity_id: ntf_fast_path\nPlease investigate heartbeat findings.",
+    }
+
+    timings: dict[str, float] = {}
+
+    async def _timed_dispatch(label: str, payload: dict[str, Any]) -> dict[str, Any]:
+        started = time.monotonic()
+        result = await service.dispatch_internal_action_background_with_admission(payload)
+        timings[label] = time.monotonic() - started
+        return result
+
+    first_task = asyncio.create_task(_timed_dispatch("first", payload_first))
+    await asyncio.sleep(0.02)
+    second_task = asyncio.create_task(_timed_dispatch("second", payload_second))
+    first_result, second_result = await asyncio.gather(first_task, second_task)
+
+    assert first_result["decision"] == "accepted"
+    assert second_result["decision"] == "accepted"
+    assert timings["second"] < timings["first"]
+    assert timings["second"] < 0.15

@@ -2583,6 +2583,60 @@ def test_dashboard_tutorial_notifications_suppress_superseded_youtube_failure_ro
     assert "ntf_stale_tutorial_failure" not in ids
 
 
+def test_dashboard_tutorial_notifications_suppress_superseded_dispatch_delayed_rows(client):
+    gateway_server._notifications.clear()
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_stale_dispatch_delayed",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_playlist_dispatch_failed",
+            "title": "Tutorial Dispatch Delayed",
+            "summary": "Ox5cUHuVQgM: runtime storage is temporarily busy; automatic retry will occur on the next playlist poll.",
+            "full_message": "Ox5cUHuVQgM: runtime storage is temporarily busy; automatic retry will occur on the next playlist poll.",
+            "severity": "warning",
+            "status": "new",
+            "requires_action": False,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T05:00:00+00:00",
+            "updated_at": "2026-03-25T05:00:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "Ox5cUHuVQgM"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+    gateway_server._activity_upsert_record(
+        {
+            "id": "ntf_ready_after_delay",
+            "event_class": "notification",
+            "source_domain": "tutorial",
+            "kind": "youtube_tutorial_ready",
+            "title": "YouTube Tutorial Artifacts Ready",
+            "summary": "Ox5cUHuVQgM artifacts are ready for review.",
+            "full_message": "Ox5cUHuVQgM artifacts are ready for review.",
+            "severity": "success",
+            "status": "new",
+            "requires_action": False,
+            "session_id": "session_hook_yt_demo",
+            "created_at": "2026-03-25T05:10:00+00:00",
+            "updated_at": "2026-03-25T05:10:00+00:00",
+            "entity_ref": {},
+            "actions": [],
+            "metadata": {"video_id": "Ox5cUHuVQgM"},
+            "channels": ["dashboard"],
+            "email_targets": [],
+        }
+    )
+
+    resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=20&include_dismissed=true")
+    assert resp.status_code == 200
+    ids = {str(item.get("id") or "") for item in resp.json().get("notifications") or []}
+    assert "ntf_ready_after_delay" in ids
+    assert "ntf_stale_dispatch_delayed" not in ids
+
+
 def test_dashboard_tutorial_notifications_reconcile_processed_run_over_started(client, tmp_path, monkeypatch):
     artifacts_root = tmp_path / "artifacts"
     run_dir = artifacts_root / "youtube-tutorial-creation" / "Anthropic__9d5bzVxocw__2026-03-25"

@@ -473,22 +473,24 @@ class HooksService:
         admit_attempt = 0
         admit_elapsed = 0.0
         action_name = str(action.name or action.to or action.kind or "unknown").strip()
-        async with self._workflow_admission_lock:
-            while admit_elapsed < ceiling:
-                admit_attempt += 1
-                try:
-                    admit_fn = functools.partial(
-                        self._admit_workflow_once,
-                        workflow_service=workflow_service,
-                        trigger=workflow_profile["trigger"],
-                        entrypoint=str(
-                            workflow_profile.get("entrypoint") or "hooks_service.generic_hook"
-                        ),
-                        workspace_dir=workflow_workspace_dir,
-                        retryable_failure=bool(workflow_profile.get("retryable_failure")),
-                        max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
-                    )
-                    loop = asyncio.get_running_loop()
+        while admit_elapsed < ceiling:
+            admit_attempt += 1
+            try:
+                admit_fn = functools.partial(
+                    self._admit_workflow_once,
+                    workflow_service=workflow_service,
+                    trigger=workflow_profile["trigger"],
+                    entrypoint=str(
+                        workflow_profile.get("entrypoint") or "hooks_service.generic_hook"
+                    ),
+                    workspace_dir=workflow_workspace_dir,
+                    retryable_failure=bool(workflow_profile.get("retryable_failure")),
+                    max_attempts=max(1, int(workflow_profile.get("max_attempts") or 1)),
+                )
+                loop = asyncio.get_running_loop()
+                # Serialize the DB admission call itself, but do not hold
+                # the lock while sleeping between retries.
+                async with self._workflow_admission_lock:
                     (
                         workflow_decision,
                         workflow_run_id,
@@ -496,30 +498,30 @@ class HooksService:
                         workflow_attempt_number,
                         workflow_workspace_dir,
                     ) = await loop.run_in_executor(None, admit_fn)
-                    return {
-                        "decision": "admitted",
-                        "workflow_decision": workflow_decision,
-                        "run_id": workflow_run_id,
-                        "attempt_id": workflow_attempt_id,
-                        "attempt_number": workflow_attempt_number,
-                        "workspace_dir": workflow_workspace_dir,
-                    }
-                except sqlite3.OperationalError as exc:
-                    if not _is_sqlite_lock_error(exc):
-                        raise
-                    delay = min(base_delay * (2 ** (admit_attempt - 1)), max_delay)
-                    logger.warning(
-                        "Hook admission DB contention (attempt %d, %.0fs elapsed) action=%s session_key=%s: %s — retrying in %.0fs",
-                        admit_attempt,
-                        admit_elapsed,
-                        action_name,
-                        session_key,
-                        exc,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    admit_elapsed += delay
-                    continue
+                return {
+                    "decision": "admitted",
+                    "workflow_decision": workflow_decision,
+                    "run_id": workflow_run_id,
+                    "attempt_id": workflow_attempt_id,
+                    "attempt_number": workflow_attempt_number,
+                    "workspace_dir": workflow_workspace_dir,
+                }
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc):
+                    raise
+                delay = min(base_delay * (2 ** (admit_attempt - 1)), max_delay)
+                logger.warning(
+                    "Hook admission DB contention (attempt %d, %.0fs elapsed) action=%s session_key=%s: %s — retrying in %.0fs",
+                    admit_attempt,
+                    admit_elapsed,
+                    action_name,
+                    session_key,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                admit_elapsed += delay
+                continue
         logger.error(
             "Hook admission DB locked after %.0fs, action=%s session_key=%s",
             admit_elapsed,

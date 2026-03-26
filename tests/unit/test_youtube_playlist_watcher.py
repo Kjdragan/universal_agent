@@ -106,7 +106,7 @@ async def test_poll_now_works_without_api_key_when_rss_is_available(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_poll_now_does_not_persist_seen_ids_when_dispatch_crashes(monkeypatch, tmp_path):
+async def test_poll_now_persists_seen_and_pending_when_dispatch_crashes(monkeypatch, tmp_path):
     monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
     monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
     monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
@@ -130,15 +130,17 @@ async def test_poll_now_does_not_persist_seen_ids_when_dispatch_crashes(monkeypa
 
     assert result["ok"] is True
     state_file = _state_path()
-    if state_file.exists():
-        saved = json.loads(state_file.read_text(encoding="utf-8"))
-        assert saved.get("seen_ids", []) == []
+    assert state_file.exists()
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "vid123" in saved.get("seen_ids", [])
+    pending = saved.get("pending_dispatch_items") or {}
+    assert "vid123" in pending
 
 
 @pytest.mark.asyncio
 async def test_concurrent_poll_now_calls_dispatch_exactly_once(monkeypatch, tmp_path):
     """Regression test: two concurrent poll_now calls on the same new video must
-    emit exactly one 'New Tutorial Video Detected' notification and dispatch exactly once.
+    dispatch exactly once and emit only run-admission notifications.
 
     This simulates the race that previously caused duplicate Telegram messages when
     the background _loop and a manual poll_now overlapped on the same new video.
@@ -159,7 +161,16 @@ async def test_concurrent_poll_now_calls_dispatch_exactly_once(monkeypatch, tmp_
     }
 
     notifications: list[dict] = []
-    dispatch_mock = AsyncMock(return_value=(True, "agent"))
+    dispatch_mock = AsyncMock(
+        return_value={
+            "decision": "accepted",
+            "reason": "dispatched",
+            "run_id": "run_race_1",
+            "attempt_id": "attempt_race_1",
+            "attempt_number": 1,
+            "workspace_dir": "/tmp/run_race_1",
+        }
+    )
 
     watcher = YouTubePlaylistWatcher(
         dispatch_fn=dispatch_mock,
@@ -178,11 +189,12 @@ async def test_concurrent_poll_now_calls_dispatch_exactly_once(monkeypatch, tmp_
     # dispatch_fn must be called exactly once
     assert dispatch_mock.await_count == 1
 
-    # Exactly one 'New Tutorial Video Detected' notification
+    # Detection-only notifications are intentionally suppressed.
     detected_notifs = [n for n in notifications if n["kind"] == "youtube_playlist_new_video"]
-    assert len(detected_notifs) == 1, (
-        f"Expected 1 'New Tutorial Video Detected' notification, got {len(detected_notifs)}"
-    )
+    assert len(detected_notifs) == 0
+    # Run-admission progress should still appear exactly once.
+    progress_notifs = [n for n in notifications if n["kind"] == "youtube_tutorial_progress"]
+    assert len(progress_notifs) == 1
 
 
 @pytest.mark.asyncio
@@ -299,7 +311,7 @@ async def test_poll_now_retries_same_video_after_rejected_dispatch(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_runtime_db_locked_dispatch_is_reported_as_delayed_and_left_retryable(monkeypatch, tmp_path):
+async def test_runtime_db_locked_dispatch_is_silent_and_left_retryable(monkeypatch, tmp_path):
     monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
     monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
     monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
@@ -327,11 +339,7 @@ async def test_runtime_db_locked_dispatch_is_reported_as_delayed_and_left_retrya
     )
 
     assert ok is False
-    failed = next((n for n in notifications if n.get("kind") == "youtube_playlist_dispatch_failed"), None)
-    assert failed is not None
-    assert failed["title"] == "Tutorial Dispatch Delayed"
-    assert "automatic retry will occur on the next playlist poll" in str(failed.get("message") or "").lower()
-    assert (failed.get("metadata") or {}).get("retryable") is True
+    assert notifications == []
 
 
 @pytest.mark.asyncio
