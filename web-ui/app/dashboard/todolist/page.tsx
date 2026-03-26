@@ -313,62 +313,19 @@ type KanbanColProps = {
 
 function KanbanCol({ label, icon, count, accentColor, emptyText, children }: KanbanColProps) {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        background: T.surfaceDim,
-        border: `1px solid ${T.ghostBorder}`,
-        minHeight: 0,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 14px",
-          borderBottom: `1px solid ${T.ghostBorder}`,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            className="material-symbols-outlined"
-            style={{ fontSize: 18, color: accentColor }}
-          >
-            {icon}
-          </span>
-          <span
-            style={{
-              fontFamily: T.fontMono,
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: "0.1em",
-              color: accentColor,
-              textTransform: "uppercase",
-            }}
-          >
-            {label}
-          </span>
+    <div className="flex flex-col backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg min-h-0 overflow-hidden transition-all duration-300 hover:border-white/[0.1] hover:shadow-glow-cyan">
+      <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06]">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-lg" style={{ color: accentColor }}>{icon}</span>
+          <span className="font-mono text-[11px] font-bold tracking-[0.1em] uppercase" style={{ color: accentColor }}>{label}</span>
         </div>
-        <span
-          style={{
-            fontFamily: T.fontMono,
-            fontSize: 10,
-            fontWeight: 700,
-            padding: "2px 8px",
-            background: `${accentColor}18`,
-            color: accentColor,
-          }}
-        >
-          {count}
-        </span>
+        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-sm" style={{ background: `${accentColor}18`, color: accentColor }}>{count}</span>
       </div>
-      <div style={{ flex: 1, overflowY: "auto", padding: 10, maxHeight: "60vh" }}>
+      <div className="flex-1 overflow-y-auto p-2.5 max-h-[60vh] scrollbar-thin">
         {count === 0 ? (
-          <p style={{ fontSize: 12, color: T.textMuted, fontStyle: "italic", padding: 8 }}>{emptyText}</p>
+          <p className="text-xs text-kcd-text-muted italic p-2">{emptyText}</p>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div>
+          <div className="flex flex-col gap-2">{children}</div>
         )}
       </div>
     </div>
@@ -404,6 +361,10 @@ export default function ToDoListDashboardPage() {
   });
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
+  const [quickAddTitle, setQuickAddTitle] = useState("");
+  const [quickAddPending, setQuickAddPending] = useState(false);
+  const [morningReport, setMorningReport] = useState<any>(null);
+  const [morningReportExpanded, setMorningReportExpanded] = useState(() => new Date().getHours() < 12);
 
   // Persist deletedTaskIds to localStorage whenever it changes
   useEffect(() => {
@@ -590,6 +551,34 @@ export default function ToDoListDashboardPage() {
     }
   }, [completedTasks, load]);
 
+  const handleQuickAdd = useCallback(async () => {
+    const title = quickAddTitle.trim();
+    if (!title || quickAddPending) return;
+    setQuickAddPending(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) throw new Error("Failed to add task");
+      setQuickAddTitle("");
+      await load(true);
+    } catch (err: any) {
+      setError(err?.message || "Failed to add task.");
+    } finally {
+      setQuickAddPending(false);
+    }
+  }, [quickAddTitle, quickAddPending, load]);
+
+  // Fetch morning report on mount — time-aware (shows overnight agent activity)
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/dashboard/todolist/morning-report`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data?.report) setMorningReport(data.report); })
+      .catch(() => {});
+  }, []);
+
   const handleOpenSession = useCallback(async (sessionId: string) => {
     setSessionDetailLoading(sessionId);
     try {
@@ -689,8 +678,16 @@ export default function ToDoListDashboardPage() {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 16, padding: 24, background: T.bg, fontFamily: T.fontUi }}>
-        <span style={{ fontFamily: T.fontMono, fontSize: 12, color: T.textMuted }}>Loading Task Hub…</span>
+      <div className="flex flex-col h-full bg-kcd-bg font-display p-5 gap-4">
+        <div className="h-14 rounded-xl bg-kcd-surface-dim/80 animate-pulse" />
+        <div className="h-12 rounded-lg bg-kcd-surface-dim/60 animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[...Array(5)].map((_, i) => <div key={i} className="h-20 rounded-lg bg-kcd-surface-dim/60 animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />)}
+        </div>
+        <div className="h-32 rounded-lg bg-kcd-surface-dim/50 animate-pulse" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 flex-1">
+          {[...Array(3)].map((_, i) => <div key={i} className="h-60 rounded-lg bg-kcd-surface-dim/50 animate-pulse" style={{ animationDelay: `${i * 150}ms` }} />)}
+        </div>
       </div>
     );
   }
@@ -733,177 +730,136 @@ export default function ToDoListDashboardPage() {
     return (
       <article
         key={item.task_id}
-        style={{
-          position: "relative",
-          background: T.surfaceLow,
-          border: `1px solid ${T.ghostBorder}`,
-          borderLeft: item.must_complete ? `3px solid ${T.red}` : `1px solid ${T.ghostBorder}`,
-          padding: 12,
-          transition: "background 0.15s",
-        }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surfaceHigh; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = T.surfaceLow; }}
+        className={`group relative rounded-md p-3 transition-all duration-200 hover:bg-kcd-surface-high/80 hover:-translate-y-[1px] hover:shadow-glow-cyan ${item.must_complete ? "border-l-2 border-l-kcd-red" : ""}`}
+        style={{ background: T.surfaceLow, border: `1px solid ${T.ghostBorder}` }}
       >
-        {onDelete ? (
-          <button
-            onClick={() => onDelete(item.task_id)}
-            disabled={isPending}
-            title="Remove from queue"
-            style={{ position: "absolute", right: 8, top: 8, background: "none", border: "none", cursor: "pointer", color: T.textMuted, fontSize: 16, padding: 2, opacity: 0.6 }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.color = T.red; (e.target as HTMLElement).style.opacity = "1"; }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.color = T.textMuted; (e.target as HTMLElement).style.opacity = "0.6"; }}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+        {onDelete && (
+          <button onClick={() => onDelete(item.task_id)} disabled={isPending} title="Remove from queue"
+            className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
+            <span className="material-symbols-outlined text-base">delete</span>
           </button>
-        ) : null}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, paddingRight: onDelete ? 24 : 0 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <span style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, color: T.textMuted }}>#{idx + 1}</span>
+        )}
+        <div className={`flex items-start justify-between gap-2 ${onDelete ? "pr-6" : ""}`}>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+              <span className="font-mono text-[9px] font-bold text-kcd-text-muted">#{idx + 1}</span>
               {sourceKindPill(item.source_kind)}
-              {item.must_complete ? (
-                <span style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, padding: "2px 6px", background: T.redDim, color: T.red, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                  MUST COMPLETE
-                </span>
-              ) : null}
+              {item.must_complete && <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 bg-kcd-red/10 text-kcd-red tracking-wider uppercase">MUST</span>}
             </div>
-            <h3 style={{ fontSize: 13, fontWeight: 600, color: T.textPrimary, lineHeight: 1.35, margin: 0 }}>
+            <h3 className="text-[13px] font-semibold text-kcd-text leading-snug m-0">
               {(() => {
                 const href = taskSourceUrl(item.task_id, item.source_kind, item.url, item.source_ref);
                 if (href) {
                   const isExternal = href.startsWith("http");
-                  return isExternal ? (
-                    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: T.textPrimary, textDecoration: "none" }}>{item.title}</a>
-                  ) : (
-                    <Link href={href} style={{ color: T.textPrimary, textDecoration: "none" }}>{item.title}</Link>
-                  );
+                  return isExternal
+                    ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</a>
+                    : <Link href={href} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</Link>;
                 }
                 return item.title;
               })()}
             </h3>
-            {item.description ? (
-              <p style={{ margin: "4px 0 0", fontSize: 11, color: T.textMuted, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{item.description}</p>
-            ) : null}
+            {item.description && (
+              <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>
+            )}
           </div>
-          <div style={{ textAlign: "right", flexShrink: 0 }}>
-            <div style={{ fontFamily: T.fontMono, fontSize: 10, fontWeight: 700, color: pColor }}>{priorityText(item.priority)}</div>
-            {item.score !== undefined ? (
-              <div style={{ fontFamily: T.fontMono, fontSize: 9, color: T.textMuted, marginTop: 2 }}>score {item.score} · Q{item.score_confidence ?? 0}</div>
-            ) : null}
+          <div className="text-right shrink-0">
+            <div className="font-mono text-[10px] font-bold" style={{ color: pColor }}>{priorityText(item.priority)}</div>
+            {item.score !== undefined && <div className="font-mono text-[9px] text-kcd-text-muted mt-0.5">score {item.score} · Q{item.score_confidence ?? 0}</div>}
           </div>
         </div>
-
-        <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, fontFamily: T.fontMono, fontSize: 10, color: T.textMuted }}>
-          {item.project_key ? <span>{item.project_key}</span> : null}
-          {item.due_at ? (<><span style={{ opacity: 0.4 }}>│</span><span style={{ color: T.amber }}>Due {item.due_at}</span></>) : null}
-          {item.updated_at ? (<><span style={{ opacity: 0.4 }}>│</span><span>Updated {formatTs(item.updated_at)}</span></>) : null}
-          {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold ? (
-            <><span style={{ opacity: 0.4 }}>│</span><span style={{ color: T.amber }}>below threshold {dispatchThreshold}</span></>
-          ) : null}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
+          {item.project_key && <span>{item.project_key}</span>}
+          {item.due_at && <><span className="opacity-40">│</span><span className="text-kcd-amber">Due {item.due_at}</span></>}
+          {item.updated_at && <><span className="opacity-40">│</span><span>Updated {formatTs(item.updated_at)}</span></>}
+          {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold && (
+            <><span className="opacity-40">│</span><span className="text-kcd-amber">below threshold {dispatchThreshold}</span></>
+          )}
         </div>
-
-        {showActions ? (
-          <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-            <button onClick={() => void handleTaskAction(item.task_id, "complete")} disabled={isPending} style={actionBtn(T.green, T.greenDim)}>
-              Complete
+        {showActions && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => void handleTaskAction(item.task_id, "complete")} disabled={isPending}
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-green/10 text-kcd-green border-none rounded-sm cursor-pointer hover:bg-kcd-green/20 transition-colors disabled:opacity-40">
+              ✓ Complete
             </button>
-            <button onClick={() => void handleWakeHeartbeat(item.task_id)} disabled={wakePending} style={actionBtn(T.cyan, T.cyanDim)}>
-              {wakePending ? "Queueing…" : "Dispatch"}
+            <button onClick={() => void handleWakeHeartbeat(item.task_id)} disabled={wakePending}
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
+              ⚡ {wakePending ? "Queueing…" : "Dispatch"}
             </button>
-            <div style={{ position: "relative" }}>
-              <button
-                onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
-                style={{ ...actionBtn(T.textSecondary, T.surfaceHigh), padding: "4px 8px" }}
-              >
-                ▾
-              </button>
+            <div className="relative">
+              <button onClick={() => setOpenActionMenuId(openActionMenuId === item.task_id ? null : item.task_id)}
+                className="px-2 py-1 font-mono text-[10px] font-bold bg-kcd-surface-high text-kcd-text-dim border-none rounded-sm cursor-pointer hover:bg-kcd-surface-bright transition-colors">▾</button>
               {openActionMenuId === item.task_id && (
-                <div style={{ position: "absolute", right: 0, top: "100%", zIndex: 10, marginTop: 4, width: 130, display: "flex", flexDirection: "column", gap: 2, background: T.surfaceDim, border: `1px solid ${T.ghostBorder}`, padding: 4, boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
-                  {item.status === "open" && (
-                    <button onClick={() => void handleTaskAction(item.task_id, "seize")} disabled={isPending} style={menuBtn(T.cyan)}>Seize</button>
-                  )}
-                  <button onClick={() => void handleTaskAction(item.task_id, "review")} disabled={isPending} style={menuBtn(T.textSecondary)}>Mark Review</button>
-                  <button onClick={() => void handleTaskAction(item.task_id, "block")} disabled={isPending} style={menuBtn(T.amber)}>Block</button>
-                  <button onClick={() => void handleTaskAction(item.task_id, "park")} disabled={isPending} style={menuBtn(T.red)}>Park
-                  </button>
+                <div className="absolute right-0 top-full z-10 mt-1 w-32 flex flex-col gap-0.5 backdrop-blur-xl bg-kcd-surface-dim/95 border border-white/[0.1] rounded-md p-1 shadow-xl shadow-black/40 animate-fade-in">
+                  {item.status === "open" && <button onClick={() => void handleTaskAction(item.task_id, "seize")} disabled={isPending} className="w-full text-left bg-transparent text-kcd-cyan border-none px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer hover:bg-kcd-cyan/10 rounded-sm transition-colors">Seize</button>}
+                  <button onClick={() => void handleTaskAction(item.task_id, "review")} disabled={isPending} className="w-full text-left bg-transparent text-kcd-text-dim border-none px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer hover:bg-white/5 rounded-sm transition-colors">Review</button>
+                  <button onClick={() => void handleTaskAction(item.task_id, "block")} disabled={isPending} className="w-full text-left bg-transparent text-kcd-amber border-none px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer hover:bg-kcd-amber/10 rounded-sm transition-colors">Block</button>
+                  <button onClick={() => void handleTaskAction(item.task_id, "park")} disabled={isPending} className="w-full text-left bg-transparent text-kcd-red border-none px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer hover:bg-kcd-red/10 rounded-sm transition-colors">Park</button>
                 </div>
               )}
             </div>
           </div>
-        ) : null}
+        )}
       </article>
     );
   };
 
-  const renderCompletedCard = (item: CompletedTaskItem) => (
-    <article
-      key={`completed-${item.task_id}`}
-      style={{ position: "relative", background: T.surfaceLow, border: `1px solid ${T.ghostBorder}`, padding: 12, transition: "background 0.15s" }}
-      onMouseEnter={(e) => { setHoveredDeleteId(item.task_id); (e.currentTarget as HTMLElement).style.background = T.surfaceHigh; }}
-      onMouseLeave={(e) => { setHoveredDeleteId(null); (e.currentTarget as HTMLElement).style.background = T.surfaceLow; }}
-    >
-      <button
-        onClick={() => void handleDeleteCompletedTask(item.task_id)}
-        style={{ position: "absolute", right: 8, top: 8, background: "none", border: "none", cursor: "pointer", color: T.textMuted, fontSize: 16, padding: 2, opacity: hoveredDeleteId === item.task_id ? 1 : 0, transition: "opacity 0.15s" }}
-        title="Delete"
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
-      </button>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, paddingRight: 24 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            {sourceKindPill(item.source_kind)}
+  const renderCompletedCard = (item: CompletedTaskItem) => {
+    const pColor = (() => { const p = Number(item.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })();
+    return (
+      <article key={`completed-${item.task_id}`}
+        className="group relative rounded-md p-3 transition-all duration-200 hover:bg-kcd-surface-high/80"
+        style={{ background: T.surfaceLow, border: `1px solid ${T.ghostBorder}` }}>
+        <button onClick={() => void handleDeleteCompletedTask(item.task_id)} title="Delete"
+          className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
+          <span className="material-symbols-outlined text-base">delete</span>
+        </button>
+        <div className="flex items-start justify-between gap-2 pr-6">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 mb-1">{sourceKindPill(item.source_kind)}</div>
+            <h3 className="text-[13px] font-semibold text-kcd-text truncate m-0">
+              {(() => {
+                const href = item.links?.session_href || taskSourceUrl(item.task_id, item.source_kind, undefined, item.source_ref);
+                if (href) {
+                  const isExternal = href.startsWith("http");
+                  return isExternal
+                    ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</a>
+                    : <Link href={href} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</Link>;
+                }
+                return item.title;
+              })()}
+            </h3>
+            {item.description && <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>}
           </div>
-          <h3 style={{ fontSize: 13, fontWeight: 600, color: T.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", margin: 0 }}>
-            {(() => {
-              const sessionHref = item.links?.session_href;
-              const sourceHref = taskSourceUrl(item.task_id, item.source_kind, undefined, item.source_ref);
-              const href = sessionHref || sourceHref;
-              if (href) {
-                const isExternal = href.startsWith("http");
-                return isExternal ? (
-                  <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: T.textPrimary, textDecoration: "none" }}>{item.title}</a>
-                ) : (
-                  <Link href={href} style={{ color: T.textPrimary, textDecoration: "none" }}>{item.title}</Link>
-                );
-              }
-              return item.title;
-            })()}
-          </h3>
-          {item.description ? <p style={{ margin: "4px 0 0", fontSize: 11, color: T.textMuted, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{item.description}</p> : null}
+          <div className="font-mono text-[10px] font-bold shrink-0 text-right" style={{ color: pColor }}>{priorityText(item.priority)}</div>
         </div>
-        <div style={{ fontFamily: T.fontMono, fontSize: 10, fontWeight: 700, flexShrink: 0, textAlign: "right", color: (() => { const p = Number(item.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })() }}>
-          {priorityText(item.priority)}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
+          {item.project_key && <span>{item.project_key}</span>}
+          <span className="opacity-40">│</span>
+          <span>Done {formatTs(item.completed_at || item.updated_at)}</span>
+          {item.last_assignment?.agent_id && <><span className="opacity-40">│</span><span className="text-kcd-text-dim">{item.last_assignment.agent_id}</span></>}
         </div>
-      </div>
-      <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, fontFamily: T.fontMono, fontSize: 10, color: T.textMuted }}>
-        {item.project_key ? <span>{item.project_key}</span> : null}
-        <span style={{ opacity: 0.4 }}>│</span>
-        <span>Done {formatTs(item.completed_at || item.updated_at)}</span>
-        {item.last_assignment?.agent_id ? (
-          <><span style={{ opacity: 0.4 }}>│</span><span style={{ color: T.textSecondary }}>{item.last_assignment.agent_id}</span></>
-        ) : null}
-      </div>
-      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-        <button onClick={() => void handleOpenTaskHistory(item.task_id)} disabled={taskHistoryLoadingId === item.task_id} style={actionBtn(T.cyan, T.cyanDim)}>
-          {taskHistoryLoadingId === item.task_id ? "Loading…" : "Review"}
-        </button>
-        <button onClick={() => setSelectedTaskDetails(item)} style={actionBtn(T.indigo, T.indigoDim)}>
-          Inspect
-        </button>
-        {item.links?.session_id ? (
-          <button onClick={() => void handleOpenSession(String(item.links!.session_id))} disabled={sessionDetailLoading === String(item.links!.session_id)} style={actionBtn(T.indigo, T.indigoDim)}>
-            {sessionDetailLoading === String(item.links!.session_id) ? "Loading…" : "Session"}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          <button onClick={() => void handleOpenTaskHistory(item.task_id)} disabled={taskHistoryLoadingId === item.task_id}
+            className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
+            {taskHistoryLoadingId === item.task_id ? "Loading…" : "Review"}
           </button>
-        ) : null}
-        {item.links?.run_log_href ? (
-          <a href={String(item.links.run_log_href)} style={{ ...actionBtn(T.cyan, T.cyanDim), textDecoration: "none" }}>
-            Run Log
-          </a>
-        ) : null}
-      </div>
-    </article>
-  );
+          <button onClick={() => setSelectedTaskDetails(item)}
+            className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
+            Inspect
+          </button>
+          {item.links?.session_id && (
+            <button onClick={() => void handleOpenSession(String(item.links!.session_id))} disabled={sessionDetailLoading === String(item.links!.session_id)}
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors disabled:opacity-40">
+              {sessionDetailLoading === String(item.links!.session_id) ? "Loading…" : "Session"}
+            </button>
+          )}
+          {item.links?.run_log_href && (
+            <a href={String(item.links.run_log_href)} className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan no-underline rounded-sm hover:bg-kcd-cyan/20 transition-colors">Run Log</a>
+          )}
+        </div>
+      </article>
+    );
+  };
 
   // ── Task details modal ────────────────────────────────────────────────────────
 
@@ -1117,179 +1073,209 @@ export default function ToDoListDashboardPage() {
   // ── Main render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ position: "relative", display: "flex", flexDirection: "column", height: "100%", gap: 16, paddingBottom: 24, background: T.bg, fontFamily: T.fontUi, color: T.textPrimary }} onClick={() => setOpenActionMenuId(null)}>
+    <div className="relative flex flex-col h-full gap-0 bg-kcd-bg font-display text-kcd-text" onClick={() => setOpenActionMenuId(null)}>
       {renderTaskDetailsModal()}
       {renderSessionDetailModal()}
 
       {/* ── Header ── */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${T.ghostBorder}`, background: T.surfaceDim }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="material-symbols-outlined" style={{ fontSize: 22, color: T.cyan }}>task_alt</span>
+      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-white/[0.06] backdrop-blur-xl bg-kcd-surface-dim/90 shadow-lg shadow-black/20">
+        <div className="flex items-center gap-2.5">
+          <span className="material-symbols-outlined text-[22px] text-kcd-cyan">task_alt</span>
           <div>
-            <h1 style={{ fontFamily: T.fontMono, fontSize: 15, fontWeight: 700, letterSpacing: "0.06em", margin: 0, color: T.cyan, textTransform: "uppercase" }}>Task Hub</h1>
-            <p style={{ fontSize: 11, color: T.textMuted, margin: 0 }}>{allQueueItems.length} open · {(agentActivity?.active_agents || 0)} active · {completionRate24h !== null ? `${completionRate24h}%` : "—"} rate</p>
+            <h1 className="font-mono text-[15px] font-bold tracking-[0.06em] text-kcd-cyan uppercase m-0">Task Hub</h1>
+            <p className="text-[11px] text-kcd-text-muted m-0">{allQueueItems.length} open · {agentActivity?.active_agents || 0} active · {completionRate24h !== null ? `${completionRate24h}%` : "—"} rate</p>
           </div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-          <span style={{ fontFamily: T.fontMono, fontSize: 10, color: T.textMuted }}>
-            {refreshing ? "Refreshing…" : `next ${countdown}s`}
-          </span>
-          <button
-            onClick={() => { setCountdown(AUTO_REFRESH_SECONDS); void load(true); }}
-            style={actionBtn(T.textSecondary, T.surfaceHigh)}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: "middle", marginRight: 4 }}>refresh</span>
-            Refresh
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[10px] text-kcd-text-muted">{refreshing ? "Refreshing…" : `next ${countdown}s`}</span>
+          <button onClick={() => { setCountdown(AUTO_REFRESH_SECONDS); void load(true); }}
+            className="flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-surface-high text-kcd-text-dim border-none rounded-sm cursor-pointer hover:bg-kcd-surface-bright transition-colors">
+            <span className="material-symbols-outlined text-sm">refresh</span> Refresh
           </button>
-          <button
-            onClick={() => void handleWakeHeartbeat()}
-            disabled={wakePending}
-            style={actionBtn(T.cyan, T.cyanDim)}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: "middle", marginRight: 4 }}>favorite</span>
-            {wakePending ? "Queueing…" : "Heartbeat"}
+          <button onClick={() => void handleWakeHeartbeat()} disabled={wakePending}
+            className="flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
+            <span className="material-symbols-outlined text-sm">favorite</span> {wakePending ? "Queueing…" : "Heartbeat"}
           </button>
-          <Link
-            href="/dashboard/approvals"
-            style={{ ...actionBtn(T.amber, T.amberDim), textDecoration: "none" }}
-          >
+          <Link href="/dashboard/approvals"
+            className="flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-amber/10 text-kcd-amber no-underline rounded-sm hover:bg-kcd-amber/20 transition-colors">
             Approvals
-            {(approvalsHighlight?.pending_count || 0) > 0 ? (
-              <span style={{ marginLeft: 6, padding: "1px 5px", background: T.amber, color: T.bg, fontFamily: T.fontMono, fontSize: 9, fontWeight: 700 }}>
-                {approvalsHighlight!.pending_count}
-              </span>
-            ) : null}
+            {(approvalsHighlight?.pending_count || 0) > 0 && (
+              <span className="ml-1 px-1.5 py-px bg-kcd-amber text-kcd-bg font-mono text-[9px] font-bold rounded-sm">{approvalsHighlight!.pending_count}</span>
+            )}
           </Link>
         </div>
-      </div>
+      </header>
 
-      {error ? (
-        <div style={{ margin: "0 20px", padding: "8px 12px", background: T.redDim, border: `1px solid ${T.ghostBorder}`, color: T.red, fontSize: 12 }}>{error}</div>
-      ) : null}
+      {error && <div className="mx-5 mt-3 px-3 py-2 bg-kcd-red/10 border border-kcd-red/20 rounded-md text-kcd-red text-xs animate-fade-in">{error}</div>}
 
-      {/* ── Content area ── */}
-      <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 16, flex: 1, minHeight: 0 }}>
+      {/* ── Scrollable Content ── */}
+      <div className="flex-1 overflow-y-auto px-5 pt-4 pb-6 space-y-4 scrollbar-thin">
 
-      {/* ── Summary Cards ── */}
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-        {[
-          { label: `Dispatch Eligible${dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}`, value: overview?.queue_health?.dispatch_eligible || 0, sub: `${overview?.queue_health?.dispatch_queue_size || 0} in queue`, color: T.textPrimary },
-          { label: "Active Agents", value: agentActivity?.active_agents || 0, sub: `${(agentActivity?.active_assignments || []).length} assignments`, color: T.cyan },
-          { label: "Backlog Open", value: agentActivity?.backlog_open || 0, sub: "total queued", color: T.textPrimary },
-          { label: "Approvals Pending", value: approvalsHighlight?.pending_count || 0, sub: "awaiting decision", color: T.amber },
-          { label: "Completion Rate", value: completionRate24h !== null ? `${completionRate24h}%` : "—", sub: "24h completed / rejected", color: completionRate24h !== null ? (completionRate24h >= 70 ? T.green : completionRate24h >= 40 ? T.amber : T.red) : T.textMuted },
-        ].map((card) => (
-          <article key={card.label} style={{ background: T.surfaceDim, border: `1px solid ${T.ghostBorder}`, padding: 12 }}>
-            <p style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: T.textMuted, textTransform: "uppercase", margin: 0 }}>{card.label}</p>
-            <p style={{ fontSize: 22, fontWeight: 600, color: card.color, margin: "4px 0 0" }}>{card.value}</p>
-            <p style={{ fontSize: 10, color: T.textMuted, margin: "4px 0 0" }}>{card.sub}</p>
-          </article>
-        ))}
-      </section>
+        {/* ── Quick-Add Bar ── */}
+        <div className="backdrop-blur-xl bg-kcd-surface-dim/90 border border-white/[0.1] rounded-xl shadow-xl shadow-black/20 p-3 flex items-center gap-3 transition-all duration-300 focus-within:border-kcd-cyan/30 focus-within:shadow-glow-cyan-md">
+          <span className="material-symbols-outlined text-xl text-kcd-cyan/60">add_task</span>
+          <input
+            className="flex-1 bg-transparent text-kcd-text text-sm placeholder:text-kcd-text-muted/50 outline-none border-none"
+            placeholder="Quick add a task — press Enter to submit"
+            value={quickAddTitle}
+            onChange={(e) => setQuickAddTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && quickAddTitle.trim()) void handleQuickAdd(); }}
+          />
+          <button onClick={() => void handleQuickAdd()} disabled={!quickAddTitle.trim() || quickAddPending}
+            className="px-4 py-1.5 bg-kcd-cyan/15 text-kcd-cyan font-mono text-[10px] font-bold tracking-wider uppercase rounded-md hover:bg-kcd-cyan/25 transition-all disabled:opacity-30 disabled:cursor-not-allowed border-none cursor-pointer">
+            {quickAddPending ? "Adding…" : "Add Task"}
+          </button>
+        </div>
 
-      {/* ── NOW: Current Assignments ── */}
-      <section style={{ background: T.surfaceDim, border: `1px solid ${T.ghostBorder}`, padding: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <span className="material-symbols-outlined" style={{ fontSize: 18, color: T.cyan }}>bolt</span>
-          <h2 style={{ fontFamily: T.fontMono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: T.cyan, textTransform: "uppercase", margin: 0 }}>
-            Now — Active ({(agentActivity?.active_assignments || []).length})
-          </h2>
+        {/* ── Morning Report Banner ── */}
+        {morningReport && (
+          <div className="backdrop-blur-md bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg overflow-hidden transition-all duration-300 animate-slide-in">
+            <button onClick={() => setMorningReportExpanded(!morningReportExpanded)}
+              className="w-full flex items-center justify-between px-4 py-2.5 bg-transparent border-none cursor-pointer text-left hover:bg-white/[0.02] transition-colors">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-kcd-amber text-lg">auto_awesome</span>
+                <span className="font-mono text-[11px] font-bold tracking-[0.08em] text-kcd-amber uppercase">Overnight Activity Report</span>
+              </div>
+              <span className={`material-symbols-outlined text-kcd-text-muted text-lg transition-transform duration-200 ${morningReportExpanded ? "rotate-180" : ""}`}>expand_more</span>
+            </button>
+            {morningReportExpanded && (
+              <div className="px-4 pb-3 text-[12px] text-kcd-text-dim leading-relaxed border-t border-white/[0.04] pt-3 animate-fade-in">
+                {morningReport.greeting && <p className="text-kcd-text font-medium mb-2">{morningReport.greeting}</p>}
+                {morningReport.summary && <p className="text-kcd-text-dim">{morningReport.summary}</p>}
+                {Array.isArray(morningReport.priorities) && morningReport.priorities.length > 0 && (
+                  <div className="mt-2">
+                    <span className="font-mono text-[9px] font-bold tracking-wider text-kcd-text-muted uppercase">Priorities</span>
+                    <ul className="mt-1 space-y-1 list-none p-0 m-0">{morningReport.priorities.map((p: any, i: number) => (
+                      <li key={i} className="text-[11px] text-kcd-text-dim">• {typeof p === "string" ? p : p.title || p.description || JSON.stringify(p)}</li>
+                    ))}</ul>
+                  </div>
+                )}
+                {!morningReport.greeting && !morningReport.summary && (
+                  <pre className="text-[10px] text-kcd-text-muted font-mono whitespace-pre-wrap">{JSON.stringify(morningReport, null, 2)}</pre>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Summary Cards ── */}
+        <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[
+            { label: `Dispatch Eligible${dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}`, value: overview?.queue_health?.dispatch_eligible || 0, sub: `${overview?.queue_health?.dispatch_queue_size || 0} in queue`, color: T.textPrimary },
+            { label: "Active Agents", value: agentActivity?.active_agents || 0, sub: `${(agentActivity?.active_assignments || []).length} assignments`, color: T.cyan },
+            { label: "Backlog Open", value: agentActivity?.backlog_open || 0, sub: "total queued", color: T.textPrimary },
+            { label: "Approvals Pending", value: approvalsHighlight?.pending_count || 0, sub: "awaiting decision", color: T.amber },
+            { label: "Completion Rate", value: completionRate24h !== null ? `${completionRate24h}%` : "—", sub: "24h completed / rejected", color: completionRate24h !== null ? (completionRate24h >= 70 ? T.green : completionRate24h >= 40 ? T.amber : T.red) : T.textMuted },
+          ].map((card, i) => (
+            <article key={card.label}
+              className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-3 hover:border-kcd-cyan/20 hover:shadow-glow-cyan transition-all duration-300 group animate-fade-in-stagger"
+              style={{ animationDelay: `${i * 80}ms` }}>
+              <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0">{card.label}</p>
+              <p className="text-xl font-semibold mt-1 m-0 transition-colors group-hover:brightness-110" style={{ color: card.color }}>{card.value}</p>
+              <p className="text-[10px] text-kcd-text-muted mt-1 m-0">{card.sub}</p>
+            </article>
+          ))}
+        </section>
+
+        {/* ── NOW: Current Assignments ── */}
+        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="material-symbols-outlined text-lg text-kcd-cyan">bolt</span>
+          <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-cyan uppercase m-0">Now — Active ({(agentActivity?.active_assignments || []).length})</h2>
         </div>
         {(agentActivity?.active_assignments || []).length === 0 ? (
-          <p style={{ fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>No agents currently working. Queue a heartbeat to dispatch work.</p>
+          <p className="text-xs text-kcd-text-muted italic">No agents currently working. Queue a heartbeat to dispatch work.</p>
         ) : (
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-            {(agentActivity?.active_assignments || []).map((a) => (
-              <div key={a.assignment_id} style={{ background: T.cyanDim, border: `1px solid ${T.cyanGhost}`, padding: 12 }}>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                  <div>
-                    <div style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: T.cyan, textTransform: "uppercase" }}>{a.agent_id}</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary, marginTop: 4, lineHeight: 1.35 }}>{a.title}</div>
+          <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
+            {(agentActivity?.active_assignments || []).map((a) => {
+              const pColor = (() => { const p = Number(a.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })();
+              return (
+                <div key={a.assignment_id} className="bg-kcd-cyan/[0.08] border border-kcd-cyan/20 rounded-md p-3 hover:bg-kcd-cyan/[0.12] transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-mono text-[9px] font-bold tracking-wider text-kcd-cyan uppercase">{a.agent_id}</div>
+                      <div className="text-[13px] font-medium text-kcd-text mt-1 leading-snug">{a.title}</div>
+                    </div>
+                    <span className="font-mono text-[10px] font-bold shrink-0" style={{ color: pColor }}>{priorityText(a.priority)}</span>
                   </div>
-                  <span style={{ fontFamily: T.fontMono, fontSize: 10, fontWeight: 700, flexShrink: 0, color: (() => { const p = Number(a.priority || 1); if (p >= 4) return T.red; if (p === 3) return T.amber; if (p === 2) return T.cyan; return T.textMuted; })() }}>{priorityText(a.priority)}</span>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
+                    {a.project_key && <span>{a.project_key}</span>}
+                    <span className="opacity-40">│</span>
+                    <span>Started {formatTs(a.started_at)}</span>
+                  </div>
                 </div>
-                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, fontFamily: T.fontMono, fontSize: 10, color: T.textMuted }}>
-                  {a.project_key ? <span>{a.project_key}</span> : null}
-                  <span style={{ opacity: 0.4 }}>│</span>
-                  <span>Started {formatTs(a.started_at)}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
 
       {/* ── Agent Efficiency Strip ── */}
-      <section style={{ background: T.surfaceDim, border: `1px solid ${T.ghostBorder}`, padding: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
-        <span style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: T.textMuted, textTransform: "uppercase", flexShrink: 0 }}>Agent Efficiency</span>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 16, fontFamily: T.fontMono, fontSize: 11 }}>
-          <span style={{ color: T.textMuted }}>1h: <strong style={{ color: T.textPrimary }}>{agentMetrics1h?.seized || 0}</strong> seized · <strong style={{ color: T.cyan }}>{agentMetrics1h?.completed || 0}</strong> done · <strong style={{ color: T.red }}>{agentMetrics1h?.rejected || 0}</strong> rejected</span>
-          <span style={{ color: T.textMuted }}>24h: <strong style={{ color: T.textPrimary }}>{agentMetrics24h?.seized || 0}</strong> seized · <strong style={{ color: T.cyan }}>{agentMetrics24h?.completed || 0}</strong> done · <strong style={{ color: T.red }}>{agentMetrics24h?.rejected || 0}</strong> rejected</span>
+      <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg px-4 py-2.5 flex flex-wrap items-center gap-4">
+        <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Agent Efficiency</span>
+        <div className="flex flex-wrap gap-4 font-mono text-[11px]">
+          <span className="text-kcd-text-muted">1h: <strong className="text-kcd-text">{agentMetrics1h?.seized || 0}</strong> seized · <strong className="text-kcd-cyan">{agentMetrics1h?.completed || 0}</strong> done · <strong className="text-kcd-red">{agentMetrics1h?.rejected || 0}</strong> rejected</span>
+          <span className="text-kcd-text-muted">24h: <strong className="text-kcd-text">{agentMetrics24h?.seized || 0}</strong> seized · <strong className="text-kcd-cyan">{agentMetrics24h?.completed || 0}</strong> done · <strong className="text-kcd-red">{agentMetrics24h?.rejected || 0}</strong> rejected</span>
         </div>
       </section>
 
       {/* ── Kanban Time Horizon Board ── */}
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }} onClick={(e) => e.stopPropagation()}>
+      <div className="grid gap-3 grid-cols-1 lg:grid-cols-3" onClick={(e) => e.stopPropagation()}>
         <KanbanCol label="Future" icon="schedule" count={futureItems.length} accentColor={T.cyan} emptyText="No queued tasks.">
           {futureItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
-
         <KanbanCol label="In Progress" icon="bolt" count={nowItems.length} accentColor={T.green} emptyText="Nothing actively in progress.">
           {nowItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
         </KanbanCol>
-
         <KanbanCol label="Past" icon="check_circle" count={visibleCompletedRows.length} accentColor={T.textMuted} emptyText="No completed tasks yet.">
           <>
-            {visibleCompletedRows.length > 1 ? (
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => void handleDeleteAllCompleted()}
-                  disabled={deleteAllPending}
-                  style={actionBtn(T.red, T.redDim)}
-                >
+            {visibleCompletedRows.length > 1 && (
+              <div className="flex justify-end">
+                <button onClick={() => void handleDeleteAllCompleted()} disabled={deleteAllPending}
+                  className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border-none rounded-sm cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40">
                   {deleteAllPending ? "Clearing…" : "Clear All"}
                 </button>
               </div>
-            ) : null}
+            )}
             {visibleCompletedRows.slice(0, 20).map((item) => renderCompletedCard(item))}
           </>
         </KanbanCol>
       </div>
 
       {/* ── Allocation Breakdown ── */}
-      {allQueueItems.length > 0 ? (
-        <section style={{ background: T.surfaceDim, border: `1px solid ${T.ghostBorder}`, padding: 16 }}>
-          <h2 style={{ fontFamily: T.fontMono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: T.textSecondary, textTransform: "uppercase", margin: "0 0 12px" }}>Work Allocation</h2>
-          <div style={{ display: "grid", gap: 24, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+      {allQueueItems.length > 0 && (
+        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
+          <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-text-dim uppercase m-0 mb-3">Work Allocation</h2>
+          <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
             <div>
-              <h3 style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: T.textMuted, textTransform: "uppercase", margin: "0 0 8px" }}>By Source</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <h3 className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0 mb-2">By Source</h3>
+              <div className="flex flex-col gap-2">
                 {allocationBySource.map(([kind, count]) => {
                   const pct = Math.round((count / allQueueItems.length) * 100);
                   return (
-                    <div key={kind} style={{ display: "grid", alignItems: "center", gap: 12, gridTemplateColumns: "8rem 1fr 4rem", fontSize: 11 }}>
-                      <div style={{ overflow: "hidden" }}>{sourceKindPill(kind)}</div>
-                      <div style={{ background: T.surfaceBright, height: 4, minWidth: 0 }}>
-                        <div style={{ height: 4, background: T.cyan, transition: "width 0.3s", width: `${pct}%` }} />
+                    <div key={kind} className="grid items-center gap-3 text-[11px]" style={{ gridTemplateColumns: "8rem 1fr 4rem" }}>
+                      <div className="overflow-hidden">{sourceKindPill(kind)}</div>
+                      <div className="bg-kcd-surface-bright h-1 min-w-0 rounded-full overflow-hidden">
+                        <div className="h-1 bg-kcd-cyan rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
                       </div>
-                      <span style={{ textAlign: "right", color: T.textMuted, fontFamily: T.fontMono, fontSize: 10, whiteSpace: "nowrap" }}>{count} ({pct}%)</span>
+                      <span className="text-right text-kcd-text-muted font-mono text-[10px] whitespace-nowrap">{count} ({pct}%)</span>
                     </div>
                   );
                 })}
               </div>
             </div>
             <div>
-              <h3 style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: T.textMuted, textTransform: "uppercase", margin: "0 0 8px" }}>By Project</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <h3 className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0 mb-2">By Project</h3>
+              <div className="flex flex-col gap-1.5">
                 {allocationByProject.map(([proj, count]) => {
                   const pct = Math.round((count / allQueueItems.length) * 100);
                   return (
-                    <div key={proj} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
-                      <span style={{ width: 112, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.textSecondary }}>{proj}</span>
-                      <div style={{ flex: 1, background: T.surfaceBright, height: 4 }}>
-                        <div style={{ height: 4, background: T.indigo, width: `${pct}%` }} />
+                    <div key={proj} className="flex items-center gap-2 text-[11px]">
+                      <span className="w-28 shrink-0 truncate text-kcd-text-dim">{proj}</span>
+                      <div className="flex-1 bg-kcd-surface-bright h-1 rounded-full overflow-hidden">
+                        <div className="h-1 bg-kcd-indigo rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
                       </div>
-                      <span style={{ width: 56, textAlign: "right", color: T.textMuted, fontFamily: T.fontMono, fontSize: 10 }}>{count} ({pct}%)</span>
+                      <span className="w-14 text-right text-kcd-text-muted font-mono text-[10px]">{count} ({pct}%)</span>
                     </div>
                   );
                 })}
@@ -1297,27 +1283,25 @@ export default function ToDoListDashboardPage() {
             </div>
           </div>
         </section>
-      ) : null}
+      )}
 
       {/* ── Task History Detail ── */}
       {renderTaskHistoryPanel()}
 
-      {/* ── Heartbeat Status (only when interesting) ── */}
-      {heartbeatAlerts.length > 0 ? (
-        <section style={{ background: T.amberDim, border: `1px solid ${T.ghostBorder}`, padding: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
-          <span style={{ fontFamily: T.fontMono, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: T.amber, textTransform: "uppercase", flexShrink: 0 }}>Heartbeat</span>
+      {/* ── Heartbeat Status ── */}
+      {heartbeatAlerts.length > 0 && (
+        <section className="bg-kcd-amber/[0.08] border border-kcd-amber/20 rounded-lg px-4 py-2.5 flex flex-wrap items-center gap-3">
+          <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase shrink-0">Heartbeat</span>
           {heartbeatAlerts.map((alert) => (
-            <span key={alert} style={{ padding: "2px 8px", background: T.amberDim, border: `1px solid ${T.ghostBorder}`, fontFamily: T.fontMono, fontSize: 10, color: T.amber }}>
-              {alert}
-            </span>
+            <span key={alert} className="px-2 py-0.5 bg-kcd-amber/10 border border-kcd-amber/20 font-mono text-[10px] text-kcd-amber rounded-sm">{alert}</span>
           ))}
-          <span style={{ fontFamily: T.fontMono, fontSize: 10, color: T.textMuted }}>
+          <span className="font-mono text-[10px] text-kcd-text-muted">
             next {formatEpochTs(overview?.heartbeat?.nearest_next_run_epoch)} · interval {formatEvery(overview?.heartbeat?.heartbeat_effective_interval_seconds ?? overview?.heartbeat?.effective_default_every_seconds)}
           </span>
         </section>
-      ) : null}
+      )}
 
-      </div>{/* end content area */}
+      </div>{/* end scrollable content */}
     </div>
   );
 }

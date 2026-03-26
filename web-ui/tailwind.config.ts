@@ -11,7 +11,7 @@ const config: Config = {
     extend: {
       fontFamily: {
         mono: ["'JetBrains Mono'", "monospace"],
-        display: ["var(--font-display)", "sans-serif"],
+        display: ["'Inter'", "system-ui", "sans-serif"],
       },
       colors: {
         // Neural Operations Center color palette
@@ -38,6 +38,22 @@ const config: Config = {
           foreground: "hsl(var(--card-foreground))",
         },
         border: "hsl(var(--border))",
+        /* Kinetic Command Deck palette */
+        kcd: {
+          bg: '#0b1326',
+          'surface-dim': '#0f1a33',
+          'surface-low': '#131f3d',
+          'surface-high': '#1a2847',
+          'surface-bright': '#223054',
+          cyan: '#22D3EE',
+          amber: '#EE9800',
+          green: '#4ADE80',
+          red: '#EF4444',
+          indigo: '#818CF8',
+          text: '#E2E8F0',
+          'text-dim': '#BBC9CD',
+          'text-muted': '#64748B',
+        },
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
       },
@@ -87,6 +103,8 @@ const config: Config = {
         "glow-sm": "0 0 8px hsl(var(--primary) / 0.15)",
         "glow-md": "0 0 14px hsl(var(--primary) / 0.2)",
         "glow-lg": "0 0 20px hsl(var(--primary) / 0.25)",
+        "glow-cyan": "0 0 12px rgba(34,211,238,0.15)",
+        "glow-cyan-md": "0 0 20px rgba(34,211,238,0.25)",
       },
     },
   },

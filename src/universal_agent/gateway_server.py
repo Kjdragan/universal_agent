@@ -2073,6 +2073,13 @@ class ToDoTaskActionRequest(BaseModel):
     agent_id: Optional[str] = None
 
 
+class QuickAddTaskRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    priority: Optional[int] = 1
+    project_key: Optional[str] = "immediate"
+
+
 # -- TodoistMirrorPolicyPatchRequest removed (Todoist decommissioned) --
 
 
@@ -16708,6 +16715,36 @@ async def dashboard_todolist_get_subtasks(task_id: str):
                 return {"status": "ok", "report": report}
             except Exception as e:
                 return {"status": "error", "error": str(e), "report": None}
+            finally:
+                conn.close()
+
+    @app.post("/api/v1/dashboard/todolist/tasks")
+    async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
+        """Quick-add a new task from the dashboard."""
+        import hashlib
+        title = str(payload.title or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required")
+        # Generate a deterministic but unique task_id from title + timestamp
+        now_iso = datetime.now(timezone.utc).isoformat()
+        raw_id = f"qa-{hashlib.sha256(f'{title}:{now_iso}'.encode()).hexdigest()[:12]}"
+        item = {
+            "task_id": raw_id,
+            "title": title,
+            "description": str(payload.description or "").strip(),
+            "priority": max(1, min(4, payload.priority or 1)),
+            "project_key": str(payload.project_key or "immediate").strip(),
+            "source_kind": "dashboard_quick_add",
+            "status": "open",
+            "labels": ["quick-add"],
+        }
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                result = task_hub.upsert_item(conn, item)
+                return {"status": "ok", "task": result}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
             finally:
                 conn.close()
 
