@@ -18,7 +18,7 @@ instead of (or in addition to) an HTTP health probe.
    OS-level liveness signal                      Application-level proactive agent scheduler
    Daemon thread, writes file every 10s          Async task, runs agent every ~30 min
    Independent of event loop                     Runs ON the event loop
-   Read by ``vps_service_watchdog.sh``           Drives HEARTBEAT.md checks, Todoist, etc.
+   Read by ``vps_service_watchdog.sh``           Drives HEARTBEAT.md checks, task dispatch, etc.
    Env prefix: ``UA_PROCESS_HEARTBEAT_*``        Env prefix: ``UA_HEARTBEAT_*`` / ``UA_HB_*``
    ============================================  ==========================================
 

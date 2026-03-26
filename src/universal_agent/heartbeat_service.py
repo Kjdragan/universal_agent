@@ -1543,63 +1543,10 @@ class HeartbeatService:
 
             dispatch_actionable_count: Optional[int] = None
             dispatch_claimed_count: Optional[int] = None
-            todoist_actionable_count = 0
-            todoist_brainstorm_candidates: list[dict[str, Any]] = []
-            todoist_timeout_seconds = max(
-                0.1,
-                float(os.getenv("UA_HEARTBEAT_TODOIST_TIMEOUT_SECONDS", "1.5") or 1.5),
-            )
-            todoist_brainstorm_limit = max(
-                1,
-                _parse_int(
-                    os.getenv("UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE"),
-                    DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE,
-                ),
-            )
-            try:
-                from universal_agent.services.todoist_service import TodoService
-
-                def _collect_todoist_heartbeat_payload() -> tuple[int, list[dict[str, Any]], dict[str, Any] | None]:
-                    todo_service = TodoService()
-                    todoist_summary_payload: dict[str, Any] | None = None
-                    actionable_count = 0
-                    summary_result = todo_service.heartbeat_summary()
-                    if isinstance(summary_result, dict):
-                        actionable_count = max(0, int(summary_result.get("actionable_count") or 0))
-                        if actionable_count > 0:
-                            todoist_summary_payload = summary_result
-
-                    candidate_rows: list[dict[str, Any]] = []
-                    brainstorm_method = getattr(todo_service, "heartbeat_brainstorm_candidates", None)
-                    if callable(brainstorm_method):
-                        raw_candidates = brainstorm_method(limit=todoist_brainstorm_limit)
-                        if isinstance(raw_candidates, list):
-                            candidate_rows = [item for item in raw_candidates if isinstance(item, dict)]
-                    return actionable_count, candidate_rows, todoist_summary_payload
-
-                (
-                    todoist_actionable_count,
-                    todoist_brainstorm_candidates,
-                    todoist_summary_payload,
-                ) = await asyncio.wait_for(
-                    asyncio.to_thread(_collect_todoist_heartbeat_payload),
-                    timeout=todoist_timeout_seconds,
-                )
-                if todoist_summary_payload is not None:
-                    metadata["todoist_summary"] = todoist_summary_payload
-                if todoist_brainstorm_candidates:
-                    metadata["todoist_brainstorm_candidates"] = todoist_brainstorm_candidates
-            except asyncio.TimeoutError:
-                logger.debug(
-                    "Todoist heartbeat injection timed out for %s after %.1fs",
-                    session.session_id,
-                    todoist_timeout_seconds,
-                )
-            except Exception as exc:
-                logger.debug("Todoist heartbeat injection unavailable for %s: %s", session.session_id, exc)
+            # -- Todoist heartbeat injection removed (decommissioned) --
             guard_policy = _heartbeat_guard_policy(
                 actionable_count=None,
-                brainstorm_candidate_count=len(todoist_brainstorm_candidates),
+                brainstorm_candidate_count=0,
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
                 has_heartbeat_content=bool(heartbeat_content.strip()),
@@ -1645,24 +1592,7 @@ class HeartbeatService:
 
                     # Enhancement 1: Escalation Pre-Check — enrich each claimed task
                     # with past escalation resolutions so the agent doesn't repeat mistakes.
-                    if task_hub_claimed:
-                        try:
-                            from universal_agent.services.todoist_service import TodoService
-
-                            for claimed in task_hub_claimed:
-                                title = str(claimed.get("title") or "").strip()
-                                if title:
-                                    resolutions = TodoService.check_escalation_memory(
-                                        title, db_conn=conn, limit=2,
-                                    )
-                                    if resolutions:
-                                        claimed["escalation_history"] = resolutions
-                                        logger.debug(
-                                            "Enriched claimed task %s with %d escalation resolutions",
-                                            claimed.get("task_id"), len(resolutions),
-                                        )
-                        except Exception:
-                            pass  # escalation memory is advisory
+                    # -- Todoist escalation pre-check removed (decommissioned) --
 
                     if task_hub_claimed:
                         hub_event = {
@@ -1728,8 +1658,8 @@ class HeartbeatService:
                 metadata["system_events"] = system_events
 
             guard_policy = _heartbeat_guard_policy(
-                actionable_count=int(dispatch_actionable_count or 0) + int(todoist_actionable_count or 0),
-                brainstorm_candidate_count=int(dispatch_claimed_count or 0) + len(todoist_brainstorm_candidates),
+                actionable_count=int(dispatch_actionable_count or 0),
+                brainstorm_candidate_count=int(dispatch_claimed_count or 0),
                 system_event_count=len(system_events),
                 has_exec_completion=has_exec_completion,
                 has_heartbeat_content=bool(heartbeat_content.strip()),
@@ -1742,8 +1672,8 @@ class HeartbeatService:
                 "max_proactive_per_cycle": int(
                     guard_policy.get("max_proactive_per_cycle") or DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE
                 ),
-                "actionable_count": int(dispatch_actionable_count or 0) + int(todoist_actionable_count or 0),
-                "brainstorm_candidate_count": int(dispatch_claimed_count or 0) + len(todoist_brainstorm_candidates),
+                "actionable_count": int(dispatch_actionable_count or 0),
+                "brainstorm_candidate_count": int(dispatch_claimed_count or 0),
                 "system_event_count": len(system_events),
                 "skip_reason": guard_skip_reason or None,
             }

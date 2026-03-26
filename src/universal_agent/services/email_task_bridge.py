@@ -1,13 +1,12 @@
 """Email → Task Bridge: materializes inbound emails as trackable tasks.
 
 Pure-Python service (no LLM calls) that converts trusted inbound AgentMail
-emails into Todoist tasks and Task Hub entries so they appear on the To-Do
-List dashboard and get picked up by the heartbeat scheduler.
+emails into Task Hub entries so they appear on the To-Do List dashboard
+and get picked up by the heartbeat scheduler.
 
 Key design decisions:
   - Thread-level deduplication: one task per email thread; subsequent emails
     on the same thread UPDATE the existing task.
-  - Todoist task → UA: Immediate Queue project, Background section.
   - Task Hub entry → source_kind='email', labels=['email-task','agent-ready'].
   - HEARTBEAT.md auto-append: active email tasks are written into the
     heartbeat file so the heartbeat cron job picks them up.
@@ -160,11 +159,10 @@ class EmailTaskBridge:
         self,
         *,
         db_conn: sqlite3.Connection,
-        todoist_service: Any = None,
+        todoist_service: Any = None,  # deprecated, ignored (kept for compat)
         heartbeat_path: Optional[str] = None,
     ) -> None:
         self._conn = db_conn
-        self._todoist = todoist_service
         self._heartbeat_path = heartbeat_path or self._default_heartbeat_path()
         ensure_email_task_schema(self._conn)
 
@@ -201,12 +199,12 @@ class EmailTaskBridge:
     ) -> dict[str, Any]:
         """Convert an inbound email into a tracked task.
 
-        For trusted senders, creates a subtask under a master task in Todoist.
+        Creates or updates a Task Hub entry for the email thread.
         For untrusted senders, creates a task with ``external-untriaged`` label
         that Simone must review before marking ``agent-ready``.
 
-        Returns a dict with ``task_id``, ``todoist_task_id``, ``is_update``,
-        ``message_count``, ``master_key``, and ``status``.
+        Returns a dict with ``task_id``, ``is_update``, ``message_count``,
+        ``master_key``, and ``status``.
         """
         thread_id = str(thread_id or "").strip()
         message_id = str(message_id or "").strip()
@@ -289,40 +287,11 @@ class EmailTaskBridge:
             labels=email_labels,
         )
 
-        # ③ Create/update Todoist task as subtask under master (best-effort)
-        todoist_task_id = ""
-        todoist_master_id = ""
-        if self._todoist:
-            todoist_task_id, todoist_master_id = self._upsert_todoist_subtask(
-                task_id=task_id,
-                subject=subject,
-                sender_email=sender_email,
-                reply_text=reply_text,
-                thread_id=thread_id,
-                master_key=master_key,
-                message_count=message_count,
-                existing_todoist_id=str(existing.get("todoist_task_id", "")) if existing else "",
-                workflow_run_id=resolved_workflow_run_id,
-                workflow_attempt_id=resolved_workflow_attempt_id,
-                provider_session_id=resolved_provider_session_id,
-                labels=email_labels,
-            )
-            if todoist_task_id:
-                self._conn.execute(
-                    """UPDATE email_task_mappings
-                       SET todoist_task_id = ?, todoist_master_id = ?
-                       WHERE thread_id = ?""",
-                    (todoist_task_id, todoist_master_id, thread_id),
-                )
-                self._conn.commit()
-
-        # ④ Update HEARTBEAT.md
+        # ③ Update HEARTBEAT.md
         self._update_heartbeat(subject=subject, thread_id=thread_id, task_id=task_id)
 
         result = {
             "task_id": task_id,
-            "todoist_task_id": todoist_task_id,
-            "todoist_master_id": todoist_master_id,
             "master_key": master_key,
             "is_update": is_update,
             "message_count": message_count,
@@ -401,24 +370,6 @@ class EmailTaskBridge:
                 exc,
             )
 
-        todoist_task_id = str(mapping.get("todoist_task_id") or "").strip()
-        if self._todoist and todoist_task_id:
-            lineage_comment = _workflow_lineage_comment(
-                workflow_run_id=resolved_workflow_run_id,
-                workflow_attempt_id=resolved_workflow_attempt_id,
-                provider_session_id=resolved_provider_session_id,
-            )
-            if lineage_comment:
-                try:
-                    self._todoist.add_comment(todoist_task_id, lineage_comment)
-                except Exception as exc:
-                    logger.warning(
-                        "📧→📋 Todoist workflow linkage comment failed thread=%s task=%s: %s",
-                        thread_id,
-                        todoist_task_id,
-                        exc,
-                    )
-
         updated = self._get_mapping(thread_id)
         return updated or mapping
 
@@ -450,7 +401,6 @@ class EmailTaskBridge:
         """Mark an email task as waiting for the user's reply.
 
         Called after Simone sends a response and is awaiting user feedback.
-        Swaps labels in Todoist: removes ``agent-ready``, adds ``waiting-on-reply``.
         """
         now = _now_iso()
         self._conn.execute(
@@ -458,21 +408,6 @@ class EmailTaskBridge:
             (now, thread_id),
         )
         self._conn.commit()
-
-        # Update Todoist labels if we have a todoist task
-        if self._todoist:
-            mapping = self._get_mapping(thread_id)
-            todoist_id = str(mapping.get("todoist_task_id", "")) if mapping else ""
-            if todoist_id:
-                try:
-                    self._todoist.swap_labels(
-                        todoist_id,
-                        remove_labels=["agent-ready"],
-                        add_labels=["waiting-on-reply"],
-                    )
-                    logger.info("📧→📋 Marked task waiting-on-reply: thread=%s todoist=%s", thread_id, todoist_id)
-                except Exception as exc:
-                    logger.warning("📧→📋 Failed to update Todoist labels for waiting-on-reply: %s", exc)
 
         # Update Task Hub status
         try:
@@ -500,20 +435,6 @@ class EmailTaskBridge:
         )
         self._conn.commit()
 
-        if self._todoist:
-            mapping = self._get_mapping(thread_id)
-            todoist_id = str(mapping.get("todoist_task_id", "")) if mapping else ""
-            if todoist_id:
-                try:
-                    self._todoist.swap_labels(
-                        todoist_id,
-                        remove_labels=["waiting-on-reply"],
-                        add_labels=["agent-ready"],
-                    )
-                    logger.info("📧→📋 Reactivated waiting task: thread=%s todoist=%s", thread_id, todoist_id)
-                except Exception as exc:
-                    logger.warning("📧→📋 Failed to reactivate Todoist labels: %s", exc)
-
         # Update Task Hub
         try:
             from universal_agent.task_hub import update_item_status
@@ -537,11 +458,11 @@ class EmailTaskBridge:
 
     @staticmethod
     def _classify_master_key(subject: str) -> str:
-        """Derive a master-task grouping key from an email subject.
+        """Derive a grouping key from an email subject.
 
         Strips Re:/Fwd: prefixes and normalizes to a lowercase slug.
         Emails with the same cleaned subject get the same master key,
-        grouping them under one master task in Todoist.
+        grouping them under one parent task in the Task Hub.
         """
         clean = _REPLY_PREFIX_RE.sub("", (subject or "")).strip()
         # Iteratively strip nested Re:/Fwd: prefixes
@@ -617,100 +538,7 @@ class EmailTaskBridge:
             logger.warning("📧→📋 Task Hub upsert failed for task_id=%s: %s", task_id, exc)
             return {}
 
-    def _upsert_todoist_subtask(
-        self,
-        *,
-        task_id: str,
-        subject: str,
-        sender_email: str,
-        reply_text: str,
-        thread_id: str,
-        master_key: str,
-        message_count: int,
-        existing_todoist_id: str,
-        workflow_run_id: str = "",
-        workflow_attempt_id: str = "",
-        provider_session_id: str = "",
-        labels: list[str] | None = None,
-    ) -> tuple[str, str]:
-        """Create/update a Todoist subtask under a master task.
-
-        Returns (subtask_id, master_task_id) or ("", "") on failure.
-        Uses Todoist's native ``parent_id`` hierarchy.
-        """
-        try:
-            # ① Find or create the master task for this master_key
-            master_content = f"🎯 {_REPLY_PREFIX_RE.sub('', subject).strip() or 'Email Thread'}"
-            master_result = self._todoist.find_or_create_master_task(
-                master_key=master_key,
-                content=master_content,
-                project_key=_EMAIL_TASK_PROJECT_KEY,
-                section="immediate",
-                description=f"Master task for email conversations about: {master_key}",
-                labels=["master-task", "email-task"],
-            )
-            master_id = str(master_result.get("id", ""))
-            if not master_id:
-                logger.warning("📧→📋 Could not create master task for key=%s", master_key)
-                return "", ""
-
-            task_labels = labels or list(_EMAIL_TASK_DEFAULT_LABELS)
-            lineage_lines = _workflow_lineage_lines(
-                workflow_run_id=workflow_run_id,
-                workflow_attempt_id=workflow_attempt_id,
-                provider_session_id=provider_session_id,
-            )
-            lineage_comment = _workflow_lineage_comment(
-                workflow_run_id=workflow_run_id,
-                workflow_attempt_id=workflow_attempt_id,
-                provider_session_id=provider_session_id,
-            )
-            description_lines = [
-                f"From: {sender_email}",
-                f"Thread: {thread_id}",
-                *lineage_lines,
-                "---",
-                f"{reply_text[:1500]}",
-            ]
-            description = "\n".join(line for line in description_lines if line)
-
-            if existing_todoist_id:
-                # ② Update existing subtask
-                content = f"📧 {subject}" if subject else "📧 Email Task"
-                self._todoist.update_task(
-                    existing_todoist_id,
-                    content=content,
-                    description=description,
-                )
-                self._todoist.add_comment(
-                    existing_todoist_id,
-                    f"**Email update #{message_count}** from {sender_email}:\n{reply_text[:800]}",
-                )
-                if lineage_comment:
-                    self._todoist.add_comment(existing_todoist_id, lineage_comment)
-                return existing_todoist_id, master_id
-            else:
-                # ③ Create new subtask under the master task
-                content = f"📧 {subject}" if subject else "📧 Email Task"
-                result = self._todoist.create_subtask(
-                    parent_id=master_id,
-                    content=content,
-                    description=description,
-                    priority="medium",
-                    labels=task_labels,
-                )
-                subtask_id = str(result.get("id", ""))
-                if subtask_id:
-                    self._todoist.add_comment(
-                        subtask_id,
-                        f"**Email from {sender_email}:**\n{reply_text[:800]}",
-                    )
-                    if lineage_comment:
-                        self._todoist.add_comment(subtask_id, lineage_comment)
-                return subtask_id, master_id
-        except Exception as exc:
-            logger.warning("📧→📋 Todoist subtask upsert failed for thread=%s: %s", thread_id, exc)
-            return "", ""
+    # -- _upsert_todoist_subtask removed (Todoist integration decommissioned) --
 
     def _update_heartbeat(
         self,

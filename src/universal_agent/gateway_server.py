@@ -352,31 +352,7 @@ AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE = (
     or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
     or "UTC"
 )
-TODOIST_CHRON_MAPPING_FILENAME = "todoist_chron_mappings.json"
-TODOIST_CHRON_MAPPING_STORE_VERSION = 1
-TODOIST_CHRON_MAPPING_MAX_ENTRIES = max(
-    100,
-    int(os.getenv("UA_TODOIST_CHRON_MAPPING_MAX_ENTRIES", "5000") or 5000),
-)
-TODOIST_CHRON_RECONCILE_ENABLED = (
-    str(os.getenv("UA_TODOIST_CHRON_RECONCILE_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
-)
-TODOIST_CHRON_RECONCILE_REMOVE_STALE = (
-    str(os.getenv("UA_TODOIST_CHRON_RECONCILE_REMOVE_STALE", "1")).strip().lower() in {"1", "true", "yes", "on"}
-)
-TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS = max(
-    60.0,
-    float(os.getenv("UA_TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS", "600") or 600.0),
-)
-AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS = max(
-    3600,
-    int(os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS", str(24 * 3600)) or (24 * 3600)),
-)
-AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS = max(
-    5,
-    int(os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS", "200") or 200),
-)
-_todoist_chron_mapping_lock = threading.Lock()
+# -- Todoist constants removed (decommissioned) --
 
 
 def _deployment_profile_defaults() -> dict:
@@ -2088,11 +2064,7 @@ class ToDoTaskActionRequest(BaseModel):
     agent_id: Optional[str] = None
 
 
-class TodoistMirrorPolicyPatchRequest(BaseModel):
-    mode: Optional[str] = None
-    classes: Optional[list[str]] = None
-    reverse_sync_fields: Optional[list[str]] = None
-    enabled: Optional[bool] = None
+# -- TodoistMirrorPolicyPatchRequest removed (Todoist decommissioned) --
 
 
 class MemoryTaskCompactRequest(BaseModel):
@@ -2227,8 +2199,7 @@ _vp_event_bridge_interval_seconds = max(
 _vp_event_bridge_cursor_key = "gateway.session_feed"
 _vp_event_bridge_task: Optional[asyncio.Task[Any]] = None
 _vp_event_bridge_stop_event: Optional[asyncio.Event] = None
-_todoist_chron_reconcile_task: Optional[asyncio.Task[Any]] = None
-_todoist_chron_reconcile_stop_event: Optional[asyncio.Event] = None
+# -- Todoist reconciliation task vars removed (decommissioned) --
 _vp_event_bridge_last_rowid = 0
 _vp_event_bridge_metrics: dict[str, Any] = {
     "cycles": 0,
@@ -2588,13 +2559,7 @@ _scheduling_runtime_metrics: dict[str, Any] = {
         "due_lag_seconds_max": 0.0,
         "due_lag_seconds_total": 0.0,
     },
-    "todoist_chron_reconciliation": {
-        "runs": 0,
-        "last_run_at": None,
-        "last_duration_ms": 0.0,
-        "last_error": None,
-        "last_result": {},
-    },
+    # -- todoist_chron_reconciliation metrics removed (decommissioned) --
 }
 _activity_runtime_started_ts = time.time()
 _activity_runtime_metrics: dict[str, Any] = {
@@ -4368,7 +4333,8 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     requires_action = bool(should_escalate)
     if event_type in {"delivery_health_recovered", "delivery_reliability_slo_recovered"}:
         requires_action = False
-    todoist_sync = bool(
+    # todoist_sync removed (Todoist decommissioned) — kept as marker for Task Hub dispatch
+    task_hub_sync = bool(
         (has_anomaly and event_type != "delivery_health_recovered")
         or event_type in {
             "rss_insight_daily",
@@ -4391,7 +4357,7 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         "requires_action": requires_action,
         "escalates_to_ua": bool(should_escalate),
         "escalation_reason": escalation_reason,
-        "todoist_sync": todoist_sync,
+        "todoist_sync": task_hub_sync,  # legacy key name preserved for downstream compat
     }
 
 
@@ -4669,7 +4635,7 @@ def classify_csi_project_key(
     quality: Any,
     source_mix: Any,
 ) -> str:
-    """Classify CSI-driven Todoist tasks into one of the 5 UA project keys."""
+    """Classify CSI-driven tasks into one of the 5 UA project keys."""
     event_type_l = str(event_type or "").strip().lower()
     subject_obj = subject if isinstance(subject, dict) else {}
     quality_obj = quality if isinstance(quality, dict) else {}
@@ -5924,7 +5890,7 @@ def _emit_cron_event(payload: dict) -> None:
                 "source": "cron",
                 "autonomous": is_autonomous,
                 "system_job": system_job,
-                "todoist_task_id": str(job_metadata.get("todoist_task_id") or ""),
+                "todoist_task_id": "",  # deprecated — Todoist decommissioned
             },
         )
         _maybe_wake_heartbeat_after_autonomous_cron(
@@ -11633,39 +11599,7 @@ async def lifespan(app: FastAPI):
     except Exception as _csi_init_exc:
         logger.warning("CSI digest DB init failed (non-fatal): %s", _csi_init_exc)
 
-    logger.info("Lifespan: Probing Todoist token health...")
-    # Probe Todoist token health at startup so failures are discovered immediately.
-    _todoist_startup_token = (
-        (os.getenv("TODOIST_API_TOKEN") or "").strip()
-        or (os.getenv("TODOIST_API_KEY") or "").strip()
-    )
-    if _todoist_startup_token:
-        try:
-            from universal_agent.services.todoist_service import TodoService
-            _td_ok, _td_err = TodoService(api_token=_todoist_startup_token).verify_token()
-            if _td_ok:
-                logger.info("✅ Todoist token verified successfully at startup")
-            else:
-                logger.warning("⚠️ Todoist token probe failed at startup: %s", _td_err)
-                if "auth_failure" in _td_err:
-                    _add_notification(
-                        kind="system_error",
-                        title="Todoist Auth Failed — Token Invalid at Startup",
-                        message=(
-                            "The Todoist API token (TODOIST_API_TOKEN) was rejected with 401/403 "
-                            "at gateway startup. Regenerate the token at "
-                            "https://app.todoist.com/app/settings/integrations/developer "
-                            "and update TODOIST_API_TOKEN in Infisical, then restart the gateway."
-                        ),
-                        severity="error",
-                        metadata={"integration": "todoist", "reason": "auth_failure", "source_domain": "system"},
-                    )
-                elif "rate_limited" in _td_err:
-                    logger.info("Todoist rate-limited at startup probe; will retry normally on first CSI write")
-        except Exception as _td_exc:
-            logger.debug("Todoist startup probe skipped (service unavailable): %s", _td_exc)
-    else:
-        logger.info("ℹ️ TODOIST_API_TOKEN/TODOIST_API_KEY not set — Todoist sync will be skipped")
+    # -- Todoist token probe removed (Todoist decommissioned) --
 
     logger.info("Lifespan: Initializing Redis delegation bus...")
 
@@ -11738,7 +11672,7 @@ async def lifespan(app: FastAPI):
     # Initialize Heartbeat Service
     global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
-    global _todoist_chron_reconcile_task, _todoist_chron_reconcile_stop_event
+    # -- _todoist_chron_reconcile_task/stop_event globals removed (decommissioned) --
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(
@@ -11798,30 +11732,7 @@ async def lifespan(app: FastAPI):
             _ensure_autonomous_daily_briefing_job()
         except Exception:
             logger.exception("Failed ensuring autonomous daily briefing chron job")
-        if TODOIST_CHRON_RECONCILE_ENABLED:
-            try:
-                initial = _reconcile_todoist_chron_mappings(
-                    remove_stale=TODOIST_CHRON_RECONCILE_REMOVE_STALE,
-                    dry_run=False,
-                )
-                logger.info(
-                    "🔁 Todoist<->Chron reconciliation startup run: inspected=%s relinked=%s removed=%s ok=%s",
-                    initial.get("inspected"),
-                    initial.get("relinked"),
-                    initial.get("removed"),
-                    initial.get("ok"),
-                )
-            except Exception:
-                logger.exception("Failed Todoist<->Chron reconciliation startup run")
-            _todoist_chron_reconcile_stop_event = asyncio.Event()
-            _todoist_chron_reconcile_task = asyncio.create_task(_todoist_chron_reconcile_loop())
-            logger.info(
-                "🔁 Todoist<->Chron reconciliation loop enabled (interval=%.1fs, remove_stale=%s)",
-                TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS,
-                TODOIST_CHRON_RECONCILE_REMOVE_STALE,
-            )
-        else:
-            logger.info("⏸️ Todoist<->Chron reconciliation loop disabled (UA_TODOIST_CHRON_RECONCILE_ENABLED)")
+        # -- Todoist<->Chron reconciliation loop removed (decommissioned) --
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 

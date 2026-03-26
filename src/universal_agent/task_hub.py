@@ -22,6 +22,12 @@ TASK_STATUS_PARKED = "parked"
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED}
 ACTIVE_STATUSES = {TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED, TASK_STATUS_REVIEW}
 VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze"}
+
+TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll"}
+DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
+
+REFINEMENT_STAGES = {"raw_idea", "interviewing", "exploring", "crystallizing", "decomposing", "actionable"}
+DEFAULT_REFINEMENT_STAGE = "raw_idea"
 CSI_ROUTING_INCUBATING = "incubating"
 CSI_ROUTING_AGENT_ACTIONABLE = "agent_actionable"
 CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED = "human_intervention_required"
@@ -52,12 +58,7 @@ class TaskHubPolicy:
     stale_min_age_minutes: int
 
 
-DEFAULT_MIRROR_POLICY = {
-    "mode": "selective",
-    "classes": ["personal", "approval", "must_complete", "csi_incident_high"],
-    "reverse_sync_fields": ["complete", "reopen", "priority"],
-    "enabled": True,
-}
+# -- Legacy mirror policy removed (Todoist integration decommissioned) --
 
 
 def _now_iso() -> str:
@@ -242,14 +243,26 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_task_hub_dispatch_rank ON task_hub_dispatch_queue(queue_build_id, eligible, rank);
 
-        CREATE TABLE IF NOT EXISTS task_hub_mirror_map (
-            task_id TEXT PRIMARY KEY,
-            todoist_task_id TEXT,
-            mirror_class TEXT,
-            mirror_state TEXT NOT NULL DEFAULT 'unmapped',
-            last_sync_at TEXT,
-            last_error TEXT
+        CREATE TABLE IF NOT EXISTS task_hub_comments (
+            comment_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            author TEXT NOT NULL DEFAULT 'system',
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_task_hub_comments_task ON task_hub_comments(task_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS task_hub_question_queue (
+            question_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            question_text TEXT NOT NULL,
+            asked_at TEXT NOT NULL,
+            answered INTEGER NOT NULL DEFAULT 0,
+            answer_text TEXT,
+            channel TEXT NOT NULL DEFAULT 'dashboard',
+            expires_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_hub_questions_task ON task_hub_question_queue(task_id, answered, asked_at DESC);
 
         CREATE TABLE IF NOT EXISTS task_hub_workstreams (
             workstream_id TEXT PRIMARY KEY,
@@ -272,6 +285,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ALTER TABLE task_hub_assignments ADD COLUMN workflow_run_id TEXT",
         "ALTER TABLE task_hub_assignments ADD COLUMN workflow_attempt_id TEXT",
         "ALTER TABLE task_hub_assignments ADD COLUMN provider_session_id TEXT",
+        "ALTER TABLE task_hub_items ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'heartbeat_poll'",
+        "ALTER TABLE task_hub_items ADD COLUMN refinement_stage TEXT",
+        "ALTER TABLE task_hub_items ADD COLUMN refinement_history_json TEXT NOT NULL DEFAULT '{}'",
     ):
         try:
             conn.execute(ddl)
@@ -303,68 +319,7 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: dict[str, Any]) -> N
     conn.commit()
 
 
-def get_mirror_policy(conn: sqlite3.Connection) -> dict[str, Any]:
-    stored = _get_setting(conn, "todoist_mirror_policy", default=DEFAULT_MIRROR_POLICY)
-    merged = dict(DEFAULT_MIRROR_POLICY)
-    merged.update(stored)
-    classes = merged.get("classes")
-    if not isinstance(classes, list):
-        merged["classes"] = list(DEFAULT_MIRROR_POLICY["classes"])
-    else:
-        merged["classes"] = [str(c).strip() for c in classes if str(c).strip()]
-    reverse = merged.get("reverse_sync_fields")
-    if not isinstance(reverse, list):
-        merged["reverse_sync_fields"] = list(DEFAULT_MIRROR_POLICY["reverse_sync_fields"])
-    else:
-        merged["reverse_sync_fields"] = [str(c).strip() for c in reverse if str(c).strip()]
-    merged["enabled"] = bool(merged.get("enabled", True))
-    merged["mode"] = str(merged.get("mode") or "selective").strip().lower() or "selective"
-    return merged
-
-
-def update_mirror_policy(conn: sqlite3.Connection, patch: dict[str, Any]) -> dict[str, Any]:
-    current = get_mirror_policy(conn)
-    next_policy = dict(current)
-    for key in ("mode", "classes", "reverse_sync_fields", "enabled"):
-        if key in patch:
-            next_policy[key] = patch[key]
-    if "mode" in next_policy:
-        next_policy["mode"] = str(next_policy.get("mode") or "selective").strip().lower() or "selective"
-    if "classes" in next_policy:
-        raw = next_policy.get("classes")
-        if isinstance(raw, list):
-            next_policy["classes"] = [str(v).strip() for v in raw if str(v).strip()]
-        else:
-            next_policy["classes"] = list(DEFAULT_MIRROR_POLICY["classes"])
-    if "reverse_sync_fields" in next_policy:
-        raw = next_policy.get("reverse_sync_fields")
-        if isinstance(raw, list):
-            next_policy["reverse_sync_fields"] = [str(v).strip() for v in raw if str(v).strip()]
-        else:
-            next_policy["reverse_sync_fields"] = list(DEFAULT_MIRROR_POLICY["reverse_sync_fields"])
-    next_policy["enabled"] = bool(next_policy.get("enabled", True))
-    _set_setting(conn, "todoist_mirror_policy", next_policy)
-    return get_mirror_policy(conn)
-
-
-def get_mirror_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
-    ensure_schema(conn)
-    rows = conn.execute(
-        "SELECT mirror_class, mirror_state, COUNT(*) AS c FROM task_hub_mirror_map GROUP BY mirror_class, mirror_state"
-    ).fetchall()
-    by_class: dict[str, int] = {}
-    by_state: dict[str, int] = {}
-    for row in rows:
-        mclass = str(row["mirror_class"] or "unknown")
-        mstate = str(row["mirror_state"] or "unknown")
-        count = int(row["c"] or 0)
-        by_class[mclass] = by_class.get(mclass, 0) + count
-        by_state[mstate] = by_state.get(mstate, 0) + count
-    return {
-        "total": sum(by_state.values()),
-        "by_class": by_class,
-        "by_state": by_state,
-    }
+# -- Mirror policy and metrics functions removed (Todoist integration decommissioned) --
 
 
 def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
@@ -1629,30 +1584,249 @@ def list_personal_queue(conn: sqlite3.Connection, *, limit: int = 120) -> list[d
     return filtered[: max(1, int(limit))]
 
 
-def upsert_mirror_map(
+# -- upsert_mirror_map removed (Todoist integration decommissioned) --
+
+
+# ---------------------------------------------------------------------------
+# Task Comments
+# ---------------------------------------------------------------------------
+
+def add_comment(
     conn: sqlite3.Connection,
     *,
     task_id: str,
-    todoist_task_id: Optional[str],
-    mirror_class: Optional[str],
-    mirror_state: str,
-    last_error: Optional[str] = None,
-) -> None:
+    content: str,
+    author: str = "system",
+) -> dict[str, Any]:
+    """Add a comment/note to a task."""
     ensure_schema(conn)
+    comment_id = str(uuid.uuid4())
+    now = _now_iso()
     conn.execute(
-        """
-        INSERT INTO task_hub_mirror_map (task_id, todoist_task_id, mirror_class, mirror_state, last_sync_at, last_error)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(task_id) DO UPDATE SET
-            todoist_task_id=excluded.todoist_task_id,
-            mirror_class=excluded.mirror_class,
-            mirror_state=excluded.mirror_state,
-            last_sync_at=excluded.last_sync_at,
-            last_error=excluded.last_error
-        """,
-        (task_id, todoist_task_id, mirror_class, mirror_state, _now_iso(), last_error),
+        "INSERT INTO task_hub_comments (comment_id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)",
+        (comment_id, task_id, author, content, now),
     )
     conn.commit()
+    return {"comment_id": comment_id, "task_id": task_id, "author": author, "content": content, "created_at": now}
+
+
+def list_comments(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List comments for a task, newest first."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM task_hub_comments WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+        (task_id, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Question Queue (proactive heartbeat questions)
+# ---------------------------------------------------------------------------
+
+def enqueue_question(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    question_text: str,
+    channel: str = "dashboard",
+    expires_minutes: int = 60,
+) -> dict[str, Any]:
+    """Queue a proactive question for user response."""
+    ensure_schema(conn)
+    question_id = str(uuid.uuid4())
+    now = _now_iso()
+    expires_at = datetime.now(timezone.utc).isoformat() if expires_minutes <= 0 else None
+    if expires_minutes > 0:
+        from datetime import timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)).isoformat()
+    conn.execute(
+        "INSERT INTO task_hub_question_queue (question_id, task_id, question_text, asked_at, answered, channel, expires_at) VALUES (?, ?, ?, ?, 0, ?, ?)",
+        (question_id, task_id, question_text, now, channel, expires_at),
+    )
+    conn.commit()
+    return {"question_id": question_id, "task_id": task_id, "question_text": question_text, "asked_at": now, "channel": channel, "expires_at": expires_at}
+
+
+def list_pending_questions(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """List unanswered, non-expired questions."""
+    ensure_schema(conn)
+    now = _now_iso()
+    rows = conn.execute(
+        "SELECT * FROM task_hub_question_queue WHERE answered = 0 AND (expires_at IS NULL OR expires_at > ?) ORDER BY asked_at ASC LIMIT ?",
+        (now, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def answer_question(
+    conn: sqlite3.Connection,
+    *,
+    question_id: str,
+    answer_text: str,
+) -> dict[str, Any]:
+    """Mark a question as answered."""
+    ensure_schema(conn)
+    conn.execute(
+        "UPDATE task_hub_question_queue SET answered = 1, answer_text = ? WHERE question_id = ?",
+        (answer_text, question_id),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM task_hub_question_queue WHERE question_id = ?", (question_id,)).fetchone()
+    return dict(row) if row else {"question_id": question_id, "answered": True}
+
+
+# ---------------------------------------------------------------------------
+# Sub-task / Decomposition Helpers
+# ---------------------------------------------------------------------------
+
+def list_subtasks(
+    conn: sqlite3.Connection,
+    parent_task_id: str,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List child tasks for a given parent."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM task_hub_items WHERE parent_task_id = ? ORDER BY priority DESC, created_at ASC LIMIT ?",
+        (parent_task_id, limit),
+    ).fetchall()
+    return [hydrate_item(dict(row)) for row in rows]
+
+
+def get_parent_progress(
+    conn: sqlite3.Connection,
+    parent_task_id: str,
+) -> dict[str, Any]:
+    """Return aggregate progress for a parent task's children."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS c FROM task_hub_items WHERE parent_task_id = ? GROUP BY status",
+        (parent_task_id,),
+    ).fetchall()
+    total = 0
+    completed = 0
+    by_status: dict[str, int] = {}
+    for row in rows:
+        count = int(row["c"] or 0)
+        status = str(row["status"] or "")
+        by_status[status] = count
+        total += count
+        if status == TASK_STATUS_COMPLETED:
+            completed += count
+    return {"total": total, "completed": completed, "by_status": by_status}
+
+
+def get_decomposition_tree(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    max_depth: int = 3,
+) -> dict[str, Any]:
+    """Return a task with nested sub-task tree."""
+    ensure_schema(conn)
+    item = get_item(conn, task_id)
+    if item is None:
+        return {"task_id": task_id, "error": "not_found"}
+    progress = get_parent_progress(conn, task_id)
+    item["subtask_progress"] = progress
+    if max_depth > 0 and progress["total"] > 0:
+        children = list_subtasks(conn, task_id)
+        item["subtasks"] = [
+            get_decomposition_tree(conn, child["task_id"], max_depth=max_depth - 1)
+            for child in children
+        ]
+    else:
+        item["subtasks"] = []
+    return item
+
+
+def decompose_task(
+    conn: sqlite3.Connection,
+    *,
+    parent_task_id: str,
+    subtasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Create child tasks under a parent. Each dict in subtasks should have title, description, etc."""
+    ensure_schema(conn)
+    created = []
+    for idx, sub in enumerate(subtasks):
+        sub_id = sub.get("task_id") or f"{parent_task_id}:sub:{idx + 1}"
+        sub_item = {
+            "task_id": sub_id,
+            "parent_task_id": parent_task_id,
+            "source_kind": sub.get("source_kind", "decomposition"),
+            "title": sub.get("title", f"Sub-task {idx + 1}"),
+            "description": sub.get("description", ""),
+            "project_key": sub.get("project_key", "immediate"),
+            "priority": sub.get("priority", 2),
+            "labels": sub.get("labels", ["agent-ready"]),
+            "status": sub.get("status", TASK_STATUS_OPEN),
+            "agent_ready": sub.get("agent_ready", True),
+            "trigger_type": sub.get("trigger_type", DEFAULT_TRIGGER_TYPE),
+        }
+        result = upsert_item(conn, sub_item)
+        created.append(result)
+    return created
+
+
+# ---------------------------------------------------------------------------
+# Refinement Helpers (brainstorm progressive refinement)
+# ---------------------------------------------------------------------------
+
+def advance_refinement(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    new_stage: str,
+    context_update: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Advance a brainstorm task to the next refinement stage."""
+    ensure_schema(conn)
+    if new_stage not in REFINEMENT_STAGES:
+        raise ValueError(f"Invalid refinement stage: {new_stage}. Valid: {REFINEMENT_STAGES}")
+    item = get_item(conn, task_id)
+    if item is None:
+        raise ValueError(f"Task not found: {task_id}")
+    history = _json_loads_obj(item.get("refinement_history_json"), default={})
+    now = _now_iso()
+    history[now] = {
+        "stage": new_stage,
+        "context": context_update or {},
+    }
+    conn.execute(
+        "UPDATE task_hub_items SET refinement_stage = ?, refinement_history_json = ?, updated_at = ? WHERE task_id = ?",
+        (new_stage, _json_dumps(history), now, task_id),
+    )
+    conn.commit()
+    return get_item(conn, task_id) or {}
+
+
+def get_refinement_state(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> dict[str, Any]:
+    """Return current refinement stage and full history."""
+    ensure_schema(conn)
+    item = get_item(conn, task_id)
+    if item is None:
+        return {"task_id": task_id, "error": "not_found"}
+    return {
+        "task_id": task_id,
+        "refinement_stage": item.get("refinement_stage"),
+        "refinement_history": _json_loads_obj(item.get("refinement_history_json"), default={}),
+        "trigger_type": item.get("trigger_type", DEFAULT_TRIGGER_TYPE),
+    }
 
 
 def perform_task_action(

@@ -1173,17 +1173,8 @@ class AgentMailService:
             conn = connect_runtime_db(get_activity_db_path())
             conn.row_factory = sqlite3.Row
 
-            # Try to get the Todoist service (optional — best-effort)
-            todoist_svc = None
-            try:
-                from universal_agent.services.todoist_service import TodoService
-                todoist_svc = TodoService()  # Uses env var from infisical run wrapper
-            except Exception as t_exc:
-                logger.debug("📧→📋 Todoist service unavailable for email tasks: %s", t_exc)
-
             self._email_task_bridge = EmailTaskBridge(
                 db_conn=conn,
-                todoist_service=todoist_svc,
             )
             logger.info("📧→📋 EmailTaskBridge initialized successfully")
         except Exception as exc:
@@ -1206,7 +1197,7 @@ class AgentMailService:
     ) -> Optional[dict[str, Any]]:
         """Materialize an inbound trusted email as a tracked task.
 
-        This creates/updates a Task Hub entry, Todoist task, and HEARTBEAT.md
+        This creates/updates a Task Hub entry and HEARTBEAT.md
         entry so the email conversation becomes visible on the To-Do List
         dashboard and gets picked up by the heartbeat scheduler.
         Returns the bridge result dict, or None if the bridge is unavailable.
