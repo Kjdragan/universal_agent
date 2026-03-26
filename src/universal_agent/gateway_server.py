@@ -133,7 +133,7 @@ from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendatio
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
-# tutorial_telegram_notifier REMOVED — rebuilding notification system
+
 from universal_agent import process_heartbeat
 from universal_agent.workflow_admission import (
     WorkflowAdmissionService,
@@ -9413,7 +9413,7 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
                 }
             )
         )
-    # tutorial_telegram_notifier.maybe_send(payload)  # REMOVED
+
 
 
 def _normalize_notification_status(status: str) -> str:
@@ -13496,7 +13496,6 @@ async def ops_telegram_status(request: Request):
 
     channels: list[dict[str, Any]] = []
     for name, env_key in [
-        ("UA Tutorial Feed", "YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID"),
         ("UA RSS Feed", "CSI_RSS_TELEGRAM_CHAT_ID"),
         ("UA Reddit Feed", "CSI_REDDIT_TELEGRAM_CHAT_ID"),
     ]:

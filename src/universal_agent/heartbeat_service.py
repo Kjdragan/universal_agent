@@ -1111,10 +1111,25 @@ class HeartbeatService:
             
         return False
 
+    # Session prefixes that represent ephemeral, fire-and-forget processing
+    # sessions and should never receive heartbeat checks.  These sessions
+    # have no HEARTBEAT.md, their agent work is self-contained, and running
+    # heartbeats on them wastes LLM tokens and produces false-alarm timeout
+    # notifications.
+    _HEARTBEAT_EXCLUDED_PREFIXES = (
+        "session_hook_yt_",       # YouTube tutorial processing
+        "session_hook_simone_",   # Simone webhook listener
+        "session_hook_agentmail_",  # AgentMail listener
+    )
+
     async def _process_session(self, session: GatewaySession):
         """Check if a session needs a heartbeat run."""
         # Check for idle cleanup first
         if self._check_session_idle(session):
+            return
+
+        # Ephemeral hook sessions are fire-and-forget; skip heartbeat entirely.
+        if session.session_id.startswith(self._HEARTBEAT_EXCLUDED_PREFIXES):
             return
 
         # Load state
