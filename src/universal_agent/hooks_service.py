@@ -686,6 +686,13 @@ class HooksService:
             0,
             self._safe_int_env("UA_HOOKS_STARTUP_WARMUP_DELAY_SECONDS", 15),
         )
+        # Legacy marker GC: old pending recovery markers created before
+        # workflow-run binding can otherwise survive forever and requeue stale
+        # videos on every restart.
+        self._legacy_pending_marker_max_age_seconds = max(
+            0,
+            self._safe_int_env("UA_HOOKS_LEGACY_PENDING_MARKER_MAX_AGE_SECONDS", 21600),
+        )
         # Video-level dispatch dedup: prevents the same YouTube video from being
         # processed concurrently by multiple dispatch sources (e.g. playlist watcher
         # + any other webhook source).  Key = video_id, value = start timestamp.
@@ -1035,6 +1042,35 @@ class HooksService:
             marker.unlink()
         except Exception:
             logger.warning("Failed removing pending local ingest marker path=%s", marker)
+
+    @staticmethod
+    def _pending_marker_created_epoch(payload: dict[str, Any]) -> float:
+        try:
+            return float(payload.get("created_at_epoch") or 0.0)
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _pending_marker_has_workflow_identity(payload: dict[str, Any]) -> bool:
+        run_id = str(payload.get("run_id") or "").strip()
+        attempt_id = str(payload.get("attempt_id") or "").strip()
+        return bool(run_id or attempt_id)
+
+    def _legacy_pending_marker_is_stale(
+        self,
+        payload: dict[str, Any],
+        *,
+        now_epoch: float,
+    ) -> bool:
+        max_age_seconds = float(self._legacy_pending_marker_max_age_seconds)
+        if max_age_seconds <= 0:
+            return False
+        if self._pending_marker_has_workflow_identity(payload):
+            return False
+        created_epoch = self._pending_marker_created_epoch(payload)
+        if created_epoch <= 0:
+            return False
+        return (now_epoch - created_epoch) >= max_age_seconds
 
     def _finalize_startup_recovery_if_already_processed(
         self,
@@ -2074,7 +2110,22 @@ class HooksService:
             if not isinstance(pending_payload, dict):
                 continue
             pending_status = str(pending_payload.get("status") or "").strip().lower()
+            if pending_status == "recovered":
+                self._clear_pending_hook_recovery_marker(session_dir)
+                continue
             if pending_status not in {"dispatch_interrupted", "dispatch_retry_pending"}:
+                continue
+            if self._legacy_pending_marker_is_stale(pending_payload, now_epoch=now_epoch):
+                marker_video_id = str(pending_payload.get("video_id") or "").strip()
+                created_epoch = self._pending_marker_created_epoch(pending_payload)
+                marker_age_seconds = max(0, int(now_epoch - created_epoch)) if created_epoch > 0 else None
+                logger.info(
+                    "Clearing stale legacy pending dispatch marker session_id=%s video_id=%s age_seconds=%s",
+                    session_id,
+                    marker_video_id,
+                    marker_age_seconds if marker_age_seconds is not None else "unknown",
+                )
+                self._clear_pending_hook_recovery_marker(session_dir)
                 continue
             marker_video_id = str(pending_payload.get("video_id") or "").strip()
             if marker_video_id and self._finalize_startup_recovery_if_already_processed(
@@ -2154,6 +2205,18 @@ class HooksService:
                 continue
             pending_status = str(pending_payload.get("status") or "").strip().lower()
             if pending_status not in {"failed_local_ingest", "pending_local_ingest"}:
+                continue
+            if self._legacy_pending_marker_is_stale(pending_payload, now_epoch=now_epoch):
+                marker_video_id = str(pending_payload.get("video_id") or "").strip()
+                created_epoch = self._pending_marker_created_epoch(pending_payload)
+                marker_age_seconds = max(0, int(now_epoch - created_epoch)) if created_epoch > 0 else None
+                logger.info(
+                    "Clearing stale legacy pending local ingest marker session_id=%s video_id=%s age_seconds=%s",
+                    session_id,
+                    marker_video_id,
+                    marker_age_seconds if marker_age_seconds is not None else "unknown",
+                )
+                self._clear_pending_local_ingest_marker(session_dir)
                 continue
             marker_video_id = str(pending_payload.get("video_id") or "").strip()
             if marker_video_id and self._finalize_startup_recovery_if_already_processed(

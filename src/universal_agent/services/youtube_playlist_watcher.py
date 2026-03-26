@@ -10,7 +10,7 @@ process being alive.
 Env vars:
     YT_TUTORIALS_PLAYLIST_ID    — playlist to watch (required)
     YOUTUBE_API_KEY             — YouTube Data API key (required)
-    YT_TUTORIALS_POLL_INTERVAL_SECONDS — poll cadence, default 60
+    YT_TUTORIALS_POLL_INTERVAL_SECONDS — poll cadence, default 120
     UA_YT_PLAYLIST_WATCHER_ENABLED — set to "0" / "false" to disable
 """
 
@@ -101,9 +101,9 @@ def _is_enabled() -> bool:
 
 def _poll_interval() -> float:
     try:
-        return max(15.0, float(os.getenv("YT_TUTORIALS_POLL_INTERVAL_SECONDS", "60")))
+        return max(15.0, float(os.getenv("YT_TUTORIALS_POLL_INTERVAL_SECONDS", "120")))
     except Exception:
-        return 60.0
+        return 120.0
 
 
 def _state_path() -> Path:

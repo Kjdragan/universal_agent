@@ -1871,7 +1871,7 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_local_inge
                 "session_id": session_id,
                 "video_url": "https://www.youtube.com/watch?v=3L7wPEB8sEc",
                 "video_id": "3L7wPEB8sEc",
-                "created_at_epoch": 1.0,
+                "created_at_epoch": time.time() - 300,
             }
         ),
         encoding="utf-8",
@@ -1918,7 +1918,7 @@ async def test_recover_interrupted_youtube_sessions_supports_run_workspace_prefi
                 "session_id": session_id,
                 "video_url": "https://www.youtube.com/watch?v=runprefix123",
                 "video_id": "runprefix123",
-                "created_at_epoch": 1.0,
+                "created_at_epoch": time.time() - 300,
             }
         ),
         encoding="utf-8",
@@ -1980,6 +1980,7 @@ async def test_recover_interrupted_youtube_sessions_skips_non_retryable_pending_
     service._dispatch_action.assert_not_called()
     marker = session_dir / ".hook_startup_recovery.json"
     assert not marker.exists()
+    assert pending_path.exists() is False
 
 
 @pytest.mark.asyncio
@@ -2012,7 +2013,7 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
                 "session_id": session_id,
                 "video_id": "3L7wPEB8sEc",
                 "reason": "hook_dispatch_interrupted",
-                "created_at_epoch": 1.0,
+                "created_at_epoch": time.time() - 300,
             }
         ),
         encoding="utf-8",
@@ -2029,6 +2030,95 @@ async def test_recover_interrupted_youtube_sessions_backfills_pending_dispatch_i
     assert "3L7wPEB8sEc" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_clears_recovered_pending_dispatch_marker(
+    mock_gateway,
+    tmp_path,
+):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
+
+    session_id = "session_hook_yt_demo__recoveredMarker123"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_hook_recovery.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "recovered",
+                "session_id": session_id,
+                "video_id": "recoveredMarker123",
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+
+    assert recovered == 0
+    service._dispatch_action.assert_not_called()
+    assert pending_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_clears_stale_legacy_pending_dispatch_retry_marker(
+    mock_gateway,
+    tmp_path,
+):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+                "UA_HOOKS_LEGACY_PENDING_MARKER_MAX_AGE_SECONDS": "600",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        _bind_workflow_runtime_db(service, tmp_path)
+
+    session_id = "session_hook_yt_demo__legacyRetry123"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = session_dir / "pending_hook_recovery.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "status": "dispatch_retry_pending",
+                "session_id": session_id,
+                "video_id": "legacyRetry123",
+                "reason": "hook_dispatch_failed",
+                "retry_count": 1,
+                "created_at_epoch": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+
+    assert recovered == 0
+    service._dispatch_action.assert_not_called()
+    assert pending_path.exists() is False
 
 
 @pytest.mark.asyncio
