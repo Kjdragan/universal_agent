@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from unittest.mock import AsyncMock
 
 import pytest
@@ -340,6 +341,33 @@ async def test_runtime_db_locked_dispatch_is_silent_and_left_retryable(monkeypat
 
     assert ok is False
     assert notifications == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_db_lock_exception_is_silent_and_left_retryable(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+
+    notifications: list[dict] = []
+    watcher = YouTubePlaylistWatcher(
+        dispatch_fn=AsyncMock(side_effect=sqlite3.OperationalError("database is locked")),
+        notification_sink=notifications.append,
+    )
+
+    ok = await watcher._dispatch(
+        {
+            "video_id": "lockedExc123",
+            "url": "https://www.youtube.com/watch?v=lockedExc123",
+            "title": "Runtime DB lock exception test",
+            "channel_id": "chan1",
+            "playlist_id": "PLdemo",
+        }
+    )
+
+    assert ok is False
+    assert notifications == []
+    assert "lockedExc123" in watcher._notified_delayed_videos
 
 
 @pytest.mark.asyncio

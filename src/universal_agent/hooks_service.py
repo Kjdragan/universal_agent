@@ -5170,10 +5170,37 @@ class HooksService:
         finally:
             if self._run_counter_finish:
                 try:
-                    try:
-                        self._run_counter_finish(session_id, run_source, terminal_reason)
-                    except TypeError:
-                        self._run_counter_finish(session_id, run_source)
+                    finish_call_attempts = (
+                        lambda: self._run_counter_finish(
+                            session_id,
+                            run_source=run_source,
+                            terminal_reason=terminal_reason,
+                        ),
+                        lambda: self._run_counter_finish(
+                            session_id,
+                            run_source=run_source,
+                        ),
+                        lambda: self._run_counter_finish(
+                            session_id,
+                            run_source,
+                            terminal_reason,
+                        ),
+                        lambda: self._run_counter_finish(
+                            session_id,
+                            run_source,
+                        ),
+                        lambda: self._run_counter_finish(session_id),
+                    )
+                    last_type_error: Optional[TypeError] = None
+                    for finish_call in finish_call_attempts:
+                        try:
+                            finish_call()
+                            last_type_error = None
+                            break
+                        except TypeError as exc:
+                            last_type_error = exc
+                    if last_type_error is not None:
+                        raise last_type_error
                 except Exception:
                     logger.exception("Failed finishing hook run counter session_id=%s", session_id)
             if dispatch_gate_acquired:

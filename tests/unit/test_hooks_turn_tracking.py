@@ -101,6 +101,42 @@ async def test_hook_dispatch_skips_when_turn_not_admitted(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hook_dispatch_supports_keyword_only_run_counter_finish(monkeypatch):
+    import universal_agent.hooks_service as hs
+
+    monkeypatch.setattr(hs, "load_ops_config", lambda: {})
+    gateway = _FakeGateway()
+    finishes: list[tuple[str, str, str | None]] = []
+
+    def finish_keyword_only(
+        session_id: str,
+        *,
+        run_source: str,
+        terminal_reason: str | None = None,
+    ) -> None:
+        finishes.append((session_id, run_source, terminal_reason))
+
+    async def admit(session_id: str, request):
+        return {"decision": "accepted", "turn_id": "turn_hook_kw_finish"}
+
+    service = HooksService(
+        gateway,
+        turn_admitter=admit,
+        run_counter_finish=finish_keyword_only,
+    )
+
+    action = HookAction(kind="agent", session_key="yt_test_kw_finish", message="run hook")
+    result = await service._dispatch_action(action)
+
+    assert result["decision"] == "accepted"
+    assert len(finishes) == 1
+    session_id, run_source, terminal_reason = finishes[0]
+    assert session_id == "session_hook_yt_test_kw_finish"
+    assert run_source == "webhook"
+    assert isinstance(terminal_reason, str) and terminal_reason
+
+
+@pytest.mark.asyncio
 async def test_dispatch_internal_action_with_admission_returns_structured_result(monkeypatch, tmp_path):
     import universal_agent.hooks_service as hs
 

@@ -713,6 +713,33 @@ class YouTubePlaylistWatcher:
                 return False
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
+            _vid = item.get("video_id", "")
+            err_text = str(exc or "").strip().lower()
+            retryable_exception = any(
+                token in err_text
+                for token in (
+                    "runtime_db_locked",
+                    "database is locked",
+                    "database table is locked",
+                )
+            )
+            if retryable_exception:
+                # Treat unexpected SQLite lock exceptions the same as structured
+                # runtime_db_locked responses: keep pending and retry silently.
+                self._notified_delayed_videos.add(_vid)
+                if silent:
+                    logger.debug(
+                        "📺 Silent retryable dispatch exception video_id=%s error=%s",
+                        _vid,
+                        self._last_error,
+                    )
+                else:
+                    logger.warning(
+                        "📺 Retryable dispatch exception defer video_id=%s error=%s (no notification emitted)",
+                        _vid,
+                        self._last_error,
+                    )
+                return False
             logger.exception(
                 "📺 Dispatch error video_id=%s: %s", item.get("video_id"), exc
             )
