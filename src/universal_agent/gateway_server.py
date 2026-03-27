@@ -3778,6 +3778,10 @@ def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
             candidate = WORKSPACES_DIR / safe_id
             if candidate.is_dir():
                 return candidate
+            # Also check _daemon_archives for recycled daemon workspaces
+            archive_candidate = WORKSPACES_DIR / "_daemon_archives" / safe_id
+            if archive_candidate.is_dir():
+                return archive_candidate
         except Exception:
             pass
         return None
@@ -17108,19 +17112,61 @@ async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
             conn.close()
 
 
-def _task_history_links_for_session(session_id: str) -> dict[str, str]:
+def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "") -> dict[str, str]:
     sid = str(session_id or "").strip()
-    if not sid:
-        return {"session_id": "", "session_href": "", "run_log_href": "", "run_log_path": ""}
-    session_href = f"/dashboard/sessions?session_id={urllib.parse.quote(sid, safe='')}"
-    run_log_rel = f"{sid}/run.log"
-    run_log_href = _storage_explorer_href(scope="workspaces", path=run_log_rel, preview=run_log_rel)
-    run_log_path = str((WORKSPACES_DIR / sid / "run.log").resolve())
+    wdir = str(workspace_dir or "").strip()
+
+    if not sid and not wdir:
+        return {"session_id": "", "session_href": "", "run_log_href": "", "run_log_path": "", "workspace_dir": ""}
+
+    # For daemon sessions, the workspace_dir is the actual timestamped directory
+    # (e.g. run_daemon_simone_20260327_224414_076ac652).
+    # After recycling, it moves to _daemon_archives/.  Resolve the best path.
+    resolved_workspace_name = ""
+    resolved_workspace_path = ""
+
+    if wdir:
+        wdir_path = Path(wdir)
+        workspace_name = wdir_path.name  # e.g. run_daemon_simone_20260327_224414_076ac652
+
+        # Check if workspace still exists at original location
+        if wdir_path.exists() and wdir_path.is_dir():
+            resolved_workspace_name = workspace_name
+            resolved_workspace_path = str(wdir_path)
+        else:
+            # Check _daemon_archives
+            archive_candidate = WORKSPACES_DIR / "_daemon_archives" / workspace_name
+            if archive_candidate.exists() and archive_candidate.is_dir():
+                resolved_workspace_name = f"_daemon_archives/{workspace_name}"
+                resolved_workspace_path = str(archive_candidate)
+            else:
+                # Workspace not found — use the name anyway for link generation
+                resolved_workspace_name = workspace_name
+                resolved_workspace_path = str(wdir_path)
+
+    # Build effective session_href: use the stored session_id (daemon_simone etc.)
+    session_href = f"/dashboard/sessions?session_id={urllib.parse.quote(sid, safe='')}" if sid else ""
+
+    # Build run_log path: use the actual workspace directory
+    if resolved_workspace_name:
+        run_log_rel = f"{resolved_workspace_name}/run.log"
+        run_log_abs = str(Path(resolved_workspace_path) / "run.log")
+    elif sid:
+        run_log_rel = f"{sid}/run.log"
+        run_log_abs = str((WORKSPACES_DIR / sid / "run.log").resolve())
+    else:
+        run_log_rel = ""
+        run_log_abs = ""
+
+    run_log_href = _storage_explorer_href(scope="workspaces", path=run_log_rel, preview=run_log_rel) if run_log_rel else ""
+
     return {
         "session_id": sid,
         "session_href": session_href,
         "run_log_href": run_log_href,
-        "run_log_path": run_log_path,
+        "run_log_path": run_log_abs,
+        "workspace_dir": resolved_workspace_path or wdir,
+        "workspace_name": resolved_workspace_name,
     }
 
 
@@ -17137,7 +17183,10 @@ async def dashboard_todolist_completed(limit: int = 60):
     for row in rows:
         item = dict(row) if isinstance(row, dict) else {}
         assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
-        links = _task_history_links_for_session(str(assignment.get("session_id") or ""))
+        links = _task_history_links_for_session(
+            str(assignment.get("session_id") or ""),
+            workspace_dir=str(assignment.get("workspace_dir") or ""),
+        )
         item["links"] = links
         enriched.append(item)
     return {"status": "ok", "items": enriched}
@@ -17252,7 +17301,10 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
     enriched_assignments: list[dict[str, Any]] = []
     for row in assignments:
         record = dict(row) if isinstance(row, dict) else {}
-        links = _task_history_links_for_session(str(record.get("session_id") or ""))
+        links = _task_history_links_for_session(
+            str(record.get("session_id") or ""),
+            workspace_dir=str(record.get("workspace_dir") or ""),
+        )
         record["links"] = links
         enriched_assignments.append(record)
     history["assignments"] = enriched_assignments

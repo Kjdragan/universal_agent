@@ -128,6 +128,8 @@ type TaskHistoryLinks = {
   session_href?: string;
   run_log_href?: string;
   run_log_path?: string;
+  workspace_dir?: string;
+  workspace_name?: string;
 };
 
 type CompletedTaskItem = {
@@ -874,8 +876,8 @@ export default function ToDoListDashboardPage() {
             className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
             Inspect
           </button>
-          {item.links?.session_id && (
-            <button onClick={() => openOrFocusChatWindow({ sessionId: String(item.links!.session_id), attachMode: "tail", role: "viewer" })}
+          {(item.links?.workspace_name || item.links?.session_id) && (
+            <button onClick={() => openOrFocusChatWindow({ sessionId: String(item.links!.workspace_name || item.links!.session_id), attachMode: "tail", role: "viewer" })}
               className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
               <span className="text-[10px]">📂</span> Workspace
             </button>
@@ -1053,9 +1055,9 @@ export default function ToDoListDashboardPage() {
                       started {formatTs(row.started_at)} · ended {formatTs(row.ended_at)}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      {(row.links?.session_id || row.session_id) ? (
+                    {(row.links?.workspace_name || row.links?.session_id || row.session_id) ? (
                         <button
-                          onClick={() => openOrFocusChatWindow({ sessionId: String(row.links?.session_id || row.session_id), attachMode: "tail", role: "viewer" })}
+                          onClick={() => openOrFocusChatWindow({ sessionId: String(row.links?.workspace_name || row.links?.session_id || row.session_id), attachMode: "tail", role: "viewer" })}
                           className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35 cursor-pointer inline-flex items-center gap-1"
                         >
                           <span className="text-[9px]">📂</span> Workspace

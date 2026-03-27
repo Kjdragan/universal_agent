@@ -1718,6 +1718,7 @@ class HeartbeatService:
                             workflow_run_id=task_hub_workflow_run_id or None,
                             workflow_attempt_id=task_hub_workflow_attempt_id or None,
                             provider_session_id=session.session_id,
+                            workspace_dir=getattr(session, "workspace_dir", None),
                         )
                     else:
                         task_hub_claimed = []

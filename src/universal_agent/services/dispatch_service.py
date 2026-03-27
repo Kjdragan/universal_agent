@@ -194,6 +194,7 @@ def dispatch_sweep(
     workflow_run_id: Optional[str] = None,
     workflow_attempt_id: Optional[str] = None,
     provider_session_id: Optional[str] = None,
+    workspace_dir: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Generic sweep dispatch — wraps claim_next_dispatch_tasks.
 
@@ -207,5 +208,6 @@ def dispatch_sweep(
         workflow_run_id=workflow_run_id,
         workflow_attempt_id=workflow_attempt_id,
         provider_session_id=provider_session_id,
+        workspace_dir=workspace_dir,
     )
     return _enrich_with_routing(claimed)

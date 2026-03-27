@@ -35,3 +35,7 @@ Airport terminal tv display
 biomcp
 
 amazing game graph of claude activities
+
+claude code organiser repo for moving/copying globsal local mcps and skills!
+
+ultra has deepthink capabilities.  Hiow can i use?
