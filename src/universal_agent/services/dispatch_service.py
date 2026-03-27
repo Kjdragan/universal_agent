@@ -5,6 +5,10 @@ Provides four entry points for triggering task dispatch:
   - dispatch_on_approval: dashboard "Approve" button
   - dispatch_scheduled_due: timer-driven scheduled task dispatch
   - dispatch_sweep: drop-in replacement for heartbeat's inline claim
+
+All dispatch paths enrich claimed tasks with agent routing metadata
+via the agent_router module (Phase 3), allowing any path to determine
+whether a task should be handled by Simone, CODIE, or ATLAS.
 """
 
 from __future__ import annotations
@@ -20,6 +24,31 @@ log = logging.getLogger(__name__)
 
 class DispatchError(Exception):
     """Raised when a dispatch operation cannot be completed."""
+
+
+# ---------------------------------------------------------------------------
+# Routing enrichment (applies to all dispatch paths)
+# ---------------------------------------------------------------------------
+
+def _enrich_with_routing(claimed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Enrich claimed tasks with agent routing metadata.
+
+    Each claimed dict gets a '_routing' key with:
+      - agent_id: which agent should execute this
+      - confidence: "label", "keyword", or "default"
+      - reason: human-readable justification
+      - should_delegate: True if task should go to a VP agent
+
+    Safe to call unconditionally — gracefully no-ops on import failure.
+    """
+    if not claimed:
+        return claimed
+    try:
+        from universal_agent.services.agent_router import route_claimed_tasks
+        route_claimed_tasks(claimed)
+    except Exception as exc:
+        log.debug("Agent routing enrichment unavailable: %s", exc)
+    return claimed
 
 
 # ---------------------------------------------------------------------------
@@ -56,11 +85,12 @@ def dispatch_immediate(
         agent_id=agent_id,
         trigger_types=["immediate"],
     )
+    _enrich_with_routing(claimed)
 
     # Find our specific task in the claimed list
     for c in claimed:
         if str(c.get("task_id")) == task_id:
-            log.info("dispatch_immediate: claimed task_id=%s assignment=%s", task_id, c.get("assignment_id"))
+            log.info("dispatch_immediate: claimed task_id=%s assignment=%s routing=%s", task_id, c.get("assignment_id"), c.get("_routing", {}).get("agent_id", "?"))
             return c
 
     raise DispatchError(f"Task {task_id!r} was not claimed — it may already be in-progress or seized")
@@ -102,10 +132,11 @@ def dispatch_on_approval(
         limit=1,
         agent_id=agent_id,
     )
+    _enrich_with_routing(claimed)
 
     for c in claimed:
         if str(c.get("task_id")) == task_id:
-            log.info("dispatch_on_approval: claimed task_id=%s assignment=%s", task_id, c.get("assignment_id"))
+            log.info("dispatch_on_approval: claimed task_id=%s assignment=%s routing=%s", task_id, c.get("assignment_id"), c.get("_routing", {}).get("agent_id", "?"))
             return c
 
     raise DispatchError(f"Task {task_id!r} could not be claimed after approval")
@@ -149,7 +180,7 @@ def dispatch_scheduled_due(
         except Exception:
             log.exception("dispatch_scheduled_due: failed to claim task_id=%s", tid)
 
-    return all_claimed
+    return _enrich_with_routing(all_claimed)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +201,7 @@ def dispatch_sweep(
     This is the heartbeat's drop-in replacement: it rebuilds the queue and
     claims the top N tasks regardless of trigger_type.
     """
-    return task_hub.claim_next_dispatch_tasks(
+    claimed = task_hub.claim_next_dispatch_tasks(
         conn,
         limit=limit,
         agent_id=agent_id,
@@ -178,3 +209,4 @@ def dispatch_sweep(
         workflow_attempt_id=workflow_attempt_id,
         provider_session_id=provider_session_id,
     )
+    return _enrich_with_routing(claimed)

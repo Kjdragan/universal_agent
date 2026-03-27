@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-24
+**Last updated:** 2026-03-26
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -15,7 +15,8 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Doc | Subject |
 |-----|---------| 
 | Heartbeat_Service.md | **Canonical source of truth** — heartbeat cycle, scheduling, JSON findings contract, 3-layer repair pipeline, mediation flow, implementation map |
-| Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: guard policy, Task Hub scoring, Todoist taxonomy, memory integration, dispatch lifecycle, Mermaid diagrams |
+| Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: guard policy, Task Hub scoring, dispatch lifecycle, brainstorm refinement, decomposition, morning report, all 11 proactive entry points inventory, development timeline (Phase A + B), roadmap/gap analysis, test coverage matrix, Mermaid diagrams |
+| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, API integration, priority/source UX patterns, Phase 6 roadmap |
 | Memory_System.md | Tiered memory & auto-flush |
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |
 | Durable_Execution.md | Resilience features |

@@ -96,6 +96,16 @@ async def decompose_with_llm(
             messages=[{"role": "user", "content": user_msg}],
         )
     except Exception as exc:
+        error_str = str(exc).lower()
+        is_rate_limit = "429" in error_str or "too many requests" in error_str or "overloaded" in error_str
+        if is_rate_limit:
+            try:
+                from universal_agent.services.capacity_governor import CapacityGovernor
+                import asyncio
+                governor = CapacityGovernor.get_instance()
+                asyncio.ensure_future(governor.report_rate_limit("decomposition_agent", error=exc))
+            except Exception:
+                pass
         logger.error("LLM call failed during decomposition: %s", exc)
         raise DecompositionError(f"LLM call failed: {exc}") from exc
 

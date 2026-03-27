@@ -2406,6 +2406,10 @@ _activity_stream_retention_days = max(
     1,
     int(os.getenv("UA_ACTIVITY_STREAM_RETENTION_DAYS", "14") or 14),
 )
+_activity_evaluations_retention_days = max(
+    3,
+    int(os.getenv("UA_ACTIVITY_EVALUATIONS_RETENTION_DAYS", "7") or 7),
+)
 _dashboard_events_sse_enabled = (
     os.getenv("UA_DASHBOARD_EVENTS_SSE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 )
@@ -2749,6 +2753,7 @@ def _activity_runtime_metrics_snapshot() -> dict[str, Any]:
     data["retention_days"] = {
         "activity_events": int(_activity_events_retention_days),
         "activity_stream": int(_activity_stream_retention_days),
+        "evaluations": int(_activity_evaluations_retention_days),
     }
     data["feature_flags"] = {
         "dashboard_events_sse_enabled": bool(_dashboard_events_sse_enabled),
@@ -7495,8 +7500,12 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
         "DELETE FROM activity_event_stream WHERE created_at < datetime('now', ?)",
         (f"-{int(_activity_stream_retention_days)} days",),
     )
+    c3 = conn.execute(
+        "DELETE FROM task_hub_evaluations WHERE evaluated_at < datetime('now', ?)",
+        (f"-{int(_activity_evaluations_retention_days)} days",),
+    )
     conn.commit()
-    deleted = (c1.rowcount or 0) + (c2.rowcount or 0)
+    deleted = (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
     if deleted > 0:
         try:
             conn.execute("VACUUM")

@@ -12,6 +12,7 @@ Tests:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import json
 import pytest
@@ -202,7 +203,8 @@ class TestRefineWithLLM:
         mock_client = AsyncMock()
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key-fake"}), \
+             patch("anthropic.AsyncAnthropic", return_value=mock_client):
             from universal_agent.services.refinement_agent import refine_with_llm
             result = await refine_with_llm(
                 title="Test brainstorm",
@@ -228,7 +230,8 @@ class TestRefineWithLLM:
         mock_client = AsyncMock()
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key-fake"}), \
+             patch("anthropic.AsyncAnthropic", return_value=mock_client):
             from universal_agent.services.refinement_agent import refine_with_llm
             result = await refine_with_llm(
                 title="Another brainstorm",

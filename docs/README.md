@@ -36,7 +36,8 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory & Auto-Flush.
 - **[Lossless Memory](02_Subsystems/Lossless_Memory.md)**: Opt-in DAG-based context compression and SQLite history store.
 - **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Autonomic cycle.
-- **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — guard policy, Task Hub scoring, Todoist taxonomy, memory integration, dispatch lifecycle.
+- **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — guard policy, Task Hub scoring, dispatch lifecycle, brainstorm refinement, decomposition, morning report.
+- **[Task Hub Dashboard](02_Subsystems/Task_Hub_Dashboard.md)**: Frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, API integration, priority/source UX patterns.
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
 

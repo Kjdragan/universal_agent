@@ -597,7 +597,24 @@ def _heartbeat_guard_policy(
         and not has_heartbeat_content
         and pending_question_count <= 0
     ):
-        skip_reason = "no_actionable_work"
+        # Phase 1: Overnight reflection mode — instead of always sleeping when
+        # the queue is empty, check if we're in the reflection window and the
+        # engine is enabled.  If so, the agent runs in reflection mode to
+        # generate and work on autonomous tasks.
+        _reflection_mode = False
+        try:
+            from universal_agent.services.reflection_engine import (
+                is_reflection_enabled,
+                is_reflection_hours,
+            )
+            if is_reflection_enabled() and is_reflection_hours():
+                _reflection_mode = True
+                skip_reason = None  # Don't skip — run reflection mode
+                logger.info("Reflection mode activated: queue empty but within overnight window")
+            else:
+                skip_reason = "no_actionable_work"
+        except Exception:
+            skip_reason = "no_actionable_work"
 
     return {
         "autonomous_enabled": autonomous_enabled,
@@ -606,6 +623,7 @@ def _heartbeat_guard_policy(
         "max_proactive_per_cycle": max_proactive_per_cycle,
         "pending_question_count": pending_question_count,
         "skip_reason": skip_reason,
+        "reflection_mode": _reflection_mode if "_reflection_mode" in dir() else False,
     }
 
 
@@ -1594,14 +1612,43 @@ class HeartbeatService:
                         )
                     queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
                     dispatch_actionable_count = int(queue.get("eligible_total") or 0)
-                    task_hub_claimed = dispatch_sweep(
-                        conn,
-                        limit=max(1, max_proactive_per_cycle),
-                        agent_id=task_hub_agent_id,
-                        workflow_run_id=task_hub_workflow_run_id or None,
-                        workflow_attempt_id=task_hub_workflow_attempt_id or None,
-                        provider_session_id=session.session_id,
-                    )
+
+                    # ── Capacity Governor gate ──────────────────────────
+                    # Check system-level capacity before claiming tasks.
+                    # If the provider is under 429 backoff or all slots are
+                    # full, skip dispatch and defer to the next cycle.
+                    _capacity_ok = True
+                    _capacity_reason = "not_checked"
+                    try:
+                        from universal_agent.services.capacity_governor import CapacityGovernor
+                        _governor = CapacityGovernor.get_instance()
+                        _capacity_ok, _capacity_reason = _governor.can_dispatch()
+                        if not _capacity_ok:
+                            logger.info(
+                                "Capacity governor blocked dispatch for %s: %s",
+                                session.session_id,
+                                _capacity_reason,
+                            )
+                    except Exception as _cap_exc:
+                        logger.debug("Capacity governor unavailable: %s", _cap_exc)
+                    # ────────────────────────────────────────────────────
+
+                    if _capacity_ok:
+                        task_hub_claimed = dispatch_sweep(
+                            conn,
+                            limit=max(1, max_proactive_per_cycle),
+                            agent_id=task_hub_agent_id,
+                            workflow_run_id=task_hub_workflow_run_id or None,
+                            workflow_attempt_id=task_hub_workflow_attempt_id or None,
+                            provider_session_id=session.session_id,
+                        )
+                    else:
+                        task_hub_claimed = []
+                        logger.info(
+                            "Dispatch skipped due to capacity: %s (%d eligible tasks deferred)",
+                            _capacity_reason,
+                            dispatch_actionable_count,
+                        )
                     dispatch_claimed_count = len(task_hub_claimed)
                     task_hub_claimed_count = dispatch_claimed_count
                     should_schedule_continuation = dispatch_claimed_count > 0
@@ -1727,6 +1774,7 @@ class HeartbeatService:
                 pending_question_count=_pending_q_count,
             )
             guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
+            _is_reflection_mode = bool(guard_policy.get("reflection_mode", False))
             metadata["heartbeat_guard"] = {
                 "autonomous_enabled": bool(guard_policy.get("autonomous_enabled")),
                 "max_actionable": int(guard_policy.get("max_actionable") or DEFAULT_HEARTBEAT_MAX_ACTIONABLE),
@@ -1738,7 +1786,79 @@ class HeartbeatService:
                 "brainstorm_candidate_count": int(dispatch_claimed_count or 0),
                 "system_event_count": len(system_events),
                 "skip_reason": guard_skip_reason or None,
+                "reflection_mode": _is_reflection_mode,
             }
+
+            # Phase 1: Reflection context injection — when the queue is empty
+            # but we're in overnight reflection mode, build the reflection
+            # prompt so the agent has goals/missions/context to work from.
+            _reflection_ctx_text = ""
+            if _is_reflection_mode:
+                try:
+                    from universal_agent.services.reflection_engine import (
+                        build_reflection_context,
+                        has_nightly_budget,
+                        _increment_nightly_task_count,
+                    )
+                    ref_conn = connect_runtime_db(get_activity_db_path())
+                    ref_conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
+                    try:
+                        if has_nightly_budget(ref_conn):
+                            ref_ctx = build_reflection_context(
+                                ref_conn,
+                                workspace_dir=str(session.workspace_dir),
+                            )
+                            _reflection_ctx_text = str(ref_ctx.get("reflection_prompt_text") or "")
+                            _increment_nightly_task_count(ref_conn, increment=1)
+                            metadata["reflection"] = {
+                                "mode": True,
+                                "nightly_task_count": ref_ctx.get("nightly_task_count", 0),
+                                "budget_remaining": ref_ctx.get("nightly_budget_remaining", 0),
+                                "stalled_brainstorms": len(ref_ctx.get("stalled_brainstorms") or []),
+                                "recent_completions": len(ref_ctx.get("recent_completions") or []),
+                            }
+                            logger.info(
+                                "Reflection context built for %s: budget_remaining=%d, stalled=%d",
+                                session.session_id,
+                                ref_ctx.get("nightly_budget_remaining", 0),
+                                len(ref_ctx.get("stalled_brainstorms") or []),
+                            )
+                        else:
+                            guard_skip_reason = "nightly_budget_exhausted"
+                            _is_reflection_mode = False
+                            logger.info(
+                                "Reflection mode skipped for %s: nightly budget exhausted",
+                                session.session_id,
+                            )
+                    finally:
+                        ref_conn.close()
+                except Exception as ref_exc:
+                    logger.debug("Reflection engine unavailable: %s", ref_exc)
+                    _reflection_ctx_text = ""
+
+            # Phase 2: Morning report — on each heartbeat tick, check if the
+            # 7 AM morning report email is due and fire-and-forget the send.
+            # Access _agentmail_service from gateway_server module (lazy import
+            # to avoid circular dependency at module load time).
+            try:
+                from universal_agent.services.morning_report_sender import (
+                    MorningReportSender,
+                )
+                import universal_agent.gateway_server as _gw_mod
+                _mr_agentmail = getattr(_gw_mod, "_agentmail_service", None)
+                _mr_sender = MorningReportSender(
+                    agentmail_service=_mr_agentmail,
+                    task_hub_db_path="",
+                )
+                _mr_result = await _mr_sender.send_if_due()
+                if _mr_result.get("sent"):
+                    logger.info(
+                        "☀️ Morning report sent during heartbeat tick: %s",
+                        _mr_result.get("recipient"),
+                    )
+                    metadata["morning_report_sent"] = True
+            except Exception as _mr_exc:
+                logger.debug("Morning report check skipped: %s", _mr_exc)
 
             # Compose heartbeat prompt only after Task Hub claims are known so the
             # model can explicitly disposition claimed items before completion.
@@ -1758,6 +1878,9 @@ class HeartbeatService:
                 brainstorm_context_text=_brainstorm_ctx_text,
                 morning_report_text=_morning_text,
             )
+            # Append reflection context after other prompt sections
+            if _reflection_ctx_text:
+                prompt = f"{prompt}\n\n{_reflection_ctx_text}"
             
             full_response = ""
             streamed_chunks: list[str] = []
@@ -2360,6 +2483,30 @@ class HeartbeatService:
                     finally:
                         if conn is not None:
                             conn.close()
+
+                    # ── Phase 6: Completion Feedback Loop ─────────────────
+                    # After successful finalization, if tasks were completed,
+                    # immediately schedule a wake for the next heartbeat cycle
+                    # instead of waiting for the 60s idle poll. This reduces
+                    # inter-task latency from ~60s to near-zero.
+                    try:
+                        completed_count = int(task_hub_finalize_result.get("completed") or 0)
+                        if completed_count > 0 and not run_failed:
+                            self.request_heartbeat_next(
+                                session.session_id,
+                                reason=f"completion_feedback:{completed_count}_done",
+                            )
+                            logger.info(
+                                "⚡ Completion feedback: wake-next for %s after %d task(s) completed",
+                                session.session_id,
+                                completed_count,
+                            )
+                    except Exception as exc:
+                        # Never let the feedback loop break finalization
+                        logger.debug(
+                            "Completion feedback wake failed (non-fatal): %s", exc,
+                        )
+
             if completed_event_payload is not None:
                 completed_event_payload.update(
                     {
@@ -2381,3 +2528,4 @@ class HeartbeatService:
                     pass
             if not keep_busy_until_collect_finishes:
                 self.busy_sessions.discard(session.session_id)
+

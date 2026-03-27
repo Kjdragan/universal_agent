@@ -1599,6 +1599,9 @@ class InProcessGateway(Gateway):
                     ttl = self._reaper_ttl_seconds(session)
                     if ttl is None:
                         continue  # interactive session — never auto-close
+                    # Daemon sessions are persistent by design; never reap them.
+                    if session.session_id.startswith("daemon_"):
+                        continue
                     lock = self._session_exec_locks.get(session.session_id)
                     if lock and lock.locked():
                         continue  # executing right now — skip

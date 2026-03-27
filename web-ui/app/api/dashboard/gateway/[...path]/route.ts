@@ -138,6 +138,50 @@ function getStubDataForPath(pathname: string): unknown | null {
       findings: [],
     };
   }
+
+  // CSI digests stub (used by CSI Signals panel)
+  if (pathname === "/api/v1/dashboard/csi/digests") {
+    return {
+      digests: [
+        {
+          id: "digest-001",
+          event_id: "evt-reddit-001",
+          source: "reddit",
+          event_type: "reddit_trending",
+          title: "AI agent orchestration frameworks gaining traction on r/MachineLearning",
+          summary: "Multiple threads discussing LangGraph vs CrewAI for production agent systems",
+          created_at: new Date(Date.now() - 3600000).toISOString(),
+        },
+        {
+          id: "digest-002",
+          event_id: "evt-x-trends-001",
+          source: "x_trends",
+          event_type: "x_trends_brief",
+          title: "AI-native consulting demand surging — small firms winning enterprise contracts",
+          summary: "Trending discussion about how boutique AI firms are outpacing Big 4 in automation consulting",
+          created_at: new Date(Date.now() - 10800000).toISOString(),
+        },
+        {
+          id: "digest-003",
+          event_id: "evt-rss-001",
+          source: "rss_feed",
+          event_type: "rss_batch",
+          title: "Upwork introduces AI project matching — new opportunities for AI-native freelancers",
+          summary: "Upwork rolling out AI-powered project recommendations based on skill profiles",
+          created_at: new Date(Date.now() - 21600000).toISOString(),
+        },
+        {
+          id: "digest-004",
+          event_id: "evt-global-001",
+          source: "global_brief",
+          event_type: "global_batch",
+          title: "n8n and Make.com automation demand up 40% on freelance platforms",
+          summary: "Q1 2026 data shows sustained growth in workflow automation project postings",
+          created_at: new Date(Date.now() - 43200000).toISOString(),
+        },
+      ],
+    };
+  }
   return null;
 }
 
