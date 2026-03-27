@@ -317,6 +317,7 @@ def _compose_heartbeat_prompt(
     workspace_dir: str = "",
     brainstorm_context_text: str = "",
     morning_report_text: str = "",
+    runtime_conn: Any = None,
 ) -> str:
     prompt = (base_prompt or DEFAULT_HEARTBEAT_PROMPT).strip()
     if "{ok_token}" in prompt:
@@ -358,7 +359,11 @@ def _compose_heartbeat_prompt(
         lines.append("   - DELEGATE_CODIE: Code-heavy — implementation, refactoring, debugging")
         lines.append("   - DELEGATE_ATLAS: Research, content generation, analysis")
         lines.append("   - DEFER: Too nuanced, needs your context, or should wait")
-        lines.append("4. For each DELEGATE decision, dispatch via `vp_dispatch_mission` BEFORE starting your own work.")
+        lines.append("4. For each DELEGATE decision:")
+        lines.append("   a) Dispatch via `vp_dispatch_mission` FIRST — note the mission_id returned.")
+        lines.append("   b) Then call `task_hub_task_action` with action=`delegate`, reason=<vp_id>,")
+        lines.append("      and include `note` with the mission_id so the task tracks the VP work.")
+        lines.append("      Example note: 'mission_id=<returned_id>'")
         lines.append("5. For DEFER items, use `task_hub_task_action` with action=`review` to release them back.")
         lines.append("6. Then work your SELF task to completion.")
         lines.append("7. Before finishing, disposition every claimed task using `task_hub_task_action`:")
@@ -366,6 +371,56 @@ def _compose_heartbeat_prompt(
         task_ids = sorted({str(item.get("task_id") or "").strip() for item in task_hub_claims if str(item.get("task_id") or "").strip()})
         lines.append(f"\nClaimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}")
         prompt = f"{prompt}\n\n" + "\n".join(lines)
+
+    # ── Phase 4: VP Completion Review Prompt ──
+    # Inject pending_review tasks for Simone's sign-off
+    if runtime_conn is not None:
+        try:
+            from universal_agent.task_hub import get_pending_review_tasks, reopen_stale_delegations
+            _runtime_conn = runtime_conn
+            if _runtime_conn is not None:
+                # 1. Reopen stale delegations (>4h without VP progress)
+                stale_reopened = reopen_stale_delegations(_runtime_conn, stale_hours=4.0)
+                if stale_reopened:
+                    stale_lines = ["\n== STALE DELEGATION RECOVERY =="]
+                    stale_lines.append(f"{len(stale_reopened)} task(s) reopened due to >4h VP inactivity:")
+                    for st in stale_reopened:
+                        stale_lines.append(f"  - [{st.get('task_id','')}] {st.get('title', '(untitled)')}")
+                    stale_lines.append("These are back in the open queue for re-triage.")
+                    prompt = f"{prompt}\n" + "\n".join(stale_lines)
+
+                # 2. Show pending_review tasks for sign-off
+                pending_reviews = get_pending_review_tasks(_runtime_conn)
+                if pending_reviews:
+                    review_lines = ["\n== VP COMPLETION REVIEW =="]
+                    review_lines.append(f"{len(pending_reviews)} VP-completed task(s) await your sign-off:\n")
+                    for idx, pr in enumerate(pending_reviews, 1):
+                        pr_id = str(pr.get("task_id") or "")
+                        pr_title = str(pr.get("title") or "(untitled)").strip()
+                        delegation = dict(pr.get("metadata") or {}).get("delegation") or {}
+                        vp_status = delegation.get("vp_terminal_status", "?")
+                        vp_id = delegation.get("vp_id", "?")
+                        mission_id = delegation.get("mission_id", "?")
+                        result_summary = delegation.get("result_summary", "")
+                        review_lines.append(f"Review {idx}: [{pr_id}] {pr_title}")
+                        review_lines.append(f"  VP: {vp_id} | Status: {vp_status} | Mission: {mission_id}")
+                        if result_summary:
+                            review_lines.append(f"  Summary: {result_summary[:150]}")
+                    review_lines.append("")
+                    review_lines.append("## Review Protocol")
+                    review_lines.append("For each pending review item:")
+                    review_lines.append("1. If the VP mission succeeded (status=completed):")
+                    review_lines.append("   - Read the artifacts via `vp_read_result_artifacts(mission_id=...)`")
+                    review_lines.append("   - If deliverables meet the objective → `task_hub_task_action(action='approve', task_id=...)`")
+                    review_lines.append("   - If deliverables need rework → `task_hub_task_action(action='review', task_id=..., note='rework needed: <reason>')` to re-open")
+                    review_lines.append("2. If the VP mission failed/cancelled:")
+                    review_lines.append("   - `task_hub_task_action(action='review', task_id=..., note='VP failed, needs retry')`")
+                    review_lines.append("   This puts the task back into the open queue for re-triage.")
+                    review_lines.append("3. Complete ALL reviews BEFORE starting new task work.")
+                    prompt = f"{prompt}\n" + "\n".join(review_lines)
+        except Exception as _review_exc:
+            logger.debug("VP review prompt injection skipped: %s", _review_exc)
+
     # Inject brainstorm context so the agent is aware of refinement stages
     if brainstorm_context_text:
         prompt = f"{prompt}\n\n{brainstorm_context_text}"
@@ -1891,6 +1946,12 @@ class HeartbeatService:
                 if "{ok_token}" in base_prompt:
                     ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
                     base_prompt = base_prompt.replace("{ok_token}", ok_token)
+            # Get runtime DB connection for VP review prompt injection
+            _hb_runtime_conn = None
+            try:
+                _hb_runtime_conn = getattr(self.gateway, 'get_db_conn', lambda: None)()
+            except Exception:
+                pass
             prompt = _compose_heartbeat_prompt(
                 base_prompt,
                 investigation_only=heartbeat_investigation_only,
@@ -1898,6 +1959,7 @@ class HeartbeatService:
                 workspace_dir=str(session.workspace_dir),
                 brainstorm_context_text=_brainstorm_ctx_text,
                 morning_report_text=_morning_text,
+                runtime_conn=_hb_runtime_conn,
             )
             # Append reflection context after other prompt sections
             if _reflection_ctx_text:

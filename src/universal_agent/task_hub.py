@@ -8,7 +8,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 
@@ -26,7 +26,7 @@ ACTIVE_STATUSES = {
     TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
 }
-VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate"}
+VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate", "approve"}
 
 TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll"}
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
@@ -2166,11 +2166,21 @@ def perform_task_action(
         # contain the target agent slug (e.g. "vp.coder.primary").
         metadata = dict(item.get("metadata") or {})
         delegate_meta = dict(metadata.get("delegation") or {})
+        note_text = str(note or "").strip()
+        # Extract mission_id from note if present (format: "mission_id=<id>")
+        _mission_id_from_note = ""
+        if "mission_id=" in note_text:
+            for _segment in note_text.split():
+                if _segment.startswith("mission_id="):
+                    _mission_id_from_note = _segment.split("=", 1)[1].strip()
+                    break
         delegate_meta.update({
             "delegate_target": reason_text or "vp.general.primary",
-            "delegate_reason": str(note or "").strip() or "simone_triage",
+            "delegate_reason": note_text or "simone_triage",
             "delegated_at": _now_iso(),
         })
+        if _mission_id_from_note:
+            delegate_meta["mission_id"] = _mission_id_from_note
         metadata["delegation"] = delegate_meta
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
@@ -2184,7 +2194,31 @@ def perform_task_action(
             reason=reason_text or "simone_triage",
             score=_safe_float(item.get("score"), 0.0),
             score_confidence=_safe_float(item.get("score_confidence"), 0.0),
-            judge_payload={"source": "simone_triage", "delegate_target": reason_text or "vp.general.primary"},
+            judge_payload={"source": "simone_triage", "delegate_target": reason_text or "vp.general.primary", "mission_id": _mission_id_from_note or None},
+        )
+
+    elif action_norm == "approve":
+        # Simone approves a VP-completed task after reviewing deliverables.
+        # Transitions pending_review → completed with sign-off metadata.
+        metadata = dict(item.get("metadata") or {})
+        delegation = dict(metadata.get("delegation") or {})
+        delegation["approved_at"] = _now_iso()
+        delegation["approved_by"] = agent_id or "simone"
+        delegation["approval_note"] = str(note or "").strip() or "approved_by_simone"
+        metadata["delegation"] = delegation
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_COMPLETED, "completed", _json_dumps(metadata), _now_iso(), task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="approve",
+            reason=reason_text or "vp_deliverable_approved",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "simone_review", "approval_note": str(note or "").strip()},
         )
 
     conn.commit()
@@ -2193,6 +2227,167 @@ def perform_task_action(
     if not fresh:
         raise ValueError("task not found after action")
     return fresh
+
+
+# ── VP Lifecycle Helpers ─────────────────────────────────────────────────────
+# Phase 4: Functions supporting the VP completion review + sign-off loop.
+
+def transition_to_pending_review(
+    conn: sqlite3.Connection,
+    *,
+    mission_id: str,
+    vp_id: str = "",
+    terminal_status: str = "completed",
+    result_summary: str = "",
+) -> Optional[dict[str, Any]]:
+    """Transition a delegated task to pending_review when its VP mission finishes.
+
+    Looks up the task via mission_id stored in delegation metadata.
+    Returns the updated task dict, or None if no matching task was found.
+    """
+    ensure_schema(conn)
+    task = find_delegated_task_by_mission_id(conn, mission_id=mission_id)
+    if task is None:
+        return None
+
+    task_id = str(task["task_id"])
+    current_status = str(task.get("status") or "")
+    if current_status != TASK_STATUS_DELEGATED:
+        # Already transitioned (idempotency guard)
+        return task
+
+    metadata = dict(task.get("metadata") or {})
+    delegation = dict(metadata.get("delegation") or {})
+    delegation["vp_terminal_status"] = terminal_status
+    delegation["vp_completed_at"] = _now_iso()
+    if vp_id:
+        delegation["vp_id"] = vp_id
+    if result_summary:
+        delegation["result_summary"] = result_summary[:500]
+    metadata["delegation"] = delegation
+
+    conn.execute(
+        "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+        (TASK_STATUS_PENDING_REVIEW, "pending_review", _json_dumps(metadata), _now_iso(), task_id),
+    )
+    conn.commit()
+    rebuild_dispatch_queue(conn)
+
+    logger.info(
+        "📋→🔍 Task %s transitioned to pending_review (mission=%s vp=%s terminal=%s)",
+        task_id, mission_id, vp_id, terminal_status,
+    )
+    return get_item(conn, task_id)
+
+
+def find_delegated_task_by_mission_id(
+    conn: sqlite3.Connection,
+    *,
+    mission_id: str,
+) -> Optional[dict[str, Any]]:
+    """Find a delegated task whose metadata contains the given mission_id.
+
+    Searches delegation.mission_id in metadata_json using JSON extract.
+    Falls back to a LIKE search if json_extract is unavailable.
+    """
+    ensure_schema(conn)
+    mission_id = str(mission_id or "").strip()
+    if not mission_id:
+        return None
+
+    # Primary: use json_extract (available in SQLite 3.38+)
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM task_hub_items
+            WHERE status = ?
+              AND json_extract(metadata_json, '$.delegation.mission_id') = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (TASK_STATUS_DELEGATED, mission_id),
+        ).fetchone()
+        if row:
+            return _row_to_dict(row)
+    except Exception:
+        pass
+
+    # Fallback: LIKE search (works on older SQLite)
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM task_hub_items
+            WHERE status = ?
+              AND metadata_json LIKE ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (TASK_STATUS_DELEGATED, f"%{mission_id}%"),
+        ).fetchone()
+        if row:
+            return _row_to_dict(row)
+    except Exception:
+        pass
+
+    return None
+
+
+def get_pending_review_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Return all tasks in pending_review status for Simone's sign-off prompt."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM task_hub_items WHERE status = ? ORDER BY updated_at DESC",
+        (TASK_STATUS_PENDING_REVIEW,),
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def reopen_stale_delegations(
+    conn: sqlite3.Connection,
+    *,
+    stale_hours: float = 4.0,
+) -> list[dict[str, Any]]:
+    """Reopen delegated tasks that have been stale for >stale_hours.
+
+    Returns a list of tasks that were reopened.
+    """
+    ensure_schema(conn)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=stale_hours)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT * FROM task_hub_items
+        WHERE status = ?
+          AND updated_at < ?
+        ORDER BY updated_at ASC
+        """,
+        (TASK_STATUS_DELEGATED, cutoff),
+    ).fetchall()
+
+    reopened = []
+    for row in rows:
+        task = _row_to_dict(row)
+        task_id = str(task["task_id"])
+        metadata = dict(task.get("metadata") or {})
+        delegation = dict(metadata.get("delegation") or {})
+        delegation["stale_reopened_at"] = _now_iso()
+        delegation["stale_reason"] = f"no_vp_progress_after_{stale_hours}h"
+        metadata["delegation"] = delegation
+
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "open", _json_dumps(metadata), _now_iso(), task_id),
+        )
+        logger.warning(
+            "📋⏰ Stale delegation reopened: task=%s delegated at %s (>%.1fh)",
+            task_id, delegation.get("delegated_at", "?"), stale_hours,
+        )
+        reopened.append(task)
+
+    if reopened:
+        conn.commit()
+        rebuild_dispatch_queue(conn)
+
+    return reopened
 
 
 def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:

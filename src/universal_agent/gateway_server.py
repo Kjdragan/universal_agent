@@ -6664,11 +6664,15 @@ def _bridge_vp_events_once(*, limit: int = 200) -> int:
     if not rows:
         return 0
 
+    # Terminal VP event types that should trigger task → pending_review
+    _VP_TERMINAL_EVENT_TYPES = {"vp.mission.completed", "vp.mission.failed", "vp.mission.cancelled"}
+
     bridged: int = 0
     cursor_advanced = False
     for row in rows:
         rowid = int(row["rowid"] or 0)
         mission_id = str(row["mission_id"] or "").strip()
+        event_type = str(row["event_type"] or "").strip()
         mission_context = _vp_source_context(conn, mission_id) if mission_id else {}
         if not mission_context.get("source_session_id"):
             fallback_payload = _parse_json_text(row["payload_json"]) if "payload_json" in row.keys() else None
@@ -6686,6 +6690,34 @@ def _bridge_vp_events_once(*, limit: int = 200) -> int:
             if source_session_id in manager.session_connections:
                 _broadcast_system_event(source_session_id, event)
             bridged += 1
+
+        # ── Phase 4: VP completion → task pending_review ──────────────
+        if event_type in _VP_TERMINAL_EVENT_TYPES and mission_id:
+            try:
+                from universal_agent.task_hub import transition_to_pending_review
+                runtime_conn = getattr(gateway, "get_db_conn", lambda: None)()
+                if runtime_conn is not None:
+                    vp_id = str(row["vp_id"] or "").strip()
+                    terminal_status = event_type.replace("vp.mission.", "", 1)
+                    result_summary = str(mission_context.get("objective") or "")[:200]
+                    updated = transition_to_pending_review(
+                        runtime_conn,
+                        mission_id=mission_id,
+                        vp_id=vp_id,
+                        terminal_status=terminal_status,
+                        result_summary=result_summary,
+                    )
+                    if updated:
+                        logger.info(
+                            "🔄 VP event bridge: task %s → pending_review (mission=%s event=%s)",
+                            updated.get("task_id", "?"), mission_id, event_type,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "VP event bridge: failed transitioning task for mission %s: %s",
+                    mission_id, exc,
+                )
+
         next_cursor = max(_vp_event_bridge_last_rowid, rowid)
         if next_cursor != _vp_event_bridge_last_rowid:
             _vp_event_bridge_last_rowid = next_cursor
