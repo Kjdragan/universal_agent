@@ -58,7 +58,6 @@ class TaskHubPolicy:
     stale_min_age_minutes: int
 
 
-# -- Legacy mirror policy removed (Todoist integration decommissioned) --
 
 
 def _now_iso() -> str:
@@ -329,7 +328,6 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: dict[str, Any]) -> N
     conn.commit()
 
 
-# -- Mirror policy and metrics functions removed (Todoist integration decommissioned) --
 
 
 def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
@@ -1636,7 +1634,6 @@ def list_personal_queue(conn: sqlite3.Connection, *, limit: int = 120) -> list[d
     return filtered[: max(1, int(limit))]
 
 
-# -- upsert_mirror_map removed (Todoist integration decommissioned) --
 
 
 # ---------------------------------------------------------------------------
@@ -2304,7 +2301,6 @@ def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-# -- sync_todoist_task_rows removed (Todoist integration decommissioned) --
 
 
 def upsert_csi_item(

@@ -5,7 +5,7 @@ import { PipelineStatsPanel } from "@/components/dashboard/PipelineStatsPanel";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, DollarSign, Download, Loader2, RefreshCw, Timer, TrendingUp, Cpu, XCircle } from "lucide-react";
+import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, DollarSign, Download, Heart, Loader2, RefreshCw, Timer, TrendingUp, Cpu, XCircle, Zap } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -950,21 +950,31 @@ function SystemResourcesPanel() {
 }
 
 
-// Heartbeat status chip -- shows last system-resources check time + status dot
+// Heartbeat status chip -- shows live session heartbeat status
 function HeartbeatChip() {
   const { refreshKey } = useContext(RefreshContext);
-  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
-  const [overallStatus, setOverallStatus] = useState<"ok" | "warn" | "critical" | null>(null);
+  const [sessions, setSessions] = useState<number>(0);
+  const [busyCount, setBusyCount] = useState<number>(0);
+  const [lastRun, setLastRun] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/system-resources`, { cache: "no-store" });
+      const res = await fetch(`${API_BASE}/api/v1/heartbeat/last`, { cache: "no-store" });
       if (!res.ok) return;
       const json = await res.json();
-      setGeneratedAt(json.generated_at_utc ?? null);
-      setOverallStatus(json.overall_status ?? null);
+      const heartbeats = json.heartbeats || {};
+      const keys = Object.keys(heartbeats);
+      setSessions(keys.length);
+      setBusyCount(keys.filter((k: string) => heartbeats[k].busy).length);
+      // Get most recent last_run across sessions
+      const runs = keys
+        .map((k: string) => heartbeats[k].last_run)
+        .filter(Boolean)
+        .sort()
+        .reverse();
+      setLastRun(runs[0] || null);
     } catch {
-      // silently ignore -- chip stays empty
+      // silently ignore
     }
   }, []);
 
@@ -972,20 +982,16 @@ function HeartbeatChip() {
     load();
   }, [load, refreshKey]);
 
-  if (!generatedAt) return null;
+  if (sessions === 0) return null;
 
-  const dotColor =
-    overallStatus === "critical"
-      ? "bg-red-500"
-      : overallStatus === "warn"
-      ? "bg-accent"
-      : "bg-primary";
+  const dotColor = busyCount > 0 ? "bg-accent animate-pulse" : "bg-primary";
 
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-2.5 py-1 text-xs text-muted-foreground">
       <span className={`inline-block h-2 w-2 rounded-full ${dotColor}`} />
-      <Activity className="h-3 w-3 text-muted-foreground" />
-      Last check: {formatTs(generatedAt)}
+      <Heart className="h-3 w-3 text-muted-foreground" />
+      {busyCount > 0 ? `${busyCount} running` : "idle"}
+      {lastRun && <span className="text-muted-foreground/60">· last {formatTs(lastRun)}</span>}
     </span>
   );
 }
@@ -1229,6 +1235,30 @@ export default function MissionControlPage() {
     }
   };
 
+  const [heartbeatLoading, setHeartbeatLoading] = useState(false);
+  const [heartbeatResult, setHeartbeatResult] = useState<string | null>(null);
+
+  const triggerHeartbeat = useCallback(async () => {
+    setHeartbeatLoading(true);
+    setHeartbeatResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/heartbeat/wake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "mission_control_manual", mode: "now" }),
+      });
+      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      const json = await res.json();
+      setHeartbeatResult(`Queued ${json.count ?? json.session_id ?? "?"} session(s)`);
+    } catch (err: any) {
+      setHeartbeatResult(err.message || "Failed");
+    } finally {
+      setHeartbeatLoading(false);
+      // Clear result after 5s
+      setTimeout(() => setHeartbeatResult(null), 5000);
+    }
+  }, []);
+
   return (
     <RefreshContext.Provider value={{ refreshKey, lastRefresh, isRefreshing }}>
       <div className="flex h-full flex-col gap-6">
@@ -1266,13 +1296,18 @@ export default function MissionControlPage() {
               Refresh All
             </button>
             <button
-              onClick={triggerRefresh}
-              disabled={isRefreshing}
+              onClick={triggerHeartbeat}
+              disabled={heartbeatLoading}
               className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50 disabled:opacity-60"
             >
-              <Activity className={`h-4 w-4 ${isRefreshing ? "animate-pulse" : ""}`} />
-              Run Health Check
+              <Zap className={`h-4 w-4 ${heartbeatLoading ? "animate-pulse" : ""}`} />
+              {heartbeatLoading ? "Triggering..." : "Trigger Heartbeat"}
             </button>
+            {heartbeatResult && (
+              <span className="flex items-center gap-1 rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary">
+                {heartbeatResult}
+              </span>
+            )}
             <button
               onClick={() => router.push("/dashboard/notifications")}
               className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"

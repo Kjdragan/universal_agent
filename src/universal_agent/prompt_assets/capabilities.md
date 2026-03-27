@@ -951,28 +951,6 @@ metadata:
       - tmux
 ```
 
-### todoist-orchestration
-Govern Todoist usage so reminders and brainstorm capture use internal Todoist tools first, while complex engineering/research work stays on the normal decomposition and specialist pipeline. Use when requests mention reminders, to-dos, brainstorm capture, backlog progression, heartbeat candidate triage, or proactive follow-up from ideas.
-Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/todoist-orchestration/SKILL.md`
-```yaml
-name: todoist-orchestration
-description: Govern Todoist usage so reminders and brainstorm capture use internal
-  Todoist tools first, while complex engineering/research work stays on the normal
-  decomposition and specialist pipeline. Use when requests mention reminders, to-dos,
-  brainstorm capture, backlog progression, heartbeat candidate triage, or proactive
-  follow-up from ideas.
-```
-
-### todoist-rich-handoff
-Create high-context Todoist pause/resume reminders with explicit restart docs, due time, personal-only labels, and verification that tasks are excluded from heartbeat auto-work. Use when users ask to "remind me to resume this tomorrow", "capture handoff in Todoist", or "pause now and pick up later".
-Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/todoist-rich-handoff/SKILL.md`
-```yaml
-name: todoist-rich-handoff
-description: Create high-context Todoist pause/resume reminders with explicit restart
-  docs, due time, personal-only labels, and verification that tasks are excluded from
-  heartbeat auto-work. Use when users ask to "remind me to resume this tomorrow",
-  "capture handoff in Todoist", or "pause now and pick up later".
-```
 
 ### trello
 Manage Trello boards, lists, and cards via the Trello REST API.

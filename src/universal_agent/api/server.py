@@ -98,6 +98,7 @@ from universal_agent.api.events import (
     create_error_event,
     ApprovalResponse,
 )
+from universal_agent.api.error_handlers import register_error_handlers
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.state import list_run_attempts
 from universal_agent.run_catalog import RunCatalogService
@@ -1329,6 +1330,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# Register unified error handling (before other middleware so it wraps last)
+register_error_handlers(app)
 # CORS middleware - allow frontend on different port
 app.add_middleware(
     CORSMiddleware,

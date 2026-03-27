@@ -534,7 +534,6 @@ class EmailTaskBridge:
             logger.warning("📧→📋 Task Hub upsert failed for task_id=%s: %s", task_id, exc)
             return {}
 
-    # -- _upsert_todoist_subtask removed (Todoist integration decommissioned) --
 
     def _update_heartbeat(
         self,

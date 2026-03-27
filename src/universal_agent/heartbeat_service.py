@@ -1574,7 +1574,6 @@ class HeartbeatService:
 
             dispatch_actionable_count: Optional[int] = None
             dispatch_claimed_count: Optional[int] = None
-            # -- Todoist heartbeat injection removed (decommissioned) --
             guard_policy = _heartbeat_guard_policy(
                 actionable_count=None,
                 brainstorm_candidate_count=0,
@@ -1657,7 +1656,6 @@ class HeartbeatService:
 
                     # Enhancement 1: Escalation Pre-Check — enrich each claimed task
                     # with past escalation resolutions so the agent doesn't repeat mistakes.
-                    # -- Todoist escalation pre-check removed (decommissioned) --
 
                     if task_hub_claimed:
                         hub_event = {

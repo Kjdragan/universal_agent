@@ -15,11 +15,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Requ
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 
 from .agent_core import UniversalAgent, AgentEvent, EventType, configure_logfire
+from universal_agent.api.error_handlers import register_error_handlers
 
 # Configure logfire on import
 configure_logfire()
 
 app = FastAPI(title="Universal Agent", version="0.1.0")
+
+register_error_handlers(app)
 
 # Path to the UI HTML
 UI_PATH = Path(__file__).parent.parent.parent / "universal_agent_ui.html"

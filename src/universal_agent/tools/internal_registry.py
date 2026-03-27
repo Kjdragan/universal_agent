@@ -59,7 +59,6 @@ from universal_agent.tools.csi_bridge import (
     csi_watchlist_snapshot_wrapper,
 )
 
-# Task Hub tools (Todoist decommissioned — Task Hub is sole task surface)
 from universal_agent.tools.task_hub_bridge import task_hub_task_action_wrapper
 from universal_agent.tools.vp_orchestration import (
     vp_cancel_mission_wrapper,

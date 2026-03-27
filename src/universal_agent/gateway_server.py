@@ -193,6 +193,7 @@ from universal_agent.supervisors import (
     persist_snapshot,
     supervisor_registry,
 )
+from universal_agent.api.error_handlers import register_error_handlers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -362,7 +363,6 @@ AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE = (
     or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
     or "UTC"
 )
-# -- Todoist constants removed (decommissioned) --
 
 
 def _deployment_profile_defaults() -> dict:
@@ -2081,7 +2081,6 @@ class QuickAddTaskRequest(BaseModel):
     project_key: Optional[str] = "immediate"
 
 
-# -- TodoistMirrorPolicyPatchRequest removed (Todoist decommissioned) --
 
 
 class MemoryTaskCompactRequest(BaseModel):
@@ -2216,7 +2215,6 @@ _vp_event_bridge_interval_seconds = max(
 _vp_event_bridge_cursor_key = "gateway.session_feed"
 _vp_event_bridge_task: Optional[asyncio.Task[Any]] = None
 _vp_event_bridge_stop_event: Optional[asyncio.Event] = None
-# -- Todoist reconciliation task vars removed (decommissioned) --
 _vp_event_bridge_last_rowid = 0
 _vp_event_bridge_metrics: dict[str, Any] = {
     "cycles": 0,
@@ -2580,7 +2578,6 @@ _scheduling_runtime_metrics: dict[str, Any] = {
         "due_lag_seconds_max": 0.0,
         "due_lag_seconds_total": 0.0,
     },
-    # -- todoist_chron_reconciliation metrics removed (decommissioned) --
 }
 _activity_runtime_started_ts = time.time()
 _activity_runtime_metrics: dict[str, Any] = {
@@ -4355,7 +4352,6 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     requires_action = bool(should_escalate)
     if event_type in {"delivery_health_recovered", "delivery_reliability_slo_recovered"}:
         requires_action = False
-    # todoist_sync removed (Todoist decommissioned) — kept as marker for Task Hub dispatch
     task_hub_sync = bool(
         (has_anomaly and event_type != "delivery_health_recovered")
         or event_type in {
@@ -11625,7 +11621,6 @@ async def lifespan(app: FastAPI):
     except Exception as _csi_init_exc:
         logger.warning("CSI digest DB init failed (non-fatal): %s", _csi_init_exc)
 
-    # -- Todoist token probe removed (Todoist decommissioned) --
 
     logger.info("Lifespan: Initializing Redis delegation bus...")
 
@@ -11698,7 +11693,6 @@ async def lifespan(app: FastAPI):
     # Initialize Heartbeat Service
     global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
-    # -- _todoist_chron_reconcile_task/stop_event globals removed (decommissioned) --
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(
@@ -11758,7 +11752,6 @@ async def lifespan(app: FastAPI):
             _ensure_autonomous_daily_briefing_job()
         except Exception:
             logger.exception("Failed ensuring autonomous daily briefing chron job")
-        # -- Todoist<->Chron reconciliation loop removed (decommissioned) --
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
@@ -12153,6 +12146,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# Register unified error handling
+register_error_handlers(app)
 _LOGFIRE_FASTAPI_INSTRUMENTED = False
 
 
@@ -15712,6 +15708,109 @@ def _task_hub_open_conn() -> sqlite3.Connection:
     return conn
 
 
+def _compute_agent_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Compute aggregated agent metrics from task_hub tables.
+
+    Returns avg completion time (by window), success rate per agent,
+    routing accuracy, and total tasks completed in the last 7 days.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    window_1h = (now - timedelta(hours=1)).isoformat()
+    window_24h = (now - timedelta(hours=24)).isoformat()
+    window_7d = (now - timedelta(days=7)).isoformat()
+
+    # --- 1. Average task completion time per window ---
+    avg_completion: dict[str, float] = {}
+    for label, since in [("1h", window_1h), ("24h", window_24h), ("7d", window_7d)]:
+        rows = conn.execute(
+            """
+            SELECT started_at, ended_at
+            FROM task_hub_assignments
+            WHERE state = 'completed' AND ended_at IS NOT NULL AND ended_at >= ?
+            """,
+            (since,),
+        ).fetchall()
+        durations: list[float] = []
+        for row in rows:
+            start = _parse_iso_utc(row["started_at"])
+            end = _parse_iso_utc(row["ended_at"])
+            if start and end and end > start:
+                durations.append((end - start).total_seconds())
+        avg_completion[label] = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+    # --- 2. Success rate per agent (7d window) ---
+    agent_rows = conn.execute(
+        """
+        SELECT agent_id, state
+        FROM task_hub_assignments
+        WHERE started_at >= ?
+        """,
+        (window_7d,),
+    ).fetchall()
+    agent_stats: dict[str, dict[str, int]] = {}
+    for row in agent_rows:
+        aid = str(row["agent_id"] or "unknown").strip()
+        if aid not in agent_stats:
+            agent_stats[aid] = {"completed": 0, "total": 0}
+        agent_stats[aid]["total"] += 1
+        if str(row["state"] or "") == "completed":
+            agent_stats[aid]["completed"] += 1
+    success_rate_per_agent: dict[str, dict[str, Any]] = {}
+    for aid, stats in agent_stats.items():
+        rate = round(stats["completed"] / stats["total"], 3) if stats["total"] > 0 else 0.0
+        success_rate_per_agent[aid] = {
+            "completed": stats["completed"],
+            "total": stats["total"],
+            "rate": rate,
+        }
+
+    # --- 3. Routing accuracy from evaluations (7d window) ---
+    eval_rows = conn.execute(
+        """
+        SELECT decision
+        FROM task_hub_evaluations
+        WHERE evaluated_at >= ?
+        """,
+        (window_7d,),
+    ).fetchall()
+    seized = sum(1 for r in eval_rows if str(r["decision"] or "") == "seize")
+    rejected = sum(1 for r in eval_rows if str(r["decision"] or "") == "reject")
+    total_eval = seized + rejected
+    accuracy = round(seized / total_eval, 3) if total_eval > 0 else 0.0
+
+    # --- 4. Total tasks completed in 7d ---
+    total_completed_7d = sum(1 for r in agent_rows if str(r["state"] or "") == "completed")
+
+    return {
+        "avg_completion_time_seconds": avg_completion,
+        "success_rate_per_agent": success_rate_per_agent,
+        "routing_accuracy": {
+            "seized": seized,
+            "rejected": rejected,
+            "accuracy": accuracy,
+        },
+        "total_tasks_completed_7d": total_completed_7d,
+    }
+
+
+def _parse_iso_utc(raw: Any) -> Optional[datetime]:
+    """Parse an ISO-8601 string to a UTC-aware datetime, or return None."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+
 def _supervisor_artifacts_payload(paths: dict[str, Any]) -> dict[str, Any]:
     markdown_path = str(paths.get("markdown_path") or "").strip()
     json_path = str(paths.get("json_path") or "").strip()
@@ -17051,6 +17150,25 @@ async def dashboard_todolist_agent_activity():
         try:
             _task_hub_sync_pending_approvals(conn)
             return {"status": "ok", **task_hub.get_agent_activity(conn)}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/agent-metrics")
+async def dashboard_agent_metrics():
+    """Aggregated agent performance metrics: completion times, success rates, routing accuracy."""
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            metrics = _compute_agent_metrics(conn)
+            return {
+                "status": "ok",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "metrics": metrics,
+            }
+        except Exception as exc:
+            logger.warning("agent-metrics endpoint failed: %s", exc)
+            return {"status": "error", "detail": str(exc)}
         finally:
             conn.close()
 
@@ -19575,8 +19693,6 @@ def _build_system_command_task_description(*, source_page: str, source_context: 
     return "\n".join(parts)
 
 
-# -- Todoist<->Chron mapping store, reconciliation functions, and schedule
-# -- signature helpers removed (Todoist fully decommissioned). --
 
 
 def _autonomous_notification_timestamp(item: dict[str, Any]) -> Optional[float]:
@@ -23037,7 +23153,6 @@ async def ops_activity_events_metrics(request: Request):
     return {"metrics": _activity_runtime_metrics_snapshot()}
 
 
-# -- /api/v1/ops/reconcile/todoist-chron endpoint removed (Todoist decommissioned) --
 
 
 @app.get("/api/v1/ops/metrics/vp-bridge")
@@ -23679,7 +23794,6 @@ async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequ
     }
 
 
-# -- /api/v1/ops/todoist/mirror-policy and mirror-metrics endpoints removed (Todoist decommissioned) --
 
 
 @app.post("/api/v1/ops/memory/compact-task-intel")

@@ -17,3 +17,5 @@ gemini 3.1 flash create a tab in our UA with a bunch of sliders that can show vi
 voxtral tts emotional tts
 
 home kits outside of the apps... example runn sonos speakers
+
+LiteParse new from llamaparse

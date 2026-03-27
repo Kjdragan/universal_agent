@@ -1143,18 +1143,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dataclass-wizard"
-version = "0.39.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/36/ea/6b2811092feecbe9d672e3641196ac5fcbec6664074da5dec8b9fd9b9059/dataclass_wizard-0.39.1.tar.gz", hash = "sha256:1679948ed7c62103f40b34df97d03b35e6b2ad50f58173fdbe30074e2e4730f2", size = 361190, upload-time = "2026-01-06T03:30:57.054Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/a0/a221942b3fbbafaea4e211744d298366b6a9712c1aa336b05fc1c865ac0c/dataclass_wizard-0.39.1-py3-none-any.whl", hash = "sha256:3324e59eca705882eb34e2b3989b2beadd8c2b523e6269d4002cf1a4a5bf703b", size = 215344, upload-time = "2026-01-06T03:30:54.915Z" },
-]
-
-[[package]]
 name = "decorator"
 version = "5.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -6027,20 +6015,6 @@ wheels = [
 ]
 
 [[package]]
-name = "todoist-api-python"
-version = "3.2.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "annotated-types" },
-    { name = "dataclass-wizard" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/6e/1ff0e0e098f2196f6eda3f20ebe0653a978abee5345f5ed1dfd1a9b5bbdc/todoist_api_python-3.2.1.tar.gz", hash = "sha256:22c60230cc616437846f9a6469dddd97548545ef916d2bea98b2ca2f522d92f9", size = 20689, upload-time = "2026-01-22T17:07:13.254Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2d/7c/6baa538db710f8d9cc4ed15f1f757ab9bc8564941d9c3291b9d7fcee7746/todoist_api_python-3.2.1-py3-none-any.whl", hash = "sha256:1091e9b557291380abd79245efe961b0f2261c7b4eb16e52beccfc6357320e95", size = 23541, upload-time = "2026-01-22T17:07:12.311Z" },
-]
-
-[[package]]
 name = "tokenizers"
 version = "0.22.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6345,7 +6319,6 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "slack-sdk" },
     { name = "starlette" },
-    { name = "todoist-api-python" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "watchdog" },
@@ -6430,7 +6403,6 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=5.2.0" },
     { name = "slack-sdk", specifier = ">=3.27.0" },
     { name = "starlette", specifier = ">=0.50.0" },
-    { name = "todoist-api-python", specifier = ">=3.2.0,<4" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "watchdog", specifier = ">=6.0.0" },
