@@ -16306,6 +16306,99 @@ async def dashboard_pipeline_stats():
             conn.close()
 
 
+@app.get("/api/v1/dashboard/proactive-pipeline")
+async def dashboard_proactive_pipeline():
+    """Return detailed item lists for each proactive pipeline stage.
+
+    Three sections:
+      - pending_approvals: Human-in-the-loop items awaiting manual sign-off
+      - refinement_items: Tasks undergoing auto-refinement / decomposition
+      - dispatch_queue: Eligible items annotated with target agent routing
+    """
+    from universal_agent.services.agent_router import qualify_agent
+
+    # --- Pending approvals ---
+    raw_approvals = list_approvals(status="pending")
+    pending_approvals = []
+    for a in (raw_approvals if isinstance(raw_approvals, list) else []):
+        pending_approvals.append({
+            "approval_id": str(a.get("approval_id") or a.get("phase_id") or ""),
+            "title": str(a.get("title") or a.get("summary") or "Approval required"),
+            "status": str(a.get("status") or "pending"),
+            "task_id": str(a.get("task_id") or ""),
+            "created_at": a.get("created_at"),
+            "updated_at": a.get("updated_at"),
+            "source_kind": str(a.get("source_kind") or ""),
+        })
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            # --- Refinement-stage items ---
+            refinement_rows = conn.execute(
+                """
+                SELECT * FROM task_hub_items
+                WHERE status = 'refinement'
+                ORDER BY updated_at DESC
+                LIMIT 20
+                """
+            ).fetchall()
+            refinement_items = []
+            for row in refinement_rows:
+                item = task_hub.hydrate_item(dict(row))
+                metadata = item.get("metadata") or {}
+                refinement_items.append({
+                    "task_id": str(item.get("task_id") or ""),
+                    "title": str(item.get("title") or ""),
+                    "status": str(item.get("status") or ""),
+                    "source_kind": str(item.get("source_kind") or ""),
+                    "project_key": str(item.get("project_key") or ""),
+                    "priority": item.get("priority"),
+                    "labels": item.get("labels", []),
+                    "refinement_stage": str(metadata.get("refinement_stage") or ""),
+                    "updated_at": item.get("updated_at"),
+                    "created_at": item.get("created_at"),
+                })
+
+            # --- Dispatch queue with agent routing ---
+            dispatch_data = task_hub.get_dispatch_queue(conn, limit=20)
+            dispatch_items = []
+            for item in dispatch_data.get("items", []):
+                routing = qualify_agent(item)
+                dispatch_items.append({
+                    "task_id": str(item.get("task_id") or ""),
+                    "title": str(item.get("title") or ""),
+                    "status": str(item.get("status") or ""),
+                    "source_kind": str(item.get("source_kind") or ""),
+                    "project_key": str(item.get("project_key") or ""),
+                    "priority": item.get("priority"),
+                    "labels": item.get("labels", []),
+                    "eligible": bool(item.get("eligible")),
+                    "skip_reason": item.get("skip_reason"),
+                    "rank": item.get("rank"),
+                    "target_agent": routing.get("agent_id", "simone"),
+                    "routing_confidence": routing.get("confidence", "default"),
+                    "routing_reason": routing.get("reason", ""),
+                    "should_delegate": routing.get("should_delegate", False),
+                    "updated_at": item.get("updated_at"),
+                    "created_at": item.get("created_at"),
+                })
+
+            return {
+                "pending_approvals": pending_approvals,
+                "refinement_items": refinement_items,
+                "dispatch_queue": dispatch_items,
+                "counts": {
+                    "approvals": len(pending_approvals),
+                    "refinement": len(refinement_items),
+                    "dispatch_eligible": sum(1 for d in dispatch_items if d.get("eligible")),
+                    "dispatch_total": len(dispatch_items),
+                },
+            }
+        finally:
+            conn.close()
+
+
 @app.get("/api/v1/dashboard/agent-assignments")
 async def dashboard_agent_assignments():
     """Return current agent task assignments."""

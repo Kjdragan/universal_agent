@@ -243,6 +243,109 @@ function getStubDataForPath(pathname: string): unknown | null {
       },
     };
   }
+  // Proactive Pipeline stub (used by Proactive Pipeline panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/proactive-pipeline") {
+    return {
+      pending_approvals: [
+        {
+          approval_id: "stub-approval-001",
+          title: "Approve research decomposition: AI agent market analysis",
+          status: "pending",
+          task_id: "task-001",
+          created_at: new Date(Date.now() - 1800000).toISOString(),
+          source_kind: "brainstorm",
+        },
+      ],
+      refinement_items: [
+        {
+          task_id: "task-refine-001",
+          title: "Build competitive analysis pipeline for RAG startups",
+          status: "refinement",
+          source_kind: "csi",
+          project_key: "research",
+          priority: 2,
+          labels: ["research", "competitive-analysis"],
+          refinement_stage: "decomposition",
+          updated_at: new Date(Date.now() - 600000).toISOString(),
+          created_at: new Date(Date.now() - 7200000).toISOString(),
+        },
+        {
+          task_id: "task-refine-002",
+          title: "Set up n8n webhook integration for Upwork alerts",
+          status: "refinement",
+          source_kind: "email",
+          project_key: "engineering",
+          priority: 3,
+          labels: ["code", "automation"],
+          refinement_stage: "subtask_generation",
+          updated_at: new Date(Date.now() - 900000).toISOString(),
+          created_at: new Date(Date.now() - 14400000).toISOString(),
+        },
+      ],
+      dispatch_queue: [
+        {
+          task_id: "task-dispatch-001",
+          title: "Refactor YouTube playlist watcher error handling",
+          status: "ready",
+          source_kind: "manual",
+          project_key: "engineering",
+          priority: 1,
+          labels: ["code", "refactor"],
+          eligible: true,
+          skip_reason: null,
+          rank: 1,
+          target_agent: "vp.coder.primary",
+          routing_confidence: "label",
+          routing_reason: "Coder label match: {'code', 'refactor'}",
+          should_delegate: true,
+          updated_at: new Date(Date.now() - 300000).toISOString(),
+          created_at: new Date(Date.now() - 86400000).toISOString(),
+        },
+        {
+          task_id: "task-dispatch-002",
+          title: "Deep research: LangGraph vs CrewAI for production agent systems",
+          status: "ready",
+          source_kind: "csi",
+          project_key: "research",
+          priority: 2,
+          labels: ["research", "deep-research"],
+          eligible: true,
+          skip_reason: null,
+          rank: 2,
+          target_agent: "vp.general.primary",
+          routing_confidence: "label",
+          routing_reason: "General label match: {'research', 'deep-research'}",
+          should_delegate: true,
+          updated_at: new Date(Date.now() - 1200000).toISOString(),
+          created_at: new Date(Date.now() - 172800000).toISOString(),
+        },
+        {
+          task_id: "task-dispatch-003",
+          title: "Send weekly status update to Kevin",
+          status: "ready",
+          source_kind: "calendar",
+          project_key: "",
+          priority: 3,
+          labels: ["communication"],
+          eligible: false,
+          skip_reason: "capacity_governor_backoff",
+          rank: 3,
+          target_agent: "simone",
+          routing_confidence: "label",
+          routing_reason: "Simone label match: {'communication'}",
+          should_delegate: false,
+          updated_at: new Date(Date.now() - 3600000).toISOString(),
+          created_at: new Date(Date.now() - 86400000).toISOString(),
+        },
+      ],
+      counts: {
+        approvals: 1,
+        refinement: 2,
+        dispatch_eligible: 2,
+        dispatch_total: 3,
+      },
+    };
+  }
   return null;
 }
 
@@ -400,6 +503,14 @@ async function proxyRequest(request: NextRequest, path: string[]) {
       },
       { status: upstreamResponse.status },
     );
+  }
+
+  // Dev-mode fallback: return stub data when upstream returns 404 for new endpoints
+  if (upstreamResponse.status === 404 && isDevModeStubsEnabled()) {
+    const stubData = getStubDataForPath(upstreamPathname);
+    if (stubData) {
+      return NextResponse.json(stubData);
+    }
   }
 
   const responseHeaders = new Headers();
