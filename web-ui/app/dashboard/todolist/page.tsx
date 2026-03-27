@@ -1003,8 +1003,18 @@ export default function ToDoListDashboardPage() {
       ) : (
         <div className="space-y-3 text-xs">
           <div className="rounded border border-border/70 bg-background/50 p-2">
-            <div className="font-semibold text-foreground">{taskHistory.task?.title || taskHistory.task?.task_id || "Task"}</div>
-            <div className="mt-1 text-muted-foreground">{taskHistory.task?.task_id}</div>
+            <div className="font-semibold text-foreground flex items-baseline gap-2 min-w-0">
+              <span className="shrink-0">{taskHistory.task?.title || taskHistory.task?.task_id || "Task"}</span>
+              {taskHistory.task?.description && (
+                <span className="text-[11px] font-normal text-muted-foreground truncate">— {taskHistory.task.description.slice(0, 100)}{taskHistory.task.description.length > 100 ? "…" : ""}</span>
+              )}
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-muted-foreground">
+              <span>{taskHistory.task?.task_id}</span>
+              {taskHistory.task?.status && <span className="opacity-40">│</span>}
+              {taskHistory.task?.status && <span className="text-[10px] uppercase tracking-wider">{taskHistory.task.status}</span>}
+              {taskHistory.task?.score !== undefined && <><span className="opacity-40">│</span><span className="text-[10px]">score {taskHistory.task.score}</span></>}
+            </div>
           </div>
           <div className="rounded border border-border/70 bg-background/50 p-2">
             <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">

@@ -31,3 +31,5 @@ Take a look at our GitHub action with regards to the OpenClaw research process a
 research on businesses for agents as the customer (what are the pain points?)
 
 Airport terminal tv display
+
+biomcp
