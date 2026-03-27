@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
-import { CopyPlus, Clock, Zap, User, Trash2 } from "lucide-react";
+import { CopyPlus, Clock, Zap, User, Trash2, Pencil, X } from "lucide-react";
 
 type ColumnType = "Backlog" | "In Progress" | "In Review" | "Done";
 
@@ -65,14 +65,226 @@ const INITIAL_TASKS: Task[] = [
 ];
 
 const COLUMNS: ColumnType[] = ["Backlog", "In Progress", "In Review", "Done"];
+const PRIORITIES: Task["priority"][] = ["High", "Medium", "Low"];
+
+/* ── Edit Modal ─────────────────────────────────────────────────────── */
+
+function EditModal({
+  task,
+  onSave,
+  onClose,
+}: {
+  task: Task;
+  onSave: (updated: Task) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState<Task>({ ...task });
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    titleRef.current?.focus();
+    titleRef.current?.select();
+  }, []);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!draft.title.trim()) return;
+    onSave(draft);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={handleSubmit}
+        className="w-full max-w-lg bg-[#0c1528] border border-white/10 shadow-2xl shadow-black/50 flex flex-col animate-in fade-in zoom-in-95 duration-150"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[11px] text-cyan-500 font-bold bg-cyan-500/10 px-1.5 py-0.5">
+              {task.id}
+            </span>
+            <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+              Edit Task
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 py-4 flex flex-col gap-4">
+          {/* Title */}
+          <label className="flex flex-col gap-1.5">
+            <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+              Title
+            </span>
+            <input
+              ref={titleRef}
+              type="text"
+              value={draft.title}
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+              className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors placeholder:text-slate-600"
+              placeholder="Task title…"
+            />
+          </label>
+
+          {/* Description */}
+          <label className="flex flex-col gap-1.5">
+            <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+              Description
+            </span>
+            <textarea
+              value={draft.description}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              rows={3}
+              className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors resize-y placeholder:text-slate-600"
+              placeholder="Mission details…"
+            />
+          </label>
+
+          {/* Row: Priority / Status */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+                Priority
+              </span>
+              <select
+                value={draft.priority}
+                onChange={(e) =>
+                  setDraft({ ...draft, priority: e.target.value as Task["priority"] })
+                }
+                className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors appearance-none cursor-pointer"
+              >
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p} className="bg-[#0c1528]">
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+                Status
+              </span>
+              <select
+                value={draft.status}
+                onChange={(e) =>
+                  setDraft({ ...draft, status: e.target.value as ColumnType })
+                }
+                className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors appearance-none cursor-pointer"
+              >
+                {COLUMNS.map((c) => (
+                  <option key={c} value={c} className="bg-[#0c1528]">
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {/* Row: Assignee / Points */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+                Assignee
+              </span>
+              <input
+                type="text"
+                value={draft.assignee}
+                onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
+                className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors placeholder:text-slate-600"
+                placeholder="Agent name…"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+                Points
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                value={draft.points}
+                onChange={(e) =>
+                  setDraft({ ...draft, points: Math.max(0, parseInt(e.target.value) || 0) })
+                }
+                className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors"
+              />
+            </label>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-white/10">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 font-mono text-[11px] font-semibold text-slate-400 uppercase tracking-widest hover:text-white hover:bg-white/5 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="px-5 py-2 bg-cyan-400 font-mono text-[11px] font-bold text-black uppercase tracking-widest hover:bg-cyan-300 active:scale-95 transition-all"
+          >
+            Save Changes
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ── Board ──────────────────────────────────────────────────────────── */
+
+const STORAGE_KEY = "ua.kanban_tasks.v1";
 
 export default function KanbanBoard() {
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    if (typeof window === "undefined") return INITIAL_TASKS;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as Task[];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch { /* ignore corrupt data */ }
+    return INITIAL_TASKS;
+  });
   const [isMounted, setIsMounted] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  // Persist tasks to localStorage on every change
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    } catch { /* storage full or unavailable */ }
+  }, [tasks]);
 
   const handleNewTask = () => {
     const newTask: Task = {
@@ -85,10 +297,17 @@ export default function KanbanBoard() {
       points: 1,
     };
     setTasks([newTask, ...tasks]);
+    // Auto-open the edit modal for new tasks so users can fill in details
+    setEditingTask(newTask);
   };
 
   const handleDeleteTask = (taskId: string) => {
     setTasks(tasks.filter((t) => t.id !== taskId));
+  };
+
+  const handleSaveTask = (updated: Task) => {
+    setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    setEditingTask(null);
   };
 
   const onDragEnd = (result: DropResult) => {
@@ -102,7 +321,6 @@ export default function KanbanBoard() {
     const draggedTask = tasks.find((t) => t.id === draggableId);
     if (!draggedTask) return;
 
-    const sourceStatus = source.droppableId as ColumnType;
     const destStatus = destination.droppableId as ColumnType;
 
     // Filter out the dragged task
@@ -130,6 +348,15 @@ export default function KanbanBoard() {
 
   return (
     <div className="w-full h-full flex flex-col">
+      {/* Edit Modal */}
+      {editingTask && (
+        <EditModal
+          task={editingTask}
+          onSave={handleSaveTask}
+          onClose={() => setEditingTask(null)}
+        />
+      )}
+
       {/* Tactical Sub-Header */}
       <div className="flex items-center justify-between mb-6 pb-2 border-b border-white/10">
         <div>
@@ -185,7 +412,7 @@ export default function KanbanBoard() {
                               {...provided.dragHandleProps}
                               style={provided.draggableProps.style}
                               className={[
-                                "relative bg-white/5 border border-white/10 p-4 transition-all group",
+                                "relative bg-white/5 border border-white/10 p-4 transition-all group cursor-pointer",
                                 // 0px border radius, Glass minimal
                                 "rounded-none",
                                 // Tonal Layering on hover / drag
@@ -194,6 +421,10 @@ export default function KanbanBoard() {
                                 "before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:bg-cyan-400 before:opacity-0 hover:before:opacity-100 before:transition-opacity",
                                 snapshot.isDragging ? "before:opacity-100" : ""
                               ].join(" ")}
+                              onClick={() => {
+                                // Don't open edit if we just finished dragging
+                                if (!snapshot.isDragging) setEditingTask(task);
+                              }}
                             >
                               <div className="flex justify-between items-start mb-2">
                                 <div className="flex items-center gap-2">
@@ -201,11 +432,18 @@ export default function KanbanBoard() {
                                     {task.id}
                                   </span>
                                   <button
-                                    onClick={() => handleDeleteTask(task.id)}
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
                                     className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/20 text-red-500/60 hover:text-red-400"
                                     title="Delete Task"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setEditingTask(task); }}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-cyan-500/20 text-cyan-500/60 hover:text-cyan-400"
+                                    title="Edit Task"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                                 {task.priority === "High" && (

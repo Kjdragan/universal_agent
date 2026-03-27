@@ -16941,170 +16941,170 @@ async def dashboard_todolist_get_subtasks(task_id: str):
             conn.close()
 
 
-    # ── Brainstorm Refinement Endpoints ───────────────────────────────────
+# ── Brainstorm Refinement Endpoints ───────────────────────────────────
 
-    @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/refine")
-    async def dashboard_todolist_refine(task_id: str):
-        """Trigger LLM-powered refinement for a brainstorm task."""
-        tid = str(task_id or "").strip()
-        if not tid:
-            raise HTTPException(status_code=400, detail="task_id is required")
-        # Read task state inside lock
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                item = task_hub.get_item(conn, tid)
-                if item is None:
-                    raise HTTPException(status_code=404, detail="Task not found")
-                ref_state = task_hub.get_refinement_state(conn, tid)
-                comments = task_hub.list_comments(conn, tid, limit=10)
-            finally:
-                conn.close()
-        # LLM call outside lock
-        current_stage = ref_state.get("refinement_stage") or "raw_idea"
-        history = ref_state.get("refinement_history", {})
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/refine")
+async def dashboard_todolist_refine(task_id: str):
+    """Trigger LLM-powered refinement for a brainstorm task."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    # Read task state inside lock
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
         try:
-            result = await refine_with_llm(
-                title=item.get("title", ""),
-                description=item.get("description", ""),
-                current_stage=current_stage,
-                refinement_history=history,
-                comments=comments,
+            item = task_hub.get_item(conn, tid)
+            if item is None:
+                raise HTTPException(status_code=404, detail="Task not found")
+            ref_state = task_hub.get_refinement_state(conn, tid)
+            comments = task_hub.list_comments(conn, tid, limit=10)
+        finally:
+            conn.close()
+    # LLM call outside lock
+    current_stage = ref_state.get("refinement_stage") or "raw_idea"
+    history = ref_state.get("refinement_history", {})
+    try:
+        result = await refine_with_llm(
+            title=item.get("title", ""),
+            description=item.get("description", ""),
+            current_stage=current_stage,
+            refinement_history=history,
+            comments=comments,
+        )
+    except RefinementError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    # Apply result inside lock
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            recommendation = result.get("recommendation", "hold")
+            if recommendation == "advance":
+                next_stg = result.get("next_stage", current_stage)
+                task_hub.advance_refinement(
+                    conn, task_id=tid, new_stage=next_stg,
+                    context_update={"reasoning": result.get("reasoning", "")},
+                )
+                if result.get("enriched_description"):
+                    task_hub.add_comment(
+                        conn, task_id=tid,
+                        content=f"[Refinement] Enriched description: {result['enriched_description']}",
+                        author="refinement_agent",
+                    )
+                task_hub.record_notification(
+                    conn, task_id=tid, event_key=f"refined_to_{next_stg}",
+                )
+            elif recommendation == "question":
+                for q in result.get("questions", []):
+                    task_hub.enqueue_question(
+                        conn, task_id=tid,
+                        question_text=str(q),
+                        channel="dashboard",
+                    )
+            return {"status": "ok", "result": result}
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/refinement-state")
+async def dashboard_todolist_refinement_state(task_id: str):
+    """Get current refinement stage and history."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            state = task_hub.get_refinement_state(conn, tid)
+            return state
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/questions")
+async def dashboard_todolist_questions(task_id: str):
+    """List pending questions for a task."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            questions = task_hub.list_pending_questions(conn, limit=20)
+            # Filter to this task
+            task_questions = [q for q in questions if q.get("task_id") == tid]
+            return {"questions": task_questions}
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/dashboard/todolist/tasks/{task_id}/answer-question")
+async def dashboard_todolist_answer_question(task_id: str, request: Request):
+    """Submit a user answer to a pending question."""
+    body = await request.json()
+    question_id = str(body.get("question_id", "")).strip()
+    answer_text = str(body.get("answer_text", "")).strip()
+    if not question_id or not answer_text:
+        raise HTTPException(status_code=400, detail="question_id and answer_text are required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = task_hub.answer_question(
+                conn, question_id=question_id, answer_text=answer_text,
             )
-        except RefinementError as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-        # Apply result inside lock
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                recommendation = result.get("recommendation", "hold")
-                if recommendation == "advance":
-                    next_stg = result.get("next_stage", current_stage)
-                    task_hub.advance_refinement(
-                        conn, task_id=tid, new_stage=next_stg,
-                        context_update={"reasoning": result.get("reasoning", "")},
-                    )
-                    if result.get("enriched_description"):
-                        task_hub.add_comment(
-                            conn, task_id=tid,
-                            content=f"[Refinement] Enriched description: {result['enriched_description']}",
-                            author="refinement_agent",
-                        )
-                    task_hub.record_notification(
-                        conn, task_id=tid, event_key=f"refined_to_{next_stg}",
-                    )
-                elif recommendation == "question":
-                    for q in result.get("questions", []):
-                        task_hub.enqueue_question(
-                            conn, task_id=tid,
-                            question_text=str(q),
-                            channel="dashboard",
-                        )
-                return {"status": "ok", "result": result}
-            finally:
-                conn.close()
+            # Also record the answer as a comment for context
+            task_hub.add_comment(
+                conn, task_id=str(task_id or "").strip(),
+                content=f"[Answer] {answer_text}",
+                author="dashboard_user",
+            )
+            return {"status": "answered", "result": result}
+        finally:
+            conn.close()
 
 
-    @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/refinement-state")
-    async def dashboard_todolist_refinement_state(task_id: str):
-        """Get current refinement stage and history."""
-        tid = str(task_id or "").strip()
-        if not tid:
-            raise HTTPException(status_code=400, detail="task_id is required")
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                state = task_hub.get_refinement_state(conn, tid)
-                return state
-            finally:
-                conn.close()
+@app.get("/api/v1/dashboard/todolist/morning-report")
+async def dashboard_todolist_morning_report():
+    """Return the morning report snapshot for the dashboard."""
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            from universal_agent.services.proactive_advisor import build_morning_report
+            report = build_morning_report(conn)
+            return {"status": "ok", "report": report}
+        except Exception as e:
+            return {"status": "error", "error": str(e), "report": None}
+        finally:
+            conn.close()
 
-
-    @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/questions")
-    async def dashboard_todolist_questions(task_id: str):
-        """List pending questions for a task."""
-        tid = str(task_id or "").strip()
-        if not tid:
-            raise HTTPException(status_code=400, detail="task_id is required")
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                questions = task_hub.list_pending_questions(conn, limit=20)
-                # Filter to this task
-                task_questions = [q for q in questions if q.get("task_id") == tid]
-                return {"questions": task_questions}
-            finally:
-                conn.close()
-
-
-    @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/answer-question")
-    async def dashboard_todolist_answer_question(task_id: str, request: Request):
-        """Submit a user answer to a pending question."""
-        body = await request.json()
-        question_id = str(body.get("question_id", "")).strip()
-        answer_text = str(body.get("answer_text", "")).strip()
-        if not question_id or not answer_text:
-            raise HTTPException(status_code=400, detail="question_id and answer_text are required")
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                result = task_hub.answer_question(
-                    conn, question_id=question_id, answer_text=answer_text,
-                )
-                # Also record the answer as a comment for context
-                task_hub.add_comment(
-                    conn, task_id=str(task_id or "").strip(),
-                    content=f"[Answer] {answer_text}",
-                    author="dashboard_user",
-                )
-                return {"status": "answered", "result": result}
-            finally:
-                conn.close()
-
-
-    @app.get("/api/v1/dashboard/todolist/morning-report")
-    async def dashboard_todolist_morning_report():
-        """Return the morning report snapshot for the dashboard."""
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                from universal_agent.services.proactive_advisor import build_morning_report
-                report = build_morning_report(conn)
-                return {"status": "ok", "report": report}
-            except Exception as e:
-                return {"status": "error", "error": str(e), "report": None}
-            finally:
-                conn.close()
-
-    @app.post("/api/v1/dashboard/todolist/tasks")
-    async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
-        """Quick-add a new task from the dashboard."""
-        import hashlib
-        title = str(payload.title or "").strip()
-        if not title:
-            raise HTTPException(status_code=400, detail="title is required")
-        # Generate a deterministic but unique task_id from title + timestamp
-        now_iso = datetime.now(timezone.utc).isoformat()
-        raw_id = f"qa-{hashlib.sha256(f'{title}:{now_iso}'.encode()).hexdigest()[:12]}"
-        item = {
-            "task_id": raw_id,
-            "title": title,
-            "description": str(payload.description or "").strip(),
-            "priority": max(1, min(4, payload.priority or 1)),
-            "project_key": str(payload.project_key or "immediate").strip(),
-            "source_kind": "dashboard_quick_add",
-            "status": "open",
-            "labels": ["quick-add"],
-        }
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                result = task_hub.upsert_item(conn, item)
-                return {"status": "ok", "task": result}
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-            finally:
-                conn.close()
+@app.post("/api/v1/dashboard/todolist/tasks")
+async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
+    """Quick-add a new task from the dashboard."""
+    import hashlib
+    title = str(payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    # Generate a deterministic but unique task_id from title + timestamp
+    now_iso = datetime.now(timezone.utc).isoformat()
+    raw_id = f"qa-{hashlib.sha256(f'{title}:{now_iso}'.encode()).hexdigest()[:12]}"
+    item = {
+        "task_id": raw_id,
+        "title": title,
+        "description": str(payload.description or "").strip(),
+        "priority": max(1, min(4, payload.priority or 1)),
+        "project_key": str(payload.project_key or "immediate").strip(),
+        "source_kind": "dashboard_quick_add",
+        "status": "open",
+        "labels": ["quick-add"],
+    }
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = task_hub.upsert_item(conn, item)
+            return {"status": "ok", "task": result}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            conn.close()
 
 
 def _task_history_links_for_session(session_id: str) -> dict[str, str]:
