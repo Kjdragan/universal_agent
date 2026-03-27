@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
-import { CopyPlus, Clock, Zap, User } from "lucide-react";
+import { CopyPlus, Clock, Zap, User, Trash2 } from "lucide-react";
 
 type ColumnType = "Backlog" | "In Progress" | "In Review" | "Done";
 
@@ -74,6 +74,23 @@ export default function KanbanBoard() {
     setIsMounted(true);
   }, []);
 
+  const handleNewTask = () => {
+    const newTask: Task = {
+      id: `TASK-${Math.floor(Math.random() * 900) + 100}`,
+      title: "New Objective",
+      description: "Awaiting mission details...",
+      status: "Backlog",
+      priority: "Medium",
+      assignee: "Unassigned",
+      points: 1,
+    };
+    setTasks([newTask, ...tasks]);
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    setTasks(tasks.filter((t) => t.id !== taskId));
+  };
+
   const onDragEnd = (result: DropResult) => {
     if (!result.destination) return;
     const { source, destination, draggableId } = result;
@@ -122,7 +139,10 @@ export default function KanbanBoard() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="rounded-none bg-cyan-400 px-4 py-2 text-[13px] font-semibold text-black transition-all hover:bg-cyan-300 active:scale-95 flex items-center gap-2">
+          <button 
+            onClick={handleNewTask}
+            className="rounded-none bg-cyan-400 px-4 py-2 text-[13px] font-semibold text-black transition-all hover:bg-cyan-300 active:scale-95 flex items-center gap-2"
+          >
             <CopyPlus className="w-4 h-4" />
             NEW TASK
           </button>
@@ -163,6 +183,7 @@ export default function KanbanBoard() {
                               ref={provided.innerRef}
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
+                              style={provided.draggableProps.style}
                               className={[
                                 "relative bg-white/5 border border-white/10 p-4 transition-all group",
                                 // 0px border radius, Glass minimal
@@ -175,9 +196,18 @@ export default function KanbanBoard() {
                               ].join(" ")}
                             >
                               <div className="flex justify-between items-start mb-2">
-                                <span className="font-mono text-[11px] text-cyan-500 font-bold bg-cyan-500/10 px-1.5 py-0.5">
-                                  {task.id}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-[11px] text-cyan-500 font-bold bg-cyan-500/10 px-1.5 py-0.5">
+                                    {task.id}
+                                  </span>
+                                  <button
+                                    onClick={() => handleDeleteTask(task.id)}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/20 text-red-500/60 hover:text-red-400"
+                                    title="Delete Task"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                                 {task.priority === "High" && (
                                   <span className="font-mono text-[10px] text-[#EE9800] bg-[#EE9800]/10 px-1.5 py-0.5 border border-[#EE9800]/20 flex items-center gap-1 uppercase">
                                     <Zap className="w-3 h-3" /> HIGH
