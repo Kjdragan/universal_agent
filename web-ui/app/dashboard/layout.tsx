@@ -28,6 +28,7 @@ import {
   LogOut,
   ChevronDown,
   Mail,
+  Kanban,
   type LucideIcon,
 } from "lucide-react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
@@ -60,6 +61,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/supervisors", label: "Supervisor Agents", icon: ShieldCheck, requiresHeadquarters: true },
       { href: "/dashboard/approvals", label: "Approvals", icon: CheckCircle },
       { href: "/dashboard/todolist", label: "To Do List", icon: ListTodo },
+      { href: "/dashboard/kanban", label: "Kanban Board", icon: Kanban },
       { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },
       { href: "/dashboard/heartbeats", label: "Heartbeats", icon: HeartPulse },
     ],
