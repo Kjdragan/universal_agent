@@ -845,16 +845,21 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
             if reason.startswith("heartbeat_"):
                 eligible = False
 
-        _record_evaluation(
-            conn,
-            task_id=task_id,
-            agent_id="scorer",
-            decision="defer",
-            reason="dispatch_rebuild",
-            score=score,
-            score_confidence=confidence,
-            judge_payload=judge_payload,
-        )
+        # Only record evaluations for tasks in potentially-dispatchable states.
+        # Tasks in blocked/in_progress/delegated/scheduled always defer — recording
+        # that on every rebuild just creates noise (120+ identical rows per task).
+        _status_skip_eval = {TASK_STATUS_BLOCKED, TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW, TASK_STATUS_SCHEDULED}
+        if status not in _status_skip_eval:
+            _record_evaluation(
+                conn,
+                task_id=task_id,
+                agent_id="scorer",
+                decision="defer",
+                reason="dispatch_rebuild",
+                score=score,
+                score_confidence=confidence,
+                judge_payload=judge_payload,
+            )
 
         item["score"] = score
         item["score_confidence"] = confidence
