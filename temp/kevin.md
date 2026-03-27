@@ -33,3 +33,5 @@ research on businesses for agents as the customer (what are the pain points?)
 Airport terminal tv display
 
 biomcp
+
+amazing game graph of claude activities

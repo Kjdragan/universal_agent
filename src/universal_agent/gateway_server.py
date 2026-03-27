@@ -19095,6 +19095,152 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
     }
 
 
+@app.get("/api/v1/ops/system-health")
+async def ops_system_health():
+    """Consolidated system health snapshot for the heartbeat dashboard.
+
+    Returns subsystem status, heartbeat summaries, cron schedule, task hub
+    counts, and active session count in a single call.
+    """
+    now_ts = time.time()
+    result: dict[str, Any] = {}
+
+    # ── Heartbeat subsystem ──────────────────────────────────────────
+    hb_data: dict[str, Any] = {"available": _heartbeat_service is not None, "interval_seconds": 1800}
+    if _heartbeat_service:
+        try:
+            hb_data["interval_seconds"] = int(getattr(_heartbeat_service, "_min_interval_seconds", None) or 1800)
+        except Exception:
+            pass
+        hb_sessions: dict[str, Any] = {}
+        for sid, session in _sessions.items():
+            state = _read_heartbeat_state(session.workspace_dir) or {}
+            if not state:
+                continue
+            busy = bool(sid in _heartbeat_service.busy_sessions)
+            last_run = state.get("last_run")
+            summary = state.get("last_summary") or {}
+            hb_sessions[sid] = {
+                "last_run": last_run,
+                "busy": busy,
+                "summary_text": str(summary.get("text") or "")[:500],
+                "summary_ok": "HEARTBEAT_OK" in str(summary.get("text") or ""),
+                "artifacts_count": len(summary.get("artifacts", {}).get("work_products", []) if isinstance(summary.get("artifacts"), dict) else []),
+                "suppressed_reason": summary.get("suppressed_reason"),
+            }
+        hb_data["sessions"] = hb_sessions
+    result["heartbeat"] = hb_data
+
+    # ── VP Fleet ─────────────────────────────────────────────────────
+    vp_data: list[dict[str, Any]] = []
+    try:
+        gateway = get_gateway()
+        vp_conn = _external_vp_conn(gateway)
+        vp_rows = list_vp_sessions(vp_conn, statuses=None, limit=50)
+        if not vp_rows:
+            runtime_conn = getattr(gateway, "_runtime_db_conn", None)
+            if runtime_conn is not None and runtime_conn is not vp_conn:
+                vp_rows = list_vp_sessions(runtime_conn, statuses=None, limit=50)
+        for row in vp_rows:
+            d = _vp_session_to_dict(row)
+            if d:
+                vp_data.append({
+                    "vp_id": str(d.get("vp_id", "") or ""),
+                    "session_id": str(d.get("session_id", "") or ""),
+                    "status": str(d.get("status", "") or ""),
+                    "effective_status": str(d.get("effective_status", "") or d.get("status", "") or ""),
+                    "last_heartbeat_at": str(d.get("last_heartbeat_at", "") or ""),
+                    "lease_expires_at": str(d.get("lease_expires_at", "") or ""),
+                })
+    except Exception:
+        pass
+    result["vp_fleet"] = vp_data
+
+    # ── Cron subsystem ───────────────────────────────────────────────
+    cron_data: dict[str, Any] = {"available": _cron_service is not None}
+    if _cron_service:
+        try:
+            jobs = _cron_service.list_jobs()
+            cron_data["jobs_total"] = len(jobs)
+            cron_data["jobs_enabled"] = sum(1 for j in jobs if j.get("enabled"))
+            cron_data["jobs_running"] = sum(1 for j in jobs if j.get("running"))
+            # Find next fire time
+            next_runs = [j.get("next_run_at") for j in jobs if j.get("next_run_at") and j.get("enabled")]
+            cron_data["next_fire_at"] = min(next_runs) if next_runs else None
+            last_runs = [j.get("last_run_at") for j in jobs if j.get("last_run_at")]
+            cron_data["last_run_at"] = max(last_runs) if last_runs else None
+            cron_data["jobs"] = [
+                {
+                    "job_id": j.get("job_id", ""),
+                    "name": j.get("metadata", {}).get("system_job") or j.get("job_id", ""),
+                    "cron_expr": j.get("cron_expr", ""),
+                    "enabled": j.get("enabled", False),
+                    "running": j.get("running", False),
+                    "last_run_at": j.get("last_run_at"),
+                    "next_run_at": j.get("next_run_at"),
+                }
+                for j in jobs
+            ]
+        except Exception as exc:
+            cron_data["error"] = str(exc)
+    result["cron"] = cron_data
+
+    # ── AgentMail subsystem ──────────────────────────────────────────
+    mail_data: dict[str, Any] = {"available": _agentmail_service is not None}
+    if _agentmail_service:
+        try:
+            status = _agentmail_service.status()
+            mail_data["watcher_running"] = status.get("started", False)
+            mail_data["ws_connected"] = status.get("ws_connected", False)
+            mail_data["inbox_address"] = status.get("inbox_address", "")
+            mail_data["queue_depth"] = status.get("trusted_requests_queued_total", 0)
+            mail_data["poll_interval"] = status.get("inbound_poll_interval_seconds")
+            mail_data["messages_sent"] = status.get("messages_sent", 0)
+            mail_data["messages_received"] = status.get("messages_received", 0)
+        except Exception as exc:
+            mail_data["error"] = str(exc)
+    result["agentmail"] = mail_data
+
+    # ── Hooks subsystem ──────────────────────────────────────────────
+    hooks_data: dict[str, Any] = {"available": _hooks_service is not None}
+    if _hooks_service:
+        try:
+            hooks_data["active_dispatches"] = getattr(_hooks_service, "active_dispatch_count", 0)
+            hooks_data["concurrency_limit"] = getattr(_hooks_service, "max_concurrent_dispatches", 3)
+        except Exception:
+            pass
+    result["hooks"] = hooks_data
+
+    # ── Task Hub ─────────────────────────────────────────────────────
+    task_data: dict[str, Any] = {"available": _task_hub_enabled()}
+    if _task_hub_enabled():
+        try:
+            conn = _task_hub_open_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) FROM task_hub_items GROUP BY status"
+                ).fetchall()
+                counts_by_status: dict[str, int] = {}
+                for row in rows:
+                    counts_by_status[str(row[0])] = int(row[1])
+                task_data["counts"] = counts_by_status
+                task_data["total"] = sum(counts_by_status.values())
+            finally:
+                conn.close()
+        except Exception as exc:
+            task_data["error"] = str(exc)
+    result["task_hub"] = task_data
+
+    # ── Active Sessions ──────────────────────────────────────────────
+    result["sessions"] = {
+        "active": len(_sessions),
+        "session_ids": sorted(str(s) for s in _sessions.keys())[:20],
+    }
+
+    result["timestamp"] = now_ts
+    return result
+
+
 @app.get("/api/v1/ops/youtube-playlist-watcher")
 async def ops_yt_playlist_watcher_status(request: Request):
     _require_ops_auth(request)
