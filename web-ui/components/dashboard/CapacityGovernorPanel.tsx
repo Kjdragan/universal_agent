@@ -1,16 +1,17 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { Activity, Server, Cpu, Clock, RefreshCw } from "lucide-react";
+import { Activity, Server, Clock, RefreshCw } from "lucide-react";
 
 export type CapacityGovernorData = {
-  status: string;
-  max_concurrent_operations: number;
-  active_operations: number;
-  backoff: {
-    active: boolean;
-    until: string | null;
-    reason: string | null;
-    sleep_multiplier: number;
-  };
+  max_concurrent: number;
+  active_slots: number;
+  available_slots: number;
+  in_backoff: boolean;
+  backoff_remaining_seconds: number;
+  consecutive_429s: number;
+  total_429s: number;
+  total_requests: number;
+  total_shed: number;
+  last_429_at: string | null;
 };
 
 export function CapacityGovernorPanel({ refreshKey }: { refreshKey: number }) {
@@ -66,9 +67,11 @@ export function CapacityGovernorPanel({ refreshKey }: { refreshKey: number }) {
     );
   }
 
-  const utilizationPercent = data.max_concurrent_operations > 0 
-    ? (data.active_operations / data.max_concurrent_operations) * 100 
+  const utilizationPercent = data.max_concurrent > 0 
+    ? (data.active_slots / data.max_concurrent) * 100 
     : 0;
+  
+  const statusLabel = data.in_backoff ? 'Throttled' : 'Healthy';
 
   return (
     <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
@@ -77,8 +80,8 @@ export function CapacityGovernorPanel({ refreshKey }: { refreshKey: number }) {
           <Server className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-medium text-foreground/80 tracking-wide uppercase">Capacity Governor</h2>
         </div>
-        <span className={`px-2 py-0.5 text-xs rounded-none ${data.status === 'healthy' ? 'bg-primary/20 text-primary' : 'bg-red-400/20 text-red-400'}`}>
-          {data.status}
+        <span className={`px-2 py-0.5 text-xs rounded-none uppercase tracking-wider font-mono ${data.in_backoff ? 'bg-red-400/20 text-red-400' : 'bg-primary/20 text-primary'}`}>
+          {statusLabel}
         </span>
       </div>
 
@@ -86,7 +89,7 @@ export function CapacityGovernorPanel({ refreshKey }: { refreshKey: number }) {
         <div>
           <div className="flex justify-between text-xs mb-1">
             <span className="text-muted-foreground uppercase tracking-widest text-[10px]">Concurrency limit</span>
-            <span className="font-mono">{data.active_operations} / {data.max_concurrent_operations}</span>
+            <span className="font-mono">{data.active_slots} / {data.max_concurrent}</span>
           </div>
           <div className="h-1.5 w-full bg-white/5 overflow-hidden">
             <div 
@@ -96,31 +99,40 @@ export function CapacityGovernorPanel({ refreshKey }: { refreshKey: number }) {
           </div>
         </div>
 
-        <div className={`p-3 border ${data.backoff.active ? 'border-secondary_container/50 bg-secondary_container/10' : 'border-white/5 bg-white/5'}`}>
+        <div className={`p-3 border ${data.in_backoff ? 'border-secondary_container/50 bg-secondary_container/10' : 'border-white/5 bg-white/5'}`}>
           <div className="flex items-center gap-2 mb-2">
-            <Activity className={`h-4 w-4 ${data.backoff.active ? 'text-secondary_container animate-pulse' : 'text-muted-foreground'}`} />
+            <Activity className={`h-4 w-4 ${data.in_backoff ? 'text-secondary_container animate-pulse' : 'text-muted-foreground'}`} />
             <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">Backoff State</h3>
-            <span className={`ml-auto text-xs ${data.backoff.active ? 'text-secondary_container' : 'text-muted-foreground'}`}>
-              {data.backoff.active ? 'ACTIVE' : 'INACTIVE'}
+            <span className={`ml-auto font-mono text-xs ${data.in_backoff ? 'text-secondary_container' : 'text-muted-foreground'}`}>
+              {data.in_backoff ? 'ACTIVE' : 'INACTIVE'}
             </span>
           </div>
           
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div>
-              <p className="text-muted-foreground uppercase text-[10px] tracking-wider mb-0.5">Multiplier</p>
-              <p className="font-mono">{data.backoff.sleep_multiplier.toFixed(1)}x</p>
+              <p className="text-muted-foreground uppercase text-[10px] tracking-wider mb-0.5">Consecutive 429s</p>
+              <p className="font-mono">{data.consecutive_429s}</p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase text-[10px] tracking-wider mb-0.5">Until</p>
-              <p className="font-mono">{data.backoff.until ? new Date(data.backoff.until).toLocaleTimeString() : '--'}</p>
+              <p className="text-muted-foreground uppercase text-[10px] tracking-wider mb-0.5">Remaining time</p>
+              <p className="font-mono">{data.in_backoff ? `${data.backoff_remaining_seconds}s` : '--'}</p>
             </div>
           </div>
-          
-          {data.backoff.active && data.backoff.reason && (
-            <div className="mt-2 text-xs text-secondary_container">
-              Reason: {data.backoff.reason}
+        </div>
+        
+        <div className="grid grid-cols-3 gap-2 text-xs border border-white/5 bg-white/5 p-2">
+            <div>
+              <p className="text-muted-foreground uppercase text-[9px] tracking-wider mb-0.5">Total Req</p>
+              <p className="font-mono text-[10px]">{data.total_requests}</p>
             </div>
-          )}
+            <div>
+              <p className="text-muted-foreground uppercase text-[9px] tracking-wider mb-0.5">Total 429s</p>
+              <p className="font-mono text-[10px]">{data.total_429s}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase text-[9px] tracking-wider mb-0.5">Shed Count</p>
+              <p className="font-mono text-[10px]">{data.total_shed}</p>
+            </div>
         </div>
       </div>
     </div>
