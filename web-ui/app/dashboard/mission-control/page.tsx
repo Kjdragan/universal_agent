@@ -1,5 +1,7 @@
 "use client";
 
+import { CapacityGovernorPanel } from "@/components/dashboard/CapacityGovernorPanel";
+import { PipelineStatsPanel } from "@/components/dashboard/PipelineStatsPanel";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -133,7 +135,7 @@ function ActiveTasksPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
@@ -168,7 +170,7 @@ function ActiveTasksPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
@@ -207,7 +209,7 @@ function ActiveTasksPanel() {
   const items = data?.items || [];
 
   return (
-    <div className="rounded-xl border border-border bg-background/70 p-4">
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-4 w-4 text-muted-foreground" />
@@ -302,7 +304,7 @@ function SystemStatusPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Activity className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
@@ -316,7 +318,7 @@ function SystemStatusPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Activity className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
@@ -339,7 +341,7 @@ function SystemStatusPanel() {
   const isHealthy = data?.status === "healthy";
 
   return (
-    <div className="rounded-xl border border-border bg-background/70 p-4">
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
       <div className="mb-4 flex items-center gap-2">
         <Activity className="h-4 w-4 text-muted-foreground" />
         <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
@@ -492,7 +494,7 @@ function RecentEventsPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Clock className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
@@ -511,7 +513,7 @@ function RecentEventsPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Clock className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
@@ -546,7 +548,7 @@ function RecentEventsPanel() {
     : events.filter((e) => !isHidden(e));
 
   return (
-    <div className="rounded-xl border border-border bg-background/70 p-4">
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
       <div className="mb-4 flex items-center justify-between">
         <Link href="/dashboard/events" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <Clock className="h-4 w-4 text-muted-foreground" />
@@ -666,7 +668,7 @@ function CSISignalsPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <TrendingUp className="h-4 w-4 text-secondary" />
           <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
@@ -680,7 +682,7 @@ function CSISignalsPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <TrendingUp className="h-4 w-4 text-secondary" />
           <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
@@ -701,7 +703,7 @@ function CSISignalsPanel() {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-background/70 p-4">
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
       <div className="mb-4 flex items-center justify-between">
         <Link href="/dashboard/csi" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <TrendingUp className="h-4 w-4 text-secondary" />
@@ -830,7 +832,7 @@ function SystemResourcesPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Cpu className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
@@ -846,7 +848,7 @@ function SystemResourcesPanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Cpu className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
@@ -877,7 +879,7 @@ function SystemResourcesPanel() {
       : "bg-primary/10 text-primary ring-green-500/20";
 
   return (
-    <div className="rounded-xl border border-border bg-background/70 p-4">
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu className="h-4 w-4 text-muted-foreground" />
@@ -1055,7 +1057,7 @@ function FreelancePipelinePanel() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Briefcase className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
@@ -1074,7 +1076,7 @@ function FreelancePipelinePanel() {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-border bg-background/70 p-4">
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Briefcase className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
@@ -1101,7 +1103,7 @@ function FreelancePipelinePanel() {
   };
 
   return (
-    <div className="rounded-xl border border-border bg-background/70 p-4">
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
       <div className="mb-4 flex items-center justify-between">
         <Link href="/dashboard/todolist" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <Briefcase className="h-4 w-4 text-muted-foreground" />
@@ -1253,7 +1255,7 @@ export default function MissionControlPage() {
         </div>
 
         {/* Quick Actions Bar */}
-        <div className="rounded-xl border border-border bg-background/70 p-3">
+        <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-3">
           <div className="flex flex-wrap gap-2">
             <button
               onClick={triggerRefresh}
@@ -1296,15 +1298,21 @@ export default function MissionControlPage() {
         </div>
 
         {/* Main Content Grid - Top row: 3 cols, Bottom row: 2 cols */}
-        <div className="grid flex-1 gap-4 md:grid-cols-3">
-          <ActiveTasksPanel />
-          <SystemStatusPanel />
-          <SystemResourcesPanel />
-        </div>
-        <div className="grid flex-1 gap-4 md:grid-cols-3">
-          <RecentEventsPanel />
-          <CSISignalsPanel />
-          <FreelancePipelinePanel />
+        <div className="grid flex-1 gap-4 lg:grid-cols-4">
+          <div className="col-span-1 lg:col-span-2 flex flex-col gap-4">
+            <ActiveTasksPanel />
+            <RecentEventsPanel />
+          </div>
+          <div className="col-span-1 flex flex-col gap-4">
+            <SystemStatusPanel />
+            <CapacityGovernorPanel refreshKey={refreshKey} />
+            <SystemResourcesPanel />
+          </div>
+          <div className="col-span-1 flex flex-col gap-4">
+            <PipelineStatsPanel refreshKey={refreshKey} />
+            <CSISignalsPanel />
+            <FreelancePipelinePanel />
+          </div>
         </div>
       </div>
     </RefreshContext.Provider>

@@ -1,0 +1,69 @@
+# Global UI Conversion Guide: Transitioning to Glass-Minimal
+
+This guide provides the necessary design logic and technical specifications to migrate existing "Old Style" UI components to the new **Tactical Glass-Minimal** aesthetic used in the AgentMail and CSI redesigns.
+
+---
+
+## 1. Layout & Shell Architecture
+All pages should adopt a high-density, command-center layout.
+
+### A. The "Hover-Activated" Sidebar
+- **Old State:** Fixed static sidebar.
+- **New State:** Collapsible container.
+  - **Closed Width:** `w-20` (Icons only).
+  - **Open Width (on hover):** `w-64` (Full labels).
+  - **Transition:** `transition-all duration-300 ease-in-out`.
+  - **Style:** `bg-[#0b1326]/90 backdrop-blur-2xl`.
+
+### B. Content Spacing
+- Use a **Multi-Pane Grid** (2 or 3 columns).
+- **Separation:** Do not use heavy borders. Use `bg-white/5` backgrounds and `border-white/10` to create separation via tonal shifts and glassmorphism.
+
+---
+
+## 2. Visual Language (The "Glass" Recipe)
+Every surface container must follow these properties to maintain the "Tactical" feel:
+
+| Property | Value | Tailwind Class |
+| :--- | :--- | :--- |
+| **Background** | Midnight Slate (Transparent) | `bg-[#0b1326]/60` |
+| **Blur** | Heavy Backdrop Blur | `backdrop-blur-xl` |
+| **Border** | Subtle Cyan/White Stroke | `border border-white/10` or `border-cyan-500/15` |
+| **Shadow** | Flat (No Shadow) | `shadow-none` |
+
+---
+
+## 3. Typography Hierarchy
+Convert all existing fonts to the following mapping:
+
+- **Primary Headers:** `Inter`, Extra Bold, `tracking-tighter`. (Use for Page Titles).
+- **Secondary Labels:** `JetBrains Mono`, Semibold, `uppercase`, `tracking-widest`. (Use for metadata, counters, and tactical badges).
+- **Body Text:** `Inter`, Regular/Medium, `text-slate-300`.
+
+---
+
+## 4. Component Conversion Table
+
+| Existing Component | New Glass-Minimal Replacement |
+| :--- | :--- |
+| **Standard Card** | Glassmorphic panel with `bg-white/5` and `hover:bg-white/10`. |
+| **Primary Button** | Solid Cyan (`bg-cyan-400`) with black text and `active:scale-95`. |
+| **Secondary Button** | Ghost button with `border-cyan-500/30` and `hover:bg-cyan-500/10`. |
+| **Data Badges** | Square corners, mono font, high-contrast background (e.g., `bg-red-500` for Alerts). |
+| **Scrollbars** | Thin, transparent tracks with `bg-cyan-500/20` thumbs. |
+
+---
+
+## 5. Implementation for AI Coders
+1. **Apply Global Theme:** Ensure the parent container has `bg-[#0b1326]` (Midnight Slate).
+2. **Refactor Grids:** Move from centered "blog-style" layouts to full-width "dashboard-style" layouts.
+3. **Layering:** Use `z-index` carefully on the sidebar (`z-60`) and Top Nav (`z-50`) to ensure they float correctly over the glass layers.
+4. **Icons:** Use `Material Symbols Outlined` with a weight of 300 for a precise, technical look.
+
+---
+
+## 6. Reference Screens
+Refer to the following placeholders for full code implementations:
+- **Navigation Shell:** `{{DATA:SCREEN:SCREEN_7}}`
+- **List/Detail Pattern:** `{{DATA:SCREEN:SCREEN_13}}`
+- **Metric Dashboard:** `{{DATA:SCREEN:SCREEN_2}}`

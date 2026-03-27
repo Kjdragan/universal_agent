@@ -142,6 +142,7 @@ from universal_agent.services.decomposition_agent import (
 from universal_agent.services.refinement_agent import (
     refine_with_llm, RefinementError,
 )
+from universal_agent.services.capacity_governor import capacity_snapshot
 
 from universal_agent import process_heartbeat
 from universal_agent.workflow_admission import (
@@ -16272,6 +16273,47 @@ async def dashboard_todolist_overview():
             data["status"] = "ok"
             data["heartbeat"] = _heartbeat_runtime_snapshot()
             return data
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/capacity")
+async def dashboard_capacity():
+    """Return point-in-time capacity snapshot for the dashboard."""
+    return capacity_snapshot()
+
+
+@app.get("/api/v1/dashboard/pipeline-stats")
+async def dashboard_pipeline_stats():
+    """Return higher-level task pipeline statistical aggregations."""
+    approvals_pending = list_approvals(status="pending")
+    pending_count = len(approvals_pending if isinstance(approvals_pending, list) else [])
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            overview = task_hub.overview(conn, approvals_pending=pending_count)
+            status_counts = overview.get("queue_health", {}).get("status_counts", {})
+            return {
+                "stats": {
+                    "total_tasks": sum(status_counts.values()),
+                    "in_backlog": status_counts.get("backlog", 0),
+                    "in_refinement": status_counts.get("refinement", 0),
+                    "human_approval": pending_count,
+                    "dispatch_eligible": overview.get("queue_health", {}).get("dispatch_eligible", 0)
+                }
+            }
+        finally:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/agent-assignments")
+async def dashboard_agent_assignments():
+    """Return current agent task assignments."""
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            activity = task_hub.get_agent_activity(conn)
+            return {"assignments": activity.get("active_assignments", [])}
         finally:
             conn.close()
 

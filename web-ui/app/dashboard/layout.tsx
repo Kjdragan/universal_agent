@@ -325,18 +325,19 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         {/* Sidebar — auto-hides on desktop, slides in on hover */}
         <aside
           className={[
-            "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border/40 bg-background shadow-2xl transition-transform duration-200",
+            "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-white/10 bg-[#0b1326]/90 backdrop-blur-2xl shadow-2xl transition-all duration-300",
             // Mobile: toggle via hamburger
-            isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
-            // Desktop: hover-reveal overlay
-            sidebarHovered ? "md:translate-x-0" : "md:-translate-x-full",
+            isMobileSidebarOpen ? "translate-x-0 w-64" : "-translate-x-full w-64",
+            // Desktop: rest at w-20, expand to w-64 on hover
+            "md:translate-x-0",
+            sidebarHovered ? "md:w-64" : "md:w-20",
           ].join(" ")}
           onMouseEnter={() => {
             if (sidebarTimeoutRef.current) clearTimeout(sidebarTimeoutRef.current);
             setSidebarHovered(true);
           }}
           onMouseLeave={() => {
-            sidebarTimeoutRef.current = setTimeout(() => setSidebarHovered(false), 400);
+            sidebarTimeoutRef.current = setTimeout(() => setSidebarHovered(false), 200);
           }}
         >
           <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -347,7 +348,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               if (visibleItems.length === 0) return null;
               return (
                 <div key={group.title} className="mb-5">
-                  <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+                  <p
+                    className={[
+                      "mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground transition-all duration-300 whitespace-nowrap overflow-hidden",
+                      sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:opacity-0 md:w-0",
+                    ].join(" ")}
+                  >
                     {group.title}
                   </p>
                   <div className="space-y-0.5">
@@ -363,9 +369,16 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                             rel="noopener noreferrer"
                             className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition hover:bg-card/20 hover:text-foreground"
                           >
-                            <Icon className="h-4 w-4 shrink-0 opacity-60" />
-                            {item.label}
-                            <span className="ml-auto text-[10px] text-muted">&#x2197;</span>
+                            <Icon className="h-5 w-5 shrink-0 opacity-60" />
+                            <span
+                              className={[
+                                "whitespace-nowrap transition-all duration-300 flex items-center w-full",
+                                sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:opacity-0 md:w-0 overflow-hidden",
+                              ].join(" ")}
+                            >
+                              {item.label}
+                              <span className="ml-auto text-[10px] text-muted">&#x2197;</span>
+                            </span>
                           </a>
                         );
                       }
@@ -376,17 +389,24 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                           className={[
                             "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition",
                             active
-                              ? "bg-primary/10 text-primary font-medium"
-                              : "text-muted-foreground hover:bg-card/20 hover:text-foreground",
+                              ? "bg-cyan-500/10 text-cyan-400 font-medium"
+                              : "text-slate-400 hover:bg-white/5 hover:text-slate-200",
                           ].join(" ")}
                         >
                           <Icon
                             className={[
-                              "h-4 w-4 shrink-0",
-                              active ? "text-primary" : "opacity-50",
+                              "h-5 w-5 shrink-0 transition-colors duration-200",
+                              active ? "text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]" : "",
                             ].join(" ")}
                           />
-                          {item.label}
+                          <span
+                            className={[
+                              "whitespace-nowrap transition-all duration-300",
+                              sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:hidden",
+                            ].join(" ")}
+                          >
+                            {item.label}
+                          </span>
                         </Link>
                       );
                     })}
@@ -396,13 +416,18 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          <div className="border-t border-border/40 px-4 py-3">
-            <p className="text-[11px] text-muted">{session.owner_id}</p>
+          <div className="border-t border-white/10 px-4 py-3 min-h-[48px] overflow-hidden whitespace-nowrap">
+            <p className={[
+              "text-[11px] text-muted-foreground font-mono transition-opacity duration-300",
+               sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:opacity-0"
+            ].join(" ")}>
+              {session.owner_id}
+            </p>
           </div>
         </aside>
 
         {/* Main Content */}
-        <main className="relative flex flex-1 flex-col overflow-hidden">
+        <main className="relative flex flex-1 flex-col overflow-hidden md:ml-20">
           {/* SystemCommandBar hover trigger zone */}
           {showSystemCommandBar && (
             <>

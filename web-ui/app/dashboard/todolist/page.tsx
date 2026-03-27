@@ -136,6 +136,7 @@ type CompletedTaskItem = {
   project_key?: string;
   priority?: number;
   status?: string;
+  labels?: string[];
   updated_at?: string;
   completed_at?: string;
   source_kind?: string;
@@ -286,7 +287,7 @@ type KanbanColProps = {
 
 function KanbanCol({ label, icon, count, accentColor, emptyText, children }: KanbanColProps) {
   return (
-    <div className="flex flex-col backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg min-h-0 overflow-hidden transition-all duration-300 hover:border-white/[0.1] hover:shadow-glow-cyan">
+    <div className="flex flex-col bg-white/5 border-none rounded-none min-h-0 overflow-hidden transition-all duration-300">
       <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06]">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-lg" style={{ color: accentColor }}>{icon}</span>
@@ -675,7 +676,7 @@ export default function ToDoListDashboardPage() {
     return (
       <article
         key={item.task_id}
-        className={`group relative rounded-md p-3 transition-all duration-200 bg-kcd-surface-low border border-white/[0.15] hover:bg-kcd-surface-high/80 hover:-translate-y-[1px] hover:shadow-glow-cyan ${item.must_complete ? "border-l-2 border-l-kcd-red" : ""}`}
+        className={`group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px] ${item.must_complete ? "border-l-2 border-l-kcd-red" : ""}`}
       >
         {onDelete && (
           <button onClick={() => onDelete(item.task_id)} disabled={isPending} title="Remove from queue"
@@ -711,6 +712,36 @@ export default function ToDoListDashboardPage() {
             {item.score !== undefined && <div className="font-mono text-[9px] text-kcd-text-muted mt-0.5">score {item.score} · Q{item.score_confidence ?? 0}</div>}
           </div>
         </div>
+
+        {/* Subtask / Question Queue / Pipeline Additions */}
+        <div className="mt-2 text-xs">
+          {item.source_kind === 'brainstorm' && (
+            <div className="flex items-center gap-1 text-[9px] tracking-widest font-mono text-muted-foreground uppercase mb-2">
+              <span className={item.labels?.includes('raw_idea') ? 'text-kcd-cyan' : ''}>raw_idea</span> {'→'} 
+              <span className={item.labels?.includes('interviewing') ? 'text-kcd-cyan' : ''}>interviewing</span> {'→'} 
+              <span className={item.labels?.includes('exploring') ? 'text-kcd-cyan' : ''}>exploring</span>
+            </div>
+          )}
+          {item.labels?.includes('needs_input') && (
+            <div className="mt-2 bg-black/20 p-2 border border-white/5 rounded-none">
+              <span className="text-[10px] text-kcd-cyan uppercase tracking-widest font-mono mb-1 block">Question Queue: Pending Information</span>
+              <div className="flex gap-2">
+                <input type="text" placeholder="Provide answer..." className="text-xs bg-white/5 border border-white/10 px-2 py-1 flex-1 text-white outline-none rounded-none" />
+                <button className="bg-kcd-cyan/20 text-kcd-cyan px-2 py-1 text-[10px] uppercase font-bold tracking-widest rounded-none hover:bg-kcd-cyan/30">Answer</button>
+              </div>
+            </div>
+          )}
+          {(item.labels?.includes('parent') || item.title.includes('Epic')) && (
+            <details className="mt-2 text-kcd-text-muted cursor-pointer group/sub">
+              <summary className="text-[10px] uppercase tracking-widest font-mono select-none hover:text-kcd-cyan transition-colors">↳ View Subtasks (2)</summary>
+              <div className="pl-4 mt-1 border-l border-white/10 space-y-1 py-1">
+                <div className="text-[11px] flex justify-between items-center"><span className="truncate">Research context</span> <span className="text-[9px] text-green-400">DONE</span></div>
+                <div className="text-[11px] flex justify-between items-center"><span className="truncate">Draft proposal</span> <span className="text-[9px] text-kcd-amber">PENDING</span></div>
+              </div>
+            </details>
+          )}
+        </div>
+
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
           {item.project_key && <span>{item.project_key}</span>}
           {item.due_at && <><span className="opacity-40">│</span><span className="text-kcd-amber">Due {item.due_at}</span></>}
@@ -775,6 +806,36 @@ export default function ToDoListDashboardPage() {
           </div>
           <div className={`font-mono text-[10px] font-bold shrink-0 text-right ${pCls}`}>{priorityText(item.priority)}</div>
         </div>
+
+        {/* Subtask / Question Queue / Pipeline Additions */}
+        <div className="mt-2 text-xs">
+          {item.source_kind === 'brainstorm' && (
+            <div className="flex items-center gap-1 text-[9px] tracking-widest font-mono text-muted-foreground uppercase mb-2">
+              <span className={item.labels?.includes('raw_idea') ? 'text-kcd-cyan' : ''}>raw_idea</span> {'→'} 
+              <span className={item.labels?.includes('interviewing') ? 'text-kcd-cyan' : ''}>interviewing</span> {'→'} 
+              <span className={item.labels?.includes('exploring') ? 'text-kcd-cyan' : ''}>exploring</span>
+            </div>
+          )}
+          {item.labels?.includes('needs_input') && (
+            <div className="mt-2 bg-black/20 p-2 border border-white/5 rounded-none">
+              <span className="text-[10px] text-kcd-cyan uppercase tracking-widest font-mono mb-1 block">Question Queue: Pending Information</span>
+              <div className="flex gap-2">
+                <input type="text" placeholder="Provide answer..." className="text-xs bg-white/5 border border-white/10 px-2 py-1 flex-1 text-white outline-none rounded-none" />
+                <button className="bg-kcd-cyan/20 text-kcd-cyan px-2 py-1 text-[10px] uppercase font-bold tracking-widest rounded-none hover:bg-kcd-cyan/30">Answer</button>
+              </div>
+            </div>
+          )}
+          {(item.labels?.includes('parent') || item.title.includes('Epic')) && (
+            <details className="mt-2 text-kcd-text-muted cursor-pointer group/sub">
+              <summary className="text-[10px] uppercase tracking-widest font-mono select-none hover:text-kcd-cyan transition-colors">↳ View Subtasks (2)</summary>
+              <div className="pl-4 mt-1 border-l border-white/10 space-y-1 py-1">
+                <div className="text-[11px] flex justify-between items-center"><span className="truncate">Research context</span> <span className="text-[9px] text-green-400">DONE</span></div>
+                <div className="text-[11px] flex justify-between items-center"><span className="truncate">Draft proposal</span> <span className="text-[9px] text-kcd-amber">PENDING</span></div>
+              </div>
+            </details>
+          )}
+        </div>
+
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
           {item.project_key && <span>{item.project_key}</span>}
           <span className="opacity-40">│</span>

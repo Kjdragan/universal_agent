@@ -25,71 +25,52 @@
 @tailwind utilities;
 
 /* ========================================
-   GRUVBOX FOREST — DESIGN SYSTEM
-   Aesthetic: Forest-Industrial (Gruvbox Forest)
-   Palette: Carbon Black · Hunter Green · Muted Teal · Celadon
+   TACTICAL GLASS-MINIMAL — DESIGN SYSTEM
+   Aesthetic: Kinetic Command Deck
+   Palette: Midnight Slate · Cyan Precision · Amber Alert
    ======================================== */
 
 @layer base {
-  :root {
-    /* GRUVBOX FOREST LIGHT (Fallback / Light Mode) */
-    --background: 130 22% 92%;   /* Light sage */
-    --foreground: 130 26% 9%;    /* Carbon Black */
-    --card: 130 22% 88%;
-    --card-foreground: 130 26% 9%;
-    --primary: 128 24% 71%;      /* #A0CCA5 Celadon */
-    --primary-foreground: 130 26% 9%;
-    --secondary: 33 28% 64%;     /* #B8A98F Warm tan */
-    --secondary-foreground: 130 26% 9%;
-    --muted: 100 8% 55%;         /* #8B9986 Muted Teal light */
-    --muted-foreground: 130 26% 9%;
-    --accent: 36 56% 58%;        /* #D4A056 Warm amber */
-    --accent-foreground: 130 26% 9%;
-    --border: 130 26% 9%;
-    --input: 100 8% 55%;
-    --ring: 128 24% 71%;
-    --radius: 0.5rem;
-  }
+  :root, .dark {
+    /* Base background: surface #0b1326 */
+    --background: 222 55% 10%;
+    /* Base text: on_surface #dae2fd */
+    --foreground: 224 71% 92%;
 
-  .dark {
-    /* GRUVBOX FOREST DARK (Primary Theme) */
+    /* Panels/Cards: surface_container_high #2d3449 */
+    --card: 225 24% 23%;
+    --card-foreground: 224 71% 92%;
 
-    /* Carbon Black #111D13 as main background */
-    --background: 136 28% 9%;       /* #111D13 Carbon Black */
-    --foreground: 38 28% 80%;       /* #D4C9A8 Warm cream */
+    /* Primary Actions/Highlights: primary_container #22d3ee */
+    --primary: 188 86% 53%;
+    --primary-foreground: 188 100% 12%; /* on_primary_container #00363e */
 
-    /* Hunter Green #4B5D43 for cards/surfaces */
-    --card: 108 16% 31%;            /* #4B5D43 Hunter Green */
-    --card-foreground: 38 28% 80%;  /* #D4C9A8 Warm cream */
+    /* Secondary/Labels: on_surface_variant #bbc9cd */
+    --secondary: 194 15% 77%;
+    --secondary-foreground: 222 55% 10%;
 
-    /* Celadon #A0CCA5 as primary accent */
-    --primary: 128 24% 71%;         /* #A0CCA5 Celadon */
-    --primary-foreground: 136 28% 9%; /* Carbon Black */
+    /* Muted backgrounds: surface_container_low #131b2e */
+    --muted: 222 42% 13%;
+    /* Muted text: on_surface_variant #bbc9cd */
+    --muted-foreground: 194 15% 77%;
 
-    /* Warm tan #B8A98F for secondary */
-    --secondary: 33 22% 64%;        /* #B8A98F Warm tan */
-    --secondary-foreground: 38 28% 80%;
+    /* Accents (Amber Alerts): secondary_container #EE9800 */
+    --accent: 38 100% 47%;
+    --accent-foreground: 38 100% 18%;
 
-    /* Muted Teal for muted/inactive text */
-    --muted: 120 12% 50%;           /* #709275 Muted Teal */
-    --muted-foreground: 100 8% 55%; /* #8B9986 Muted Teal (light) */
+    /* Borders: outline_variant #3c494c */
+    --border: 198 11% 26%;
+    --input: 198 11% 26%;
+    --ring: 188 86% 53%;
 
-    /* Warm amber #D4A056 for accent */
-    --accent: 36 56% 58%;           /* #D4A056 Warm amber */
-    --accent-foreground: 38 28% 80%;
+    /* Status indicators */
+    --status-connected: 188 86% 53%;  /* #22d3ee */
+    --status-processing: 38 100% 47%; /* #ee9800 */
+    --status-error: 4 100% 82%;       /* #ffb4ab */
+    --status-warning: 38 100% 47%;
 
-    /* Borders: blend between Hunter Green and Carbon Black */
-    --border: 110 14% 22%;          /* Between Carbon Black and Hunter Green */
-    --input: 110 14% 22%;
-    --ring: 128 24% 71%;            /* Match Primary (Celadon) */
-
-    /* Status colors (forest-appropriate) */
-    --status-connected: 128 24% 71%;  /* #A0CCA5 Celadon */
-    --status-processing: 36 56% 58%;  /* #D4A056 Warm amber */
-    --status-error: 0 33% 60%;        /* #CC6666 Muted red */
-    --status-warning: 36 56% 58%;     /* #D4A056 Warm amber */
-
-    --radius: 0.4rem;
+    /* TACTICAL UI - Sharp corners only (0px radius) */
+    --radius: 0rem;
   }
 }
 
@@ -141,13 +122,11 @@
      ======================================== */
 
   .glass {
-    @apply backdrop-blur-md bg-card/60 border border-border/40;
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+    @apply backdrop-blur-xl bg-[#0b1326]/60 border border-white/10 shadow-none;
   }
 
   .glass-strong {
-    @apply backdrop-blur-xl bg-card/80 border border-border/50;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    @apply backdrop-blur-2xl bg-[#0b1326]/90 border border-cyan-500/15 shadow-none;
   }
 
   /* Tactical panel style */
