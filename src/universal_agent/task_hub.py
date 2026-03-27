@@ -1381,8 +1381,8 @@ def finalize_assignments(
 
         if policy_norm == "heartbeat":
             if run_state == "completed":
-                dispatch_meta["last_disposition"] = "needs_review"
-                dispatch_meta["last_disposition_reason"] = "heartbeat_completed_no_explicit_disposition"
+                dispatch_meta["last_disposition"] = "completed"
+                dispatch_meta["last_disposition_reason"] = "heartbeat_auto_completed"
                 metadata["dispatch"] = dispatch_meta
                 conn.execute(
                     """
@@ -1390,10 +1390,10 @@ def finalize_assignments(
                     SET status=?, seizure_state=?, metadata_json=?, updated_at=?
                     WHERE task_id=?
                     """,
-                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+                    (TASK_STATUS_COMPLETED, "unseized", _json_dumps(metadata), now_iso, task_id),
                 )
-                reviewed += 1
-                logger.info("Task Hub heartbeat finalize moved task %s to needs_review", task_id)
+                completed += 1
+                logger.info("Task Hub heartbeat finalize auto-completed task %s", task_id)
                 continue
 
             retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
