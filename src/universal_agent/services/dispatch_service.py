@@ -6,9 +6,8 @@ Provides four entry points for triggering task dispatch:
   - dispatch_scheduled_due: timer-driven scheduled task dispatch
   - dispatch_sweep: drop-in replacement for heartbeat's inline claim
 
-All dispatch paths enrich claimed tasks with agent routing metadata
-via the agent_router module (Phase 3), allowing any path to determine
-whether a task should be handled by Simone, CODIE, or ATLAS.
+All dispatch paths enrich claimed tasks with Simone-first routing metadata.
+Simone is the primary orchestrator and decides delegation via batch triage.
 """
 
 from __future__ import annotations
@@ -31,13 +30,13 @@ class DispatchError(Exception):
 # ---------------------------------------------------------------------------
 
 def _enrich_with_routing(claimed: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enrich claimed tasks with agent routing metadata.
+    """Enrich claimed tasks with Simone-first routing metadata.
 
     Each claimed dict gets a '_routing' key with:
-      - agent_id: which agent should execute this
-      - confidence: "label", "keyword", or "default"
+      - agent_id: always "simone" (Simone-first orchestration)
+      - confidence: "orchestrator"
       - reason: human-readable justification
-      - should_delegate: True if task should go to a VP agent
+      - should_delegate: False (Simone decides delegation herself)
 
     Safe to call unconditionally — gracefully no-ops on import failure.
     """

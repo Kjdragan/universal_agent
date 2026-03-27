@@ -16411,7 +16411,7 @@ async def dashboard_proactive_pipeline():
       - refinement_items: Tasks undergoing auto-refinement / decomposition
       - dispatch_queue: Eligible items annotated with target agent routing
     """
-    from universal_agent.services.agent_router import qualify_agent
+    from universal_agent.services.agent_router import AGENT_SIMONE
 
     # --- Pending approvals ---
     raw_approvals = list_approvals(status="pending")
@@ -16460,7 +16460,12 @@ async def dashboard_proactive_pipeline():
             dispatch_data = task_hub.get_dispatch_queue(conn, limit=20)
             dispatch_items = []
             for item in dispatch_data.get("items", []):
-                routing = qualify_agent(item)
+                routing = {
+                    "agent_id": AGENT_SIMONE,
+                    "confidence": "orchestrator",
+                    "reason": "Simone-first: all tasks route through primary orchestrator",
+                    "should_delegate": False,
+                }
                 dispatch_items.append({
                     "task_id": str(item.get("task_id") or ""),
                     "title": str(item.get("title") or ""),
