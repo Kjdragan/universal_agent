@@ -189,32 +189,19 @@ def _temporary_sanitized_process_env() -> Any:
 # ---------------------------------------------------------------------------
 # Environment sanitisation guard – prevent E2BIG on subprocess spawn
 # ---------------------------------------------------------------------------
-
-# Linux default MAX_ARG_STRLEN is ~2 MB for argv + envp combined.
-# We leave headroom for CLI args (system prompt, MCP config, etc.).
-_ENV_SAFE_THRESHOLD_BYTES = 1_500_000  # 1.5 MB
-
-# Env vars that are safe to strip when we need to shed size.
-# Ordered roughly by typical size (biggest savings first).
-_ENV_STRIP_CANDIDATES = (
-    "LS_COLORS",
-    "UA_SYSTEM_EVENTS_JSON",
-    "UA_SYSTEM_EVENTS_PROMPT",
-    "CLAUDE_AGENT_CONVERSATION_HISTORY",
-    "LSCOLORS",
-    "LESS_TERMCAP_md",
-    "LESS_TERMCAP_me",
-    "LESS_TERMCAP_se",
-    "LESS_TERMCAP_so",
-    "LESS_TERMCAP_ue",
-    "LESS_TERMCAP_us",
-)
-
-# Prefixes for env vars that can be bulk-stripped (bash exported functions etc.).
-_ENV_STRIP_PREFIXES = (
-    "BASH_FUNC_",
-    "LESS_TERMCAP_",
-)
+#
+# Linux ARG_MAX is ~2 MB for argv + envp combined.  In practice, our total env
+# is ~14 KB and the system prompt + MCP config consume ~200 KB, leaving >1.8 MB
+# of headroom.
+#
+# History: the original whitelist approach (keep only ANTHROPIC_/CLAUDE_/UA_/...)
+# repeatedly broke integrations (AGENTMAIL_API_KEY, future service keys) because
+# every new credential required a manual allowlist entry.  With 14 KB of env
+# against a 2 MB budget, the aggressive stripping saved ~9 KB and bought nothing.
+#
+# Current approach: **blocklist** — strip only known-huge or useless vars.
+# Everything else (including Infisical-injected service keys) passes through.
+# This is resilient by default: new secrets from Infisical just work.
 
 # Max bytes for a single system-events env var before it gets truncated.
 _MAX_SYSTEM_EVENTS_ENV_BYTES = 32_000  # 32 KB
@@ -225,46 +212,65 @@ def _env_total_size() -> int:
     return sum(len(k) + len(v) + 2 for k, v in os.environ.items())
 
 
+# Exact var names to always strip (known-huge or subprocess-irrelevant).
+_STRIP_EXACT = {
+    "LS_COLORS",
+    "LSCOLORS",
+    "UA_SYSTEM_EVENTS_JSON",
+    "UA_SYSTEM_EVENTS_PROMPT",
+    "CLAUDE_AGENT_CONVERSATION_HISTORY",
+}
+
+# Prefixes to always strip (bash exported functions, terminal escapes).
+_STRIP_PREFIXES = (
+    "BASH_FUNC_",
+    "LESS_TERMCAP_",
+)
+
+# Safety cap: if total env exceeds this, fall back to aggressive stripping.
+_ENV_SAFE_THRESHOLD_BYTES = 1_500_000  # 1.5 MB
+
+
 def sanitize_env_for_subprocess() -> list[str]:
-    """Strip non-essential env vars so the subprocess argv+envp stays under ARG_MAX.
+    """Strip known-large env vars to keep subprocess argv+envp under ARG_MAX.
 
-    Uses a **whitelist** approach: only env vars the Claude Code CLI actually
-    needs are kept.  Everything else (190+ Infisical secrets, build metadata,
-    systemd vars, etc.) is removed.
+    Uses a **blocklist** approach: only known-problematic vars (LS_COLORS,
+    system event blobs, conversation history, bash exported functions) are
+    removed.  All Infisical-injected service credentials (AGENTMAIL_API_KEY,
+    etc.) pass through automatically.
 
-    Always runs — there is no threshold gate.  The CLI subprocess never needs
-    Infisical secrets, Slack tokens, or other service credentials.
+    If after blocklist stripping the total env still exceeds 1.5 MB, falls back
+    to stripping any individual var larger than 4 KB as a safety valve.
 
     Modifies ``os.environ`` **in-place** and returns the list of keys removed.
     """
-    # Env vars the Claude Code CLI subprocess genuinely requires.
-    _KEEP_PREFIXES = (
-        "ANTHROPIC_",     # API key, model config
-        "CLAUDE_",        # SDK / CLI flags
-        "UA_",            # Universal Agent runtime flags
-        "LOGFIRE_",       # Observability
-        "COMPOSIO_",      # Tool integrations
-    )
-    _KEEP_EXACT = {
-        "PATH", "HOME", "USER", "SHELL", "LANG", "TERM", "DISPLAY",
-        "PYTHONPATH", "VIRTUAL_ENV", "PWD", "TMPDIR", "TZ",
-        "INFISICAL_TOKEN",  # If the CLI itself needs to call Infisical
-        "NODE_PATH", "NODE_OPTIONS",
-        "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-    }
-
     total_before = _env_total_size()
-
     removed: list[str] = []
-    for key in list(os.environ):
-        if key in _KEEP_EXACT:
-            continue
-        if any(key.startswith(p) for p in _KEEP_PREFIXES):
-            continue
-        removed.append(key)
-        os.environ.pop(key)
 
+    for key in list(os.environ):
+        if key in _STRIP_EXACT:
+            removed.append(key)
+            os.environ.pop(key)
+            continue
+        if any(key.startswith(p) for p in _STRIP_PREFIXES):
+            removed.append(key)
+            os.environ.pop(key)
+            continue
+
+    # Safety valve: if still over threshold, strip any single var > 4 KB.
     total_after = _env_total_size()
+    if total_after > _ENV_SAFE_THRESHOLD_BYTES:
+        for key in list(os.environ):
+            val = os.environ.get(key, "")
+            if len(key) + len(val) > 4096:
+                removed.append(key)
+                os.environ.pop(key)
+                logger.warning(
+                    "Safety-stripped oversized env var %s (%d bytes)",
+                    key, len(key) + len(val),
+                )
+        total_after = _env_total_size()
+
     logger.info(
         "Sanitized env for subprocess: kept %d vars, removed %d vars, "
         "%d KB → %d KB (headroom: %d KB)",
