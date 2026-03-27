@@ -5,10 +5,11 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-26 — Todoist integration decommissioned; Task Hub is
-> now the sole dispatch and orchestration layer. Phases 1–4 implemented:
-> overnight reflection engine, morning report email push, multi-agent
-> task routing (Simone / CODIE / ATLAS), and Calendar → Task Hub bridge.
+> **Last updated:** 2026-03-27 — **Simone-First Orchestration** adopted;
+> all tasks route through Simone who decides delegation to VPs.
+> See `01_Architecture/05_Simone_First_Orchestration.md` for full
+> architectural rationale. Todoist decommissioned; Task Hub is the sole
+> dispatch and orchestration layer.
 
 ---
 
@@ -44,14 +45,11 @@ graph LR
         BC["Brainstorm Context<br/>Prompt Injection"]
     end
 
-    subgraph "Routing"
-        RTR["Agent Router<br/>(agent_router.py)"]
-    end
-
-    subgraph "Execution"
-        SIM["Simone<br/>Daemon Session"]
-        COD["CODIE<br/>VP Coder"]
-        ATL["ATLAS<br/>VP General"]
+    subgraph "Simone-First Execution"
+        SIM["Simone<br/>Batch Triage + Execute"]
+        COD["CODIE<br/>VP Coder (overflow)"]
+        ATL["ATLAS<br/>VP General (overflow)"]
+        BRG["VP Event Bridge<br/>(completion feedback)"]
     end
 
     subgraph "Memory & Learning"
@@ -71,10 +69,13 @@ graph LR
     PC --> SCR
     GRD -->|"pass"| SCR
     SCR --> DSP
-    DSP --> RTR
-    RTR -->|"default/coordination"| SIM
-    RTR -->|"code/deploy"| COD
-    RTR -->|"research/content"| ATL
+    DSP --> SIM
+    SIM -->|"SELF"| SIM
+    SIM -->|"DELEGATE"| COD
+    SIM -->|"DELEGATE"| ATL
+    COD --> BRG
+    ATL --> BRG
+    BRG -->|"pending_review"| SIM
 
     PA --> MR
     PA --> BC
@@ -917,30 +918,33 @@ The Task Hub / Proactive Pipeline was built across **two phase systems** over Ma
 |---|---|---|
 | `UA_CALENDAR_BRIDGE_ENABLED` | `false` | Enable/disable calendar → task materialization |
 
-### 18.4 Agent Qualification Routing ✅ IMPLEMENTED
+### 18.4 Simone-First Orchestration ✅ REPLACING LEGACY ROUTER
 
-**Concept**: Route tasks to the best-qualified agent (Simone, VP General, VP Coder) based on task type, labels, and source.
+> [!WARNING]
+> **The legacy `qualify_agent()` keyword router is being retired.**
+> See `01_Architecture/05_Simone_First_Orchestration.md` for the full
+> architectural rationale and implementation plan.
 
-**Implementation** (`services/agent_router.py`):
+**Concept**: All tasks route to Simone. She evaluates the full queue, picks her own task,
+and delegates overflow to VP agents (Atlas, Codie) when she's busy. No task completes
+without her sign-off.
 
-- **`qualify_agent(task)`** — deterministic single-task routing using a priority cascade:
-  1. **Label matching** (highest confidence) — `code`, `deploy`, `debug` → CODIE; `research`, `content`, `scout` → ATLAS; `email`, `brainstorm`, `reflection` → Simone
-  2. **Project key** — `coding`/`engineering` → CODIE; `research`/`scouting` → ATLAS
-  3. **Keyword heuristics** — regex scan of title + description for domain-specific terms
-  4. **Source kind** — `csi`/`signal` → ATLAS
-  5. **Default** — ambiguous or unclassified → Simone triages
+**Legacy** (`services/agent_router.py` — being retired):
 
-- **`route_claimed_tasks(tasks)`** — batch routing with feature flag gate. Returns `{agent_id: [tasks]}` buckets.
+- `qualify_agent()` used deterministic keyword/label matching to pre-route tasks
+- This bypassed Simone's reasoning capabilities and created brittle routing
+- `UA_AGENT_ROUTING_ENABLED` was never enabled in production (default: `false`)
 
-- **Integration point**: `dispatch_service.py` — all four dispatch paths (`dispatch_immediate`, `dispatch_on_approval`, `dispatch_scheduled_due`, `dispatch_sweep`) call `_enrich_with_routing()` after claiming, so routing metadata is available regardless of how a task entered the system.
+**New model** (Simone-First):
 
-- **Feature flag**: `UA_AGENT_ROUTING_ENABLED` (default: `false` — opt-in for Phase 3)
+- **Batch triage**: Simone sees all eligible tasks (up to 5) and triages each:
+  `SELF` / `DELEGATE_ATLAS` / `DELEGATE_CODIE` / `DEFER`
+- **Simone is the primary executor**: she works the most complex tasks herself
+- **VPs are overflow capacity**: delegated via `vp_dispatch_mission` when Simone is busy
+- **Sign-off required**: VP-completed tasks go to `pending_review` until Simone approves
+- **Triage logging**: every delegation decision is recorded in Task Hub metadata
 
-- **Graceful fallback**: If a target VP agent isn't available (not in `vp_enabled_ids()`), the task falls through to Simone.
-
-| Env Variable | Default | Purpose |
-|---|---|---|
-| `UA_AGENT_ROUTING_ENABLED` | `false` | Enable/disable multi-agent routing |
+**New statuses**: `delegated` (VP working), `pending_review` (VP done, awaiting sign-off)
 
 ### 18.5 Automated Refinement-to-Decomposition Loop ✅ IMPLEMENTED
 

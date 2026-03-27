@@ -346,6 +346,81 @@ function getStubDataForPath(pathname: string): unknown | null {
       },
     };
   }
+  // Agent Queue stub (used by Active Tasks panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/todolist/agent-queue") {
+    return {
+      status: "ok",
+      items: [
+        {
+          task_id: "stub-task-001",
+          title: "Refactor YouTube playlist watcher error handling",
+          description: "Improve robustness of the playlist watcher to handle transient network failures gracefully.",
+          project_key: "engineering",
+          priority: 1,
+          labels: ["code", "refactor"],
+          status: "in_progress",
+          must_complete: false,
+          incident_key: null,
+          score: 7.2,
+          updated_at: new Date(Date.now() - 300000).toISOString(),
+          due_at: new Date(Date.now() + 86400000).toISOString(),
+          source_kind: "manual",
+        },
+        {
+          task_id: "stub-task-002",
+          title: "Deep research: LangGraph vs CrewAI for production agent systems",
+          description: "Produce a comparative analysis of LangGraph and CrewAI for building production-grade multi-agent systems.",
+          project_key: "research",
+          priority: 2,
+          labels: ["research", "deep-research"],
+          status: "open",
+          must_complete: false,
+          incident_key: null,
+          score: 6.8,
+          updated_at: new Date(Date.now() - 1200000).toISOString(),
+          due_at: null,
+          source_kind: "csi",
+        },
+        {
+          task_id: "stub-task-003",
+          title: "Set up n8n webhook integration for Upwork alerts",
+          description: "Create n8n workflow that receives Upwork job alert webhooks and routes them to the CSI pipeline.",
+          project_key: "engineering",
+          priority: 3,
+          labels: ["code", "automation"],
+          status: "blocked",
+          must_complete: false,
+          incident_key: null,
+          score: 4.1,
+          updated_at: new Date(Date.now() - 3600000).toISOString(),
+          due_at: new Date(Date.now() + 172800000).toISOString(),
+          source_kind: "email",
+        },
+        {
+          task_id: "stub-task-004",
+          title: "Send weekly status update to Kevin",
+          description: "Compile and send the weekly status report covering agent metrics and pipeline progress.",
+          project_key: "",
+          priority: 3,
+          labels: ["communication"],
+          status: "completed",
+          must_complete: false,
+          incident_key: null,
+          score: 1.0,
+          updated_at: new Date(Date.now() - 86400000).toISOString(),
+          due_at: null,
+          source_kind: "calendar",
+        },
+      ],
+      pagination: {
+        total: 4,
+        offset: 0,
+        limit: 10,
+        count: 4,
+        has_more: false,
+      },
+    };
+  }
   return null;
 }
 

@@ -12733,9 +12733,6 @@ async def dashboard_freelance_pipeline():
         }
     }
 
-
-
-
 @app.post("/api/v1/youtube/ingest")
 async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
     """
@@ -16517,15 +16514,95 @@ async def dashboard_todolist_agent_queue(
     include_csi: bool = True,
     collapse_csi: bool = True,
     project_key: Optional[str] = None,
+    status: str = "all",
 ):
+    """Return the agent task queue for the Mission Control Active Tasks panel.
+
+    Supports pagination and optional status filtering.
+    When *status* is provided and not ``"all"``, a direct SQL query is used
+    so that the caller can filter by arbitrary status values.  Otherwise the
+    existing ``task_hub.list_agent_queue`` logic is preserved for backward
+    compatibility.
+    """
+    bounded_limit = max(1, min(int(limit), 100))
+    bounded_offset = max(0, int(offset))
+    status_filter = str(status).strip().lower() if status else "all"
+
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
+            # When a specific status filter is requested, use raw SQL so the
+            # caller can filter by any status (pending, in_progress, blocked,
+            # completed, etc.) rather than only the active/agent-ready set.
+            if status_filter and status_filter != "all":
+                if status_filter == "pending":
+                    statuses = list(task_hub.ACTIVE_STATUSES)
+                elif status_filter == "completed":
+                    statuses = [task_hub.TASK_STATUS_COMPLETED]
+                else:
+                    statuses = [status_filter]
+                placeholders = ",".join("?" * len(statuses))
+
+                count_row = conn.execute(
+                    f"SELECT COUNT(*) AS cnt FROM task_hub_items WHERE status IN ({placeholders})",
+                    [*statuses],
+                ).fetchone()
+                total = dict(count_row)["cnt"] if hasattr(count_row, "keys") else count_row[0]
+
+                rows = conn.execute(
+                    f"SELECT * FROM task_hub_items WHERE status IN ({placeholders}) ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    [*statuses, bounded_limit, bounded_offset],
+                ).fetchall()
+
+                items = []
+                for row in rows:
+                    row_dict = dict(row) if hasattr(row, "keys") else {}
+                    if not row_dict:
+                        continue
+                    hydrated = task_hub.hydrate_item(row_dict)
+
+                    # Compute live score via score_task
+                    score_val = hydrated.get("score", 0.0)
+                    try:
+                        score_val, _confidence, _details = task_hub.score_task(conn, hydrated)
+                    except Exception:
+                        pass
+                    hydrated["score"] = score_val
+
+                    items.append({
+                        "task_id": hydrated.get("task_id"),
+                        "title": hydrated.get("title"),
+                        "description": hydrated.get("description") or None,
+                        "project_key": hydrated.get("project_key") or None,
+                        "priority": hydrated.get("priority"),
+                        "labels": hydrated.get("labels") or [],
+                        "status": hydrated.get("status"),
+                        "must_complete": hydrated.get("must_complete") or False,
+                        "incident_key": hydrated.get("incident_key") or None,
+                        "score": hydrated.get("score"),
+                        "updated_at": hydrated.get("updated_at"),
+                        "due_at": hydrated.get("due_at") or None,
+                        "source_kind": hydrated.get("source_kind") or None,
+                    })
+
+                return {
+                    "status": "ok",
+                    "items": items,
+                    "pagination": {
+                        "total": total,
+                        "offset": bounded_offset,
+                        "limit": bounded_limit,
+                        "count": len(items),
+                        "has_more": (bounded_offset + len(items)) < total,
+                    },
+                }
+
+            # Default path: preserve existing list_agent_queue behaviour.
             _task_hub_sync_pending_approvals(conn)
             queue = task_hub.list_agent_queue(
                 conn,
-                offset=max(0, int(offset)),
-                limit=max(1, min(int(limit), 200)),
+                offset=bounded_offset,
+                limit=bounded_limit,
                 include_csi=bool(include_csi),
                 collapse_csi=bool(collapse_csi),
                 project_key=project_key,

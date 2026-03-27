@@ -32,6 +32,7 @@ Written from source code review — these describe the system as it actually exi
 | 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
 | 03 | VP Workers & Delegation — VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat |
 | 04 | Dual Factory and Capability Expansion Brainstorm |
+| 05 | Simone-First Orchestration — batch triage, VP delegation lifecycle, two-layer email response, `/btw` sidebar |
 
 ## Root Architecture Docs
 
