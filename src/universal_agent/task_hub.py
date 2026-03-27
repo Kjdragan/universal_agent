@@ -20,11 +20,13 @@ TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_PARKED = "parked"
 TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
+TASK_STATUS_SCHEDULED = "scheduled"            # Time-bound: cron trigger will execute at due_at
 
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED}
 ACTIVE_STATUSES = {
     TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
+    TASK_STATUS_SCHEDULED,
 }
 VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate", "approve"}
 
@@ -821,7 +823,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
         is_system_schedule = _is_system_schedule_task(item)
         eligible = bool(item.get("agent_ready")) and score >= float(policy.agent_threshold)
-        if status in {TASK_STATUS_BLOCKED, TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW}:
+        if status in {TASK_STATUS_BLOCKED, TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW, TASK_STATUS_SCHEDULED}:
             eligible = False
         elif status == TASK_STATUS_REVIEW:
             # System command schedule instructions are explicit operator directives

@@ -190,6 +190,7 @@ class EmailTaskBridge:
         sender_trusted: bool = True,
         security_classification: str = "",
         priority: int | None = None,
+        due_at: str | None = None,
         workflow_run_id: str = "",
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
@@ -287,6 +288,7 @@ class EmailTaskBridge:
             provider_session_id=resolved_provider_session_id,
             labels=email_labels,
             priority=priority,
+            due_at=due_at,
             initial_status="in_progress",
         )
 
@@ -504,6 +506,7 @@ class EmailTaskBridge:
         provider_session_id: str = "",
         labels: list[str] | None = None,
         priority: int | None = None,
+        due_at: str | None = None,
         initial_status: str = "open",
     ) -> dict[str, Any]:
         """Create or update a Task Hub entry for this email task.
@@ -554,6 +557,7 @@ class EmailTaskBridge:
                 "description": description,
                 "project_key": _EMAIL_TASK_PROJECT_KEY,
                 "priority": resolved_priority,
+                "due_at": due_at,
                 "labels": task_labels,
                 "status": initial_status,
                 "agent_ready": "agent-ready" in task_labels,

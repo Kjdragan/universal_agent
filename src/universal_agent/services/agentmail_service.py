@@ -1128,6 +1128,24 @@ class AgentMailService:
                 except Exception as _prio_exc:
                     logger.debug("Priority pre-classification failed (non-fatal): %s", _prio_exc)
 
+                # ── Extract due_at timestamp from email using LLM ──
+                extracted_due_at: str | None = None
+                try:
+                    from universal_agent.services.llm_classifier import extract_due_at
+                    _temporal = await extract_due_at(
+                        subject=subject,
+                        body=(reply_text or text_body or ""),
+                    )
+                    extracted_due_at = _temporal.get("due_at")
+                    if extracted_due_at:
+                        logger.info(
+                            "📧⏰ Extracted due_at=%s from email subject=%r (method=%s, confidence=%s)",
+                            extracted_due_at, subject,
+                            _temporal.get("method"), _temporal.get("confidence"),
+                        )
+                except Exception as _time_exc:
+                    logger.debug("Temporal extraction failed (non-fatal): %s", _time_exc)
+
                 # ── Email-to-Task Bridge: materialize as trackable task ──
                 # Task starts as in_progress to prevent heartbeat double-claiming
                 # while the hook session is actively processing.
@@ -1139,7 +1157,26 @@ class AgentMailService:
                     reply_text=reply_text,
                     session_key=session_key,
                     priority=classified_priority,
+                    due_at=extracted_due_at,
                 )
+
+                # ── Schedule future-dated tasks via persistent cron run_at ──
+                _task_id = bridge_result.get("task_id", "") if bridge_result else ""
+                if extracted_due_at and _task_id:
+                    try:
+                        await self._schedule_future_task(
+                            task_id=_task_id,
+                            due_at=extracted_due_at,
+                            subject=subject,
+                            reply_text=reply_text or text_body or "",
+                            sender_email=sender_email,
+                            thread_id=thread_id,
+                        )
+                    except Exception as _sched_exc:
+                        logger.warning(
+                            "📧⏰ Failed to schedule future task %s: %s",
+                            _task_id, _sched_exc,
+                        )
 
                 # ── Priority-aware dispatch ──
                 # Trigger immediate dispatch for P0/P1
@@ -1223,6 +1260,7 @@ class AgentMailService:
         reply_text: str,
         session_key: str,
         priority: int | None = None,
+        due_at: str | None = None,
         workflow_run_id: str = "",
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
@@ -1246,6 +1284,7 @@ class AgentMailService:
                 reply_text=reply_text,
                 session_key=session_key,
                 priority=priority,
+                due_at=due_at,
                 workflow_run_id=workflow_run_id,
                 workflow_attempt_id=workflow_attempt_id,
                 provider_session_id=provider_session_id,
@@ -1256,6 +1295,143 @@ class AgentMailService:
                 thread_id, exc,
             )
             return None
+
+    async def _schedule_future_task(
+        self,
+        *,
+        task_id: str,
+        due_at: str,
+        subject: str,
+        reply_text: str,
+        sender_email: str,
+        thread_id: str,
+    ) -> None:
+        """Schedule a future-dated email task via persistent cron run_at.
+
+        1. Creates a one-shot cron job at the gateway API that fires at due_at.
+        2. Updates the Task Hub entry status to 'scheduled'.
+        3. Optionally creates a Google Calendar event for visibility.
+
+        The cron job's command instructs the system to execute the task at
+        the scheduled time, independent of any session lifecycle.
+        """
+        import os
+        from datetime import datetime
+
+        port = os.getenv("UA_GATEWAY_PORT", "8002")
+        base_url = f"http://127.0.0.1:{port}"
+
+        # Validate due_at is actually in the future
+        try:
+            target_dt = datetime.fromisoformat(due_at)
+            import pytz
+            ct = pytz.timezone("America/Chicago")
+            now_ct = datetime.now(ct)
+            if target_dt.tzinfo is None:
+                target_dt = ct.localize(target_dt)
+            if target_dt <= now_ct:
+                logger.info(
+                    "📧⏰ due_at %s is not in the future, skipping cron scheduling",
+                    due_at,
+                )
+                return
+        except Exception:
+            logger.warning("📧⏰ Invalid due_at format: %s", due_at)
+            return
+
+        # ── 1. Create persistent cron run_at job ──
+        import aiohttp
+        cron_command = (
+            f"Execute scheduled email task '{subject}' from {sender_email}. "
+            f"Task ID: {task_id}. Thread: {thread_id}. "
+            f"Original request: {reply_text[:300]}"
+        )
+        cron_payload = {
+            "command": cron_command,
+            "run_at": due_at,
+            "delete_after_run": True,
+            "timezone": "America/Chicago",
+            "metadata": {
+                "source": "email_task_scheduler",
+                "task_id": task_id,
+                "thread_id": thread_id,
+                "sender_email": sender_email,
+                "subject": subject,
+            },
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base_url}/api/v1/cron/jobs",
+                    json=cron_payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status in (200, 201):
+                        result = await resp.json()
+                        job_id = result.get("job_id", "unknown")
+                        logger.info(
+                            "📧⏰ Created cron run_at job %s for task %s at %s",
+                            job_id, task_id, due_at,
+                        )
+                    else:
+                        body = await resp.text()
+                        logger.warning(
+                            "📧⏰ Cron job creation failed (status=%s): %s",
+                            resp.status, body[:200],
+                        )
+        except Exception as exc:
+            logger.warning("📧⏰ Cron job creation request failed: %s", exc)
+
+        # ── 2. Update Task Hub status to 'scheduled' ──
+        try:
+            bridge = self._get_email_task_bridge()
+            if bridge and bridge._task_hub:
+                bridge._task_hub.upsert_item({
+                    "task_id": task_id,
+                    "status": "scheduled",
+                    "due_at": due_at,
+                })
+                logger.info("📧⏰ Task %s status set to 'scheduled'", task_id)
+        except Exception as exc:
+            logger.warning("📧⏰ Failed to update task status to scheduled: %s", exc)
+
+        # ── 3. Optionally create Google Calendar event for visibility ──
+        gcal_enabled = os.getenv("UA_GCAL_SCHEDULED_TASKS", "1").strip().lower()
+        if gcal_enabled in ("1", "true", "yes", "on"):
+            try:
+                import subprocess
+                # Use gws CLI to create a calendar event
+                cal_title = f"📧 Scheduled: {subject}"
+                cal_desc = (
+                    f"Auto-scheduled email task from {sender_email}.\n"
+                    f"Task ID: {task_id}\n"
+                    f"Thread: {thread_id}"
+                )
+                result = subprocess.run(
+                    [
+                        "gws", "calendar", "events", "create",
+                        "--calendar-id", "primary",
+                        "--summary", cal_title,
+                        "--description", cal_desc,
+                        "--start", due_at,
+                        "--end", due_at,  # point-in-time event
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if result.returncode == 0:
+                    logger.info("📧📅 Created GCal visibility event for task %s", task_id)
+                else:
+                    logger.debug(
+                        "📧📅 GCal event creation returned %d: %s",
+                        result.returncode, result.stderr[:200],
+                    )
+            except FileNotFoundError:
+                logger.debug("📧📅 gws CLI not available, skipping GCal event")
+            except Exception as exc:
+                logger.debug("📧📅 GCal event creation failed (non-fatal): %s", exc)
 
     def _link_email_task_workflow(
         self,

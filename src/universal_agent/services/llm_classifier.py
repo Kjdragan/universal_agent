@@ -370,3 +370,126 @@ async def generate_calendar_task_description(
             "suggested_labels": [],
             "method": "fallback",
         }
+
+
+# ── Temporal Extraction (due_at) ─────────────────────────────────────────────
+
+_TEMPORAL_SYSTEM = """\
+You are a temporal reference extractor. Given an email subject and body, determine
+if the sender is requesting something at a specific date and/or time.
+
+Current date and time (Central Time): {current_datetime_ct}
+
+Rules:
+- Only extract times that represent WHEN a task should be executed or a deadline.
+- Do NOT extract times that are just mentioned in passing or as context.
+- "at 9:50am" → extract 9:50 AM today (or tomorrow if 9:50 AM has already passed)
+- "by 3pm tomorrow" → extract 3:00 PM tomorrow
+- "March 28 at noon" → extract noon on March 28
+- "tonight" → extract 8:00 PM today
+- "ASAP" or "now" → do NOT extract (these are immediate, no scheduling needed)
+- If no specific time is mentioned, return null.
+- All times are in Central Time (America/Chicago) unless explicitly stated otherwise.
+- If a time has already passed today, assume it means tomorrow at that time.
+
+Respond with ONLY a JSON object:
+{{
+  "has_time": true | false,
+  "iso_datetime": "YYYY-MM-DDTHH:MM:SS-05:00" | null,
+  "reasoning": "1-sentence explanation",
+  "confidence": "high" | "medium" | "low"
+}}
+"""
+
+_TEMPORAL_USER = """\
+Extract any temporal reference from this email:
+
+Subject: {subject}
+Body: {body}
+"""
+
+
+async def extract_due_at(
+    *,
+    subject: str,
+    body: str = "",
+    current_datetime_ct: str = "",
+) -> dict[str, Any]:
+    """Extract a due_at timestamp from email text using LLM reasoning.
+
+    Returns a dict with:
+      - due_at: str | None (ISO-8601 datetime in Central Time, or None)
+      - reasoning: str
+      - confidence: str ("high", "medium", "low")
+      - method: "llm" or "fallback"
+    """
+    # Quick heuristic pre-check: skip LLM call if there's clearly no time
+    # reference at all (saves API cost for most emails)
+    import re
+    combined = f"{subject} {body}".lower()
+    _quick_time_check = re.compile(
+        r'\b(\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|noon|midnight|tonight|'
+        r'tomorrow|next\s+(mon|tue|wed|thu|fri|sat|sun)|'
+        r'by\s+\d|at\s+\d|before\s+\d|until\s+\d|'
+        r'january|february|march|april|may|june|july|august|'
+        r'september|october|november|december)\b',
+        re.IGNORECASE,
+    )
+    if not _quick_time_check.search(combined):
+        return {
+            "due_at": None,
+            "reasoning": "No temporal references detected in text",
+            "confidence": "high",
+            "method": "heuristic_skip",
+        }
+
+    try:
+        # Determine current datetime in Central Time
+        if not current_datetime_ct:
+            from datetime import datetime
+            import pytz
+            ct = pytz.timezone("America/Chicago")
+            current_datetime_ct = datetime.now(ct).strftime("%Y-%m-%d %I:%M %p %Z")
+
+        system_prompt = _TEMPORAL_SYSTEM.format(current_datetime_ct=current_datetime_ct)
+        user_msg = _TEMPORAL_USER.format(
+            subject=subject,
+            body=(body[:1000]) or "(empty)",
+        )
+
+        raw = await _call_llm(
+            system=system_prompt,
+            user=user_msg,
+            max_tokens=256,
+        )
+        result = _parse_json_response(raw)
+
+        has_time = bool(result.get("has_time", False))
+        iso_datetime = result.get("iso_datetime") if has_time else None
+        reasoning = str(result.get("reasoning", ""))
+        confidence = str(result.get("confidence", "medium")).lower()
+
+        # Validate the ISO datetime if present
+        if iso_datetime:
+            from datetime import datetime as _dt
+            try:
+                _dt.fromisoformat(str(iso_datetime))
+            except (ValueError, TypeError):
+                logger.warning("LLM returned invalid ISO datetime: %s", iso_datetime)
+                iso_datetime = None
+
+        return {
+            "due_at": str(iso_datetime) if iso_datetime else None,
+            "reasoning": reasoning,
+            "confidence": confidence,
+            "method": "llm",
+        }
+
+    except Exception as exc:
+        logger.warning("LLM temporal extraction failed (non-fatal): %s", exc)
+        return {
+            "due_at": None,
+            "reasoning": f"Fallback (LLM unavailable: {exc})",
+            "confidence": "fallback",
+            "method": "fallback",
+        }

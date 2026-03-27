@@ -21,3 +21,11 @@ home kits outside of the apps... example runn sonos speakers
 LiteParse new from llamaparse
 
 CMUX
+
+investigate Browserbase pay browser service
+
+stripe machine to machinepayments research
+
+Take a look at our GitHub action with regards to the OpenClaw research process and see if we can generalize this so we can have this kind of up-to-date latest release analysis for whatever library we want to examine
+
+research on businesses for agents as the customer (what are the pain points?)
