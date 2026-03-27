@@ -28,6 +28,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat.
 - **[Dual Factory and Capability Expansion Brainstorm](01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md)**: Factory expansion concepts.
 - **[Simone-First Orchestration](01_Architecture/05_Simone_First_Orchestration.md)**: Simone-centric task routing — batch triage, VP delegation, sign-off protocol, two-layer email response, `/btw` sidebar sessions.
+- **[Comparison: Background Workers vs Simone Orchestration](01_Architecture/06_Comparison_Background_Workers_vs_Simone_Orchestration.md)**: Deep-dive evaluation of pull-based, branch-isolated background workers compared to the event-driven, hierarchical Simone-First orchestration model.
 - **[Agent Architecture: agent_core.py vs main.py](001_AGENT_ARCHITECTURE.md)**: Entry point comparison, AgentSetup synchronization, URW session management.
 - **[SDK Permissions, Hooks & Subagents](002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md)**: Permission model, hooks architecture, subagent patterns.
 - **[Regression Control and Golden Runs](003_REGRESSION_CONTROL_AND_GOLDEN_RUNS.md)**: Testing stability, golden run preservation.
