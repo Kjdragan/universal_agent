@@ -1178,6 +1178,39 @@ class CronService:
                 if job.delete_after_run and record.status == "success":
                     logger.info("Deleting one-shot chron job %s after successful run", job.job_id)
                     self.delete_job(job.job_id)
+
+                # ── Task Hub lifecycle closure ──
+                # When a cron job sourced from the email scheduler completes,
+                # mark the originating Task Hub item as "completed" so it
+                # moves out of `in_progress`/`scheduled` into the done column.
+                if record.status == "success" and metadata.get("source") == "email_task_scheduler":
+                    _task_id = metadata.get("task_id")
+                    if _task_id:
+                        try:
+                            from universal_agent import task_hub as _th
+                            from universal_agent.gateway_server import _task_hub_open_conn
+                            _conn = _task_hub_open_conn()
+                            try:
+                                _th.perform_task_action(
+                                    _conn,
+                                    task_id=_task_id,
+                                    action="complete",
+                                    reason=f"Cron job {job.job_id} completed successfully",
+                                    agent_id="cron_scheduler",
+                                )
+                                _conn.commit()
+                                logger.info(
+                                    "📧✅ Task Hub item %s marked completed after cron job %s",
+                                    _task_id, job.job_id,
+                                )
+                            finally:
+                                _conn.close()
+                        except Exception as _th_exc:
+                            logger.warning(
+                                "📧⚠️  Failed to mark Task Hub item %s as completed: %s",
+                                _task_id, _th_exc,
+                            )
+
             return record
 
     def _organize_workspace_outputs(self, workspace_dir: str) -> list[str]:
