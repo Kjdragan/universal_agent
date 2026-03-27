@@ -189,6 +189,7 @@ class EmailTaskBridge:
         session_key: str = "",
         sender_trusted: bool = True,
         security_classification: str = "",
+        priority: int | None = None,
         workflow_run_id: str = "",
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
@@ -269,6 +270,10 @@ class EmailTaskBridge:
         self._conn.commit()
 
         # ② Create/update Task Hub entry
+        # Status starts as 'in_progress' to prevent double-claiming by the
+        # heartbeat while the hook session is actively running.  If the
+        # session crashes, the task will be reverted to 'open' by the
+        # hook finalization logic.
         self._upsert_task_hub(
             task_id=task_id,
             subject=subject,
@@ -281,6 +286,8 @@ class EmailTaskBridge:
             workflow_attempt_id=resolved_workflow_attempt_id,
             provider_session_id=resolved_provider_session_id,
             labels=email_labels,
+            priority=priority,
+            initial_status="in_progress",
         )
 
         # ③ Update HEARTBEAT.md
@@ -496,8 +503,21 @@ class EmailTaskBridge:
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
         labels: list[str] | None = None,
+        priority: int | None = None,
+        initial_status: str = "open",
     ) -> dict[str, Any]:
-        """Create or update a Task Hub entry for this email task."""
+        """Create or update a Task Hub entry for this email task.
+
+        Parameters
+        ----------
+        priority : int | None
+            Task Hub numeric priority (0-3). ``None`` falls through to
+            a default of 2 (medium).
+        initial_status : str
+            Starting status — defaults to ``open`` but callers may pass
+            ``in_progress`` to prevent the heartbeat from double-claiming
+            while the hook session is already running.
+        """
         try:
             from universal_agent.task_hub import upsert_item, ensure_schema
 
@@ -524,6 +544,8 @@ class EmailTaskBridge:
             if provider_session_id:
                 metadata["provider_session_id"] = provider_session_id
 
+            resolved_priority = priority if priority is not None else 2
+
             item = {
                 "task_id": task_id,
                 "source_kind": _EMAIL_TASK_SOURCE_KIND,
@@ -531,9 +553,9 @@ class EmailTaskBridge:
                 "title": f"📧 {subject}" if subject else "📧 Email Task",
                 "description": description,
                 "project_key": _EMAIL_TASK_PROJECT_KEY,
-                "priority": 2,  # Medium priority
+                "priority": resolved_priority,
                 "labels": task_labels,
-                "status": "open",
+                "status": initial_status,
                 "agent_ready": "agent-ready" in task_labels,
                 "must_complete": False,
                 "metadata": metadata,

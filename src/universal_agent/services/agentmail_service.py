@@ -1100,7 +1100,37 @@ class AgentMailService:
                     action_payload=action_payload,
                 )
 
+                # ── Classify priority BEFORE materializing so it flows
+                #    into the Task Hub entry ──
+                classified_priority: int | None = None
+                try:
+                    from universal_agent.services.priority_classifier import (
+                        classify_email_priority,
+                        TaskPriority,
+                    )
+
+                    _priority_decision = classify_email_priority(
+                        sender_trusted=True,
+                        is_reply=bool(reply_text),
+                        thread_message_count=1,  # will be updated in bridge
+                        subject=subject,
+                        body_snippet=(reply_text or text_body or "")[:200],
+                    )
+                    _PRIORITY_VALUE_MAP = {
+                        TaskPriority.P0_IMMEDIATE: 0,
+                        TaskPriority.P1_SOON: 1,
+                        TaskPriority.P2_SCHEDULED: 2,
+                        TaskPriority.P3_BACKGROUND: 3,
+                    }
+                    classified_priority = _PRIORITY_VALUE_MAP.get(
+                        _priority_decision.priority, 2,
+                    )
+                except Exception as _prio_exc:
+                    logger.debug("Priority pre-classification failed (non-fatal): %s", _prio_exc)
+
                 # ── Email-to-Task Bridge: materialize as trackable task ──
+                # Task starts as in_progress to prevent heartbeat double-claiming
+                # while the hook session is actively processing.
                 bridge_result = self._materialize_email_task(
                     thread_id=thread_id,
                     message_id=message_id,
@@ -1108,10 +1138,11 @@ class AgentMailService:
                     subject=subject,
                     reply_text=reply_text,
                     session_key=session_key,
+                    priority=classified_priority,
                 )
 
                 # ── Priority-aware dispatch ──
-                # Classify the email and dispatch immediately for P0/P1
+                # Trigger immediate dispatch for P0/P1
                 self._try_priority_dispatch(
                     sender_trusted=True,
                     is_reply=bool(reply_text),
@@ -1191,6 +1222,7 @@ class AgentMailService:
         subject: str,
         reply_text: str,
         session_key: str,
+        priority: int | None = None,
         workflow_run_id: str = "",
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
@@ -1213,6 +1245,7 @@ class AgentMailService:
                 subject=subject,
                 reply_text=reply_text,
                 session_key=session_key,
+                priority=priority,
                 workflow_run_id=workflow_run_id,
                 workflow_attempt_id=workflow_attempt_id,
                 provider_session_id=provider_session_id,
