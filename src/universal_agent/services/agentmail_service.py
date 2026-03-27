@@ -1340,7 +1340,7 @@ class AgentMailService:
             return
 
         # ── 1. Create persistent cron run_at job ──
-        import aiohttp
+        import httpx
         cron_command = (
             f"Execute scheduled email task '{subject}' from {sender_email}. "
             f"Task ID: {task_id}. Thread: {thread_id}. "
@@ -1361,25 +1361,23 @@ class AgentMailService:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
                     f"{base_url}/api/v1/cron/jobs",
                     json=cron_payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status in (200, 201):
-                        result = await resp.json()
-                        job_id = result.get("job_id", "unknown")
-                        logger.info(
-                            "📧⏰ Created cron run_at job %s for task %s at %s",
-                            job_id, task_id, due_at,
-                        )
-                    else:
-                        body = await resp.text()
-                        logger.warning(
-                            "📧⏰ Cron job creation failed (status=%s): %s",
-                            resp.status, body[:200],
-                        )
+                )
+                if resp.status_code in (200, 201):
+                    result = resp.json()
+                    job_id = result.get("job_id", "unknown")
+                    logger.info(
+                        "📧⏰ Created cron run_at job %s for task %s at %s",
+                        job_id, task_id, due_at,
+                    )
+                else:
+                    logger.warning(
+                        "📧⏰ Cron job creation failed (status=%s): %s",
+                        resp.status_code, resp.text[:200],
+                    )
         except Exception as exc:
             logger.warning("📧⏰ Cron job creation request failed: %s", exc)
 
