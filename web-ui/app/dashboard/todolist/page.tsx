@@ -673,11 +673,33 @@ export default function ToDoListDashboardPage() {
   const renderTaskCard = (item: AgentQueueItem, idx: number, showActions = true, onDelete?: (id: string) => void) => {
     const isPending = actionPendingTaskId === item.task_id;
     const pCls = priorityColorClass(item.priority);
+    const isProcessing = String(item.status || "") === "in_progress";
+    const isAwaitingReview = String(item.status || "") === "needs_review";
     return (
       <article
         key={item.task_id}
-        className={`group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px] ${item.must_complete ? "border-l-2 border-l-kcd-red" : ""}`}
+        className={[
+          "group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px]",
+          item.must_complete ? "border-l-2 border-l-kcd-red" : "",
+          isProcessing ? "processing-bar border-l-2 border-l-kcd-green" : "",
+          isAwaitingReview ? "border-l-2 border-l-kcd-amber" : "",
+        ].filter(Boolean).join(" ")}
       >
+        {/* Processing / Review Status Badge */}
+        {isProcessing && (
+          <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-kcd-green/[0.08] border border-kcd-green/20 rounded-sm">
+            <span className="inline-block w-2 h-2 rounded-full bg-kcd-green animate-pulse" />
+            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-green uppercase">Processing</span>
+            <span className="font-mono text-[9px] text-kcd-text-muted">· Agent working</span>
+          </div>
+        )}
+        {isAwaitingReview && (
+          <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-kcd-amber/[0.08] border border-kcd-amber/20 rounded-sm">
+            <span className="material-symbols-outlined text-xs text-kcd-amber">rate_review</span>
+            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Awaiting Review</span>
+            <span className="font-mono text-[9px] text-kcd-text-muted">· Run finished</span>
+          </div>
+        )}
         {onDelete && (
           <button onClick={() => onDelete(item.task_id)} disabled={isPending} title="Remove from queue"
             className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
@@ -1240,7 +1262,7 @@ export default function ToDoListDashboardPage() {
         <KanbanCol label="In Progress" icon="bolt" count={nowItems.length} accentColor="#4ADE80" emptyText="Nothing actively in progress.">
           {nowItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
         </KanbanCol>
-        <KanbanCol label="Past" icon="check_circle" count={visibleCompletedRows.length} accentColor="#64748B" emptyText="No completed tasks yet.">
+        <KanbanCol label="Completed" icon="check_circle" count={visibleCompletedRows.length} accentColor="#4ADE80" emptyText="No completed tasks yet.">
           <>
             {visibleCompletedRows.length > 1 && (
               <div className="flex justify-end">
