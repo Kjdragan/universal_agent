@@ -874,13 +874,10 @@ export default function ToDoListDashboardPage() {
             Inspect
           </button>
           {item.links?.session_id && (
-            <button onClick={() => void handleOpenSession(String(item.links!.session_id))} disabled={sessionDetailLoading === String(item.links!.session_id)}
-              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors disabled:opacity-40">
-              {sessionDetailLoading === String(item.links!.session_id) ? "Loading…" : "Session"}
-            </button>
-          )}
-          {item.links?.run_log_href && (
-            <a href={String(item.links.run_log_href)} className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan no-underline rounded-sm hover:bg-kcd-cyan/20 transition-colors">Run Log</a>
+            <Link href={`/dashboard/sessions?session_id=${encodeURIComponent(String(item.links!.session_id))}`}
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 no-underline border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
+              <span className="text-[10px]">📂</span> Workspace
+            </Link>
           )}
         </div>
       </article>
@@ -1056,21 +1053,12 @@ export default function ToDoListDashboardPage() {
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
                       {(row.links?.session_id || row.session_id) ? (
-                        <button
-                          onClick={() => void handleOpenSession(String(row.links?.session_id || row.session_id))}
-                          disabled={sessionDetailLoading === String(row.links?.session_id || row.session_id)}
-                          className="rounded border border-indigo-700/60 bg-indigo-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200 hover:bg-indigo-900/35 disabled:opacity-50"
+                        <Link
+                          href={`/dashboard/sessions?session_id=${encodeURIComponent(String(row.links?.session_id || row.session_id))}`}
+                          className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35 no-underline inline-flex items-center gap-1"
                         >
-                          {sessionDetailLoading === String(row.links?.session_id || row.session_id) ? "Loading…" : "Session"}
-                        </button>
-                      ) : null}
-                      {row.links?.run_log_href ? (
-                        <a
-                          href={String(row.links.run_log_href)}
-                          className="rounded border border-primary/30/60 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-primary/80 hover:bg-primary/20"
-                        >
-                          Run Log
-                        </a>
+                          <span className="text-[9px]">📂</span> Workspace
+                        </Link>
                       ) : null}
                     </div>
                   </div>
