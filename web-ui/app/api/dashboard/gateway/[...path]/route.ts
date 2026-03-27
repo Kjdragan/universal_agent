@@ -182,6 +182,67 @@ function getStubDataForPath(pathname: string): unknown | null {
       ],
     };
   }
+
+  // Freelance Pipeline stub (used by Freelance Pipeline panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/freelance/pipeline") {
+    return {
+      opportunities: [
+        {
+          id: "opp-001",
+          title: "Build AI chatbot for e-commerce customer support",
+          platform: "Upwork",
+          rate: "$80-120/hr",
+          fit_score: 88,
+          status: "new",
+          created_at: new Date(Date.now() - 7200000).toISOString(),
+        },
+        {
+          id: "opp-002",
+          title: "RAG pipeline implementation for legal document search",
+          platform: "Upwork",
+          rate: "$100-150/hr",
+          fit_score: 92,
+          status: "qualified",
+          created_at: new Date(Date.now() - 14400000).toISOString(),
+        },
+        {
+          id: "opp-003",
+          title: "n8n workflow automation for HR onboarding",
+          platform: "Fiverr",
+          rate: "$500 fixed",
+          fit_score: 75,
+          status: "new",
+          created_at: new Date(Date.now() - 28800000).toISOString(),
+        },
+      ],
+      applications: [
+        {
+          id: "app-001",
+          position_title: "AI Automation Specialist — Remote",
+          platform: "Upwork",
+          company: "TechVenture Inc.",
+          status: "submitted",
+          created_at: new Date(Date.now() - 86400000).toISOString(),
+        },
+        {
+          id: "app-002",
+          position_title: "LangChain Developer for SaaS Product",
+          platform: "Upwork",
+          status: "response_received",
+          created_at: new Date(Date.now() - 172800000).toISOString(),
+        },
+      ],
+      stats: {
+        total_opportunities: 3,
+        active_applications: 2,
+        draft_applications: 1,
+        submitted_applications: 1,
+        responses: 1,
+        interviews: 0,
+        success_rate: 0,
+      },
+    };
+  }
   return null;
 }
 
