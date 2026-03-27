@@ -16204,10 +16204,10 @@ def _list_ops_approvals(status: Optional[str] = None) -> list[dict[str, Any]]:
             rows.append(_serialize_persisted_approval(record))
 
     task_statuses = {
-        "pending": ("open", "in_progress", "blocked", "needs_review"),
+        "pending": ("open", "in_progress", "blocked", "needs_review", "delegated", "pending_review"),
         "approved": ("completed",),
         "rejected": ("parked",),
-    }.get(status_norm, ("open", "in_progress", "blocked", "needs_review", "completed", "parked"))
+    }.get(status_norm, ("open", "in_progress", "blocked", "needs_review", "completed", "parked", "delegated", "pending_review"))
 
     with _activity_store_lock:
         conn = _task_hub_open_conn()
@@ -20875,7 +20875,7 @@ def _park_duplicate_system_command_tasks(
         WHERE source_kind = 'system_command'
           AND task_id <> ?
           AND title = ?
-          AND status IN ('open', 'in_progress', 'blocked', 'needs_review')
+          AND status IN ('open', 'in_progress', 'blocked', 'needs_review', 'delegated', 'pending_review')
         """,
         (str(keep_task_id or ""), str(content or "").strip()),
     ).fetchall()

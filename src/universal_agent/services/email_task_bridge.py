@@ -302,6 +302,15 @@ class EmailTaskBridge:
             "📧→📋 Email task materialized: task_id=%s thread=%s master=%s is_update=%s messages=%d trusted=%s",
             task_id, thread_id, master_key, is_update, message_count, sender_trusted,
         )
+
+        # ④ Phase 3: Nudge the idle dispatch loop so Simone wakes within
+        # seconds instead of waiting for the next poll interval.
+        try:
+            from universal_agent.services.idle_dispatch_loop import nudge_dispatch
+            nudge_dispatch(reason=f"email_inbound:{thread_id[:16]}")
+        except Exception as _nudge_exc:
+            logger.debug("Nudge dispatch unavailable: %s", _nudge_exc)
+
         return result
 
     def link_workflow(

@@ -91,7 +91,7 @@ DEFAULT_HEARTBEAT_AUTONOMOUS_ENABLED = (
 )
 DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE = max(
     1,
-    int(os.getenv("UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE", "1") or 1),
+    int(os.getenv("UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE", "5") or 5),  # Simone-first: claim up to 5 for batch triage
 )
 DEFAULT_HEARTBEAT_MAX_ACTIONABLE = max(
     1,
@@ -329,20 +329,43 @@ def _compose_heartbeat_prompt(
     if investigation_only and "investigation-only mode" not in prompt.lower():
         prompt = f"{prompt} {INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS}".strip()
     if task_hub_claims:
-        task_ids = sorted(
-            {
-                str(item.get("task_id") or "").strip()
-                for item in task_hub_claims
-                if str(item.get("task_id") or "").strip()
-            }
+        # ── Simone-First Batch Triage Prompt ──
+        # Show Simone all claimed tasks and let her decide triage.
+        lines = ["== TASK QUEUE TRIAGE =="]
+        lines.append(
+            f"You have {len(task_hub_claims)} task(s) to triage. "
+            "For each, decide: SELF, DELEGATE_CODIE, DELEGATE_ATLAS, or DEFER."
         )
-        prompt = (
-            f"{prompt}\n\n"
-            "Task Hub lifecycle requirement: before finishing, disposition every claimed Task Hub item using "
-            "the `task_hub_task_action` tool with one of: `review`, `complete`, `block`, `park`, `unblock`. "
-            "Do not leave claimed tasks in `in_progress`. If work is not completed, use `review`.\n"
-            f"Claimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}"
-        )
+        lines.append("")
+        for idx, item in enumerate(task_hub_claims, 1):
+            title = str(item.get("title") or "(untitled)").strip()
+            priority = f"P{item.get('priority', '?')}"
+            source = str(item.get("source_kind") or "unknown").strip()
+            score = f"{float(item.get('score', 0)):.1f}"
+            task_id = str(item.get("task_id") or "")
+            description = str(item.get("description") or "").strip()
+            desc_preview = (description[:120] + "…") if len(description) > 120 else description
+            lines.append(f"Task {idx}: [{task_id}] {title}")
+            lines.append(f"  Priority: {priority} | Source: {source} | Score: {score}")
+            if desc_preview:
+                lines.append(f"  Description: {desc_preview}")
+        lines.append("")
+        lines.append("## Triage Protocol")
+        lines.append("1. Review ALL tasks above before acting on any.")
+        lines.append("2. Pick ONE task for yourself (SELF) — the one that benefits most from your")
+        lines.append("   full orchestration capabilities (skills, MCPs, sub-agents, context).")
+        lines.append("3. For remaining tasks, decide:")
+        lines.append("   - DELEGATE_CODIE: Code-heavy — implementation, refactoring, debugging")
+        lines.append("   - DELEGATE_ATLAS: Research, content generation, analysis")
+        lines.append("   - DEFER: Too nuanced, needs your context, or should wait")
+        lines.append("4. For each DELEGATE decision, dispatch via `vp_dispatch_mission` BEFORE starting your own work.")
+        lines.append("5. For DEFER items, use `task_hub_task_action` with action=`review` to release them back.")
+        lines.append("6. Then work your SELF task to completion.")
+        lines.append("7. Before finishing, disposition every claimed task using `task_hub_task_action`:")
+        lines.append("   `complete`, `review`, `block`, or `park`. Do NOT leave items in `in_progress`.")
+        task_ids = sorted({str(item.get("task_id") or "").strip() for item in task_hub_claims if str(item.get("task_id") or "").strip()})
+        lines.append(f"\nClaimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}")
+        prompt = f"{prompt}\n\n" + "\n".join(lines)
     # Inject brainstorm context so the agent is aware of refinement stages
     if brainstorm_context_text:
         prompt = f"{prompt}\n\n{brainstorm_context_text}"

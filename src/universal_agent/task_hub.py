@@ -18,10 +18,15 @@ TASK_STATUS_BLOCKED = "blocked"
 TASK_STATUS_REVIEW = "needs_review"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_PARKED = "parked"
+TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
+TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED}
-ACTIVE_STATUSES = {TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED, TASK_STATUS_REVIEW}
-VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze"}
+ACTIVE_STATUSES = {
+    TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
+    TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
+}
+VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate"}
 
 TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll"}
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
@@ -582,6 +587,10 @@ def _dispatch_skip_reason(item: dict[str, Any], *, eligible: bool, threshold: fl
         return "blocked"
     if status == TASK_STATUS_IN_PROGRESS:
         return "in_progress"
+    if status == TASK_STATUS_DELEGATED:
+        return "delegated_to_vp"
+    if status == TASK_STATUS_PENDING_REVIEW:
+        return "pending_review"
     if status == TASK_STATUS_REVIEW and not _is_system_schedule_task(item):
         return "needs_review"
     if not bool(item.get("agent_ready")):
@@ -812,7 +821,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
         is_system_schedule = _is_system_schedule_task(item)
         eligible = bool(item.get("agent_ready")) and score >= float(policy.agent_threshold)
-        if status in {TASK_STATUS_BLOCKED, TASK_STATUS_IN_PROGRESS}:
+        if status in {TASK_STATUS_BLOCKED, TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW}:
             eligible = False
         elif status == TASK_STATUS_REVIEW:
             # System command schedule instructions are explicit operator directives
@@ -2151,6 +2160,31 @@ def perform_task_action(
         conn.execute(
             "UPDATE task_hub_items SET metadata_json=?, updated_at=? WHERE task_id=?",
             (_json_dumps(metadata), _now_iso(), task_id),
+        )
+    elif action_norm == "delegate":
+        # Simone delegates this task to a VP agent.  reason_text should
+        # contain the target agent slug (e.g. "vp.coder.primary").
+        metadata = dict(item.get("metadata") or {})
+        delegate_meta = dict(metadata.get("delegation") or {})
+        delegate_meta.update({
+            "delegate_target": reason_text or "vp.general.primary",
+            "delegate_reason": str(note or "").strip() or "simone_triage",
+            "delegated_at": _now_iso(),
+        })
+        metadata["delegation"] = delegate_meta
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_DELEGATED, "delegated", _json_dumps(metadata), _now_iso(), task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="delegate",
+            reason=reason_text or "simone_triage",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "simone_triage", "delegate_target": reason_text or "vp.general.primary"},
         )
 
     conn.commit()
