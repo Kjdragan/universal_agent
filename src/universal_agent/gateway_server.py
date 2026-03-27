@@ -47,6 +47,7 @@ from universal_agent.auth.ops_auth import (
 )
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.runtime_role import FactoryRole, build_factory_runtime_policy
+from universal_agent.session_hub import set_active_sidebar, get_active_sidebar, clear_active_sidebar
 from universal_agent.delegation.redis_bus import (
     MISSION_CONSUMER_GROUP,
     MISSION_DLQ_STREAM,
@@ -24291,6 +24292,81 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
 
                 if msg_type == "execute":
                     user_input = msg.get("data", {}).get("user_input", "")
+                    
+                    user_input_strip = user_input.strip()
+                    exec_session = session
+                    
+                    if user_input_strip.startswith("/btw ") or user_input_strip == "/btw":
+                        prompt = user_input_strip[4:].strip()
+                        sidebar_id = get_active_sidebar(session_id)
+                        if not sidebar_id:
+                            sidebar_id = f"{session_id}_sidebar_{int(time.time()*100)}"
+                            await gateway.create_session(user_id=session.user_id, session_id=sidebar_id)
+                            set_active_sidebar(session_id, sidebar_id)
+                        
+                        user_input = prompt
+                        if not prompt:
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "status",
+                                    "data": {"status": "info", "message": "Entered sidebar session. Type your next message normally."},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"completed": True},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                session_id=session_id,
+                            )
+                            continue
+
+                    elif user_input_strip == "/return":
+                        sidebar_id = clear_active_sidebar(session_id)
+                        if sidebar_id:
+                            msg_status = "Returned to main session."
+                        else:
+                            msg_status = "You are not in an active sidebar session."
+
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "status",
+                                "data": {"status": "info", "message": msg_status},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"completed": True},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        continue
+
+                    active_sidebar = get_active_sidebar(session_id)
+                    metadata = msg.get("data", {}).get("metadata", {}) or {}
+                    if not isinstance(metadata, dict):
+                        metadata = {"raw": metadata}
+                    
+                    if active_sidebar:
+                        exec_session = gateway._sessions.get(active_sidebar)
+                        if not exec_session:
+                            try:
+                                exec_session = await gateway.resume_session(active_sidebar)
+                            except Exception:
+                                exec_session = session
+                                clear_active_sidebar(session_id)
+                        metadata["is_sidebar"] = True
                     if not user_input.strip():
                         await manager.send_json(
                             connection_id,
@@ -24314,14 +24390,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
 
                     raw_data = msg.get("data", {}) or {}
                     client_turn_id = _normalize_client_turn_id(raw_data.get("client_turn_id"))
-                    metadata = raw_data.get("metadata", {}) or {}
-                    if not isinstance(metadata, dict):
-                        metadata = {"raw": metadata}
+                    # Metadata already initialized above, just merge if needed
+                    if raw_data.get("metadata"):
+                        if isinstance(raw_data.get("metadata"), dict):
+                            metadata.update(raw_data.get("metadata"))
                     if _should_inject_system_events_for_request(metadata):
                         system_events = _drain_system_events(session_id)
                         if system_events:
                             metadata = {**metadata, "system_events": system_events}
-                    policy = _session_policy(session)
+                    policy = _session_policy(exec_session)
                     memory_policy = normalize_memory_policy(policy.get("memory"))
 
                     resume_requested = user_input.strip().lower() in {"resume", "continue", "/resume"}
@@ -24631,7 +24708,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
 
                         try:
                             # Execute the request and stream to all attached clients for this session.
-                            async for event in gateway.execute(session, request):
+                            async for event in gateway.execute(exec_session, request):
                                 if event.type == EventType.TOOL_CALL:
                                     tool_call_count += 1
                                     if isinstance(event.data, dict):
