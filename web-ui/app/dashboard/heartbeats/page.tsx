@@ -463,16 +463,20 @@ export default function HeartbeatsPage() {
       }
     }
 
-    // Cron
+    // Cron — "offline" means not configured (neutral), not broken
     let cronStatus: SubStatus = "offline";
     if (health.cron.available && !health.cron.error) {
       cronStatus = (health.cron.jobs_enabled || 0) > 0 ? "healthy" : "idle";
     }
 
-    // AgentMail
+    // AgentMail — started=true means healthy; queue items are normal
     let mailStatus: SubStatus = "offline";
     if (health.agentmail.available && !health.agentmail.error) {
-      mailStatus = health.agentmail.watcher_running ? "healthy" : "warning";
+      if (health.agentmail.watcher_running) {
+        mailStatus = "healthy";
+      } else {
+        mailStatus = "warning";
+      }
     }
 
     // Hooks
@@ -497,8 +501,10 @@ export default function HeartbeatsPage() {
   };
 
   const statuses = computeStatuses();
-  const subsystemCount = Object.keys(statuses).length;
-  const healthyCount = Object.values(statuses).filter((s) => s === "healthy").length;
+  // Only count subsystems that are actually configured (exclude offline/idle from the denominator)
+  const configuredStatuses = Object.values(statuses).filter((s) => s !== "offline" && s !== "idle");
+  const subsystemCount = configuredStatuses.length || 1; // avoid 0/0
+  const healthyCount = configuredStatuses.filter((s) => s === "healthy").length;
 
   /* ── Task Hub counts ────────────────────────────────────────── */
   const taskCounts = health?.task_hub?.counts || {};
@@ -613,12 +619,16 @@ export default function HeartbeatsPage() {
             statusLabel={
               health?.agentmail.available
                 ? health.agentmail.watcher_running
-                  ? "watching"
+                  ? "healthy"
                   : "paused"
                 : "offline"
             }
-            metric={health?.agentmail.queue_depth ?? "—"}
-            metricLabel="in queue"
+            metric={
+              health?.agentmail.available
+                ? `${health.agentmail.messages_sent ?? 0}↑ ${health.agentmail.messages_received ?? 0}↓`
+                : "—"
+            }
+            metricLabel="messages"
           >
             {health?.agentmail.available && (
               <div className="space-y-1">
@@ -632,6 +642,12 @@ export default function HeartbeatsPage() {
                   <span className="text-[10px] text-kcd-text-muted">Poll Interval</span>
                   <span className="font-mono text-[10px] text-kcd-text">
                     {health.agentmail.poll_interval ? `${health.agentmail.poll_interval}s` : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-kcd-text-muted">Trusted Queue</span>
+                  <span className="font-mono text-[10px] text-kcd-text">
+                    {health.agentmail.queue_depth ?? 0} pending
                   </span>
                 </div>
                 <div className="flex justify-between">

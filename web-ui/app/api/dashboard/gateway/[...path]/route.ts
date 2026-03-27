@@ -421,6 +421,106 @@ function getStubDataForPath(pathname: string): unknown | null {
       },
     };
   }
+  // Health endpoint stub (used by System Status panel in Mission Control)
+  if (pathname === "/api/v1/health") {
+    return {
+      status: "healthy",
+      timestamp: new Date().toISOString(),
+      version: "dev-stub",
+      db_status: "connected",
+      db_error: null,
+    };
+  }
+
+  // Capacity Governor stub (used by Capacity Governor panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/capacity") {
+    return {
+      max_concurrent: 5,
+      active_slots: 2,
+      available_slots: 3,
+      in_backoff: false,
+      backoff_remaining_seconds: 0,
+      consecutive_429s: 0,
+      total_429s: 3,
+      total_requests: 142,
+      total_shed: 1,
+      last_429_at: new Date(Date.now() - 7200000).toISOString(),
+    };
+  }
+
+  // Dashboard events stub (used by Recent Events panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/events") {
+    return {
+      events: [
+        {
+          id: "stub-evt-001",
+          event_class: "heartbeat",
+          source_domain: "heartbeat",
+          kind: "heartbeat_complete",
+          title: "Agent session completed successfully",
+          summary: "CODIE finished task: Refactor YouTube playlist watcher error handling",
+          severity: "success",
+          status: "new",
+          requires_action: false,
+          created_at_utc: new Date(Date.now() - 300000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 300000).toISOString(),
+        },
+        {
+          id: "stub-evt-002",
+          event_class: "dispatch",
+          source_domain: "csi",
+          kind: "task_dispatched",
+          title: "New CSI-sourced task dispatched",
+          summary: "Deep research: LangGraph vs CrewAI routed to ATLAS",
+          severity: "info",
+          status: "new",
+          requires_action: false,
+          created_at_utc: new Date(Date.now() - 1200000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 1200000).toISOString(),
+        },
+        {
+          id: "stub-evt-003",
+          event_class: "capacity",
+          source_domain: "heartbeat",
+          kind: "capacity_backoff",
+          title: "Capacity governor entered backoff",
+          summary: "2 consecutive 429 errors triggered 60s backoff. Dispatch paused.",
+          severity: "warning",
+          status: "resolved",
+          requires_action: false,
+          created_at_utc: new Date(Date.now() - 3600000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 3400000).toISOString(),
+        },
+        {
+          id: "stub-evt-004",
+          event_class: "cron",
+          source_domain: "cron",
+          kind: "cron_task_failed",
+          title: "Cron email task failed",
+          summary: "Weekly digest email failed to send: SMTP connection timeout",
+          severity: "error",
+          status: "new",
+          requires_action: true,
+          created_at_utc: new Date(Date.now() - 7200000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 7200000).toISOString(),
+        },
+        {
+          id: "stub-evt-005",
+          event_class: "refinement",
+          source_domain: "continuity",
+          kind: "task_decomposed",
+          title: "Task decomposed into 4 subtasks",
+          summary: "Build competitive analysis pipeline broken into research, scrape, analyze, report stages",
+          severity: "info",
+          status: "new",
+          requires_action: false,
+          created_at_utc: new Date(Date.now() - 14400000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 14400000).toISOString(),
+        },
+      ],
+    };
+  }
+
   return null;
 }
 
