@@ -48,6 +48,15 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Do not infer or repeat old tasks from prior chats. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
+TASK_FOCUSED_PROMPT = (
+    "You have been given specific tasks from the Task Queue below. "
+    "Focus EXCLUSIVELY on executing these tasks to completion. "
+    "Do NOT run system health checks, VPS monitoring, or read HEARTBEAT.md. "
+    "Do NOT run uptime, free, df, or any system diagnostic commands. "
+    "Do NOT write system_health_latest.md or run infrastructure checks. "
+    "Execute the assigned tasks, deliver results, then disposition them. "
+    "The system will automatically record the run outcome."
+)
 _GLOBAL_HEARTBEAT_SESSION_PREFIXES = (
     "session_hook_simone_heartbeat_",
 )
@@ -309,6 +318,41 @@ def _build_heartbeat_environment_context(workspace_dir: str) -> str:
     return "\n".join(lines)
 
 
+def _build_task_focused_environment_context(workspace_dir: str) -> str:
+    """Build a lean environment context for task-focused heartbeat runs.
+
+    When the heartbeat is dispatching Task Hub work (e.g. email-triggered tasks),
+    the agent needs workspace/file-write rules but NOT system monitoring instructions.
+    Health check findings are written deterministically by Python after the run.
+    """
+    from universal_agent.runtime_role import resolve_machine_slug, resolve_factory_role
+    import socket
+
+    machine_slug = resolve_machine_slug()
+    factory_role = resolve_factory_role().value
+    hostname = socket.gethostname()
+
+    lines = [
+        "## Task Execution Environment",
+        f"- Factory: {machine_slug} (role={factory_role}, host={hostname})",
+        f"- Run workspace: {workspace_dir}",
+        "- You are running LOCALLY on this machine. Do NOT SSH to it — run shell commands directly.",
+        "",
+        "### File Write Rules (MANDATORY)",
+        f"- Write all output files to `{workspace_dir}/work_products/` using `mcp__internal__write_text_file`.",
+        "- Do NOT use the native `Write` tool for new files (it requires a prior Read and will fail).",
+        "- Do NOT write to paths outside the run workspace (they will be blocked by workspace guards).",
+        "- Issue file write calls SEQUENTIALLY, not in parallel — sibling failures cascade and waste tool budget.",
+        "",
+        "### IMPORTANT: No System Monitoring",
+        "- Do NOT write heartbeat_findings_latest.json — the system handles this automatically.",
+        "- Do NOT run health checks (uptime, free, df, etc.).",
+        "- Do NOT write system_health_latest.md.",
+        "- Focus 100% on executing the tasks below.",
+    ]
+    return "\n".join(lines)
+
+
 def _compose_heartbeat_prompt(
     base_prompt: str,
     *,
@@ -318,6 +362,7 @@ def _compose_heartbeat_prompt(
     brainstorm_context_text: str = "",
     morning_report_text: str = "",
     runtime_conn: Any = None,
+    task_focused: bool = False,
 ) -> str:
     prompt = (base_prompt or DEFAULT_HEARTBEAT_PROMPT).strip()
     if "{ok_token}" in prompt:
@@ -325,7 +370,10 @@ def _compose_heartbeat_prompt(
         pass
     # Inject environment context so agents know where they run and how to write files.
     if workspace_dir:
-        env_context = _build_heartbeat_environment_context(workspace_dir)
+        if task_focused:
+            env_context = _build_task_focused_environment_context(workspace_dir)
+        else:
+            env_context = _build_heartbeat_environment_context(workspace_dir)
         prompt = f"{prompt}\n\n{env_context}"
     if investigation_only and "investigation-only mode" not in prompt.lower():
         prompt = f"{prompt} {INVESTIGATION_ONLY_PROMPT_INSTRUCTIONS}".strip()
@@ -434,10 +482,11 @@ def _compose_heartbeat_prompt(
             logger.debug("VP review prompt injection skipped: %s", _review_exc)
 
     # Inject brainstorm context so the agent is aware of refinement stages
-    if brainstorm_context_text:
+    # Skip brainstorm and morning report in task-focused mode — they add noise
+    if brainstorm_context_text and not task_focused:
         prompt = f"{prompt}\n\n{brainstorm_context_text}"
     # Inject morning report if this is the first tick of the day
-    if morning_report_text:
+    if morning_report_text and not task_focused:
         prompt = f"{prompt}\n\n{morning_report_text}"
     return prompt
 
@@ -1803,47 +1852,56 @@ class HeartbeatService:
                             pass  # memory context is advisory, never block heartbeat
 
                     # Phase 5: Proactive Advisor — brainstorm context + morning report
-                    try:
-                        from universal_agent.services.proactive_advisor import (
-                            build_brainstorm_context,
-                            format_brainstorm_context_prompt,
-                            build_morning_report,
+                    # Skip entirely in task-focused mode (task_hub_claimed > 0) —
+                    # the agent won't see this data anyway, so don't waste DB queries.
+                    if not task_hub_claimed:
+                        try:
+                            from universal_agent.services.proactive_advisor import (
+                                build_brainstorm_context,
+                                format_brainstorm_context_prompt,
+                                build_morning_report,
+                            )
+                            _brainstorm_ctx = build_brainstorm_context(conn)
+                            _brainstorm_ctx_text = format_brainstorm_context_prompt(_brainstorm_ctx)
+                            _pending_q_count = len(task_hub.list_pending_questions(conn, limit=100))
+
+                            # Morning report: trigger on first tick of the day
+                            _morning_text = ""
+                            last_run_ts = getattr(state, "last_run", None)
+                            now_date = datetime.now().date()
+                            last_date = None
+                            if last_run_ts:
+                                try:
+                                    last_date = last_run_ts.date()
+                                except Exception:
+                                    pass
+                            if last_date is None or last_date < now_date:
+                                report = build_morning_report(conn)
+                                _morning_text = str(report.get("report_text") or "")
+                                if _morning_text:
+                                    logger.info(
+                                        "Morning report generated for %s (%d active, %d brainstorm)",
+                                        session.session_id,
+                                        report.get("total_active", 0),
+                                        len(report.get("brainstorm_tasks") or []),
+                                    )
+
+                            metadata["proactive_advisor"] = {
+                                "brainstorm_task_count": len(_brainstorm_ctx),
+                                "pending_question_count": _pending_q_count,
+                                "morning_report": bool(_morning_text),
+                            }
+                        except Exception as pa_exc:
+                            logger.debug("Proactive advisor unavailable: %s", pa_exc)
+                            _brainstorm_ctx_text = ""
+                            _pending_q_count = 0
+                            _morning_text = ""
+                    else:
+                        logger.info(
+                            "Skipping proactive advisor for %s (task-focused mode, %d tasks claimed)",
+                            session.session_id,
+                            len(task_hub_claimed),
                         )
-                        _brainstorm_ctx = build_brainstorm_context(conn)
-                        _brainstorm_ctx_text = format_brainstorm_context_prompt(_brainstorm_ctx)
-                        _pending_q_count = len(task_hub.list_pending_questions(conn, limit=100))
-
-                        # Morning report: trigger on first tick of the day
-                        _morning_text = ""
-                        last_run_ts = getattr(state, "last_run", None)
-                        now_date = datetime.now().date()
-                        last_date = None
-                        if last_run_ts:
-                            try:
-                                last_date = last_run_ts.date()
-                            except Exception:
-                                pass
-                        if last_date is None or last_date < now_date:
-                            report = build_morning_report(conn)
-                            _morning_text = str(report.get("report_text") or "")
-                            if _morning_text:
-                                logger.info(
-                                    "Morning report generated for %s (%d active, %d brainstorm)",
-                                    session.session_id,
-                                    report.get("total_active", 0),
-                                    len(report.get("brainstorm_tasks") or []),
-                                )
-
-                        metadata["proactive_advisor"] = {
-                            "brainstorm_task_count": len(_brainstorm_ctx),
-                            "pending_question_count": _pending_q_count,
-                            "morning_report": bool(_morning_text),
-                        }
-                    except Exception as pa_exc:
-                        logger.debug("Proactive advisor unavailable: %s", pa_exc)
-                        _brainstorm_ctx_text = ""
-                        _pending_q_count = 0
-                        _morning_text = ""
 
                 finally:
                     conn.close()
@@ -1951,7 +2009,18 @@ class HeartbeatService:
 
             # Compose heartbeat prompt only after Task Hub claims are known so the
             # model can explicitly disposition claimed items before completion.
-            if has_exec_completion:
+            #
+            # Task-focused mode: when tasks are claimed from the dispatch queue,
+            # switch to a lean prompt that skips all system monitoring.
+            _is_task_focused = bool(task_hub_claimed)
+            if _is_task_focused:
+                base_prompt = TASK_FOCUSED_PROMPT
+                logger.info(
+                    "Using TASK_FOCUSED_PROMPT for session %s (%d tasks claimed, skipping system monitoring)",
+                    session.session_id,
+                    len(task_hub_claimed),
+                )
+            elif has_exec_completion:
                 base_prompt = EXEC_EVENT_PROMPT
                 logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
             else:
@@ -1973,9 +2042,10 @@ class HeartbeatService:
                 brainstorm_context_text=_brainstorm_ctx_text,
                 morning_report_text=_morning_text,
                 runtime_conn=_hb_runtime_conn,
+                task_focused=_is_task_focused,
             )
-            # Append reflection context after other prompt sections
-            if _reflection_ctx_text:
+            # Append reflection context after other prompt sections (skip in task-focused mode)
+            if _reflection_ctx_text and not _is_task_focused:
                 prompt = f"{prompt}\n\n{_reflection_ctx_text}"
             
             full_response = ""
@@ -2358,7 +2428,67 @@ class HeartbeatService:
                 _findings_filename in str(p)
                 for p in (write_paths + work_product_paths)
             )
-            if _findings_written:
+
+            # ── Task-focused mode: always write deterministic findings ────
+            # In task-focused runs the agent is told NOT to write findings.
+            # Python writes a task-run-aware record instead — zero LLM cost.
+            if _is_task_focused:
+                try:
+                    _wp_dir = Path(session.workspace_dir) / "work_products"
+                    _wp_dir.mkdir(parents=True, exist_ok=True)
+
+                    _task_titles = [
+                        str(c.get("title") or "untitled").strip()
+                        for c in task_hub_claimed
+                    ]
+                    if run_failed:
+                        _tf_status = "critical"
+                        _tf_summary = (
+                            f"Task run failed ({len(task_hub_claimed)} tasks claimed: "
+                            f"{', '.join(_task_titles[:3])}). "
+                            f"Response preview: {(response_text or full_response)[:200]}"
+                        )
+                    else:
+                        _tf_status = "ok"
+                        _tf_summary = (
+                            f"Task run completed ({len(task_hub_claimed)} tasks: "
+                            f"{', '.join(_task_titles[:3])})"
+                        )
+
+                    _task_findings = {
+                        "version": 1,
+                        "overall_status": _tf_status,
+                        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "source": "task_run",
+                        "summary": _tf_summary,
+                        "task_run": {
+                            "claimed_count": len(task_hub_claimed),
+                            "task_titles": _task_titles[:5],
+                            "run_failed": run_failed,
+                            "timed_out": timed_out,
+                        },
+                        "findings": [],
+                    }
+                    _tf_path = _wp_dir / _findings_filename
+                    _tf_path.write_text(
+                        json.dumps(_task_findings, indent=2, default=str),
+                        encoding="utf-8",
+                    )
+                    work_product_paths.append(str(_tf_path))
+                    logger.info(
+                        "Wrote task-run findings (%s, %d tasks) for %s → %s",
+                        _tf_status,
+                        len(task_hub_claimed),
+                        session.session_id,
+                        _tf_path,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to write task-run findings for %s: %s",
+                        session.session_id,
+                        exc,
+                    )
+            elif _findings_written:
                 # ── Post-write validation: repair & re-serialize agent JSON ──
                 try:
                     _wp_dir = Path(session.workspace_dir) / "work_products"
@@ -2398,7 +2528,7 @@ class HeartbeatService:
             #   not ok   + not run_failed  →  "ok"       / preview of response
             #   run_failed                 →  "critical"  / error details
             # ------------------------------------------------------------------
-            if not _findings_written and not should_skip_agent_run:
+            if not _findings_written and not should_skip_agent_run and not _is_task_focused:
                 try:
                     _wp_dir = Path(session.workspace_dir) / "work_products"
                     _wp_dir.mkdir(parents=True, exist_ok=True)
