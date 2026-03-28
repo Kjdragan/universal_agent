@@ -78,6 +78,22 @@ The heartbeat is highly configurable via environment variables.
 | `UA_HEARTBEAT_MAX_SYSTEM_EVENTS` | 25 | Maximum system events to include per heartbeat. |
 | `UA_HEARTBEAT_INVESTIGATION_ONLY` | None | If set, heartbeat runs in investigation-only mode (no mutations). |
 
+### Task-Focused Mode
+
+When `task_hub_claimed` is non-empty (i.e., a Task Hub task has been claimed for dispatch), heartbeat runs in **task-focused mode**. This mode optimizes for quick task execution rather than comprehensive system monitoring.
+
+| Environment Variable | Default | Description |
+| --- | --- | --- |
+| (none — mode is automatic) | — | Activated when `task_hub_claimed` is non-empty. |
+
+**Behavioral changes in task-focused mode:**
+- **Skipped components**: Brainstorm context injection, morning report generation, system health checks
+- **Lean environment prompt**: Uses `_build_task_focused_environment_context()` instead of full context builder
+- **No manual findings JSON**: Agent does not write heartbeat_findings_latest.json (synthetic findings used)
+- **Faster scheduling**: Continuation passes prioritize task completion over monitoring
+
+**Implementation:** See `_compose_heartbeat_prompt()` parameter `task_focused=True` and `_build_task_focused_environment_context()` in `heartbeat_service.py`.
+
 ### OK Tokens
 
 The agent can emit special strings (like `HEARTBEAT_OK` or `UA_HEARTBEAT_OK`) to indicate it has nothing to do, ending the turn cleanly. These are stripped and matched by `_strip_heartbeat_tokens()` which also detects "no-op checklist" language to avoid accidental leakage.
