@@ -64,8 +64,8 @@ These are the authoritative references for each subsystem. When any other docume
 | 96 | NotebookLM Integration & Research Pipeline |
 | 97 | Infisical CLI Reference & Lessons Learned |
 | 98 | Agent Skills Directory (`.agents/skills/`) |
-| 99 | Documentation Drift Maintenance Pipeline
-| 100 | OpenClaw Release Sync Pipeline
+| 99 | Documentation Drift Maintenance Pipeline — two-stage nightly audit (heuristic drift detection → VP remediation dispatch), PR persistence, issue batching, verify-before-fix rules |
+| 100 | OpenClaw Release Sync Pipeline |
 | 101 | VP Agent Identity & Prompt Architecture — CODIE/ATLAS souls, VP system prompt, mission briefing injection
 | 102 | E2BIG Kernel Limits and Prompt Architecture — 128KB execution limit constraints and prompt optimization strategy
 | 104 | Run/Attempt Lifecycle and Nomenclature Migration Plan — canonical migration plan for run/attempt terminology, packet rollout, rollback scope, and CSI boundary handling |
@@ -198,7 +198,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 78 | Daily Autonomous Briefing Reliability |
 | 79 | Golden Run Research Report Pipeline Reference |
 | 80 | Google Workspace Integration Retrospective Memo |
-| 99 | **Tutorial Pipeline Architecture & Operations** — canonical source-of-truth |
+| 99 | **Documentation Drift Maintenance Pipeline** — canonical source-of-truth |
 | 103 | Debugging Lessons Living Document — reusable debugging lessons from complex production incidents |
 
 ## Cleanup Summary

@@ -37,11 +37,13 @@ jobs:
       - name: Install project dependencies
         run: uv sync --frozen --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
 
-      - name: Run Stage 1 — Documentation Drift Auditor
+      # ── Stage 1: Audit ──────────────────────────────────────────────────
+      - name: "Stage 1 — Run Documentation Drift Auditor"
         id: audit
         env:
           SINCE_HOURS: ${{ github.event.inputs.since_hours || '24' }}
         run: |
+          STAGE1_START=$(date +%s)
           echo "Running doc_drift_auditor.py (scanning last ${SINCE_HOURS}h of git history)..."
           set +e
           uv run --no-sync python src/universal_agent/scripts/doc_drift_auditor.py \
@@ -56,13 +58,14 @@ jobs:
           echo "report_date=${REPORT_DATE}" >> "$GITHUB_OUTPUT"
           echo "report_dir=artifacts/doc-drift-reports/${REPORT_DATE}" >> "$GITHUB_OUTPUT"
 
+          STAGE1_END=$(date +%s)
+          echo "⏱️  Stage 1 completed in $((STAGE1_END - STAGE1_START))s (exit=${EXIT_CODE})"
+
           if [ "${EXIT_CODE}" -eq 0 ]; then
             echo "✅ Audit complete — no documentation drift issues found."
           else
             echo "⚠️  Audit complete — documentation drift issues detected (exit ${EXIT_CODE})."
           fi
-          # A non-zero exit from the auditor means issues were found — this is expected.
-          # We don't fail the workflow here; the report is still useful for Stage 2.
 
       - name: Verify report files were produced
         run: |
@@ -96,7 +99,9 @@ jobs:
           path: artifacts/doc-drift-reports/
           retention-days: 30
 
-      - name: Commit drift report via auto-merged PR
+      # ── Stage 1b: Commit Report to develop ──────────────────────────────
+      - name: "Stage 1b — Commit drift report via auto-merged PR"
+        id: commit_report
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,6 +113,15 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Clean up any orphan drift-report branches from previous failed runs
+          echo "🧹 Cleaning up orphan drift-report branches..."
+          for orphan in $(git ls-remote --heads origin 'refs/heads/chore/drift-report-*' | awk '{print $2}' | sed 's|refs/heads/||'); do
+            if [ "$orphan" != "$PR_BRANCH" ]; then
+              echo "  Deleting orphan branch: $orphan"
+              git push origin --delete "$orphan" 2>/dev/null || true
+            fi
+          done
+
           # Stage only the report files — force because artifacts/ is gitignored
           git add -f "${REPORT_DIR}/drift_report.json"
           git add -f "${REPORT_DIR}/DRIFT_REPORT.md"
@@ -115,31 +129,43 @@ jobs:
           # Check if there's actually anything new to commit
           if git diff --cached --quiet; then
             echo "ℹ️  No changes in report files — report is identical to last run. Skipping commit."
+            echo "pr_created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           ISSUE_COUNT=$(python3 -c "import json; r = json.load(open('${REPORT_DIR}/drift_report.json')); print(r['total_issues'])")
           COMMIT_MSG="chore(docs): nightly drift report ${REPORT_DATE} — ${ISSUE_COUNT} issues [auto]"
 
-          # Create temp branch, commit, push (unprotected branch)
+          # Clean up existing branch if re-running same day
+          git push origin --delete "${PR_BRANCH}" 2>/dev/null || true
+
+          # Create temp branch, commit, push
           git checkout -b "${PR_BRANCH}"
           git commit -m "${COMMIT_MSG}"
           git push origin "${PR_BRANCH}"
 
-          # Create PR and immediately squash-merge it
+          # Create PR (without label to avoid failure)
           PR_URL=$(gh pr create \
             --base develop \
             --head "${PR_BRANCH}" \
             --title "${COMMIT_MSG}" \
-            --body "Automated nightly drift report for ${REPORT_DATE}. Auto-merged by CI." \
-            --label "automated")
+            --body "Automated nightly drift report for ${REPORT_DATE}. Auto-merged by CI.")
 
           echo "📝 PR created: ${PR_URL}"
+          echo "pr_created=true" >> "$GITHUB_OUTPUT"
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
-          # Auto-merge (squash keeps develop history clean)
-          gh pr merge "${PR_URL}" --squash --delete-branch --admin \
-            || gh pr merge "${PR_URL}" --squash --delete-branch \
-            || echo "⚠️ Auto-merge failed — PR remains open for manual merge."
+          # Best-effort label — don't fail if label doesn't exist
+          gh pr edit "${PR_URL}" --add-label "automated" 2>/dev/null || true
+
+          # Auto-merge with fallback chain
+          if gh pr merge "${PR_URL}" --squash --delete-branch --admin 2>/dev/null; then
+            echo "✅ PR merged with --admin"
+          elif gh pr merge "${PR_URL}" --squash --delete-branch 2>/dev/null; then
+            echo "✅ PR merged (standard)"
+          else
+            echo "⚠️ Auto-merge failed — PR remains open for manual merge at: ${PR_URL}"
+          fi
 
           echo "✅ Drift report committed to develop via auto-merged PR."
 
@@ -158,7 +184,7 @@ jobs:
             echo "## ❌ Report not generated" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # ── Stage 2: Trigger VP doc-maintenance mission on VPS ──
+      # ── Stage 2: Dispatch VP doc-maintenance to VPS ─────────────────────
       - name: "Stage 2 — Connect to Tailscale"
         if: steps.audit.outputs.exit_code != '0'
         uses: tailscale/github-action@v4
@@ -168,42 +194,52 @@ jobs:
           tags: tag:ci-gha
           hostname: gha-doc-stage2-${{ github.run_id }}
 
-      - name: "Stage 2 — Dispatch VP doc-maintenance missions"
+      - name: "Stage 2 — Copy report and dispatch VP missions"
         if: steps.audit.outputs.exit_code != '0'
         env:
           SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
           SSH_USER: ${{ secrets.VPS_SSH_USER }}
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
+          STAGE2_START=$(date +%s)
           echo "🔄 Stage 2: Dispatching VP doc-maintenance missions to VPS..."
 
-          # Configure SSH key (same pattern as deploy workflows)
+          # Configure SSH key
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=15"
 
-          # Copy drift report to VPS (artifacts/ is gitignored so won't be on VPS)
+          # Copy drift report to VPS (artifacts/ is gitignored so won't be on VPS via deploy)
           REPORT_DIR="artifacts/doc-drift-reports/$(date -u +%Y-%m-%d)"
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$SSH_USER@$SSH_HOST" "mkdir -p /opt/universal_agent/${REPORT_DIR}" || true
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          echo "📋 Copying drift report to VPS..."
+          ssh ${SSH_OPTS} "$SSH_USER@$SSH_HOST" "mkdir -p /opt/universal_agent/${REPORT_DIR}" || true
+          scp ${SSH_OPTS} \
             "${REPORT_DIR}/drift_report.json" \
-            "$SSH_USER@$SSH_HOST:/opt/universal_agent/${REPORT_DIR}/" || true
+            "$SSH_USER@$SSH_HOST:/opt/universal_agent/${REPORT_DIR}/" || {
+              echo "::warning::Failed to SCP drift report to VPS. Stage 2 will try to use an existing report."
+            }
+
+          # Verify the report landed on VPS
+          echo "🔍 Verifying report on VPS..."
+          ssh ${SSH_OPTS} "$SSH_USER@$SSH_HOST" \
+            "test -f /opt/universal_agent/${REPORT_DIR}/drift_report.json && echo 'Report verified on VPS' || echo 'WARNING: Report not found on VPS'"
 
           # Run Stage 2 doc maintenance agent on VPS
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$SSH_USER@$SSH_HOST" \
+          echo "🚀 Dispatching VP missions..."
+          ssh ${SSH_OPTS} "$SSH_USER@$SSH_HOST" \
             "cd /opt/universal_agent && PYTHONPATH=src ./.venv/bin/python3 -m universal_agent.scripts.doc_maintenance_agent" \
             2>&1 | tee stage2_output.log
 
           STAGE2_EXIT=$?
+          STAGE2_END=$(date +%s)
+
           if [ "${STAGE2_EXIT}" -eq 0 ]; then
-            echo "✅ Stage 2 complete — VP missions dispatched"
-            echo "### 🤖 Stage 2: VP Missions Dispatched" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Stage 2 complete in $((STAGE2_END - STAGE2_START))s — VP missions dispatched"
+            echo "### 🤖 Stage 2: VP Missions Dispatched ($((STAGE2_END - STAGE2_START))s)" >> "$GITHUB_STEP_SUMMARY"
             tail -5 stage2_output.log >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ Stage 2 dispatch failed (exit ${STAGE2_EXIT})"
-            echo "### ⚠️ Stage 2: Dispatch Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Stage 2 dispatch failed in $((STAGE2_END - STAGE2_START))s (exit ${STAGE2_EXIT})"
+            echo "### ⚠️ Stage 2: Dispatch Failed ($((STAGE2_END - STAGE2_START))s)" >> "$GITHUB_STEP_SUMMARY"
             tail -10 stage2_output.log >> "$GITHUB_STEP_SUMMARY"
           fi
-

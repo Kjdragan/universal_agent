@@ -218,7 +218,7 @@ def _build_batched_objectives(report: dict) -> list[dict]:
             for i, issue in enumerate(chunk, 1):
                 cat = issue["category"]
                 instruction = fix_instructions.get(cat, issue.get("suggested_action", "Review and fix."))
-                lines.append(f"{i}. **{issue['file']}**: {issue['description'][:120]}")
+                lines.append(f"{i}. **{issue['file']}**: {issue['description']}")
                 lines.append(f"   Fix: {instruction}")
 
             objective = "\n".join(lines)
@@ -297,6 +297,9 @@ def _dispatch_via_gateway(
 
 async def main():
     """Entry point for cron script execution."""
+    import time as _time
+    _stage2_start = _time.monotonic()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -317,6 +320,19 @@ async def main():
     # Resolve the gateway URL (prefers localhost on VPS)
     gateway_url = _resolve_gateway_url()
     logger.info(f"Using gateway: {gateway_url}")
+
+    # Pre-flight: verify gateway is reachable before spending time on report parsing
+    try:
+        health_req = urllib.request.Request(
+            f"{gateway_url}/api/health", method="GET",
+        )
+        with urllib.request.urlopen(health_req, timeout=5) as resp:
+            logger.info(f"Gateway health check: HTTP {resp.status} — OK")
+    except Exception as gw_exc:
+        logger.warning(
+            f"Gateway health pre-check failed ({type(gw_exc).__name__}: {gw_exc}). "
+            "Dispatch will retry with backoff if needed."
+        )
 
     # Find today's drift report
     report_path = _find_todays_report()
@@ -395,7 +411,11 @@ async def main():
             logger.info("  Waiting 30s before next batch...")
             await asyncio.sleep(30)
 
-    logger.info(f"Dispatch complete: {dispatched} batches dispatched, {failed} failed")
+    elapsed = _time.monotonic() - _stage2_start
+    logger.info(
+        f"Dispatch complete in {elapsed:.1f}s: "
+        f"{dispatched} batches dispatched, {failed} failed"
+    )
     if failed > 0:
         logger.error("❌ Some batches failed to dispatch. Health check will alert Simone.")
         sys.exit(1)

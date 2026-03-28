@@ -631,7 +631,7 @@ def run_audit(dry_run: bool = False, since_hours: int = 24) -> int:
     return 1 if issues else 0
 
 
-async def main():
+def main():
     """Entry point for cron script execution."""
     logging.basicConfig(
         level=logging.INFO,
@@ -650,5 +650,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
+

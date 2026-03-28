@@ -29,6 +29,35 @@ from agentmail import AgentMail
 client = AgentMail(api_key="YOUR_API_KEY")
 ```
 
+## ⚠️ CRITICAL: SDK Response Objects (MUST READ)
+
+AgentMail SDK methods return **Pydantic model objects**, NOT Python dicts. You MUST access properties via **dot notation**:
+
+```python
+# ✅ CORRECT — use dot notation for response properties
+msg = client.inboxes.messages.send(inbox_id=..., to=..., subject=..., text=...)
+print(msg.message_id)  # str — the sent message ID
+print(msg.thread_id)   # str — the thread ID
+
+inbox = client.inboxes.create(username="test")
+print(inbox.inbox_id)  # str — the inbox email address
+
+draft = client.inboxes.drafts.create(inbox_id=..., to=..., subject=..., text=...)
+print(draft.draft_id)  # str — the draft ID
+
+# ❌ WRONG — these WILL CRASH with AttributeError
+msg.get("message_id")    # AttributeError: 'SendMessageResponse' has no attribute 'get'
+msg["message_id"]        # TypeError: not subscriptable
+result.get("status")     # AttributeError — response objects are NOT dicts
+```
+
+**Common response properties:**
+- `SendMessageResponse`: `.message_id`, `.thread_id`
+- `Inbox`: `.inbox_id`
+- `Draft`: `.draft_id`
+- `Message`: `.message_id`, `.thread_id`, `.from_`, `.to`, `.subject`, `.text`, `.html`, `.labels`, `.created_at`, `.attachments`
+- `Thread`: `.thread_id`, `.messages`, `.subject`, `.updated_at`
+
 ## Inboxes
 
 Create scalable inboxes on-demand. Each inbox has a unique email address.

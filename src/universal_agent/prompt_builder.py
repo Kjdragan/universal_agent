@@ -450,6 +450,7 @@ def build_system_prompt(
         "- **How to use**: Invoke the `agentmail` **Skill** (use the `Skill(agentmail, ...)` tool, NOT manual curl/requests).\n"
         "- The skill handles authentication, formatting, and delivery via the AgentMail Python SDK.\n"
         "- Simone sends FROM her own `@agentmail.to` address.\n"
+        "- **SDK RESPONSE PATTERN**: AgentMail SDK returns Pydantic objects. Use `msg.message_id` (dot notation), NEVER `msg.get('message_id')` or `msg['message_id']` — those crash with AttributeError.\n"
         "- **NEVER** use curl, requests.post, or the ops API to send AgentMail. ALWAYS use the Skill invocation.\n\n"
         "### 2. GWS CLI — Kevin's Gmail (ONLY when acting as Kevin)\n"
         "- **When to use**: Only when the user explicitly asks you to send email FROM Kevin's Gmail (`kevinjdragan@gmail.com`).\n"
