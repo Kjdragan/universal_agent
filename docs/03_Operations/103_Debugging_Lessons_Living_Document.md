@@ -150,6 +150,37 @@ When a production service claims a secret-backed feature is "not configured":
 
 ---
 
+## 2026-03-28: Transcript Generation Duplication & Gateway Port Collisions
+
+### Incident Summary 1: Run Transcript Iteration Duplication
+
+The `transcript.md` log for runs progressively repeated "Iteration 1" over and over, dumping all historical tool calls cumulatively into a single block instead of creating progressive turns.
+
+The underlying issue was tracking loops: the central Agent SDK engine starts each `process_turn()` CLI execution loop with a local counter initialized to `iteration = 1`. The `transcript_builder.py` assumed this `iteration` value uniquely mapped to a step, so when it compiled the trace log, it grabbed *every* tool call previously generated with `iteration = 1`, resulting in massive redundant output dumps.
+
+### Lesson 1: Local Loop Variables Do Not Ensure Global Sequencing
+
+When processing multi-turn, stateful traces over independent programmatic executions, local counters like `iteration` cannot uniquely map events.
+
+Reusable rule:
+
+- Always map events across a continuous trace back to universally unique boundary signatures (`step_id` or `trace_id`), rather than relying on local procedural loops.
+
+### Incident Summary 2: Gateway Server Crashing on Restart (Address in Use)
+
+During fast inner-loop development, terminating and restarting the `gateway_server.py` FastAPI service frequently caused it to crash on startup with `OSError: [Errno 98] Address already in use`, requiring manual intervention to wait out the `TIME_WAIT` TCP flush state.
+
+### Lesson 2: Production Services Need Bonded Startup Retries
+
+Generic application runners like `uvicorn.run()` die immediately if the socket binding fails. Fast, programmatic redeploys or restarts usually encounter kernel socket flush races.
+
+Reusable rule:
+
+1. Never boot the core entrypoint of a primary system service completely unprotected against socket race conditions.
+2. Wrap the API runner inside a bounded, small-interval retry loop that explicitly catches `Errno 98 / Address already in use` to gracefully wait out the flush before aborting.
+
+---
+
 ## 2026-03-25: Nightly Documentation Pipeline Audit
 
 ### How The Pipeline Works

@@ -10,7 +10,7 @@ The gateway is the central hub of Universal Agent. All agent execution — wheth
 
 **Primary implementation:** `src/universal_agent/gateway_server.py`
 
-The gateway server is a FastAPI application running on port 8002. It is the largest single file in the codebase (~17K lines) because it serves as the integration point for every subsystem.
+The gateway server is a FastAPI application running on port 8002. It is the largest single file in the codebase (~17K lines) because it serves as the integration point for every subsystem. The core `uvicorn` entrypoint uses a bounded 10-second retry loop specifically implemented to absorb TCP `TIME_WAIT` races when rapidly redeploying or restarting the service locally or during automated pipeline tests (`Errno 98 Address currently in use`).
 
 ### What the gateway owns:
 
@@ -118,6 +118,7 @@ Step-by-step:
 5. `ProcessTurnAdapter` wraps the CLI's `process_turn()` to emit `AgentEvent` objects
 6. Events stream back over WebSocket as JSON messages
 7. `query_complete` event signals the end of execution
+8. **Trace Reconstruction**: Post-execution, `transcript_builder.py` consumes the `trace.json` file to rebuild a human-readable `transcript.md` file containing every event and interaction in order. It relies strictly on globally unique identifiers (`step_id`) rather than local counters (`iteration`) when compiling events, correctly distributing complex multi-turn logic into a sequential output history.
 
 ### Session Ownership and Auth
 
