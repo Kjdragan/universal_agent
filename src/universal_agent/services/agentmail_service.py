@@ -2339,15 +2339,26 @@ class AgentMailService:
         maxlen = self._seen_message_ids.maxlen
         if maxlen is not None and len(self._seen_message_id_set) > maxlen:
             self._seen_message_id_set = set(self._seen_message_ids)
+            
         try:
             self._ensure_queue_schema()
-            with self._queue_connect() as conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO agentmail_seen_messages (message_id, created_at) VALUES (?, ?)",
-                    (clean_id, _iso_now())
-                )
+            for attempt in range(6):
+                try:
+                    with self._queue_connect() as conn:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO agentmail_seen_messages (message_id, created_at) VALUES (?, ?)",
+                            (clean_id, _iso_now())
+                        )
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "database is locked" in str(exc).lower() and attempt < 5:
+                        time.sleep(0.2 + attempt * 0.2)
+                        continue
+                    raise
         except Exception as exc:
-            logger.warning("📧 SQLite seen_messages insert failed: %s", exc)
+            logger.error("📧 SQLite seen_messages insert failed permanently: %s", exc)
+            self._release_seen_message_id(clean_id)
+            raise RuntimeError(f"Failed to record seen message id in db: {exc}")
         return True
 
     def _release_seen_message_id(self, message_id: str) -> None:
