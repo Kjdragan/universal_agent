@@ -1,0 +1,51 @@
+server {
+  server_name app.clearspringcg.com;
+
+  # ──────────────────────────────────────────────────────────────────
+  # All traffic goes through Next.js (port 3000).
+  # Next.js rewrites in next.config.js proxy /api/* → gateway (8002)
+  # and /ws/* → gateway (8002) for WebSocket.
+  # ──────────────────────────────────────────────────────────────────
+
+  # UA websocket for chat stream — needs explicit upgrade headers.
+  # Routed through Next.js which already rewrites ws/* → gateway.
+  location ^~ /ws/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600;
+    proxy_send_timeout 3600;
+  }
+
+  # Everything (pages, API, etc.) → Next.js
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/app.clearspringcg.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/app.clearspringcg.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+server {
+    if ($host = app.clearspringcg.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+  listen 80;
+  server_name app.clearspringcg.com;
+    return 404; # managed by Certbot
+
+
+}
