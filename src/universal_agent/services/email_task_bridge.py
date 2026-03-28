@@ -271,10 +271,10 @@ class EmailTaskBridge:
         self._conn.commit()
 
         # ② Create/update Task Hub entry
-        # Status starts as 'in_progress' to prevent double-claiming by the
-        # heartbeat while the hook session is actively running.  If the
-        # session crashes, the task will be reverted to 'open' by the
-        # hook finalization logic.
+        # Status starts as 'open' so the heartbeat dispatch sweep can
+        # discover and claim it through the normal pipeline.  The
+        # claim_next_dispatch_tasks function atomically transitions the
+        # task to 'in_progress' when seized, which prevents double-claiming.
         self._upsert_task_hub(
             task_id=task_id,
             subject=subject,
@@ -289,7 +289,7 @@ class EmailTaskBridge:
             labels=email_labels,
             priority=priority,
             due_at=due_at,
-            initial_status="in_progress",
+            initial_status="open",
         )
 
         # ③ Update HEARTBEAT.md
@@ -517,9 +517,9 @@ class EmailTaskBridge:
             Task Hub numeric priority (0-3). ``None`` falls through to
             a default of 2 (medium).
         initial_status : str
-            Starting status — defaults to ``open`` but callers may pass
-            ``in_progress`` to prevent the heartbeat from double-claiming
-            while the hook session is already running.
+            Starting status — defaults to ``open``.  The heartbeat's
+            ``claim_next_dispatch_tasks`` atomically transitions to
+            ``in_progress`` when it seizes the task for execution.
         """
         try:
             from universal_agent.task_hub import upsert_item, ensure_schema
