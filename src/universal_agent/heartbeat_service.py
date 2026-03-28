@@ -2569,22 +2569,46 @@ class HeartbeatService:
                             conn.close()
 
                     # ── Phase 6: Completion Feedback Loop ─────────────────
-                    # After successful finalization, if tasks were completed,
-                    # immediately schedule a wake for the next heartbeat cycle
-                    # instead of waiting for the 60s idle poll. This reduces
-                    # inter-task latency from ~60s to near-zero.
+                    # After successful finalization, if tasks were completed
+                    # AND there are more eligible tasks in the queue, schedule
+                    # a wake for the next heartbeat cycle. We no longer
+                    # unconditionally wake — doing so created a tight race
+                    # window where a just-completed task could be re-claimed
+                    # before the SQLite commit fully propagated.
                     try:
                         completed_count = int(task_hub_finalize_result.get("completed") or 0)
                         if completed_count > 0 and not run_failed:
-                            self.request_heartbeat_next(
-                                session.session_id,
-                                reason=f"completion_feedback:{completed_count}_done",
-                            )
-                            logger.info(
-                                "⚡ Completion feedback: wake-next for %s after %d task(s) completed",
-                                session.session_id,
-                                completed_count,
-                            )
+                            # Check if there are MORE eligible tasks waiting
+                            _remaining_eligible = 0
+                            _feedback_conn = None
+                            try:
+                                _feedback_conn = connect_runtime_db(get_activity_db_path())
+                                _feedback_conn.row_factory = sqlite3.Row  # type: ignore[name-defined]
+                                _q = task_hub.get_dispatch_queue(_feedback_conn, limit=3)
+                                _remaining_eligible = int(_q.get("eligible_total") or 0)
+                            except Exception:
+                                pass
+                            finally:
+                                if _feedback_conn is not None:
+                                    _feedback_conn.close()
+
+                            if _remaining_eligible > 0:
+                                self.request_heartbeat_next(
+                                    session.session_id,
+                                    reason=f"completion_feedback:{completed_count}_done,{_remaining_eligible}_remaining",
+                                )
+                                logger.info(
+                                    "⚡ Completion feedback: wake-next for %s after %d task(s) completed (%d remaining)",
+                                    session.session_id,
+                                    completed_count,
+                                    _remaining_eligible,
+                                )
+                            else:
+                                logger.info(
+                                    "⚡ Completion feedback: NO wake-next for %s (no remaining eligible tasks after %d completed)",
+                                    session.session_id,
+                                    completed_count,
+                                )
                     except Exception as exc:
                         # Never let the feedback loop break finalization
                         logger.debug(

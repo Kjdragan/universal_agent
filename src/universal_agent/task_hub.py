@@ -305,6 +305,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ALTER TABLE task_hub_items ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'heartbeat_poll'",
         "ALTER TABLE task_hub_items ADD COLUMN refinement_stage TEXT",
         "ALTER TABLE task_hub_items ADD COLUMN refinement_history_json TEXT NOT NULL DEFAULT '{}'",
+        # Idempotency token: prevents re-claim of completed tasks until explicitly cleared
+        "ALTER TABLE task_hub_items ADD COLUMN completion_token TEXT DEFAULT NULL",
     ):
         try:
             conn.execute(ddl)
@@ -1030,6 +1032,35 @@ def claim_next_dispatch_tasks(
         if str(current.get("status") or "") not in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
             continue
 
+        # ── Idempotency guard: skip tasks with a recent completed assignment ──
+        # Prevents the "completion feedback loop" race where a task gets
+        # re-claimed within seconds of being marked completed.
+        _recent_guard_minutes = max(1, _safe_int(os.getenv("UA_TASK_HUB_RECENT_CLAIM_GUARD_MINUTES"), 5))
+        recent_completed = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM task_hub_assignments
+            WHERE task_id = ? AND state = 'completed'
+              AND ended_at > datetime('now', ? || ' minutes')
+            """,
+            (task_id, f"-{_recent_guard_minutes}"),
+        ).fetchone()
+        if recent_completed and int(recent_completed["cnt"] or 0) > 0:
+            logger.warning(
+                "⛔ Skipping re-claim of recently-completed task %s "
+                "(has %d completed assignment(s) in last %d min)",
+                task_id, int(recent_completed["cnt"]), _recent_guard_minutes,
+            )
+            continue
+
+        # Also check completion_token — if set, task was finalized and should
+        # not be re-claimed without explicit operator reset.
+        if current.get("completion_token"):
+            logger.warning(
+                "⛔ Skipping claim of completion-locked task %s (token=%s)",
+                task_id, str(current["completion_token"])[:16],
+            )
+            continue
+
         assignment_id = f"asg_{uuid.uuid4().hex[:16]}"
         resolved_provider_session_id = str(provider_session_id or "").strip() or _session_id_from_agent_id(agent_id)
         resolved_workflow_run_id = str(workflow_run_id or "").strip() or None
@@ -1397,16 +1428,17 @@ def finalize_assignments(
                 dispatch_meta["last_disposition"] = "completed"
                 dispatch_meta["last_disposition_reason"] = "heartbeat_auto_completed"
                 metadata["dispatch"] = dispatch_meta
+                _completion_token = f"hb_{uuid.uuid4().hex[:12]}_{now_iso}"
                 conn.execute(
                     """
                     UPDATE task_hub_items
-                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=?
                     WHERE task_id=?
                     """,
-                    (TASK_STATUS_COMPLETED, "unseized", _json_dumps(metadata), now_iso, task_id),
+                    (TASK_STATUS_COMPLETED, "unseized", _completion_token, _json_dumps(metadata), now_iso, task_id),
                 )
                 completed += 1
-                logger.info("Task Hub heartbeat finalize auto-completed task %s", task_id)
+                logger.info("Task Hub heartbeat finalize auto-completed task %s (token=%s)", task_id, _completion_token[:24])
                 continue
 
             retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
@@ -2157,9 +2189,10 @@ def perform_task_action(
     elif action_norm == "review":
         conn.execute("UPDATE task_hub_items SET status=?, updated_at=? WHERE task_id=?", (TASK_STATUS_REVIEW, _now_iso(), task_id))
     elif action_norm == "complete":
+        _completion_token = f"api_{uuid.uuid4().hex[:12]}_{_now_iso()}"
         conn.execute(
-            "UPDATE task_hub_items SET status=?, seizure_state=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_COMPLETED, "completed", _now_iso(), task_id),
+            "UPDATE task_hub_items SET status=?, seizure_state=?, completion_token=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_COMPLETED, "completed", _completion_token, _now_iso(), task_id),
         )
         conn.execute(
             """

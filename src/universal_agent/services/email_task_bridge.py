@@ -124,6 +124,8 @@ def ensure_email_task_schema(conn: sqlite3.Connection) -> None:
         ("workflow_run_id", "''"),
         ("workflow_attempt_id", "''"),
         ("provider_session_id", "''"),
+        # Idempotency: tracks when an email response was sent for this thread
+        ("email_sent_at", "NULL"),
     ]:
         try:
             conn.execute(
@@ -410,6 +412,32 @@ class EmailTaskBridge:
         )
         self._conn.commit()
         return True
+
+    def mark_email_sent(self, thread_id: str) -> bool:
+        """Record that an email response was sent for this thread.
+
+        This provides an idempotency signal: if the task is re-claimed
+        and re-executed, the agent prompt will include a warning that an
+        email has already been sent.
+        """
+        now = _now_iso()
+        self._conn.execute(
+            "UPDATE email_task_mappings SET email_sent_at = ?, updated_at = ? WHERE thread_id = ?",
+            (now, now, thread_id),
+        )
+        self._conn.commit()
+        logger.info("📧 Marked email_sent_at=%s for thread=%s", now, thread_id)
+        return True
+
+    def was_email_sent(self, thread_id: str) -> bool:
+        """Check whether an email response was already sent for this thread."""
+        row = self._conn.execute(
+            "SELECT email_sent_at FROM email_task_mappings WHERE thread_id = ? LIMIT 1",
+            (str(thread_id or "").strip(),),
+        ).fetchone()
+        if row is None:
+            return False
+        return bool(row["email_sent_at"])
 
     def mark_waiting_on_reply(self, thread_id: str) -> bool:
         """Mark an email task as waiting for the user's reply.

@@ -11772,6 +11772,30 @@ async def lifespan(app: FastAPI):
                 logger.info("🤖 Daemon sessions disabled (UA_DAEMON_SESSIONS_ENABLED=0)")
         except Exception:
             logger.exception("Failed creating daemon sessions")
+
+        # ── Startup Recovery: Release orphaned task assignments ──────────
+        # When the gateway crashes, in-progress tasks with seized assignments
+        # are left orphaned. Release them here with a short stale threshold
+        # (5 minutes) since we KNOW the process was dead.
+        try:
+            from universal_agent import task_hub as _recovery_task_hub
+            _recovery_conn = connect_runtime_db(get_activity_db_path())
+            _recovery_conn.row_factory = sqlite3.Row
+            _recovery_task_hub.ensure_schema(_recovery_conn)
+            _recovery_result = _recovery_task_hub.release_stale_assignments(
+                _recovery_conn,
+                agent_id_prefix="heartbeat:",
+                stale_after_seconds=300,  # 5 minutes — short at startup since process was dead
+            )
+            if int(_recovery_result.get("finalized") or 0) > 0:
+                logger.warning(
+                    "🔄 Startup recovery: released %d orphaned task assignment(s) (reopened=%d)",
+                    int(_recovery_result.get("finalized") or 0),
+                    int(_recovery_result.get("reopened") or 0),
+                )
+            _recovery_conn.close()
+        except Exception as _recovery_exc:
+            logger.warning("Startup task recovery sweep failed (non-fatal): %s", _recovery_exc)
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
