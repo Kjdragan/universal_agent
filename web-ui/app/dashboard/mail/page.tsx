@@ -149,6 +149,8 @@ export default function MailPage() {
   const [draftSending, setDraftSending] = useState<string | null>(null);
   const [deletingThread, setDeletingThread] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"inbox" | "sent">("inbox");
+  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const deepLinkHandled = useRef(false);
   const refreshAbortRef = useRef<AbortController | null>(null);
   const refreshSeqRef = useRef(0);
@@ -341,6 +343,48 @@ export default function MailPage() {
       setDeletingThread(null);
     }
   }, [selectedThread]);
+
+  const bulkDeleteThreads = useCallback(async () => {
+    if (selectedThreadIds.size === 0) return;
+    if (!confirm(`Delete ${selectedThreadIds.size} selected thread(s)?`)) return;
+    setIsBulkDeleting(true);
+    const payloadThreads = threads
+      .filter((t) => selectedThreadIds.has(t.thread_id))
+      .map((t) => ({ thread_id: t.thread_id, inbox_id: t.inbox_id }));
+      
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/threads/bulk_delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threads: payloadThreads }),
+      });
+      if (!res.ok) throw new Error(`bulk delete ${res.status}`);
+      const data = await res.json();
+      const successIds = new Set<string>(
+        (data.results || [])
+        .filter((r: any) => r.success)
+        .map((r: any) => r.thread_id)
+      );
+      setThreads((prev) => prev.filter((t) => !successIds.has(t.thread_id)));
+      if (selectedThread && successIds.has(selectedThread.thread_id)) {
+        setSelectedThread(null);
+        setThreadMessages([]);
+      }
+      setSelectedThreadIds(new Set());
+      if (data.success_count < payloadThreads.length) {
+         alert(`Deleted ${data.success_count} of ${payloadThreads.length}. Check console for details.`);
+      }
+    } catch (e) {
+      console.error("Failed to bulk delete threads", e);
+      alert("Failed to bulk delete \u2014 see console.");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }, [selectedThreadIds, threads, selectedThread]);
+
+  useEffect(() => {
+    setSelectedThreadIds(new Set());
+  }, [viewMode]);
 
   /* ── Effects ─── */
   useEffect(() => {
@@ -674,11 +718,52 @@ export default function MailPage() {
               alignItems: "center",
             }}
           >
-            <SectionTitle
-              icon="forum"
-              label="THREADS"
-              count={filteredThreads.length}
-            />
+            {selectedThreadIds.size > 0 ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 12, color: TOKENS.textPrimary, fontWeight: 600 }}>
+                  {selectedThreadIds.size} selected
+                </span>
+                <button
+                  onClick={bulkDeleteThreads}
+                  disabled={isBulkDeleting}
+                  style={{
+                    background: TOKENS.redDim,
+                    color: TOKENS.red,
+                    border: `1px solid ${TOKENS.red}`,
+                    padding: "4px 10px",
+                    borderRadius: 4,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: isBulkDeleting ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    opacity: isBulkDeleting ? 0.6 : 1,
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
+                  {isBulkDeleting ? "Deleting..." : "Delete"}
+                </button>
+                <button
+                  onClick={() => setSelectedThreadIds(new Set())}
+                  style={{
+                    background: "transparent",
+                    color: TOKENS.textMuted,
+                    border: "none",
+                    fontSize: 11,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <SectionTitle
+                icon="forum"
+                label="THREADS"
+                count={filteredThreads.length}
+              />
+            )}
             {/* View Toggle: Inbox | Sent */}
             <div
               style={{
@@ -724,6 +809,30 @@ export default function MailPage() {
               </button>
             </div>
           </div>
+          {/* Select All Row */}
+          {filteredThreads.length > 0 && (
+            <div style={{ padding: "8px 20px 8px 32px", borderBottom: `1px solid ${TOKENS.ghostBorder}`, display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={filteredThreads.length > 0 && selectedThreadIds.size === filteredThreads.length}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedThreadIds(new Set(filteredThreads.map(t => t.thread_id)));
+                  } else {
+                    setSelectedThreadIds(new Set());
+                  }
+                }}
+                style={{ cursor: "pointer", accentColor: TOKENS.cyan }}
+              />
+              <span style={{ fontSize: 11, color: TOKENS.textMuted, fontFamily: TOKENS.fontUi, userSelect: "none", cursor: "pointer" }} onClick={() => {
+                if (selectedThreadIds.size === filteredThreads.length) {
+                  setSelectedThreadIds(new Set());
+                } else {
+                  setSelectedThreadIds(new Set(filteredThreads.map(t => t.thread_id)));
+                }
+              }}>Select All</span>
+            </div>
+          )}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px" }}>
             {loading && filteredThreads.length === 0 ? (
               <LoadingState />
@@ -737,6 +846,15 @@ export default function MailPage() {
                   selected={selectedThread?.thread_id === t.thread_id}
                   deleting={deletingThread === t.thread_id}
                   viewMode={viewMode}
+                  checked={selectedThreadIds.has(t.thread_id)}
+                  onToggleCheck={() => {
+                    setSelectedThreadIds(prev => {
+                      const next = new Set(prev);
+                      if (next.has(t.thread_id)) next.delete(t.thread_id);
+                      else next.add(t.thread_id);
+                      return next;
+                    });
+                  }}
                   onClick={() => fetchThreadMessages(t)}
                   onDelete={() => deleteThread(t)}
                 />
@@ -931,6 +1049,8 @@ function ThreadRow({
   selected,
   deleting,
   viewMode,
+  checked,
+  onToggleCheck,
   onClick,
   onDelete,
 }: {
@@ -938,6 +1058,8 @@ function ThreadRow({
   selected: boolean;
   deleting?: boolean;
   viewMode: "inbox" | "sent";
+  checked?: boolean;
+  onToggleCheck?: () => void;
   onClick: () => void;
   onDelete: () => void;
 }) {
@@ -985,6 +1107,17 @@ function ThreadRow({
           transition: "all 0.12s",
         }}
       >
+        <div style={{ display: "flex", alignItems: "center", height: "100%", marginTop: 4 }} onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={!!checked}
+            onChange={(e) => {
+              e.stopPropagation();
+              onToggleCheck?.();
+            }}
+            style={{ cursor: "pointer", accentColor: TOKENS.cyan, width: 14, height: 14 }}
+          />
+        </div>
         {/* Direction Icon or Badge */}
         <span
           className="material-symbols-outlined"

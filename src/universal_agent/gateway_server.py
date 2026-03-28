@@ -19590,6 +19590,41 @@ async def ops_agentmail_thread_messages(request: Request, thread_id: str):
         raise HTTPException(status_code=404, detail=f"Thread not found or API error: {exc}")
 
 
+@app.post("/api/v1/ops/agentmail/threads/bulk_delete")
+async def ops_agentmail_bulk_delete_threads(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+
+    payload = await request.json()
+    threads = payload.get("threads", [])
+    if not isinstance(threads, list):
+        raise HTTPException(status_code=400, detail="Expected a list of threads in payload")
+
+    import asyncio
+
+    async def _safe_delete(t: dict):
+        t_id = t.get("thread_id")
+        i_id = t.get("inbox_id")
+        if not t_id or not i_id:
+            return {"success": False, "thread_id": t_id, "error": "Missing thread_id or inbox_id"}
+        try:
+            await _agentmail_service.delete_thread(inbox_id=i_id, thread_id=t_id)
+            return {"success": True, "thread_id": t_id, "inbox_id": i_id}
+        except Exception as exc:
+            logger.warning("bulk_delete failed for thread=%s: %s", t_id, exc)
+            return {"success": False, "thread_id": t_id, "inbox_id": i_id, "error": str(exc)}
+
+    results = await asyncio.gather(*[_safe_delete(thread) for thread in threads])
+    success_count = sum(1 for r in results if r.get("success"))
+    return {
+        "ok": True,
+        "results": results,
+        "success_count": success_count,
+        "total_count": len(threads)
+    }
+
+
 @app.delete("/api/v1/ops/agentmail/threads/{thread_id}")
 async def ops_agentmail_delete_thread(request: Request, thread_id: str):
     _require_ops_auth(request)

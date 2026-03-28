@@ -16,53 +16,7 @@ interface Task {
   points: number;
 }
 
-const INITIAL_TASKS: Task[] = [
-  {
-    id: "TASK-100",
-    title: "Implement Heartbeat Subsystem",
-    description: "Refactor existing heartbeat listener to handle concurrent pulses across the mesh.",
-    status: "Backlog",
-    priority: "High",
-    assignee: "Cora",
-    points: 8,
-  },
-  {
-    id: "TASK-101",
-    title: "Update Gateway Schema",
-    description: "Align the Postgres configuration schema with new API v2 specifications.",
-    status: "Backlog",
-    priority: "Medium",
-    assignee: "Simon",
-    points: 3,
-  },
-  {
-    id: "TASK-102",
-    title: "Deploy AgentMail Handlers",
-    description: "Finalize deployment scripts for the new AgentMail ingest hooks.",
-    status: "In Progress",
-    priority: "High",
-    assignee: "Cora",
-    points: 5,
-  },
-  {
-    id: "TASK-103",
-    title: "CSI Feed Rendering Glitch",
-    description: "Fix layout shift when incoming events have large multiline payloads.",
-    status: "In Review",
-    priority: "Low",
-    assignee: "UI Engine",
-    points: 2,
-  },
-  {
-    id: "TASK-104",
-    title: "Migrate Auth to Infisical",
-    description: "Completely migrate secrets to Infisical across the production environment.",
-    status: "Done",
-    priority: "High",
-    assignee: "SysOps",
-    points: 8,
-  },
-];
+const INITIAL_TASKS: Task[] = [];
 
 const COLUMNS: ColumnType[] = ["Backlog", "In Progress", "In Review", "Done"];
 const PRIORITIES: Task["priority"][] = ["High", "Medium", "Low"];
