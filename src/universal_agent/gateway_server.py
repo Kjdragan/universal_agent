@@ -13567,13 +13567,86 @@ async def get_artifact_file(file_path: str):
     return _read_file_from_root(ARTIFACTS_DIR, file_path)
 
 
+def _resolve_session_workspace(session_id: str) -> Path:
+    """Resolve a session ID to its actual workspace directory on disk.
+
+    Daemon sessions (e.g. ``daemon_simone``) use timestamped workspace dirs
+    (``run_daemon_simone_20260327_224414_xxx``) that may live under
+    ``WORKSPACES_DIR/`` (active) or ``WORKSPACES_DIR/_daemon_archives/``
+    (recycled).  This helper checks, in order:
+
+    1. ``_workspace_dir_for_session()`` — finds the live in-memory session's
+       workspace, which is the timestamped directory for daemons.
+    2. ``WORKSPACES_DIR / session_id`` — direct directory match (non-daemon
+       sessions like ``pg-test-...``).
+    3. ``WORKSPACES_DIR / _daemon_archives / session_id`` — archived session
+       with an exact-name match.
+    4. Most-recent ``run_daemon_{agent}_*`` directory in both active and
+       archived locations (fallback glob for daemon agents).
+
+    Raises ``HTTPException(404)`` if no workspace is found.
+    """
+    # (1) In-memory live session (works for daemon_simone → timestamped dir)
+    live_ws = _workspace_dir_for_session(session_id)
+    if live_ws is not None and live_ws.is_dir():
+        return live_ws
+
+    safe_id = _sanitize_session_id_or_400(session_id)
+
+    # (2) Direct directory match
+    direct = WORKSPACES_DIR / safe_id
+    if direct.is_dir():
+        return direct
+
+    # (3) Exact name in _daemon_archives
+    archive_exact = WORKSPACES_DIR / "_daemon_archives" / safe_id
+    if archive_exact.is_dir():
+        return archive_exact
+
+    # (4) Glob fallback — find the most recent run_daemon_{agent}_* workspace.
+    #     The session_id for daemons is "daemon_{agent}", strip the prefix.
+    if safe_id.startswith("daemon_"):
+        agent_slug = safe_id  # e.g. "daemon_simone"
+        prefix = f"run_{agent_slug}_"
+
+        candidates: list[Path] = []
+        # Active workspaces
+        for p in WORKSPACES_DIR.iterdir():
+            if p.is_dir() and p.name.startswith(prefix):
+                candidates.append(p)
+        # Archived workspaces
+        archive_root = WORKSPACES_DIR / "_daemon_archives"
+        if archive_root.is_dir():
+            for p in archive_root.iterdir():
+                if p.is_dir() and p.name.startswith(prefix):
+                    candidates.append(p)
+
+        if candidates:
+            # Most recently modified first
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return candidates[0]
+
+    raise HTTPException(status_code=404, detail="Run workspace not found")
+
+
+@app.get("/api/files")
+async def list_session_files(session_id: str = "", path: str = ""):
+    """List files/dirs inside a session workspace (query-param based).
+
+    This is the endpoint that the session explorer's ``buildDurableFileListUrl``
+    calls: ``GET /api/files?session_id=daemon_simone&path=.``
+    """
+    session_id = (session_id or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    session_root = _resolve_session_workspace(session_id)
+    return _list_directory_under_root(session_root, path)
+
+
 @app.get("/api/files/{session_id}/{file_path:path}")
 async def get_session_file(session_id: str, file_path: str):
-    """Get file content from a durable run workspace using a legacy session identifier."""
-    safe_id = _sanitize_session_id_or_400(session_id)
-    session_root = WORKSPACES_DIR / safe_id
-    if not session_root.is_dir():
-        raise HTTPException(status_code=404, detail="Run workspace not found")
+    """Get file content from a durable run workspace."""
+    session_root = _resolve_session_workspace(session_id)
     return _read_file_from_root(session_root, file_path)
 
 
