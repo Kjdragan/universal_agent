@@ -1761,6 +1761,17 @@ class HeartbeatService:
                             stale_result.get("finalized"),
                             stale_result.get("reopened"),
                         )
+
+                    import time
+                    if getattr(task_hub, "_last_pruned_timestamp", 0) < time.time() - 86400:
+                        try:
+                            _prune_res = task_hub.prune_settled_tasks(conn, retention_days=21)
+                            if (_prune_res.get("items") or 0) > 0:
+                                logger.info("Periodic background prune completed: %s", _prune_res)
+                            task_hub._last_pruned_timestamp = time.time()
+                        except Exception as _prune_err:
+                            logger.error("Task Hub background pruning failed: %s", _prune_err)
+
                     queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
                     dispatch_actionable_count = int(queue.get("eligible_total") or 0)
 
@@ -1885,19 +1896,62 @@ class HeartbeatService:
                             last_date = None
                             if last_run_ts:
                                 try:
-                                    last_date = last_run_ts.date()
+                                    last_date = datetime.fromtimestamp(last_run_ts).date()
                                 except Exception:
                                     pass
                             if last_date is None or last_date < now_date:
                                 report = build_morning_report(conn)
-                                _morning_text = str(report.get("report_text") or "")
-                                if _morning_text:
+                                _raw_morning_text = str(report.get("report_text") or "")
+                                if _raw_morning_text:
                                     logger.info(
                                         "Morning report generated for %s (%d active, %d brainstorm)",
                                         session.session_id,
                                         report.get("total_active", 0),
                                         len(report.get("brainstorm_tasks") or []),
                                     )
+                                    from universal_agent.services.health_evaluator import evaluate_health_snapshot
+                                    try:
+                                        eval_result = await evaluate_health_snapshot(report)
+                                    except Exception as e:
+                                        logger.error(f"Failed to evaluate health snapshot: {e}")
+                                        eval_result = {}
+                                    
+                                    # Get capacity info
+                                    max_coder = os.getenv("UA_MAX_CONCURRENT_VP_CODER", "1")
+                                    max_general = os.getenv("UA_MAX_CONCURRENT_VP_GENERAL", "2")
+                                    
+                                    # Fetch active missions
+                                    active_missions = []
+                                    try:
+                                        rows = conn.execute("SELECT task_id, title FROM task_hub_items WHERE status = 'delegated'").fetchall()
+                                        for r in rows:
+                                            tid = r["task_id"] if hasattr(r, "keys") else r[0]
+                                            ttitle = r["title"] if hasattr(r, "keys") else r[1]
+                                            active_missions.append(f"[{tid}] {ttitle}")
+                                    except Exception as e:
+                                        logger.debug("Failed to list active missions for capacity report: %s", e)
+                                        
+                                    _cap_report = "== CAPACITY REPORT ==\n"
+                                    _cap_report += f"Max Concurrent VP Coder: {max_coder}\n"
+                                    _cap_report += f"Max Concurrent VP General: {max_general}\n"
+                                    _cap_report += f"Active VP Missions ({len(active_missions)}):\n"
+                                    for m in active_missions:
+                                        _cap_report += f"- {m}\n"
+                                        
+                                    dirs = eval_result.get("simone_directives", [])
+                                    esc = eval_result.get("human_escalations", [])
+                                    
+                                    _morning_text = _cap_report + "\n"
+                                    if dirs or esc:
+                                        _morning_text += "== HEALTH CHECK DIRECTIVES ==\n"
+                                        for d in dirs:
+                                            _morning_text += f"- {d}\n"
+                                        if esc:
+                                            _morning_text += "\n== ESCALATIONS ==\n"
+                                            for e in esc:
+                                                _morning_text += f"- {e}\n"
+                                    else:
+                                        _morning_text += "== HEALTH CHECK ==\nAll systems nominal. No stuck tasks."
 
                             metadata["proactive_advisor"] = {
                                 "brainstorm_task_count": len(_brainstorm_ctx),
@@ -2643,6 +2697,16 @@ class HeartbeatService:
             }
 
         except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "too many requests" in error_str or "overloaded" in error_str
+            if is_rate_limit:
+                from universal_agent.services.capacity_governor import CapacityGovernor
+                asyncio.ensure_future(
+                    CapacityGovernor.get_instance().report_rate_limit(
+                        "heartbeat_simone", error=e
+                    )
+                )
+
             run_failed = True
             task_hub_finalize_state = "failed"
             task_hub_finalize_summary = f"heartbeat_failed:{str(e)[:180]}"

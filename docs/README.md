@@ -23,6 +23,8 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 1. [Architecture](01_Architecture)
 
+- **[Pipeline Masterpiece](01_Architecture/000_PIPELINE_MASTERPIECE.md)**: Holistic end-to-end view of the pipeline (inputs, task hub state machine, Simone orchestration, autonomy engines).
+
 - **[System Architecture Overview](01_Architecture/01_System_Architecture_Overview.md)**: Component map, services, data stores, deployment topology.
 - **[Gateway, Sessions & Execution](01_Architecture/02_Gateway_Sessions_And_Execution.md)**: Session model, auth surfaces, execution engine, background services.
 - **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat.
@@ -32,6 +34,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Agent Architecture: agent_core.py vs main.py](001_AGENT_ARCHITECTURE.md)**: Entry point comparison, AgentSetup synchronization, URW session management.
 - **[SDK Permissions, Hooks & Subagents](002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md)**: Permission model, hooks architecture, subagent patterns.
 - **[Regression Control and Golden Runs](003_REGRESSION_CONTROL_AND_GOLDEN_RUNS.md)**: Testing stability, golden run preservation.
+- **[Database Architecture](01_Architecture/Database_Architecture.md)**: Absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic.
 
 ### 2. [Subsystems](02_Subsystems)
 

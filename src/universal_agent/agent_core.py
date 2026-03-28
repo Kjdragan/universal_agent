@@ -1737,13 +1737,13 @@ class UniversalAgent:
             "### Step 2: Run Research Phase (ONE TOOL CALL - AFTER ALL SEARCHES COMPLETE)\n"
             "**IMMEDIATELY** call `mcp__internal__run_research_phase`:\n"
             "   - `query`: The original user query.\n"
-            "   - `task_name`: (derive from research topic, e.g., 'russia_ukraine_war')\n\n"
+            "   - `context_path`: (derive from research topic, e.g., 'russia_ukraine_war')\n\n"
             "**What this tool does AUTOMATICALLY (you do NOT need to do these manually):**\n"
             "  1. ✅ Reads all `search_results/*.json` files\n"
             "  2. ✅ Extracts ALL URLs programmatically (Python code, not Bash)\n"
             "  3. ✅ Crawls ALL URLs in parallel (via Crawl4AI Cloud API)\n"
             "  4. ✅ Filters and deduplicates content\n"
-            "  5. ✅ Creates `tasks/{task_name}/refined_corpus.md` (token-efficient research corpus)\n\n"
+            "  5. ✅ Creates `tasks/{context_path}/refined_corpus.md` (token-efficient research corpus)\n\n"
             "🚫 **PROHIBITED ACTIONS (DO NOT DO THESE):**\n"
             "  - ❌ Do NOT use Bash/grep/jq to extract URLs from JSON files\n"
             "  - ❌ Do NOT manually call `crawl_parallel` after searches\n"
@@ -1808,7 +1808,7 @@ class UniversalAgent:
         else:
             prompt += (
                 "## RESEARCH DATA\n\n"
-                f"Read the corpus: `{workspace_path}/tasks/[task_name]/refined_corpus.md`\n\n"
+                f"Read the corpus: `{workspace_path}/tasks/[context_path]/refined_corpus.md`\n\n"
             )
 
         prompt += (

@@ -161,6 +161,57 @@ class LosslessDB:
             "created_at": now
         }
 
+    def prune_decayed_nodes(self, days: int = 180) -> dict:
+        """Deletes raw messages and obsolete summaries older than `days`."""
+        with self._lock:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute(
+                    "DELETE FROM lcm_context_items WHERE item_type = 'message' AND reference_id IN "
+                    "(SELECT id FROM lcm_messages WHERE created_at < datetime('now', ?))",
+                    (f"-{days} days",)
+                )
+                
+                cursor.execute(
+                    "DELETE FROM lcm_summary_messages WHERE message_id IN "
+                    "(SELECT id FROM lcm_messages WHERE created_at < datetime('now', ?))",
+                    (f"-{days} days",)
+                )
+
+                cursor.execute(
+                    "DELETE FROM lcm_messages WHERE created_at < datetime('now', ?)",
+                    (f"-{days} days",)
+                )
+                msgs_deleted = cursor.rowcount or 0
+
+                cursor.execute(
+                    "DELETE FROM lcm_context_items WHERE item_type = 'summary' AND reference_id IN "
+                    "(SELECT id FROM lcm_summaries WHERE created_at < datetime('now', ?))",
+                    (f"-{days} days",)
+                )
+
+                cursor.execute(
+                    "DELETE FROM lcm_summary_parents WHERE summary_id IN "
+                    "(SELECT id FROM lcm_summaries WHERE created_at < datetime('now', ?)) "
+                    "OR parent_summary_id IN "
+                    "(SELECT id FROM lcm_summaries WHERE created_at < datetime('now', ?))",
+                    (f"-{days} days", f"-{days} days")
+                )
+
+                cursor.execute(
+                    "DELETE FROM lcm_summaries WHERE created_at < datetime('now', ?)",
+                    (f"-{days} days",)
+                )
+                summaries_deleted = cursor.rowcount or 0
+                
+                conn.commit()
+                
+                return {
+                    "messages_pruned": msgs_deleted,
+                    "summaries_pruned": summaries_deleted
+                }
+
     def get_context_items(self, conversation_id: str) -> list:
         """Hydrates the active context list (summaries + fresh tail)."""
         # Returns ordered items with either 'message' or 'summary' loaded

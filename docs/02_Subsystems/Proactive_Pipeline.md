@@ -1016,7 +1016,7 @@ This creates a **chained execution model**: `Task A completes → immediate wake
   - Minimum cooldown: `cooldown_after_429` (default: 60s)
   - Consecutive tracking: 429s within 120s of each other count as the same incident
 
-- **Integration points** (4 locations):
+- **Integration points**:
 
   | Location | Hook | Purpose |
   |----------|------|---------|
@@ -1024,6 +1024,8 @@ This creates a **chained execution model**: `Task A completes → immediate wake
   | `auto_refinement_loop.py` | `can_dispatch()` before refinement cycle | Defer LLM work under pressure |
   | `refinement_agent.py` | `report_rate_limit()` in error handler | Feed 429s into backoff |
   | `decomposition_agent.py` | `report_rate_limit()` in error handler | Feed 429s into backoff |
+  | `heartbeat_service.py` | `report_rate_limit()` in execution error handler | Feed 429s from Simone into backoff |
+  | `vp/worker_loop.py` | `report_rate_limit()` in VP worker loop | Feed 429s from VP (Coder/Generalist) runs into backoff |
 
 - **Graceful degradation**: If the governor module fails to import (e.g., upgrade-in-progress), all callers fall through to their default behavior — the governor is **additive, not blocking**.
 

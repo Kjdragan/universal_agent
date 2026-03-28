@@ -224,6 +224,16 @@ class VpWorkerLoop:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                error_str = str(exc).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str or "overloaded" in error_str
+                if is_rate_limit:
+                    from universal_agent.services.capacity_governor import CapacityGovernor
+                    asyncio.ensure_future(
+                        CapacityGovernor.get_instance().report_rate_limit(
+                            f"vp_{self.vp_id}", error=exc
+                        )
+                    )
+
                 logger.exception("VP worker tick failed: vp_id=%s err=%s", self.vp_id, exc)
                 update_vp_session_status(
                     self.conn,

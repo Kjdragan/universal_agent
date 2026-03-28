@@ -108,6 +108,8 @@ def connect_runtime_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON;")
+    # Incremental vacuum reduces OS lock contention vs full VACUUM sweeps
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL;")
     # WAL improves concurrent read/write behavior across independent processes.
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms};")

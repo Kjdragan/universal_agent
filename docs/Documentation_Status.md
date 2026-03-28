@@ -34,11 +34,13 @@ Written from source code review — these describe the system as it actually exi
 | 04 | Dual Factory and Capability Expansion Brainstorm |
 | 05 | Simone-First Orchestration — batch triage, VP delegation lifecycle, two-layer email response, `/btw` sidebar |
 | 06 | Comparison: Background Workers vs Simone Orchestration — Deep-dive evaluation of pull-based agent workers vs the event-driven Simone-First orchestration model |
+| 07 | Database Architecture — absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic |
 
 ## Root Architecture Docs
 
 | Doc | Subject |
 |-----|---------|
+| 000 | Pipeline Masterpiece — holistic end-to-end view of input ingress, task hub state machine, Simone orchestration, and the autonomous reflection engines |
 | 001 | Agent Architecture (agent_core.py vs main.py) — entry points, AgentSetup sync, URW session reuse |
 | 002 | SDK Permissions, Hooks & Subagents — permission model, hooks architecture, subagent patterns |
 | 003 | Regression Control and Golden Runs — testing stability, golden run preservation |

@@ -7542,10 +7542,13 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
     deleted = (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
     if deleted > 0:
         try:
-            conn.execute("VACUUM")
-            logger.info("Activity DB pruned %d rows and vacuumed", deleted)
+            # Reclaim pages incrementally to prevent locking the database
+            # globally rather than doing a full VACUUM sweep.
+            conn.execute("PRAGMA auto_vacuum = INCREMENTAL;")
+            conn.execute("PRAGMA incremental_vacuum(500);")
+            logger.info("Activity DB pruned %d rows and incrementally vacuumed", deleted)
         except Exception as exc:
-            logger.debug("Activity DB VACUUM skipped: %s", exc)
+            logger.debug("Activity DB incremental_vacuum skipped: %s", exc)
 
 
 def _activity_upsert_record(record: dict[str, Any]) -> None:

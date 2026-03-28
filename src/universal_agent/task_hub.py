@@ -1537,6 +1537,68 @@ def finalize_assignments(
     }
 
 
+def prune_settled_tasks(
+    conn: sqlite3.Connection,
+    *,
+    retention_days: int = 21,
+) -> dict[str, int]:
+    ensure_schema(conn)
+    retention_days = max(1, int(retention_days))
+
+    # 1. Delete evaluations associated with eligible settled tasks
+    c_eval = conn.execute(
+        """
+        DELETE FROM task_hub_evaluations
+        WHERE task_id IN (
+            SELECT task_id FROM task_hub_items
+            WHERE status IN (?, ?)
+            AND updated_at < datetime('now', ?)
+        )
+        """,
+        (TASK_STATUS_COMPLETED, "parked", f"-{retention_days} days"),
+    )
+    deleted_evaluations = c_eval.rowcount or 0
+
+    # 2. Delete assignments associated with eligible settled tasks
+    c_assign = conn.execute(
+        """
+        DELETE FROM task_hub_assignments
+        WHERE task_id IN (
+            SELECT task_id FROM task_hub_items
+            WHERE status IN (?, ?)
+            AND updated_at < datetime('now', ?)
+        )
+        """,
+        (TASK_STATUS_COMPLETED, "parked", f"-{retention_days} days"),
+    )
+    deleted_assignments = c_assign.rowcount or 0
+
+    # 3. Delete the tasks themselves
+    c_items = conn.execute(
+        """
+        DELETE FROM task_hub_items
+        WHERE status IN (?, ?)
+        AND updated_at < datetime('now', ?)
+        """,
+        (TASK_STATUS_COMPLETED, "parked", f"-{retention_days} days"),
+    )
+    deleted_items = c_items.rowcount or 0
+
+    conn.commit()
+    
+    if deleted_items > 0:
+        logger.info(
+            "Pruned %d tasks, %d assignments, %d evaluations older than %d days.",
+            deleted_items, deleted_assignments, deleted_evaluations, retention_days
+        )
+
+    return {
+        "items": deleted_items,
+        "assignments": deleted_assignments,
+        "evaluations": deleted_evaluations,
+    }
+
+
 def release_stale_assignments(
     conn: sqlite3.Connection,
     *,

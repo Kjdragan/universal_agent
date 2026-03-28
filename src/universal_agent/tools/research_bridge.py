@@ -116,7 +116,7 @@ def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
     description="Execute the UNIFIED Research & Reporting Pipeline. Handles Search -> Crawl -> Refine -> Outline -> Draft -> Compile in one Turn. EFFICIENCY: Use this to avoid fragmented tool calls. TRUST the JSON success receipt; DO NOT call Bash/ls after this.",
     input_schema={
         "query": str, 
-        "task_name": str,
+        "context_path": str,
         "workspace_dir": str,
     }
 )
@@ -125,7 +125,7 @@ async def run_research_pipeline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for the research pipeline to run in-process.
     """
     query = args.get("query")
-    raw_task_name = args.get("task_name", "default")
+    raw_task_name = args.get("context_path", "default")
     workspace_hint = _resolve_workspace_hint(args)
     
     # Apply Guardrail
@@ -182,7 +182,7 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description="Execute Phase 1 of Research: Crawl & Refine. Produces refined_corpus.md. EFFICIENCY: Trust the output path in the JSON response. Do NOT call 'ls' to verify.",
     input_schema={
         "query": str, 
-        "task_name": str,
+        "context_path": str,
     }
 )
 async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -190,7 +190,7 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for research phase (Crawl -> Refine) to run in-process.
     """
     query = args.get("query")
-    raw_task_name = args.get("task_name", "default")
+    raw_task_name = args.get("context_path", "default")
     workspace_hint = _resolve_workspace_hint(args)
     
     # Apply Guardrail
@@ -205,7 +205,7 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description="Execute Phase 2 of Research: Outline -> Draft -> Compile. Produces report.html. EFFICIENCY: Unified turn. Do NOT use Bash to check for the report file after this.",
     input_schema={
         "query": str, 
-        "task_name": str,
+        "context_path": str,
         "corpus_data": str,  # Option to provide corpus directly (for non-search tasks)
     }
 )
@@ -214,7 +214,7 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for report generation (Outline -> Compile) to run in-process.
     """
     query = args.get("query")
-    raw_task_name = args.get("task_name", "default")
+    raw_task_name = args.get("context_path", "default")
     corpus_data = args.get("corpus_data")
     workspace_hint = _resolve_workspace_hint(args)
 
@@ -250,13 +250,13 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description="Generate a report outline from the refined corpus.",
     input_schema={
         "topic": str,
-        "task_name": str
+        "context_path": str
     }
 )
 async def generate_outline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     from mcp_server import generate_outline
     topic = args.get("topic")
-    task_name = resolve_best_task_match(args.get("task_name", "default"))
+    task_name = resolve_best_task_match(args.get("context_path", "default"))
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result = await generate_outline(topic, task_name)
     return {"content": [{"type": "text", "text": result}]}
@@ -265,12 +265,12 @@ async def generate_outline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     name="draft_report_parallel",
     description="Execute the parallel drafting system to generate report sections.",
     input_schema={
-        "task_name": str
+        "context_path": str
     }
 )
 async def draft_report_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     from mcp_server import draft_report_parallel
-    task_name = resolve_best_task_match(args.get("task_name", "default"))
+    task_name = resolve_best_task_match(args.get("context_path", "default"))
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result = await draft_report_parallel(task_name=task_name)
     return {"content": [{"type": "text", "text": result}]}

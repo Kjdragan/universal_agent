@@ -39,3 +39,5 @@ amazing game graph of claude activities
 claude code organiser repo for moving/copying globsal local mcps and skills!
 
 ultra has deepthink capabilities.  Hiow can i use?
+
+improved scraping, update use of crawkl4ai, schema investigation for particular sites such as hacker newsrather than blanket scrapes,.  When scraping, make sure skill porcesses pipeline tio get it in good for for model to then injest.
