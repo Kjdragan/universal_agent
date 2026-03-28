@@ -1032,28 +1032,8 @@ def claim_next_dispatch_tasks(
         if str(current.get("status") or "") not in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
             continue
 
-        # ── Idempotency guard: skip tasks with a recent completed assignment ──
-        # Prevents the "completion feedback loop" race where a task gets
-        # re-claimed within seconds of being marked completed.
-        _recent_guard_minutes = max(1, _safe_int(os.getenv("UA_TASK_HUB_RECENT_CLAIM_GUARD_MINUTES"), 5))
-        recent_completed = conn.execute(
-            """
-            SELECT COUNT(*) AS cnt FROM task_hub_assignments
-            WHERE task_id = ? AND state = 'completed'
-              AND ended_at > datetime('now', ? || ' minutes')
-            """,
-            (task_id, f"-{_recent_guard_minutes}"),
-        ).fetchone()
-        if recent_completed and int(recent_completed["cnt"] or 0) > 0:
-            logger.warning(
-                "⛔ Skipping re-claim of recently-completed task %s "
-                "(has %d completed assignment(s) in last %d min)",
-                task_id, int(recent_completed["cnt"]), _recent_guard_minutes,
-            )
-            continue
-
-        # Also check completion_token — if set, task was finalized and should
-        # not be re-claimed without explicit operator reset.
+        # ── completion_token guard: if set, task was finalized and should
+        # not be re-claimed without explicit operator reset. ──
         if current.get("completion_token"):
             logger.warning(
                 "⛔ Skipping claim of completion-locked task %s (token=%s)",
@@ -1465,23 +1445,58 @@ def finalize_assignments(
                     heartbeat_retry_limit,
                 )
             else:
-                dispatch_meta["last_disposition"] = "reopened"
-                dispatch_meta["last_disposition_reason"] = f"heartbeat_{run_state or 'failed'}_retryable"
-                conn.execute(
-                    """
-                    UPDATE task_hub_items
-                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
-                    WHERE task_id=?
-                    """,
-                    (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
-                )
-                reopened += 1
-                logger.info(
-                    "Task Hub heartbeat finalize reopened task %s for retry (%s/%s)",
-                    task_id,
-                    retry_count,
-                    heartbeat_retry_limit,
-                )
+                # ── Side-effect-aware retry guard ──────────────────────
+                # Before reopening for retry, check if irreversible side
+                # effects already occurred (e.g. email already sent).
+                # If so, force-complete to prevent duplicate execution.
+                side_effects_detected = False
+                try:
+                    _se_row = conn.execute(
+                        "SELECT email_sent_at FROM email_task_mappings WHERE task_id = ? LIMIT 1",
+                        (task_id,),
+                    ).fetchone()
+                    if _se_row and _se_row["email_sent_at"]:
+                        side_effects_detected = True
+                except Exception:
+                    pass  # table may not exist — safe to skip
+
+                if side_effects_detected:
+                    dispatch_meta["last_disposition"] = "completed"
+                    dispatch_meta["last_disposition_reason"] = "side_effects_detected_force_complete"
+                    metadata["dispatch"] = dispatch_meta
+                    _completion_token = f"se_{uuid.uuid4().hex[:12]}_{now_iso}"
+                    conn.execute(
+                        """
+                        UPDATE task_hub_items
+                        SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=?
+                        WHERE task_id=?
+                        """,
+                        (TASK_STATUS_COMPLETED, "unseized", _completion_token, _json_dumps(metadata), now_iso, task_id),
+                    )
+                    completed += 1
+                    logger.warning(
+                        "🛡️ Task Hub finalize FORCE-COMPLETED task %s — side effects already occurred "
+                        "(email_sent_at set), preventing duplicate execution (retry %s/%s)",
+                        task_id, retry_count, heartbeat_retry_limit,
+                    )
+                else:
+                    dispatch_meta["last_disposition"] = "reopened"
+                    dispatch_meta["last_disposition_reason"] = f"heartbeat_{run_state or 'failed'}_retryable"
+                    conn.execute(
+                        """
+                        UPDATE task_hub_items
+                        SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                        WHERE task_id=?
+                        """,
+                        (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+                    )
+                    reopened += 1
+                    logger.info(
+                        "Task Hub heartbeat finalize reopened task %s for retry (%s/%s)",
+                        task_id,
+                        retry_count,
+                        heartbeat_retry_limit,
+                    )
             continue
 
         metadata["dispatch"] = dispatch_meta
@@ -1494,6 +1509,23 @@ def finalize_assignments(
             (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
         )
         reopened += 1
+
+    # ── Dispatch queue invalidation ─────────────────────────────────
+    # Purge completed/reviewed tasks from the snapshot table so they
+    # cannot be re-served by a stale dispatch queue build.
+    try:
+        conn.execute(
+            """
+            DELETE FROM task_hub_dispatch_queue
+            WHERE task_id IN (
+                SELECT task_id FROM task_hub_items
+                WHERE status IN (?, ?, ?)
+            )
+            """,
+            (TASK_STATUS_COMPLETED, TASK_STATUS_REVIEW, "waiting-on-reply"),
+        )
+    except Exception as _dq_err:
+        logger.debug("Dispatch queue cleanup skipped: %s", _dq_err)
 
     conn.commit()
     return {
