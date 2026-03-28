@@ -25387,6 +25387,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+    import time
 
     port = int(os.getenv("UA_GATEWAY_PORT", "8002"))
     host = os.getenv("UA_GATEWAY_HOST", "0.0.0.0")
@@ -25401,4 +25402,17 @@ if __name__ == "__main__":
 ╚══════════════════════════════════════════════════════════════╝
     """)
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            uvicorn.run(app, host=host, port=port, log_level="info")
+            break
+        except OSError as e:
+            if "address already in use" in str(e).lower() or getattr(e, "errno", None) == 98:
+                print(f"Port {port} is in use. Retrying in 2 seconds... (Attempt {attempt + 1}/{max_retries})")
+                time.sleep(2)
+                if attempt == max_retries - 1:
+                    print("Max retries reached. Exiting.")
+                    raise
+            else:
+                raise

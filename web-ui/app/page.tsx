@@ -556,7 +556,9 @@ function FileViewer() {
         ) : (
           <div className="h-full overflow-auto p-4 scrollbar-thin bg-background text-foreground">
             <pre className="text-xs font-mono whitespace-pre-wrap text-muted-foreground">
-              {viewingFile.content || "Loading or Binary Content..."}
+              {typeof viewingFile.content === "string" 
+                ? (viewingFile.content || "[Empty File]") 
+                : "Loading or Binary Content..."}
             </pre>
           </div>
         )}

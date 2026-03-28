@@ -51,10 +51,8 @@ DEFAULT_HEARTBEAT_PROMPT = (
 TASK_FOCUSED_PROMPT = (
     "You have been given specific tasks from the Task Queue below. "
     "Focus EXCLUSIVELY on executing these tasks to completion. "
-    "Do NOT run system health checks, VPS monitoring, or read HEARTBEAT.md. "
-    "Do NOT run uptime, free, df, or any system diagnostic commands. "
-    "Do NOT write system_health_latest.md or run infrastructure checks. "
-    "Execute the assigned tasks, deliver results, then disposition them. "
+    "Do not perform any system monitoring, infrastructure checks, or background reporting. "
+    "Your only goal is to execute the assigned tasks, deliver results, then disposition them. "
     "The system will automatically record the run outcome."
 )
 _GLOBAL_HEARTBEAT_SESSION_PREFIXES = (
@@ -393,11 +391,26 @@ def _compose_heartbeat_prompt(
             score = f"{float(item.get('score', 0)):.1f}"
             task_id = str(item.get("task_id") or "")
             description = str(item.get("description") or "").strip()
-            desc_preview = (description[:120] + "…") if len(description) > 120 else description
+            description = str(item.get("description") or "").strip()
+            desc_preview = (description[:2000] + "…") if len(description) > 2000 else description
             lines.append(f"Task {idx}: [{task_id}] {title}")
             lines.append(f"  Priority: {priority} | Source: {source} | Score: {score}")
             if desc_preview:
                 lines.append(f"  Description: {desc_preview}")
+            
+            # If there's useful metadata (like email sender info), include it briefly
+            metadata = item.get("metadata_json")
+            if metadata:
+                import json
+                try:
+                    meta_dict = json.loads(metadata) if isinstance(metadata, str) else metadata
+                    if isinstance(meta_dict, dict):
+                        # Filter out huge fields, just give context
+                        safe_meta = {k: v for k, v in meta_dict.items() if len(str(v)) < 500}
+                        if safe_meta:
+                            lines.append(f"  Context/Metadata: {json.dumps(safe_meta)}")
+                except Exception:
+                    pass
         lines.append("")
         lines.append("## Triage Protocol")
         lines.append("1. Review ALL tasks above before acting on any.")

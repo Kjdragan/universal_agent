@@ -79,14 +79,19 @@ def generate_transcript(trace_data: Dict[str, Any], output_path: str):
         lines.append("*No complex tool iterations recorded.*")
     
     for i, iter_data in enumerate(iterations):
+        step_id = iter_data.get("step_id")
         iter_num = iter_data.get("iteration", i + 1)
+        display_num = i + 1
         
         # Iteration Header
         lines.append(f"---")
-        lines.append(f"### 🔄 Iteration {iter_num}")
+        lines.append(f"### 🔄 Turn {display_num}")
         
         # Extract thoughts if available (usually in multi-execute inputs)
-        iter_calls = [tc for tc in tool_calls if tc.get("iteration") == iter_num]
+        if step_id:
+            iter_calls = [tc for tc in tool_calls if tc.get("step_id") == step_id]
+        else:
+            iter_calls = [tc for tc in tool_calls if tc.get("iteration") == iter_num]
         
         if not iter_calls:
             lines.append("*No tools called in this iteration.*")
