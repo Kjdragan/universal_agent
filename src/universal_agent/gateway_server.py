@@ -2199,6 +2199,7 @@ _gateway: Optional[InProcessGateway] = None
 _sessions: dict[str, GatewaySession] = {}
 _session_runtime: dict[str, dict[str, Any]] = {}
 _heartbeat_service: Optional[HeartbeatService] = None
+_todo_dispatch_service: Optional[Any] = None
 _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
@@ -5669,6 +5670,8 @@ async def _admit_hook_turn(session_id: str, request: GatewayRequest) -> dict[str
                     store_session(candidate)
                     if _heartbeat_service:
                         _heartbeat_service.register_session(candidate)
+                    if _todo_dispatch_service:
+                        _todo_dispatch_service.register_session(candidate)
         except Exception as exc:
             logger.warning("Failed to sync hook session into gateway state (session=%s): %s", session_id, exc)
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
@@ -6045,6 +6048,8 @@ def _collect_live_heartbeat_targets(
         if register_with_heartbeat and _heartbeat_service:
             try:
                 _heartbeat_service.register_session(session)
+                if _todo_dispatch_service:
+                    _todo_dispatch_service.register_session(session)
             except Exception:
                 logger.debug("Failed to register live session %s with heartbeat", sid)
     if include_heartbeat_active and _heartbeat_service and hasattr(_heartbeat_service, "active_sessions"):
@@ -11732,7 +11737,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
+    global _heartbeat_service, _todo_dispatch_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
@@ -11753,6 +11758,18 @@ async def lifespan(app: FastAPI):
                 logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
         except Exception as exc:
             logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
+
+        from universal_agent.services.todo_dispatch_service import ToDoDispatchService
+        _todo_dispatch_service = ToDoDispatchService(
+            connection_manager=manager,
+            event_callback=_emit_heartbeat_event
+        )
+        await _todo_dispatch_service.start()
+        try:
+            for existing_session in _gateway_live_session_summaries():
+                _todo_dispatch_service.register_session(existing_session)
+        except Exception as exc:
+            logger.warning("Failed to seed tododispatch sessions at startup: %s", exc)
 
         # --- Persistent Daemon Sessions (always-on agents) ---
         try:
@@ -11994,6 +12011,8 @@ async def lifespan(app: FastAPI):
             if session is not None:
                 try:
                     _heartbeat_service.register_session(session)
+                    if _todo_dispatch_service:
+                        _todo_dispatch_service.register_session(session)
                 except Exception:
                     pass
             _heartbeat_service.request_heartbeat_now(sid, reason=wake_reason)
@@ -12076,6 +12095,7 @@ async def lifespan(app: FastAPI):
                     (lambda: dict(_heartbeat_service.active_sessions))
                     if _heartbeat_service else None
                 ),
+                todo_dispatch_service=_todo_dispatch_service,
             )
         )
         logger.info("🔄 Idle dispatch loop background task started")
@@ -13836,6 +13856,8 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
         _increment_metric("sessions_created")
         if _heartbeat_service:
             _heartbeat_service.register_session(session)
+        if _todo_dispatch_service:
+            _todo_dispatch_service.register_session(session)
         else:
             logger.warning("Heartbeat service not available in create_session")
         return CreateSessionResponse(
@@ -22654,6 +22676,8 @@ async def get_session_info(session_id: str, request: Request):
             _increment_metric("resume_successes")
             if _heartbeat_service:
                 _heartbeat_service.register_session(session)
+            if _todo_dispatch_service:
+                _todo_dispatch_service.register_session(session)
         except ValueError:
             _increment_metric("resume_failures")
             raise HTTPException(status_code=404, detail="Session not found")
@@ -22792,6 +22816,8 @@ async def delete_session(session_id: str, request: Request):
     _session_runtime.pop(session_id, None)
     if _heartbeat_service:
         _heartbeat_service.unregister_session(session_id)
+    if _todo_dispatch_service:
+        _todo_dispatch_service.unregister_session(session_id)
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -24570,6 +24596,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             store_session(session)
             if _heartbeat_service:
                 _heartbeat_service.register_session(session)
+            if _todo_dispatch_service:
+                _todo_dispatch_service.register_session(session)
         except ValueError:
             # Session Not Found - do NOT count as continuity failure
             await websocket.close(code=4004, reason="Session not found")

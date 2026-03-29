@@ -14,7 +14,6 @@ from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent import task_hub
-from universal_agent.services.dispatch_service import dispatch_sweep
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 import shutil
@@ -51,15 +50,7 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Do NOT write or run Python/Bash scripts to interact with AgentMail or Task Hub. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
-TASK_FOCUSED_PROMPT = (
-    "You have been given specific tasks from the Task Queue below. "
-    "Focus EXCLUSIVELY on executing these tasks to completion. "
-    "Do not perform any system monitoring, infrastructure checks, or background reporting. "
-    "Your only goal is to execute the assigned tasks, deliver results, then disposition them. "
-    "To send an email, strictly use `mcp__internal__send_agentmail` tool. Do NOT write scripts. "
-    "To manage tasks, strictly use `mcp__internal__task_hub_task_action` tool. Do NOT write scripts. "
-    "The system will automatically record the run outcome."
-)
+
 _GLOBAL_HEARTBEAT_SESSION_PREFIXES = (
     "session_hook_simone_heartbeat_",
 )
@@ -1860,24 +1851,9 @@ class HeartbeatService:
                         logger.debug("Capacity governor unavailable: %s", _cap_exc)
                     # ────────────────────────────────────────────────────
 
-                    if _capacity_ok:
-                        task_hub_claimed = dispatch_sweep(
-                            conn,
-                            limit=max(1, max_proactive_per_cycle),
-                            agent_id=task_hub_agent_id,
-                            workflow_run_id=task_hub_workflow_run_id or None,
-                            workflow_attempt_id=task_hub_workflow_attempt_id or None,
-                            provider_session_id=session.session_id,
-                            workspace_dir=getattr(session, "workspace_dir", None),
-                        )
-                    else:
-                        task_hub_claimed = []
-                        logger.info(
-                            "Dispatch skipped due to capacity: %s (%d eligible tasks deferred)",
-                            _capacity_reason,
-                            dispatch_actionable_count,
-                        )
-                    dispatch_claimed_count = len(task_hub_claimed)
+                    # Dispatch logic moved to todo_dispatch_service
+                    task_hub_claimed = []
+                    dispatch_claimed_count = 0
                     task_hub_claimed_count = dispatch_claimed_count
                     should_schedule_continuation = dispatch_claimed_count > 0
                     if should_schedule_continuation:
@@ -2144,15 +2120,9 @@ class HeartbeatService:
             #
             # Task-focused mode: when tasks are claimed from the dispatch queue,
             # switch to a lean prompt that skips all system monitoring.
-            _is_task_focused = bool(task_hub_claimed)
-            if _is_task_focused:
-                base_prompt = TASK_FOCUSED_PROMPT
-                logger.info(
-                    "Using TASK_FOCUSED_PROMPT for session %s (%d tasks claimed, skipping system monitoring)",
-                    session.session_id,
-                    len(task_hub_claimed),
-                )
-            elif has_exec_completion:
+            _is_task_focused = False
+            
+            if has_exec_completion:
                 base_prompt = EXEC_EVENT_PROMPT
                 logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
             else:

@@ -78,6 +78,7 @@ async def idle_dispatch_loop(
     get_sessions_fn: Any,
     notification_sink: Optional[Any] = None,
     get_heartbeat_sessions_fn: Optional[Any] = None,
+    todo_dispatch_service: Optional[Any] = None,
 ) -> None:
     """Background loop: if agents are idle and tasks exist, dispatch.
 
@@ -171,9 +172,13 @@ async def idle_dispatch_loop(
             # for minimal benefit — the heartbeat handles multi-session)
             target_sid = sorted(idle_sessions)[0]
 
-            heartbeat_service.request_heartbeat_now(
-                target_sid, reason=f"idle_dispatch_{nudge_reason}"
-            )
+            if todo_dispatch_service:
+                todo_dispatch_service.request_dispatch_now(target_sid)
+            else:
+                heartbeat_service.request_heartbeat_now(
+                    target_sid, reason=f"idle_dispatch_{nudge_reason}"
+                )
+            
             last_dispatch_time = now
 
             logger.info(
