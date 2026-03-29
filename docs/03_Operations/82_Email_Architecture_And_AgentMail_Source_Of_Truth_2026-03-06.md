@@ -132,6 +132,19 @@ Implementation:
 
 This avoids confusing the triage agent with full quoted thread history. Kevin's new reply content is cleanly isolated from the quoted digest below it.
 
+### Disjointed Task Decoupling
+
+Implementation:
+- `universal_agent.services.llm_classifier.extract_disjointed_tasks()`
+- `AgentMailService._handle_inbound_email()`
+- `EmailTaskBridge.materialize()`
+
+When a single email contains multiple unrelated requests, it is split into "disjointed tasks". To prevent multiple tasks from the same email from overwriting each other in the `email_task_mappings` database:
+- `AgentMailService` generates a `virtual_thread_id` (e.g., `threadId_0`) for tracking purposes.
+- The `virtual_thread_id` is used as the primary key internally to decouple the rows in local databases and the Task Hub dashboard.
+- The **actual** AgentMail `thread_id` and `message_id` are persisted in the `real_thread_id` and `real_message_id` columns.
+- The `real_thread_id` is passed into the Task Hub metadata so that Simone can successfully execute MCP API calls (like replying) without hitting 404 errors from the external AgentMail API.
+
 ### Trusted Sender Handling
 
 Implementation:

@@ -1153,9 +1153,14 @@ class AgentMailService:
                     except Exception as _time_exc:
                         logger.debug("Temporal extraction failed (non-fatal): %s", _time_exc)
 
+                    virtual_thread_id = f"{thread_id}_{index}" if len(disjointed_tasks) > 1 else thread_id
+                    virtual_message_id = f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id
+
                     bridge_result = self._materialize_email_task(
-                        thread_id=thread_id,
-                        message_id=f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id,
+                        thread_id=virtual_thread_id,
+                        message_id=virtual_message_id,
+                        real_thread_id=thread_id,
+                        real_message_id=message_id,
                         sender_email=sender_email,
                         subject=f"{subject} (Task {index+1}/{len(disjointed_tasks)})" if len(disjointed_tasks) > 1 else subject,
                         reply_text=task_content,
@@ -1190,7 +1195,7 @@ class AgentMailService:
                         subject=subject,
                         body_snippet=task_content[:200],
                         task_id=bridge_result.get("task_id", "") if bridge_result else "",
-                        thread_id=thread_id,
+                        thread_id=virtual_thread_id,
                         sender_email=sender_email,
                     )
 
@@ -1258,6 +1263,8 @@ class AgentMailService:
         workflow_run_id: str = "",
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
+        real_thread_id: str = "",
+        real_message_id: str = "",
     ) -> Optional[dict[str, Any]]:
         """Materialize an inbound trusted email as a tracked task.
 
@@ -1282,6 +1289,8 @@ class AgentMailService:
                 workflow_run_id=workflow_run_id,
                 workflow_attempt_id=workflow_attempt_id,
                 provider_session_id=provider_session_id,
+                real_thread_id=real_thread_id,
+                real_message_id=real_message_id,
             )
         except Exception as exc:
             logger.warning(

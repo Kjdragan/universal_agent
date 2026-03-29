@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS email_task_mappings (
     provider_session_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     last_message_id TEXT NOT NULL DEFAULT '',
+    real_thread_id TEXT NOT NULL DEFAULT '',
+    real_message_id TEXT NOT NULL DEFAULT '',
     message_count INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -124,6 +126,8 @@ def ensure_email_task_schema(conn: sqlite3.Connection) -> None:
         ("workflow_run_id", "''"),
         ("workflow_attempt_id", "''"),
         ("provider_session_id", "''"),
+        ("real_thread_id", "''"),
+        ("real_message_id", "''"),
         # Idempotency: tracks when an email response was sent for this thread
         ("email_sent_at", "NULL"),
     ]:
@@ -196,6 +200,8 @@ class EmailTaskBridge:
         workflow_run_id: str = "",
         workflow_attempt_id: str = "",
         provider_session_id: str = "",
+        real_thread_id: str = "",
+        real_message_id: str = "",
     ) -> dict[str, Any]:
         """Convert an inbound email into a tracked task.
 
@@ -210,6 +216,9 @@ class EmailTaskBridge:
         message_id = str(message_id or "").strip()
         if not thread_id:
             thread_id = message_id or f"orphan_{int(time.time())}"
+            
+        real_thread_id = str(real_thread_id or thread_id).strip()
+        real_message_id = str(real_message_id or message_id).strip()
 
         task_id = _deterministic_task_id(thread_id)
         master_key = self._classify_master_key(subject)
@@ -245,12 +254,14 @@ class EmailTaskBridge:
                 SET subject = ?, sender_email = ?, last_message_id = ?,
                     message_count = ?, updated_at = ?, master_key = ?,
                     sender_trusted = ?, security_classification = ?,
-                    workflow_run_id = ?, workflow_attempt_id = ?, provider_session_id = ?
+                    workflow_run_id = ?, workflow_attempt_id = ?, provider_session_id = ?,
+                    real_thread_id = ?, real_message_id = ?
                 WHERE thread_id = ?
                 """,
                 (subject, sender_email, message_id, message_count, now,
                  master_key, int(sender_trusted), security_classification,
                  resolved_workflow_run_id, resolved_workflow_attempt_id, resolved_provider_session_id,
+                 real_thread_id, real_message_id,
                  thread_id),
             )
         else:
@@ -262,13 +273,13 @@ class EmailTaskBridge:
                      master_key, subject, sender_email, sender_trusted,
                      security_classification, workflow_run_id, workflow_attempt_id,
                      provider_session_id, status, last_message_id,
-                     message_count, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)
+                     message_count, created_at, updated_at, real_thread_id, real_message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?, ?, ?)
                 """,
                 (thread_id, task_id, master_key, subject, sender_email,
                  int(sender_trusted), security_classification,
                  resolved_workflow_run_id, resolved_workflow_attempt_id, resolved_provider_session_id,
-                 message_id, now, now),
+                 message_id, now, now, real_thread_id, real_message_id),
             )
         self._conn.commit()
 
@@ -292,6 +303,8 @@ class EmailTaskBridge:
             priority=priority,
             due_at=due_at,
             initial_status="open",
+            real_thread_id=real_thread_id,
+            real_message_id=real_message_id,
         )
 
         # ③ Update HEARTBEAT.md
@@ -536,6 +549,8 @@ class EmailTaskBridge:
         priority: int | None = None,
         due_at: str | None = None,
         initial_status: str = "open",
+        real_thread_id: str = "",
+        real_message_id: str = "",
     ) -> dict[str, Any]:
         """Create or update a Task Hub entry for this email task.
 
@@ -562,7 +577,8 @@ class EmailTaskBridge:
             task_labels = labels or list(_EMAIL_TASK_DEFAULT_LABELS)
 
             metadata: dict[str, Any] = {
-                "email_thread_id": thread_id,
+                "email_thread_id": str(real_thread_id or thread_id),
+                "email_message_id": str(real_message_id),
                 "sender_email": sender_email,
                 "message_count": message_count,
                 "session_key": session_key,
@@ -576,11 +592,12 @@ class EmailTaskBridge:
                 metadata["provider_session_id"] = provider_session_id
 
             resolved_priority = priority if priority is not None else 2
+            resolved_source_ref = str(real_thread_id or thread_id)
 
             item = {
                 "task_id": task_id,
                 "source_kind": _EMAIL_TASK_SOURCE_KIND,
-                "source_ref": f"agentmail_thread:{thread_id}",
+                "source_ref": f"agentmail_thread:{resolved_source_ref}",
                 "title": f"📧 {subject}" if subject else "📧 Email Task",
                 "description": description,
                 "project_key": _EMAIL_TASK_PROJECT_KEY,
