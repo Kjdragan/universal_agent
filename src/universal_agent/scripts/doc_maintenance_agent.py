@@ -192,18 +192,19 @@ def _build_batched_objectives(report: dict) -> list[dict]:
                 "## Rules",
                 "",
                 "### Verify Before Fixing (CRITICAL)",
-                "The drift report flags potential issues based on git co-change heuristics.",
-                "It does NOT prove the documentation is actually wrong. Before editing any file:",
+                "This auditing process serves as a backstop. We generally update documentation as we go along, but sometimes we forget specific features or elements.",
+                "Therefore, it is CRITICAL that you comprehensively read the existing documentation to understand the 'spirit' and scope of what is already there.",
+                "The drift report flags potential issues based on git co-change heuristics, but it does NOT prove the documentation is actually wrong. Before editing any file:",
                 "",
-                "1. **Read the current content** of the referenced doc file",
-                "2. **Read the relevant source code** that the issue refers to",
-                "3. **Compare**: Does the documentation already accurately describe the current code behavior?",
+                "1. **Read the complete current content** of the referenced doc file to grasp the spirit of what exists.",
+                "2. **Read the relevant source code** that the issue refers to.",
+                "3. **Compare**: Does the documentation already broadly address the codebase changes?",
                 "4. **If YES** — the doc is already correct (likely updated manually). **SKIP** this issue.",
                 "   Add a line to the commit body: `Skipped: <file> — already accurate`",
-                "5. **If NO** — the doc is genuinely stale. Fix it.",
+                "5. **If NO** — the doc is genuinely missing important updates. Fix it by filling in the blanks.",
+                "   When adding to the document, ensure your additions are in the spirit of the entire codebase changes, not just one disconnected element.",
                 "",
-                "Do NOT assume a flagged file needs changes. The developer may have already",
-                "updated documentation to reflect recent code changes outside this audit window.",
+                "Do NOT assume a flagged file needs changes. Assess the likelihood that recent changes were already adequately covered.",
                 "",
                 "### General",
                 "- All documentation MUST reside within `docs/`",
@@ -255,6 +256,9 @@ def _dispatch_via_gateway(
             "You are operating as a **Documentation Maintenance Agent** for this mission.\n\n"
             "### Your Task\n"
             "Verify and fix documentation drift issues identified by an automated audit.\n"
+            "This process is a backstop. We usually update docs as we build, but this catches what we miss.\n"
+            "Read the complete existing documentation to understand its spirit. Only fill in the blanks if a meaningful change was missed.\n"
+            "If you make additions, ensure they align with the spirit of the entire changeset, not just isolated elements.\n"
             "Each issue includes a file path, line reference, and suspected staleness.\n\n"
             "### Fast-Skip Rules (Apply FIRST to Save Time)\n"
             "Some issue categories have high false-positive rates. Check these BEFORE "
