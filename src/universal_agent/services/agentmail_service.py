@@ -1015,7 +1015,7 @@ class AgentMailService:
                 else "external"
             )
             sender_trusted = sender_role == "trusted_operator"
-            subject = getattr(msg, "subject", "(no subject)")
+            subject = getattr(msg, "subject", None) or "(no subject)"
             thread_id = getattr(msg, "thread_id", "")
             message_id = str(getattr(msg, "message_id", "") or "").strip()
             text_body = getattr(msg, "text", "") or ""
