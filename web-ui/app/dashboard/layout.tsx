@@ -352,7 +352,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <div key={group.title} className="mb-5">
                   <p
                     className={[
-                      "mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground transition-all duration-300 whitespace-nowrap overflow-hidden",
+                      "mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground transition-all duration-300 whitespace-nowrap overflow-hidden w-full",
                       sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:opacity-0 md:w-0",
                     ].join(" ")}
                   >
@@ -369,7 +369,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                             href={item.href}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition hover:bg-card/20 hover:text-foreground"
+                            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition overflow-hidden hover:bg-card/20 hover:text-foreground"
                           >
                             <Icon className="h-5 w-5 shrink-0 opacity-60" />
                             <span
@@ -389,7 +389,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                           key={item.href}
                           href={item.href}
                           className={[
-                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition",
+                            "flex items-center w-full gap-2.5 rounded-lg px-3 py-2 text-[13px] transition overflow-hidden",
                             active
                               ? "bg-cyan-500/10 text-cyan-400 font-medium"
                               : "text-slate-400 hover:bg-white/5 hover:text-slate-200",
@@ -404,7 +404,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                           <span
                             className={[
                               "whitespace-nowrap transition-all duration-300",
-                              sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:hidden",
+                              sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:opacity-0 md:w-0 overflow-hidden",
                             ].join(" ")}
                           >
                             {item.label}
