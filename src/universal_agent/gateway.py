@@ -836,7 +836,7 @@ class InProcessGateway(Gateway):
             )
             inferred_explicit_vp = False
 
-            if not requested_vp_id and request_source not in {"cron", "webhook"}:
+            if not requested_vp_id and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
                 inferred_vp_id, inferred_mission_type = _infer_explicit_vp_target(request.user_input)
                 if inferred_vp_id:
                     inferred_explicit_vp = True
@@ -849,7 +849,7 @@ class InProcessGateway(Gateway):
                         strict_external_vp = vp_explicit_intent_require_external(default=True)
                         request_metadata["require_external_vp"] = strict_external_vp
 
-            if requested_vp_id and request_source not in {"cron", "webhook"}:
+            if requested_vp_id and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
                 # Explicit VP language should default to external dispatch unless
                 # operators explicitly disable it via UA_VP_EXTERNAL_DISPATCH_ENABLED=0.
                 dispatch_default = bool(inferred_explicit_vp and strict_external_vp)
@@ -989,7 +989,7 @@ class InProcessGateway(Gateway):
 
             # Keep webhook/cron executions pinned to their explicit run workspace
             # for deterministic artifacts/log paths and easier ops visibility.
-            if self._coder_vp_runtime and request_source not in {"cron", "webhook"}:
+            if self._coder_vp_runtime and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
                 if decision.use_coder_vp:
                     external_dispatch = (

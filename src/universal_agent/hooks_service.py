@@ -5777,10 +5777,10 @@ class HooksService:
             "\\n"
             "CRITICAL: You are a TRIAGE layer only.\\n"
             "- Do NOT execute tasks (no scheduling, no cron jobs, no file writes)\\n"
+            "- Do NOT use tools to save files or modify system state\\n"
             "- Do NOT send replies\\n"
-            "- Do NOT modify system state\\n"
             "- ONLY analyze, classify, and prepare the brief for Simone\\n"
-            "- Return the structured triage brief as your output\\n"
+            "- Return the structured triage brief directly as your response text\\n"
         )
 
         routing_lines = [
