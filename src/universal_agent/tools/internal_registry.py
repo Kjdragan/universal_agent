@@ -59,7 +59,7 @@ from universal_agent.tools.csi_bridge import (
     csi_watchlist_snapshot_wrapper,
 )
 
-from universal_agent.tools.task_hub_bridge import task_hub_task_action_wrapper
+from universal_agent.tools.task_hub_bridge import task_hub_task_action_wrapper, task_hub_decompose_wrapper
 from universal_agent.tools.vp_orchestration import (
     vp_cancel_mission_wrapper,
     vp_dispatch_mission_wrapper,
@@ -110,6 +110,7 @@ def get_core_internal_tools() -> List[Callable]:
         csi_source_health_wrapper,
         csi_watchlist_snapshot_wrapper,
         task_hub_task_action_wrapper,
+        task_hub_decompose_wrapper,
         mcp__internal__send_agentmail,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,

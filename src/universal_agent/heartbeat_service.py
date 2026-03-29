@@ -441,6 +441,60 @@ def _compose_heartbeat_prompt(
         lines.append("   - `block`: Waiting on an external dependency you cannot resolve.")
         lines.append("   - `park`: Should be deferred indefinitely.")
         lines.append("   Do NOT leave items in `in_progress`.")
+
+        # ── Live VP Capacity Snapshot ──
+        # Shows Simone whether VPs have bandwidth for delegation
+        if runtime_conn is not None:
+            try:
+                import os as _os
+                max_coder = int(_os.getenv("UA_MAX_CONCURRENT_VP_CODER", "1"))
+                max_general = int(_os.getenv("UA_MAX_CONCURRENT_VP_GENERAL", "2"))
+                # Count currently delegated tasks per VP type
+                _delegated_rows = runtime_conn.execute(
+                    "SELECT metadata_json FROM task_hub_items WHERE status = 'delegated'"
+                ).fetchall()
+                active_coder = 0
+                active_general = 0
+                for _dr in _delegated_rows:
+                    _meta_raw = _dr[0] if not hasattr(_dr, "keys") else _dr["metadata_json"]
+                    try:
+                        _meta = json.loads(_meta_raw) if isinstance(_meta_raw, str) else (_meta_raw or {})
+                        _target = str((_meta.get("delegation") or {}).get("delegate_target", "")).lower()
+                        if "coder" in _target:
+                            active_coder += 1
+                        else:
+                            active_general += 1
+                    except Exception:
+                        active_general += 1  # assume general if unknown
+
+                lines.append("")
+                lines.append("## VP Capacity (live)")
+                lines.append(f"  Atlas (vp.general.primary): {active_general}/{max_general} slots in use")
+                lines.append(f"  Codie (vp.coder.primary):   {active_coder}/{max_coder} slots in use")
+                if active_general < max_general or active_coder < max_coder:
+                    lines.append("  → Delegation IS available. Use it for disparate tasks.")
+                else:
+                    lines.append("  → All VP slots occupied. DEFER delegation or process yourself.")
+            except Exception as _cap_exc:
+                logger.debug("VP capacity injection failed: %s", _cap_exc)
+
+        # ── Delegation Strategy Guidance ──
+        lines.append("")
+        lines.append("## Delegation Strategy")
+        lines.append("When you have multiple tasks, analyze their dependencies:")
+        lines.append("- PARALLEL: Tasks are independent (different topics, no shared context)")
+        lines.append("  → Dispatch each to a separate VP agent simultaneously")
+        lines.append("  → Achieves N× throughput vs. serial processing")
+        lines.append("  → Example: 'Research X' + 'Draft email Y' + 'Update doc Z'")
+        lines.append("- SEQUENTIAL: Tasks feed into each other (output of A is input to B)")
+        lines.append("  → Keep in one agent (usually yourself) to preserve context")
+        lines.append("  → Example: 'Analyze data' then 'Write report based on analysis'")
+        lines.append("- BATCH: Related micro-tasks from same domain")
+        lines.append("  → Group and send as one VP mission for efficiency")
+        lines.append("  → Example: 'Update 3 config files' → single Codie mission")
+        lines.append("If a task email contains multiple distinct items, use `task_hub_decompose`")
+        lines.append("to split it into linked sub-tasks, then delegate each independently.")
+
         task_ids = sorted({str(item.get("task_id") or "").strip() for item in task_hub_claims if str(item.get("task_id") or "").strip()})
         lines.append(f"\nClaimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}")
         prompt = f"{prompt}\n\n" + "\n".join(lines)
