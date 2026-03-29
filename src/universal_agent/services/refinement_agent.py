@@ -19,7 +19,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ async def refine_with_llm(
     current_stage: str = "raw_idea",
     refinement_history: dict[str, Any] | None = None,
     comments: list[dict[str, Any]] | None = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: Optional[str] = None,
 ) -> dict[str, Any]:
     """Call Claude to analyze a brainstorm task and recommend next action.
 
@@ -204,7 +205,7 @@ async def refine_with_llm(
 
     try:
         response = await client.messages.create(
-            model=model,
+            model=model or resolve_sonnet(),
             max_tokens=1024,
             system=system_msg,
             messages=[{"role": "user", "content": user_msg}],

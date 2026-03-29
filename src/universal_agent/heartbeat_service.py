@@ -1796,6 +1796,11 @@ class HeartbeatService:
                                 session.session_id,
                                 _capacity_reason,
                             )
+                            if "api_down" in _capacity_reason:
+                                await _broadcast_wire(
+                                    "system_alert",
+                                    {"message": f"CRITICAL INFERENCE DROP: {_capacity_reason}"}
+                                )
                     except Exception as _cap_exc:
                         logger.debug("Capacity governor unavailable: %s", _cap_exc)
                     # ────────────────────────────────────────────────────

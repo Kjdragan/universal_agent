@@ -15,9 +15,10 @@ Design principles:
 from __future__ import annotations
 
 import json
-import logging
 import os
-from typing import Any
+import logging
+from typing import Any, Optional
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +52,14 @@ async def _call_llm(
     *,
     system: str,
     user: str,
-    model: str = "claude-sonnet-4-20250514",
+    model: Optional[str] = None,
     max_tokens: int = 512,
 ) -> str:
     """Make an LLM call and return the raw text response."""
     client = await _get_anthropic_client()
 
     response = await client.messages.create(
-        model=model,
+        model=model or resolve_sonnet(),
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],

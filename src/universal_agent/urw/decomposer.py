@@ -19,6 +19,7 @@ from abc import ABC, abstractmethod
 
 from .state import Task, TaskStatus
 from .evaluation_policy import TEMPLATE_EVALUATION_POLICIES
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 
 DECOMPOSITION_TEMPLATES = {
@@ -294,9 +295,9 @@ class TemplateDecomposer(Decomposer):
 class LLMDecomposer(Decomposer):
     """Decomposer that uses an LLM to generate task breakdown."""
 
-    def __init__(self, llm_client: Any, model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "opus")):
+    def __init__(self, llm_client: Any, model: Optional[str] = None):
         self.llm_client = llm_client
-        self.model = model
+        self.model = model or resolve_sonnet()
 
     def can_handle(self, request: str) -> bool:
         return True
@@ -401,7 +402,7 @@ Return ONLY the JSON array, no additional text."""
 class HybridDecomposer(Decomposer):
     """Combines template and LLM decomposition."""
 
-    def __init__(self, llm_client: Any, templates: Optional[Dict] = None, model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "opus")):
+    def __init__(self, llm_client: Any, templates: Optional[Dict] = None, model: Optional[str] = None):
         self.template_decomposer = TemplateDecomposer(templates)
         self.llm_decomposer = LLMDecomposer(llm_client, model)
 

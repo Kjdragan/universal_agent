@@ -17,6 +17,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
+from universal_agent.utils.model_resolution import resolve_sonnet
+
 from .state import (
     Artifact,
     ArtifactType,
@@ -57,9 +59,7 @@ class URWConfig:
     auto_decompose_failed_tasks: bool = True
 
     llm_model: str = field(
-        default_factory=lambda: os.getenv(
-            "ANTHROPIC_DEFAULT_SONNET_MODEL", "opus"
-        )
+        default_factory=resolve_sonnet
     )
 
     verbose: bool = True

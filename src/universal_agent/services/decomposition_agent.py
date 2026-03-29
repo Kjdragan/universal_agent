@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ async def decompose_with_llm(
     *,
     title: str,
     description: str = "",
-    model: str = "claude-sonnet-4-20250514",
+    model: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Call Claude to decompose a task into subtasks.
 
@@ -90,7 +91,7 @@ async def decompose_with_llm(
 
     try:
         response = await client.messages.create(
-            model=model,
+            model=model or resolve_sonnet(),
             max_tokens=1024,
             system=_DECOMPOSE_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],

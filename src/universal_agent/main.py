@@ -962,11 +962,8 @@ _LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "0").lower() in 
 
 
 def _resolve_default_anthropic_model() -> str:
-    return (
-        (os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") or "").strip()
-        or (os.getenv("MODEL_NAME") or "").strip()
-        or "opus"
-    )
+    from universal_agent.utils.model_resolution import resolve_sonnet
+    return resolve_sonnet()
 
 
 def _resolve_letta_model() -> str:
@@ -8707,7 +8704,7 @@ async def setup_session(
         mcp_servers_config["notebooklm-mcp"] = notebooklm_mcp_config
 
     options = ClaudeAgentOptions(
-        model=resolve_claude_code_model(default="opus"),
+        model=resolve_claude_code_model(default="sonnet"),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
         disallowed_tools=disallowed_tools,

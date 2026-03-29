@@ -35,6 +35,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[SDK Permissions, Hooks & Subagents](002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md)**: Permission model, hooks architecture, subagent patterns.
 - **[Regression Control and Golden Runs](003_REGRESSION_CONTROL_AND_GOLDEN_RUNS.md)**: Testing stability, golden run preservation.
 - **[Database Architecture](01_Architecture/Database_Architecture.md)**: Absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic.
+- **[Model Choice and Resolution](01_Architecture/10_Model_Choice_And_Resolution.md)**: Anthropic Z.AI proxy emulation, model resolution mapping, and inference health governance.
 
 ### 2. [Subsystems](02_Subsystems)
 

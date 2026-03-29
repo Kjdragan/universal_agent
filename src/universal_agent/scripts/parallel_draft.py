@@ -7,11 +7,12 @@ from typing import Optional
 from anthropic import AsyncAnthropic
 
 from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 # CONFIG - Auto-detect environment
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
-MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "opus")
+MODEL = resolve_sonnet()
 
 async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, order, base_path: Path):
     """Write a single section using centralized rate limiter."""

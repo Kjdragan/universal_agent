@@ -45,11 +45,12 @@ import httpx
 import yaml
 
 from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 # Configuration
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 AUTH_TOKEN = os.getenv("ZAI_API_KEY", os.getenv("ANTHROPIC_AUTH_TOKEN"))
-FAST_MODEL = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "opus")
+FAST_MODEL = resolve_sonnet()
 
 # Rate limit: max concurrent API calls
 MAX_CONCURRENT = 3

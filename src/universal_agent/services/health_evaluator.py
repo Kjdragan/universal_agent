@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import litellm
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str,
     lessons_learned = _get_lessons_learned_content()
     prompt = _build_evaluation_prompt(raw_report_text, lessons_learned)
     
-    model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-3-5-sonnet-20241022")
+    model = resolve_sonnet()
     try:
         response = await litellm.acompletion(
             model=model,

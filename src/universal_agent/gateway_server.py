@@ -78,6 +78,7 @@ from universal_agent.feature_flags import (
     sdk_session_history_enabled,
 )
 from universal_agent.sdk import session_history_adapter
+from universal_agent.utils.model_resolution import resolve_sonnet
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import (
     connect_runtime_db,
@@ -19808,7 +19809,7 @@ async def vision_describe(request: VisionDescribeRequest):
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured for vision tasks")
 
-    model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-3-5-sonnet-latest")
+    model = resolve_sonnet()
 
     try:
         base64_data = request.image_base64
@@ -24488,12 +24489,9 @@ async def ops_work_threads_update(
 async def ops_models_list(request: Request):
     _require_ops_auth(request)
     models = []
-    sonnet = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL")
-    haiku = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+    sonnet = resolve_sonnet()
     if sonnet:
         models.append({"id": sonnet, "label": "default-sonnet"})
-    if haiku:
-        models.append({"id": haiku, "label": "default-haiku"})
     return {"models": models}
 
 

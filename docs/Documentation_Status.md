@@ -35,6 +35,7 @@ Written from source code review — these describe the system as it actually exi
 | 05 | Simone-First Orchestration — batch triage, VP delegation lifecycle, two-layer email response, `/btw` sidebar |
 | 06 | Comparison: Background Workers vs Simone Orchestration — Deep-dive evaluation of pull-based agent workers vs the event-driven Simone-First orchestration model |
 | 07 | Database Architecture — absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic |
+| 10 | Model Choice and Resolution — Anthropic proxy emulation map, inference fallbacks, and the Capacity Governor loud-failure hook |
 
 ## Root Architecture Docs
 

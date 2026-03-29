@@ -67,6 +67,9 @@ class CapacitySnapshot:
     total_requests: int
     total_shed: int  # requests shed (denied) by governor
     last_429_at: Optional[str]
+    consecutive_api_errors: int
+    total_api_errors: int
+    api_down: bool
 
 
 class CapacityGovernor:
@@ -110,6 +113,11 @@ class CapacityGovernor:
         self._last_429_at: float = 0.0
         self._backoff_until: float = 0.0  # Unix timestamp
 
+        # Generic API failure tracking
+        self._consecutive_api_errors = 0
+        self._total_api_errors = 0
+        self._api_down_until: float = 0.0
+
         logger.info(
             "CapacityGovernor initialized: max_concurrent=%d, backoff_base=%.1fs, backoff_max=%.1fs, cooldown=%.1fs",
             self._max_concurrent,
@@ -141,6 +149,16 @@ class CapacityGovernor:
         Does NOT acquire a slot — use `acquire_slot()` for that.
         """
         now = time.time()
+
+        # Check 0: Is the API completely down (inference failure)?
+        if now < self._api_down_until:
+            remaining = self._api_down_until - now
+            reason = (
+                f"api_down: {remaining:.0f}s remaining "
+                f"(consecutive_api_errors={self._consecutive_api_errors})"
+            )
+            self._total_shed += 1
+            return False, reason
 
         # Check 1: Are we in mandatory backoff?
         if now < self._backoff_until:
@@ -253,16 +271,60 @@ class CapacityGovernor:
 
             return total_backoff
 
+    async def report_api_failure(self, context: str = "", error: Optional[Exception] = None, is_fatal: bool = False) -> float:
+        """Report a generic inference failure (e.g. 500, Auth Error, generic Exception).
+        
+        If consecutive errors accrue or it's fatal, the governor flags the API as 'down'
+        and triggers a mandatory backoff to protect the system and freeze dispatch.
+        """
+        async with self._lock:
+            now = time.time()
+            self._total_api_errors += 1
+            self._consecutive_api_errors += 1
+            
+            if is_fatal or self._consecutive_api_errors >= 3:
+                # Calculate backoff: much harsher than 429s, as the service is outright failing
+                backoff = min(
+                    self._backoff_base * (2 ** self._consecutive_api_errors),
+                    self._backoff_max * 2,  # allow longer holds for full outages
+                )
+                self._api_down_until = now + backoff
+                
+                logger.error(
+                    "CapacityGovernor: CRITICAL INFERENCE FAILURE by %s. API flagged as DOWN. "
+                    "(consecutive=%d, total=%d). Halting dispatch for %.0fs until %s. Error: %s",
+                    context,
+                    self._consecutive_api_errors,
+                    self._total_api_errors,
+                    backoff,
+                    time.strftime("%H:%M:%S", time.localtime(self._api_down_until)),
+                    str(error)[:250] if error else "N/A",
+                )
+                return backoff
+            
+            logger.warning(
+                "CapacityGovernor: API Failure tracked by %s (consecutive=%d). Error: %s",
+                context, self._consecutive_api_errors, str(error)[:150] if error else "N/A"
+            )
+            return 0.0
+
     async def report_success(self, context: str = "") -> None:
         """Report a successful execution. Gradually decays backoff pressure."""
         async with self._lock:
             self._total_requests += 1
             # Successful runs decay the consecutive counter
             self._consecutive_429s = max(0, self._consecutive_429s - 1)
+            # Successful runs decay the api error counter heavily
+            self._consecutive_api_errors = 0
+            
             # If we've had enough successes, clear backoff early
             if self._consecutive_429s == 0 and self._backoff_until > 0:
                 self._backoff_until = 0.0
                 logger.info("CapacityGovernor: backoff cleared after success by %s", context)
+                
+            if self._api_down_until > 0:
+                self._api_down_until = 0.0
+                logger.info("CapacityGovernor: api_down state cleared after success by %s", context)
 
     # ------------------------------------------------------------------
     # Snapshot (for dashboards, logging, health checks)
@@ -286,6 +348,9 @@ class CapacityGovernor:
                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._last_429_at))
                 if self._last_429_at > 0 else None
             ),
+            consecutive_api_errors=self._consecutive_api_errors,
+            total_api_errors=self._total_api_errors,
+            api_down=now < self._api_down_until,
         )
 
     def snapshot_dict(self) -> dict[str, Any]:
@@ -302,6 +367,9 @@ class CapacityGovernor:
             "total_requests": s.total_requests,
             "total_shed": s.total_shed,
             "last_429_at": s.last_429_at,
+            "consecutive_api_errors": s.consecutive_api_errors,
+            "total_api_errors": s.total_api_errors,
+            "api_down": s.api_down,
         }
 
 

@@ -2,26 +2,44 @@ from __future__ import annotations
 
 import os
 
+ZAI_MODEL_MAP = {
+    "haiku": "GLM-4.5-Air",
+    "sonnet": "GLM-4.7",      # Recommended by Z.AI for routine tasks
+    "opus": "GLM-5.1",        # Recommended by Z.AI for complex tasks
+}
+
+def resolve_model(tier: str = "sonnet") -> str:
+    """
+    Resolve the Anthropic API model identifier, considering Z.AI proxy emulation mappings.
+    Defaults to the recommended Z.AI Coding Plan models.
+    """
+    if tier == "haiku":
+        env_val = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+    elif tier == "sonnet":
+        env_val = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL")
+    else:
+        env_val = os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL")
+        
+    resolved = (env_val or "").strip()
+    return resolved if resolved else ZAI_MODEL_MAP.get(tier, ZAI_MODEL_MAP["sonnet"])
+
+def resolve_haiku() -> str:
+    return resolve_model("haiku")
+
+def resolve_sonnet() -> str:
+    return resolve_model("sonnet")
+
+def resolve_opus() -> str:
+    return resolve_model("opus")
 
 def resolve_claude_code_model(default: str = "opus") -> str:
     """
     Resolve the model string passed to Claude Code / claude-agent-sdk.
 
-    We default to the Claude Code alias "opus" to keep model choice stable and
-    easy to toggle without baking provider-specific model IDs into UA.
-
-    Override precedence:
-    1) UA_CLAUDE_CODE_MODEL (recommended; typically: opus|sonnet|haiku)
-    2) MODEL_NAME (legacy)
-    3) default (opus)
+    We default to the centralized resolution mapped via Z.AI
     """
-
-    return (
-        (os.getenv("UA_CLAUDE_CODE_MODEL") or "").strip()
-        or (os.getenv("MODEL_NAME") or "").strip()
-        or (default or "opus").strip()
-        or "opus"
-    )
+    # Overriding to pure programmatic central resolution (ignoring stringly-typed env keys temporarily)
+    return resolve_model(default)
 
 
 def _is_truthy(value: str) -> bool:
