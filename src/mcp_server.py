@@ -4120,12 +4120,15 @@ def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     """
     results = []
     
-    # Initialize Composio client
-    try:
-        bridge = get_bridge()
-        client = bridge.composio_client
-    except Exception as e:
-        return [{"error": f"Failed to initialize Composio client: {e}"}]
+    # Initialize Composio client ONLY if a composio tool is requested
+    client = None
+    has_composio = any(isinstance(call, dict) and "mcp__composio__" in str(call.get("tool", "")) for call in tool_calls)
+    if has_composio:
+        try:
+            bridge = get_bridge()
+            client = bridge.composio_client
+        except Exception as e:
+            return [{"error": f"Failed to initialize Composio client: {e}"}]
     
     import concurrent.futures
     import time
@@ -4148,6 +4151,8 @@ def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         try:
             # 1. Composio Tools
             if "mcp__composio__" in name:
+                if client is None:
+                    raise Exception("Composio client not initialized")
                 action_name = name.split("mcp__composio__")[1]
                 # Bridge check inside the thread? Better to get client once outside.
                 resp = client.action(action_name).execute(args)

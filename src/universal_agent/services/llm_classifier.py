@@ -494,3 +494,68 @@ async def extract_due_at(
             "confidence": "fallback",
             "method": "fallback",
         }
+
+# ── Disjointed Task Extraction ───────────────────────────────────────────────
+
+_DISJOINTED_TASK_SYSTEM = """\
+You are an intelligent email analyzer for an AI agent system. Your job is to read a message and determine if it contains multiple, independent tasks or requests that should be processed separately.
+
+Rules:
+- If the email is a single cohesive task or a set of tightly coupled steps for one goal, treat it as 1 task.
+- If the email contains clearly disjointed or unrelated requests (e.g. "Also, can you look into X", or "1. Fix X. 2. Write a blog about Y."), split them into separate tasks.
+- Return a list where each item represents an actionable, decoupled task derived from the email.
+- The task should contain both the goal and the necessary original context from the email so the agent handling it has all the information they need without needing the other tasks.
+
+Respond with ONLY a JSON object:
+{
+  "tasks": [
+    {
+      "task_content": "Full description of the task, preserving original context and constraints",
+      "reasoning": "1-sentence explanation of why this is considered a distinct task"
+    }
+  ]
+}
+"""
+
+_DISJOINTED_TASK_USER = """\
+Extract actionable tasks from this email:
+
+Subject: {subject}
+Body: {body}
+"""
+
+async def extract_disjointed_tasks(
+    *,
+    subject: str,
+    body: str = "",
+) -> list[dict[str, Any]]:
+    """Analyze an email to extract disjointed, independent tasks.
+
+    Returns a list of dicts, each with:
+      - task_content: str
+      - reasoning: str
+    If no tasks are found or extraction fails, returns a single task with the original body.
+    """
+    try:
+        user_msg = _DISJOINTED_TASK_USER.format(
+            subject=subject,
+            body=(body[:3000]) or "(empty)",
+        )
+
+        raw = await _call_llm(
+            system=_DISJOINTED_TASK_SYSTEM,
+            user=user_msg,
+            max_tokens=1024,
+        )
+        result = _parse_json_response(raw)
+
+        tasks = result.get("tasks", [])
+        if not tasks or not isinstance(tasks, list):
+            # Fallback to single task if extraction is malformed
+            return [{"task_content": f"Subject: {subject}\n\n{body}", "reasoning": "Fallback full body"}]
+
+        return tasks
+
+    except Exception as exc:
+        logger.warning("LLM disjointed task extraction failed (non-fatal): %s", exc)
+        return [{"task_content": f"Subject: {subject}\n\n{body}", "reasoning": f"Fallback (LLM unavailable: {exc})"}]

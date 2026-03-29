@@ -1050,177 +1050,171 @@ class AgentMailService:
                 sender, subject, thread_id, reply_is_extracted, sender_trusted,
             )
 
-            session_key = f"agentmail_{thread_id or message_id}"
-            action_payload = {
-                "kind": "agent",
-                "name": "AgentMailInbound",
-                "session_key": session_key,
-                "to": "email-handler",
-                "deliver": True,
-                "receiving_inbox": receiving_inbox,
-                "message": self._build_inbound_message(
-                    sender=sender,
-                    sender_email=sender_email,
-                    sender_role=sender_role,
-                    sender_trusted=sender_trusted,
-                    subject=subject,
-                    thread_id=thread_id,
-                    message_id=message_id,
-                    receiving_inbox=receiving_inbox,
-                    reply_text=reply_text,
-                    reply_is_extracted=reply_is_extracted,
-                    text_body=text_body,
-                    attachments=getattr(msg, "attachments", None),
-                ),
-            }
+            from universal_agent.services.llm_classifier import extract_disjointed_tasks
+            disjointed_tasks = await extract_disjointed_tasks(
+                subject=subject,
+                body=reply_text or text_body or "",
+            )
 
-            if sender_trusted and self._trusted_ingress_fn:
-                try:
-                    self._trusted_ingress_fn(dict(action_payload))
-                except Exception as exc:
-                    logger.warning(
-                        "📧 Trusted inbound pre-dispatch hook failed message_id=%s: %s",
-                        message_id,
-                        exc,
-                    )
+            for index, d_task in enumerate(disjointed_tasks):
+                task_content = d_task.get("task_content", reply_text or text_body or "")
 
-            # Email notifications suppressed — dedicated Mail page provides visibility.
+                base_session_key = f"agentmail_{thread_id or message_id}"
+                session_key = f"{base_session_key}_{index}" if len(disjointed_tasks) > 1 else base_session_key
 
-            if sender_trusted and message_id and self._dispatch_with_admission_fn:
-                self._last_trusted_inbound_at = _iso_now()
-                queue_id, created = self._queue_insert_trusted_inbound(
-                    message_id=message_id,
-                    thread_id=thread_id,
-                    sender=sender,
-                    sender_email=sender_email,
-                    subject=subject,
-                    reply_text=reply_text,
-                    text_body=text_body,
-                    session_key=session_key,
-                    action_payload=action_payload,
-                )
-
-                # ── Classify priority BEFORE materializing so it flows
-                #    into the Task Hub entry ──
-                classified_priority: int | None = None
-                try:
-                    from universal_agent.services.priority_classifier import (
-                        classify_email_priority,
-                        TaskPriority,
-                    )
-
-                    _priority_decision = classify_email_priority(
-                        sender_trusted=True,
-                        is_reply=bool(reply_text),
-                        thread_message_count=1,  # will be updated in bridge
+                action_payload = {
+                    "kind": "agent",
+                    "name": "AgentMailInbound",
+                    "session_key": session_key,
+                    "to": "email-handler",
+                    "deliver": True,
+                    "receiving_inbox": receiving_inbox,
+                    "message": self._build_inbound_message(
+                        sender=sender,
+                        sender_email=sender_email,
+                        sender_role=sender_role,
+                        sender_trusted=sender_trusted,
                         subject=subject,
-                        body_snippet=(reply_text or text_body or "")[:200],
-                    )
-                    _PRIORITY_VALUE_MAP = {
-                        TaskPriority.P0_IMMEDIATE: 0,
-                        TaskPriority.P1_SOON: 1,
-                        TaskPriority.P2_SCHEDULED: 2,
-                        TaskPriority.P3_BACKGROUND: 3,
-                    }
-                    classified_priority = _PRIORITY_VALUE_MAP.get(
-                        _priority_decision.priority, 2,
-                    )
-                except Exception as _prio_exc:
-                    logger.debug("Priority pre-classification failed (non-fatal): %s", _prio_exc)
-
-                # ── Extract due_at timestamp from email using LLM ──
-                extracted_due_at: str | None = None
-                try:
-                    from universal_agent.services.llm_classifier import extract_due_at
-                    _temporal = await extract_due_at(
-                        subject=subject,
-                        body=(reply_text or text_body or ""),
-                    )
-                    extracted_due_at = _temporal.get("due_at")
-                    if extracted_due_at:
-                        logger.info(
-                            "📧⏰ Extracted due_at=%s from email subject=%r (method=%s, confidence=%s)",
-                            extracted_due_at, subject,
-                            _temporal.get("method"), _temporal.get("confidence"),
-                        )
-                except Exception as _time_exc:
-                    logger.debug("Temporal extraction failed (non-fatal): %s", _time_exc)
-
-                # ── Email-to-Task Bridge: materialize as trackable task ──
-                # Task starts as in_progress to prevent heartbeat double-claiming
-                # while the hook session is actively processing.
-                bridge_result = self._materialize_email_task(
-                    thread_id=thread_id,
-                    message_id=message_id,
-                    sender_email=sender_email,
-                    subject=subject,
-                    reply_text=reply_text,
-                    session_key=session_key,
-                    priority=classified_priority,
-                    due_at=extracted_due_at,
-                )
-
-                # ── Schedule future-dated tasks via persistent cron run_at ──
-                _task_id = bridge_result.get("task_id", "") if bridge_result else ""
-                if extracted_due_at and _task_id:
-                    try:
-                        await self._schedule_future_task(
-                            task_id=_task_id,
-                            due_at=extracted_due_at,
-                            subject=subject,
-                            reply_text=reply_text or text_body or "",
-                            sender_email=sender_email,
-                            thread_id=thread_id,
-                        )
-                    except Exception as _sched_exc:
-                        logger.warning(
-                            "📧⏰ Failed to schedule future task %s: %s",
-                            _task_id, _sched_exc,
-                        )
-
-                # ── Priority-aware dispatch ──
-                # Trigger immediate dispatch for P0/P1
-                self._try_priority_dispatch(
-                    sender_trusted=True,
-                    is_reply=bool(reply_text),
-                    thread_message_count=int(
-                        bridge_result.get("message_count", 1) if bridge_result else 1
+                        thread_id=thread_id,
+                        message_id=message_id,
+                        receiving_inbox=receiving_inbox,
+                        reply_text=task_content,
+                        reply_is_extracted=reply_is_extracted,
+                        text_body=text_body,
+                        attachments=getattr(msg, "attachments", None),
                     ),
-                    subject=subject,
-                    body_snippet=(reply_text or text_body or "")[:200],
-                    task_id=bridge_result.get("task_id", "") if bridge_result else "",
-                    thread_id=thread_id,
-                    sender_email=sender_email,
-                )
+                    "task_index": index,
+                    "total_tasks": len(disjointed_tasks),
+                }
 
-                # No automatic ack reply — Kevin trusts Simone is working
-                # on the email and only expects a meaningful reply when done.
-                # Email notifications suppressed — dedicated Mail page provides visibility.
-                self._queue_wakeup.set()
-                return
-
-            # No automatic ack reply for trusted senders — only
-            # the meaningful post-triage response is sent.
-
-            # Dispatch through hooks pipeline if dispatch_fn available
-            if self._dispatch_fn:
-                try:
-                    ok, reason = await self._dispatch_fn(action_payload)
-                    if ok:
-                        logger.info(
-                            "📧 Dispatched inbound email handler message_id=%s",
-                            message_id,
-                        )
-                    else:
+                if sender_trusted and self._trusted_ingress_fn:
+                    try:
+                        self._trusted_ingress_fn(dict(action_payload))
+                    except Exception as exc:
                         logger.warning(
-                            "📧 Inbound dispatch rejected message_id=%s reason=%s",
-                            message_id, reason,
+                            "📧 Trusted inbound pre-dispatch hook failed message_id=%s task_idx=%d: %s",
+                            message_id, index, exc,
                         )
-                except Exception as exc:
-                    logger.exception(
-                        "📧 Inbound dispatch error message_id=%s: %s",
-                        message_id, exc,
+
+                if sender_trusted and message_id and self._dispatch_with_admission_fn:
+                    self._last_trusted_inbound_at = _iso_now()
+                    queue_id, created = self._queue_insert_trusted_inbound(
+                        message_id=f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id,
+                        thread_id=thread_id,
+                        sender=sender,
+                        sender_email=sender_email,
+                        subject=subject,
+                        reply_text=task_content,
+                        text_body=text_body,
+                        session_key=session_key,
+                        action_payload=action_payload,
                     )
+
+                    classified_priority: int | None = None
+                    try:
+                        from universal_agent.services.priority_classifier import (
+                            classify_email_priority,
+                            TaskPriority,
+                        )
+
+                        _priority_decision = classify_email_priority(
+                            sender_trusted=True,
+                            is_reply=bool(task_content),
+                            thread_message_count=1,
+                            subject=subject,
+                            body_snippet=task_content[:200],
+                        )
+                        _PRIORITY_VALUE_MAP = {
+                            TaskPriority.P0_IMMEDIATE: 0,
+                            TaskPriority.P1_SOON: 1,
+                            TaskPriority.P2_SCHEDULED: 2,
+                            TaskPriority.P3_BACKGROUND: 3,
+                        }
+                        classified_priority = _PRIORITY_VALUE_MAP.get(
+                            _priority_decision.priority, 2,
+                        )
+                    except Exception as _prio_exc:
+                        logger.debug("Priority pre-classification failed (non-fatal): %s", _prio_exc)
+
+                    extracted_due_at: str | None = None
+                    try:
+                        from universal_agent.services.llm_classifier import extract_due_at
+                        _temporal = await extract_due_at(
+                            subject=subject,
+                            body=task_content,
+                        )
+                        extracted_due_at = _temporal.get("due_at")
+                        if extracted_due_at:
+                            logger.info(
+                                "📧⏰ Extracted due_at=%s from email subject=%r (method=%s, confidence=%s)",
+                                extracted_due_at, subject,
+                                _temporal.get("method"), _temporal.get("confidence"),
+                            )
+                    except Exception as _time_exc:
+                        logger.debug("Temporal extraction failed (non-fatal): %s", _time_exc)
+
+                    bridge_result = self._materialize_email_task(
+                        thread_id=thread_id,
+                        message_id=f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id,
+                        sender_email=sender_email,
+                        subject=f"{subject} (Task {index+1}/{len(disjointed_tasks)})" if len(disjointed_tasks) > 1 else subject,
+                        reply_text=task_content,
+                        session_key=session_key,
+                        priority=classified_priority,
+                        due_at=extracted_due_at,
+                    )
+
+                    _task_id = bridge_result.get("task_id", "") if bridge_result else ""
+                    if extracted_due_at and _task_id:
+                        try:
+                            await self._schedule_future_task(
+                                task_id=_task_id,
+                                due_at=extracted_due_at,
+                                subject=subject,
+                                reply_text=task_content,
+                                sender_email=sender_email,
+                                thread_id=thread_id,
+                            )
+                        except Exception as _sched_exc:
+                            logger.warning(
+                                "📧⏰ Failed to schedule future task %s: %s",
+                                _task_id, _sched_exc,
+                            )
+
+                    self._try_priority_dispatch(
+                        sender_trusted=True,
+                        is_reply=bool(task_content),
+                        thread_message_count=int(
+                            bridge_result.get("message_count", 1) if bridge_result else 1
+                        ),
+                        subject=subject,
+                        body_snippet=task_content[:200],
+                        task_id=bridge_result.get("task_id", "") if bridge_result else "",
+                        thread_id=thread_id,
+                        sender_email=sender_email,
+                    )
+
+                    self._queue_wakeup.set()
+                    continue
+
+                if self._dispatch_fn:
+                    try:
+                        ok, reason = await self._dispatch_fn(action_payload)
+                        if ok:
+                            logger.info(
+                                "📧 Dispatched inbound email handler message_id=%s task_idx=%d",
+                                message_id, index,
+                            )
+                        else:
+                            logger.warning(
+                                "📧 Inbound dispatch rejected message_id=%s task_idx=%d reason=%s",
+                                message_id, index, reason,
+                            )
+                    except Exception as exc:
+                        logger.exception(
+                            "📧 Inbound dispatch error message_id=%s task_idx=%d: %s",
+                            message_id, index, exc,
+                        )
         except Exception as exc:
             if message_id and claimed_message:
                 self._release_seen_message_id(message_id)
