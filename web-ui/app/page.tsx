@@ -1711,7 +1711,7 @@ function ChatInterface() {
 
         const useOpsTailHydration = sessionAttachMode === "tail" && !isVpObserverSession && !isRunWorkspaceOnly;
         const runLogUrl = useOpsTailHydration
-          ? `${API_BASE}/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sessionId)}&limit=2000`
+          ? `/api/dashboard/gateway/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sessionId)}&limit=2000`
           : (isVpObserverSession && vpWorkspaceRel
             ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
             : buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "run.log"));

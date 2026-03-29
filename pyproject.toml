@@ -71,7 +71,6 @@ dependencies = [
     "slack-sdk>=3.27.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
-
     "pytz>=2025.2",
     "redis>=7.2.1",
     "agentmail>=0.2.22",
@@ -81,6 +80,7 @@ dependencies = [
     "infisical-python==2.3.5",
     "pyjwt>=2.12.1",
     "langsmith[claude-agent-sdk,otel]>=0.7.22",
+    "crawl4ai-cloud-sdk",
 ]
 
 [tool.ruff]
@@ -108,3 +108,6 @@ filterwarnings = [
 markers = [
     "llm: requires live LLM connectivity",
 ]
+
+[tool.uv.sources]
+crawl4ai-cloud-sdk = { git = "https://github.com/unclecode/crawl4ai-cloud-sdk.git", subdirectory = "python" }

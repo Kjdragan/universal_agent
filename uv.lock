@@ -997,6 +997,14 @@ wheels = [
 ]
 
 [[package]]
+name = "crawl4ai-cloud-sdk"
+version = "0.2.7"
+source = { git = "https://github.com/unclecode/crawl4ai-cloud-sdk.git?subdirectory=python#72084118dc0847058177b06b19872dbd9aa958ab" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[[package]]
 name = "croniter"
 version = "6.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6267,6 +6275,7 @@ dependencies = [
     { name = "composio-claude-agent-sdk" },
     { name = "composio-client" },
     { name = "crawl4ai" },
+    { name = "crawl4ai-cloud-sdk" },
     { name = "croniter" },
     { name = "defusedxml" },
     { name = "edgartools" },
@@ -6351,6 +6360,7 @@ requires-dist = [
     { name = "composio-claude-agent-sdk", specifier = ">=0.10.6,<1.0.0" },
     { name = "composio-client", specifier = ">=1.21.0" },
     { name = "crawl4ai", specifier = ">=0.3.7" },
+    { name = "crawl4ai-cloud-sdk", git = "https://github.com/unclecode/crawl4ai-cloud-sdk.git?subdirectory=python" },
     { name = "croniter", specifier = ">=6.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "edgartools", specifier = ">=5.6.0" },

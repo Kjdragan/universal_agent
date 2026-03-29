@@ -72,6 +72,9 @@ from universal_agent.tools.vp_orchestration import (
 # Live Chrome Bridge (CDP session attachment) — feature-gated
 from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
 
+# AgentMail Tool
+from universal_agent.tools.agentmail_bridge import mcp__internal__send_agentmail
+
 
 def get_core_internal_tools() -> List[Callable]:
     """
@@ -107,6 +110,7 @@ def get_core_internal_tools() -> List[Callable]:
         csi_source_health_wrapper,
         csi_watchlist_snapshot_wrapper,
         task_hub_task_action_wrapper,
+        mcp__internal__send_agentmail,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,
         vp_list_missions_wrapper,

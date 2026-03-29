@@ -2045,13 +2045,12 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
             MAX_RETRIES = 2
             RETRY_BACKOFF = [1, 3]  # seconds between retries
 
-            async def crawl_single_url(session, url):
-                """Crawl a single URL using Cloud API with retry logic"""
-                payload = {
-                    "url": url,
-                    "apikey": crawl4ai_api_key,
-                    # Note: Don't use output_format:fit_markdown - returns empty for news sites
-                    "excluded_tags": [
+            from crawl4ai_cloud import AsyncWebCrawler, CrawlerRunConfig
+
+            async def crawl_single_url(crawler: AsyncWebCrawler, url: str):
+                """Crawl a single URL using Cloud SDK API with retry logic"""
+                config = CrawlerRunConfig(
+                    excluded_tags=[
                         "nav",
                         "footer",
                         "header",
@@ -2060,120 +2059,69 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                         "style",
                         "form",
                     ],
-                    "remove_overlay_elements": True,
-                    "word_count_threshold": 10,
-                    "cache_mode": "bypass",
-                    "magic": True,  # Anti-bot protection bypass
-                }
+                    remove_overlay_elements=True,
+                    word_count_threshold=10,
+                    cache_mode="bypass",
+                    magic=True,
+                )
 
                 last_error = None
 
                 for attempt in range(MAX_RETRIES):
                     try:
                         async with semaphore:  # Rate limit concurrent requests
-                            async with session.post(
-                                cloud_endpoint, json=payload, timeout=30
-                            ) as resp:
-                                if resp.status == 429:  # Rate limited
-                                    last_error = "Rate limited (429)"
-                                    if attempt < MAX_RETRIES - 1:
-                                        await asyncio.sleep(RETRY_BACKOFF[attempt])
-                                        continue
-                                    return {
-                                        "url": url,
-                                        "success": False,
-                                        "error": last_error,
-                                    }
+                            result = await crawler.arun(url=url, config=config)
+                            
+                        if not result.success:
+                            last_error = result.error_message or "Unknown crawl error"
+                            if "429" in last_error or "HTTP " in last_error or "Timeout" in last_error:
+                                if attempt < MAX_RETRIES - 1:
+                                    await asyncio.sleep(RETRY_BACKOFF[attempt])
+                                    continue
+                            return {
+                                "url": url,
+                                "success": False,
+                                "error": last_error,
+                            }
 
-                                if resp.status != 200:
-                                    last_error = f"HTTP {resp.status}"
-                                    if attempt < MAX_RETRIES - 1:
-                                        await asyncio.sleep(RETRY_BACKOFF[attempt])
-                                        continue
-                                    return {
-                                        "url": url,
-                                        "success": False,
-                                        "error": last_error,
-                                    }
+                        raw_content = result.markdown or ""
+                        
+                        # Post-process: Strip markdown links, keep just the text
+                        import re
+                        content = raw_content
+                        content = re.sub(
+                            r"\[([^\]]+)\]\([^)]+\)", r"\1", content
+                        )
+                        # Also remove bare URLs that start lines
+                        content = re.sub(
+                            r"^https?://[^\s]+\s*$",
+                            "",
+                            content,
+                            flags=re.MULTILINE,
+                        )
+                        # Remove image markdown ![alt](url)
+                        content = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)
+                        # Clean up excessive blank lines
+                        content = re.sub(r"\n{3,}", "\n\n", content)
 
-                                data = await resp.json()
+                        return {
+                            "url": url,
+                            "success": True,
+                            "content": content,
+                            "raw_content": raw_content,  # Keep for date extraction
+                            "metadata": getattr(result, "metadata", {}) or {},
+                        }
 
-                                # Cloud API returns content directly (no polling needed)
-                                if data.get("success") is False:
-                                    last_error = data.get("error", "Unknown error")
-                                    # Don't retry on explicit API errors (e.g., blocked)
-                                    return {
-                                        "url": url,
-                                        "success": False,
-                                        "error": last_error,
-                                    }
-                                if isinstance(data.get("data"), str):
-                                    return {
-                                        "url": url,
-                                        "success": False,
-                                        "error": data.get("data"),
-                                    }
-
-                                # Get content (may be nested under data)
-                                response_payload = (
-                                    data.get("data")
-                                    if isinstance(data.get("data"), dict)
-                                    else data
-                                )
-                                raw_content = (
-                                    response_payload.get("content")
-                                    or response_payload.get("markdown")
-                                    or response_payload.get("fit_markdown")
-                                    or ""
-                                )
-                                content = raw_content
-
-                                # Post-process: Strip markdown links, keep just the text
-                                # [link text](url) -> link text
-                                import re
-
-                                content = re.sub(
-                                    r"\[([^\]]+)\]\([^)]+\)", r"\1", content
-                                )
-                                # Also remove bare URLs that start lines
-                                content = re.sub(
-                                    r"^https?://[^\s]+\s*$",
-                                    "",
-                                    content,
-                                    flags=re.MULTILINE,
-                                )
-                                # Remove image markdown ![alt](url)
-                                content = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)
-                                # Clean up excessive blank lines
-                                content = re.sub(r"\n{3,}", "\n\n", content)
-
-                                return {
-                                    "url": url,
-                                    "success": True,
-                                    "content": content,
-                                    "raw_content": raw_content,  # Keep for date extraction
-                                    "metadata": response_payload.get("metadata", {}),
-                                }
-
-                    except asyncio.TimeoutError:
-                        last_error = "Timeout (30s)"
-                        if attempt < MAX_RETRIES - 1:
-                            await asyncio.sleep(RETRY_BACKOFF[attempt])
-                            continue
-                    except aiohttp.ClientError as e:
-                        last_error = f"Connection error: {str(e)}"
-                        if attempt < MAX_RETRIES - 1:
-                            await asyncio.sleep(RETRY_BACKOFF[attempt])
-                            continue
                     except Exception as e:
                         last_error = str(e)
-                        # Don't retry on unexpected errors
-                        break
-
+                        if attempt < MAX_RETRIES - 1:
+                            await asyncio.sleep(RETRY_BACKOFF[attempt])
+                            continue
+                        
                 return {
                     "url": url,
                     "success": False,
-                    "error": last_error or "Unknown error",
+                    "error": last_error or "Max retries exceeded",
                 }
 
             # Execute concurrent crawl with rate limiting
@@ -2182,8 +2130,8 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                 level="DEBUG",
                 prefix="[crawl_core]"
             )
-            async with aiohttp.ClientSession() as session:
-                tasks = [crawl_single_url(session, url) for url in urls]
+            async with AsyncWebCrawler(api_key=crawl4ai_api_key) as crawler:
+                tasks = [crawl_single_url(crawler, url) for url in urls]
                 crawl_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # Console visibility

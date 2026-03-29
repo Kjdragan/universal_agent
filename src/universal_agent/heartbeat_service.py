@@ -46,6 +46,9 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
+    "If you need to send an email, use the native `mcp__internal__send_agentmail` tool. "
+    "If you need to create tasks, use the native `mcp__internal__task_hub_task_action` tool. "
+    "Do NOT write or run Python/Bash scripts to interact with AgentMail or Task Hub. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
 TASK_FOCUSED_PROMPT = (
@@ -53,6 +56,8 @@ TASK_FOCUSED_PROMPT = (
     "Focus EXCLUSIVELY on executing these tasks to completion. "
     "Do not perform any system monitoring, infrastructure checks, or background reporting. "
     "Your only goal is to execute the assigned tasks, deliver results, then disposition them. "
+    "To send an email, strictly use `mcp__internal__send_agentmail` tool. Do NOT write scripts. "
+    "To manage tasks, strictly use `mcp__internal__task_hub_task_action` tool. Do NOT write scripts. "
     "The system will automatically record the run outcome."
 )
 _GLOBAL_HEARTBEAT_SESSION_PREFIXES = (
