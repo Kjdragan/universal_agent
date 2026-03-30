@@ -5,8 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-30 — **`task_hub_decompose`** tool documented alongside `task_hub_task_action` in Agent Tools section; Simone-First Orchestration adopted;
-> all tasks route through Simone who decides delegation to VPs.
+> **Last updated:** 2026-03-30 — trusted AgentMail inbound is now triage-only at the hook layer, Task Hub / ToDo is the sole canonical execution path for email work, Simone is split into role-isolated heartbeat and ToDo runtimes, and delivery-mode heuristics now select between fast summary, standard report, and enhanced report behavior.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
@@ -194,7 +193,9 @@ Converts trusted inbound AgentMail emails into trackable tasks:
 - **Deterministic task IDs**: `email:<sha256(thread_id)[:16]>` — stable across restarts
 - **Trust-based labeling**: Trusted sender → `['email-task', 'agent-ready']`; untrusted → `['email-task', 'external-untriaged']`
 - **Auto-reactivation**: If a thread was `waiting-on-reply` and a new inbound arrives, it auto-reactivates to `open`
-- **HEARTBEAT.md auto-append**: Active email tasks are written into the heartbeat file
+- **Delivery-mode inference**: `fast_summary`, `standard_report`, or `enhanced_report` is inferred from the prompt and stored in task metadata
+- **Canonical execution owner**: Trusted email tasks are stamped with `canonical_execution_owner="todo_dispatcher"`
+- **Hook contract**: The AgentMail hook may record triage metadata and optionally send a short receipt acknowledgement, but it must not execute the mission or send the final deliverable
 
 ### 3.3 Dashboard Quick-Add (`POST /api/v1/dashboard/todolist/tasks`)
 
@@ -221,6 +222,27 @@ Tasks with `refinement_stage` set are brainstorm items progressing through the
 The `HEARTBEAT.md` file contains standing instructions that the heartbeat
 service reads each cycle. These inform the agent's prompt but are not
 materialized as Task Hub entries directly.
+
+### 3.6 Trusted Email Canonical Flow
+
+Trusted inbound email now follows a single canonical execution chain:
+
+```mermaid
+flowchart LR
+    Mail["AgentMail inbound"] --> Hook["Hook session<br/>email_triage"]
+    Hook -->|"triage metadata + optional receipt ack"| TH["Task Hub item"]
+    TH --> Todo["ToDo dispatcher<br/>daemon_simone_todo"]
+    Todo -->|"self execute or delegate"| VP["VP / Simone execution"]
+    VP --> Review["pending_review / review"]
+    Review --> Final["Final email delivery"]
+    Final --> Done["Task Hub completed"]
+```
+
+Important invariants:
+- The hook session is **not** an execution path.
+- Heartbeat is **not** a fallback executor for trusted email work.
+- Final report email comes from the canonical Task Hub lifecycle only.
+- `standard_report` and `enhanced_report` send one final email with executive summary in the body and the full artifact attached when available.
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-03-30
+> **Last updated:** 2026-03-30 — dispatcher health, canonical execution forensics, delivery-mode visibility, and role-separated heartbeat vs ToDo execution semantics documented.
 
 ---
 
@@ -91,7 +91,7 @@ page.tsx ("use client")
     ├── Column: Not Assigned (derived lane: `not_assigned`)
     ├── Column: In Progress (derived lane: `in_progress`)
     ├── Column: Needs Review (derived lane: `needs_review`)
-    └── Column: Done (derived lane: `completed`)
+    └── Column: Completed (derived lane: `completed`)
 ```
 
 ### 4.2 Task Card Components
@@ -101,6 +101,8 @@ Each task card renders:
 - **Title**: Truncated with hover tooltip for overflow
 - **Source pill**: Visual indicator of task origin (`sourceKindPill` helper)
 - **Labels**: Tag chips for `agent-ready`, brainstorm stage, etc.
+- **Delivery mode**: `fast_summary`, `standard_report`, or `enhanced_report`
+- **Canonical execution role**: `email_triage`, `todo_execution`, `heartbeat`, or VP lineage surfaced from backend history
 - **Action buttons**: Contextual lifecycle actions per column
 
 ### 4.3 Dispatcher Health Panel
@@ -111,6 +113,7 @@ The ToDo dashboard includes a dedicated dispatcher-health strip for the separate
 - Last claim batch size and claiming session
 - Last execution decision and latest failure/defer reason
 - Pending wake count versus registered-session count
+- Busy-session count so “agent asleep” vs “all executors busy” is visible without log inspection
 
 ### 4.4 Helper Functions
 
@@ -131,9 +134,9 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/v1/dashboard/todolist/overview` | GET | Summary counts, heartbeat runtime, and ToDo dispatcher health |
-| `/api/v1/dashboard/todolist/agent-queue` | GET | Queue items plus derived board lanes and assignment/session lineage |
+| `/api/v1/dashboard/todolist/agent-queue` | GET | Queue items plus derived board lanes, delivery mode, and canonical assignment/session lineage |
 | `/api/v1/dashboard/todolist/completed` | GET | Completed tasks with session/workspace links |
-| `/api/v1/dashboard/todolist/tasks/{task_id}/history` | GET | Assignment/evaluation trail, email mapping, transcript/run-log links |
+| `/api/v1/dashboard/todolist/tasks/{task_id}/history` | GET | Assignment/evaluation trail, email mapping, transcript/run-log links, and canonical execution forensics |
 | `/api/v1/dashboard/todolist/morning-report` | GET | Deterministic morning report snapshot |
 
 ### 5.2 Write Endpoints
@@ -187,7 +190,7 @@ graph LR
 | **Not Assigned** | `open` with no active assignment/delegation | Dispatch, Seize, Block, Park |
 | **In Progress** | `in_progress`, `delegated`, or active seized/running assignment | Complete, Block, Review, Park |
 | **Needs Review** | `needs_review`, `pending_review`, or unverified completion flagged by reconciliation | Complete, Park |
-| **Done** | `completed` | Inspect, review history, hide |
+| **Completed** | `completed` | Inspect, review history, hide |
 
 Blocked and parked items remain available through queue data and filters, but they are no longer primary board columns.
 
@@ -197,6 +200,7 @@ The board is intentionally more diagnostic than before:
 - **Dispatcher Health** makes wake/claim/defer/failure state visible without checking logs first
 - **Task History** exposes session lineage, email mapping, reconciliation flags, and transcript/run-log links
 - **Orphaned** card badges highlight tasks whose lifecycle state no longer matches an active assignment
+- **Canonical execution hints** prevent hook-triage or heartbeat artifacts from being mistaken for the final execution owner
 
 ### 6.2 Action → API Mapping
 
@@ -257,5 +261,5 @@ Visual indicators showing where a task originated:
 | Document | Scope |
 |----------|-------|
 | [Proactive Pipeline](Proactive_Pipeline.md) | End-to-end autonomous task execution — ingress, scoring, dispatch, refinement, decomposition |
-| [Heartbeat Service](Heartbeat_Service.md) | Cycle mechanics, task claim integration |
+| [Heartbeat Service](Heartbeat_Service.md) | Heartbeat supervision contract, mediation flow, and separation from canonical ToDo execution |
 | [Memory System](Memory_System.md) | Tiered memory architecture used by proactive agents |

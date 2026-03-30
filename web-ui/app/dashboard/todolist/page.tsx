@@ -45,6 +45,11 @@ type AgentQueueItem = {
   assigned_session_id?: string | null;
   assignment_state?: string | null;
   requires_simone_review?: boolean;
+  delivery_mode?: string | null;
+  session_role?: string | null;
+  run_kind?: string | null;
+  canonical_execution_session_id?: string | null;
+  canonical_execution_workspace?: string | null;
   reconciliation?: {
     orphaned_in_progress?: boolean;
     completion_unverified?: boolean;
@@ -138,6 +143,8 @@ type OverviewPayload = {
     registered_session_count?: number;
     pending_wake_sessions?: string[];
     pending_wake_count?: number;
+    busy_sessions?: string[];
+    busy_session_count?: number;
     sleeping_session_warning?: boolean;
   };
 };
@@ -209,6 +216,8 @@ type TaskAssignmentHistory = {
   started_at?: string;
   ended_at?: string;
   result_summary?: string;
+  session_role?: string | null;
+  run_kind?: string | null;
   links?: TaskHistoryLinks;
 };
 
@@ -240,6 +249,13 @@ type TaskHistoryPayload = {
   reconciliation?: {
     orphaned_in_progress?: boolean;
     completion_unverified?: boolean;
+  };
+  delivery_mode?: string;
+  canonical_execution?: {
+    session_id?: string | null;
+    workspace_dir?: string | null;
+    session_role?: string | null;
+    run_kind?: string | null;
   };
   artifacts?: TaskHistoryLinks;
 };
@@ -723,6 +739,9 @@ export default function ToDoListDashboardPage() {
     if ((todoDispatch?.last_dispatch_decision || "").toLowerCase() === "busy") {
       alerts.push("Last dispatch was rejected because the target was busy");
     }
+    if (Number(todoDispatch?.busy_session_count || 0) > 0) {
+      alerts.push(`${todoDispatch?.busy_session_count || 0} executor session${Number(todoDispatch?.busy_session_count || 0) === 1 ? "" : "s"} currently busy`);
+    }
     if (todoDispatch?.last_deferred_reason) {
       alerts.push(`Deferred: ${todoDispatch.last_deferred_reason}`);
     }
@@ -856,6 +875,8 @@ export default function ToDoListDashboardPage() {
 
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
           {item.project_key && <span>{item.project_key}</span>}
+          {item.delivery_mode && <><span className="opacity-40">│</span><span>{item.delivery_mode}</span></>}
+          {item.session_role && <><span className="opacity-40">│</span><span>{item.session_role}</span></>}
           {item.assigned_agent_id && <><span className="opacity-40">│</span><span>{item.assigned_agent_id}</span></>}
           {item.assignment_state && <><span className="opacity-40">│</span><span>{item.assignment_state}</span></>}
           {item.due_at && <><span className="opacity-40">│</span><span className="text-kcd-amber">Due {item.due_at}</span></>}
@@ -1144,6 +1165,15 @@ export default function ToDoListDashboardPage() {
                 {taskHistory.email_mapping?.email_sent_at && (
                   <div>Email sent {formatTs(taskHistory.email_mapping.email_sent_at)}</div>
                 )}
+                {taskHistory.delivery_mode && (
+                  <div>Delivery mode {taskHistory.delivery_mode}</div>
+                )}
+                {taskHistory.canonical_execution?.session_id && (
+                  <div>
+                    Canonical execution <span className="font-mono text-muted-foreground">{taskHistory.canonical_execution.session_id}</span>
+                    {taskHistory.canonical_execution.session_role ? ` · ${taskHistory.canonical_execution.session_role}` : ""}
+                  </div>
+                )}
                 {taskHistory.reconciliation?.orphaned_in_progress && (
                   <div className="text-kcd-red">Flagged orphaned in-progress state</div>
                 )}
@@ -1178,6 +1208,9 @@ export default function ToDoListDashboardPage() {
                     </div>
                     <div className="text-[10px] text-muted-foreground">
                       started {formatTs(row.started_at)} · ended {formatTs(row.ended_at)}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {row.session_role || "unknown-role"}{row.run_kind ? ` · ${row.run_kind}` : ""}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     {(row.links?.workspace_name || row.links?.session_id || row.session_id) ? (
@@ -1362,7 +1395,7 @@ export default function ToDoListDashboardPage() {
               {
                 label: "Wake Queue",
                 value: `${todoDispatch?.pending_wake_count || 0} pending`,
-                sub: `${todoDispatch?.registered_session_count || 0} registered sessions`,
+                sub: `${todoDispatch?.registered_session_count || 0} registered · ${todoDispatch?.busy_session_count || 0} busy`,
                 cls: Number(todoDispatch?.pending_wake_count || 0) > 0 ? "text-kcd-amber" : "text-kcd-text",
               },
             ].map((card) => (

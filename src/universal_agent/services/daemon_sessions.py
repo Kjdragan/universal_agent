@@ -1,14 +1,13 @@
-"""Persistent Daemon Agent Sessions.
+"""Persistent daemon runtimes for role-specific background execution.
 
-Creates and maintains always-on heartbeat sessions for configured agents
-(Simone, Atlas, Cody) so they can pick up proactive work without requiring
-a user to have an active WebSocket connection.
+Creates and maintains always-on daemon sessions for configured agents so
+heartbeat supervision and Task Hub execution do not share the same runtime.
 
 Each daemon session:
-- Has a stable session ID (e.g. ``daemon_simone``)
+- Has a stable session ID (e.g. ``daemon_simone_heartbeat``)
 - Gets a fresh workspace on each gateway startup
 - Is exempt from idle timeout reaping
-- Gets recycled (workspace archived + fresh context) after each heartbeat run
+- Gets recycled after its own role-specific runs
 """
 
 from __future__ import annotations
@@ -27,7 +26,12 @@ logger = logging.getLogger(__name__)
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 DAEMON_SESSION_PREFIX = "daemon_"
-DEFAULT_DAEMON_AGENTS = ("simone",)  # Atlas & Cody are on-demand only; no proactive heartbeat polling
+DEFAULT_DAEMON_AGENTS = ("simone",)  # Atlas & Cody are on-demand only; no proactive polling
+DAEMON_ROLE_HEARTBEAT = "heartbeat"
+DAEMON_ROLE_TODO = "todo"
+_DEFAULT_AGENT_ROLE_MAP: dict[str, tuple[str, ...]] = {
+    "simone": (DAEMON_ROLE_HEARTBEAT, DAEMON_ROLE_TODO),
+}
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -63,10 +67,27 @@ def is_daemon_session(session_id: str) -> bool:
 
 # ── Lazy import to avoid circular deps ───────────────────────────────────────
 
+def _session_role_for_daemon_role(role: str) -> str:
+    role_norm = str(role or "").strip().lower()
+    if role_norm == DAEMON_ROLE_TODO:
+        return "todo_execution"
+    return "heartbeat"
+
+
+def _daemon_session_id(agent_name: str, role: str) -> str:
+    return f"{DAEMON_SESSION_PREFIX}{agent_name}_{role}"
+
+
+def configured_daemon_roles_for_agent(agent_name: str) -> tuple[str, ...]:
+    agent_norm = str(agent_name or "").strip().lower()
+    return _DEFAULT_AGENT_ROLE_MAP.get(agent_norm, (DAEMON_ROLE_HEARTBEAT,))
+
+
 def _make_gateway_session(
     session_id: str,
     workspace_dir: str,
     agent_name: str,
+    role: str,
 ) -> Any:
     """Create a lightweight GatewaySession for the daemon."""
     from universal_agent.gateway import GatewaySession
@@ -78,6 +99,9 @@ def _make_gateway_session(
         metadata={
             "source": "daemon",
             "daemon_agent": agent_name,
+            "daemon_role": role,
+            "session_role": _session_role_for_daemon_role(role),
+            "run_kind": _session_role_for_daemon_role(role),
             "created_at": time.time(),
             "last_activity_at": datetime.now(timezone.utc).isoformat(),
             "runtime": {
@@ -112,10 +136,8 @@ class DaemonSessionManager:
         self.workspaces_dir = Path(workspaces_dir)
         self.heartbeat_service = heartbeat_service
         self.agent_names = agent_names or configured_daemon_agents()
-        # Map: agent_name -> current GatewaySession
         self._sessions: dict[str, Any] = {}
-        # Map: agent_name -> session_id
-        self._session_ids: dict[str, str] = {}
+        self._session_ids: dict[tuple[str, str], str] = {}
         # Archive dir for recycled workspaces
         self._archive_dir = self.workspaces_dir / "_daemon_archives"
 
@@ -146,16 +168,14 @@ class DaemonSessionManager:
             if not entry.is_dir():
                 continue
             name = entry.name
-            # Match directories like run_daemon_simone_20260322_051942_f38ff5bf.
             if not name.startswith(f"run_{DAEMON_SESSION_PREFIX}"):
                 continue
             if name == "_daemon_archives":
                 continue
-            suffix = name[len(f"run_{DAEMON_SESSION_PREFIX}"):]  # "simone_20260322_..."
-            parts = suffix.split("_", 1)
-            agent_candidate = parts[0].lower()
-            if agent_candidate in {a.lower() for a in self.agent_names} and len(parts) > 1:
-                # This is a leftover timestamped workspace — archive it
+            if any(
+                name.startswith(f"run_{DAEMON_SESSION_PREFIX}{str(agent or '').strip().lower()}_")
+                for agent in self.agent_names
+            ):
                 self._archive_workspace(entry)
                 archived += 1
 
@@ -176,18 +196,20 @@ class DaemonSessionManager:
 
         created: list[str] = []
         for agent_name in self.agent_names:
-            session_id = f"{DAEMON_SESSION_PREFIX}{agent_name}"
-            workspace = self._create_workspace(agent_name)
-            session = _make_gateway_session(session_id, str(workspace), agent_name)
-            self._sessions[session_id] = session
-            self._session_ids[agent_name] = session_id
-            self.heartbeat_service.register_session(session)
-            created.append(session_id)
-            logger.info(
-                "🤖 Daemon session created: %s → %s",
-                session_id,
-                workspace,
-            )
+            for role in configured_daemon_roles_for_agent(agent_name):
+                session_id = _daemon_session_id(agent_name, role)
+                workspace = self._create_workspace(agent_name, role)
+                session = _make_gateway_session(session_id, str(workspace), agent_name, role)
+                self._sessions[session_id] = session
+                self._session_ids[(agent_name.lower(), role)] = session_id
+                if role == DAEMON_ROLE_HEARTBEAT:
+                    self.heartbeat_service.register_session(session)
+                created.append(session_id)
+                logger.info(
+                    "🤖 Daemon session created: %s → %s",
+                    session_id,
+                    workspace,
+                )
         if created:
             logger.info(
                 "🤖 Daemon sessions ready: %s",
@@ -195,11 +217,11 @@ class DaemonSessionManager:
             )
         return created
 
-    def _create_workspace(self, agent_name: str) -> Path:
+    def _create_workspace(self, agent_name: str, role: str) -> Path:
         """Create a fresh timestamped workspace for an agent."""
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         short_id = uuid.uuid4().hex[:8]
-        workspace_name = f"run_{DAEMON_SESSION_PREFIX}{agent_name}_{ts}_{short_id}"
+        workspace_name = f"run_{DAEMON_SESSION_PREFIX}{agent_name}_{role}_{ts}_{short_id}"
         workspace = self.workspaces_dir / workspace_name
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / "work_products").mkdir(exist_ok=True)
@@ -221,10 +243,13 @@ class DaemonSessionManager:
             logger.warning("Cannot recycle unknown daemon session: %s", session_id)
             return None
 
-        agent_name = session.metadata.get("daemon_agent", "")
+        agent_name = str(session.metadata.get("daemon_agent", "") or "").strip().lower()
+        role = str(session.metadata.get("daemon_role", "") or "").strip().lower()
         if not agent_name:
-            # Extract from session_id
-            agent_name = session_id.removeprefix(DAEMON_SESSION_PREFIX)
+            raw = session_id.removeprefix(DAEMON_SESSION_PREFIX)
+            parts = raw.split("_", 1)
+            agent_name = parts[0].strip().lower()
+            role = parts[1].strip().lower() if len(parts) > 1 else DAEMON_ROLE_HEARTBEAT
 
         old_workspace = Path(session.workspace_dir)
 
@@ -232,7 +257,7 @@ class DaemonSessionManager:
         self._archive_workspace(old_workspace)
 
         # Create fresh workspace
-        new_workspace = self._create_workspace(agent_name)
+        new_workspace = self._create_workspace(agent_name, role or DAEMON_ROLE_HEARTBEAT)
         session.workspace_dir = str(new_workspace)
         session.metadata["last_activity_at"] = datetime.now(timezone.utc).isoformat()
         session.metadata["created_at"] = time.time()
@@ -267,9 +292,17 @@ class DaemonSessionManager:
         """Get a daemon session by ID."""
         return self._sessions.get(session_id)
 
-    def get_session_for_agent(self, agent_name: str) -> Optional[Any]:
+    def get_session_for_agent(self, agent_name: str, *, role: str | None = None) -> Optional[Any]:
         """Get the daemon session for a named agent."""
-        session_id = self._session_ids.get(agent_name.lower())
+        agent_norm = str(agent_name or "").strip().lower()
+        session_id = None
+        if role:
+            session_id = self._session_ids.get((agent_norm, str(role).strip().lower()))
+        else:
+            for preferred_role in (DAEMON_ROLE_TODO, DAEMON_ROLE_HEARTBEAT):
+                session_id = self._session_ids.get((agent_norm, preferred_role))
+                if session_id:
+                    break
         if session_id:
             return self._sessions.get(session_id)
         return None

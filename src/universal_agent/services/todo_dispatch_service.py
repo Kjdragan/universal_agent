@@ -20,6 +20,7 @@ Your only goal is to execute the assigned tasks, deliver results, then dispositi
 - To send emails, strictly use `mcp__internal__send_agentmail`.
 - NEVER write Python scripts, Bash scripts, or use `curl` to interact with AgentMail or Task Hub. Exclusively use the provided native MCP tools.
 - Legacy external task-manager flows are retired. ALL missions are managed through Task Hub.
+- You are the ONLY canonical executor for trusted email tasks. Hook sessions may triage and optionally send a short receipt acknowledgement, but they must not deliver the final report or final response.
 
 ### VP Delegation Fallback (CRITICAL):
 If you attempt to delegate a mission to a VP Gateway (e.g., `vp.general.primary` or `vp.coder.primary`) and the connection is refused, DO NOT give up, block the task, or attempt to absorb the work yourself. 
@@ -41,6 +42,7 @@ class ToDoDispatchService:
         self.running = False
         self.task: Optional[asyncio.Task] = None
         self.active_sessions: Dict[str, GatewaySession] = {}
+        self.busy_sessions: set[str] = set()
         self.wake_sessions = set()
         self.execution_callback = execution_callback
         self.event_callback = event_callback
@@ -65,6 +67,11 @@ class ToDoDispatchService:
         logger.info("📋 ToDo Dispatch Service stopped")
         
     def register_session(self, session: GatewaySession):
+        metadata = session.metadata if isinstance(session.metadata, dict) else {}
+        session_role = str(metadata.get("session_role") or "").strip().lower()
+        if session_role not in {"todo_execution", "todo"}:
+            logger.debug("Skipping session %s for todo_dispatch (session_role=%s)", session.session_id, session_role or "none")
+            return
         logger.info(f"Registering session {session.session_id} for todo_dispatch")
         self.active_sessions[session.session_id] = session
         if self.event_callback:
@@ -182,6 +189,32 @@ class ToDoDispatchService:
             lines.append(f"You have {len(task_hub_claimed)} task(s) to process.")
             snapshot = capacity_snapshot()
             lines.append("")
+            delivery_modes = sorted(
+                {
+                    str(
+                        (
+                            item.get("metadata")
+                            if isinstance(item.get("metadata"), dict)
+                            else {}
+                        ).get("delivery_mode")
+                        or "standard_report"
+                    ).strip()
+                    for item in task_hub_claimed
+                }
+            )
+            lines.append("== DELIVERY CONTRACT ==")
+            lines.append(
+                "delivery_modes={modes}".format(
+                    modes=", ".join(delivery_modes) if delivery_modes else "standard_report"
+                )
+            )
+            lines.append(
+                "For standard_report and enhanced_report: send exactly one final email with an executive summary in the body and attach the full report artifact when available."
+            )
+            lines.append(
+                "For fast_summary: send exactly one concise body-only final email unless the task is explicitly upgraded."
+            )
+            lines.append("")
             lines.append("== CAPACITY SNAPSHOT ==")
             lines.append(
                 "available_slots={available_slots} active_slots={active_slots} max_concurrent={max_concurrent} in_backoff={in_backoff}".format(
@@ -214,6 +247,9 @@ class ToDoDispatchService:
                 desc = str(item.get("description") or "").strip()
                 lines.append(f"Task {idx}: [{t_id}] {title}")
                 lines.append(f"Description: {desc}")
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                delivery_mode = str(metadata.get("delivery_mode") or "standard_report").strip()
+                lines.append(f"Delivery Mode: {delivery_mode}")
                 routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
                 if routing:
                     lines.append(f"Routing Hint: {routing}")
@@ -237,6 +273,7 @@ class ToDoDispatchService:
                 force_complex=True,
                 metadata={
                     "source": "todo_dispatcher",
+                    "run_kind": "todo_execution",
                     "dispatch_kind": "todo",
                     "claimed_task_ids": task_ids,
                     "claimed_assignment_ids": claimed_assignment_ids,

@@ -15,6 +15,8 @@ Most chatbots are passive—they only speak when spoken to. The Heartbeat Servic
 - **Monitoring Background Tasks**: Checking if long-running operations (like research or compilation) are finished.
 - **Time Sensitivity**: Informing the agent of the current time, approaching deadlines, or scheduled events.
 
+Heartbeat does **not** own trusted email mission execution. That work is routed through Task Hub and the dedicated ToDo dispatcher. Heartbeat remains responsible for health supervision, mediation, and other role-appropriate proactive checks.
+
 ## 2. Process Heartbeat vs. UA Heartbeat Service
 
 These are **two completely separate modules** with overlapping names:
@@ -91,6 +93,8 @@ When `task_hub_claimed` is non-empty (i.e., a Task Hub task has been claimed for
 - **Lean environment prompt**: Uses `_build_task_focused_environment_context()` instead of full context builder
 - **No manual findings JSON**: Agent does not write heartbeat_findings_latest.json (synthetic findings used)
 - **Faster scheduling**: Continuation passes prioritize task completion over monitoring
+
+**Scope note:** Task-focused heartbeat mode still exists for heartbeat-owned proactive work, but trusted inbound email no longer enters this path. Trusted email is triaged by the hook layer and then executed by the dedicated ToDo runtime.
 
 **Implementation:** See `_compose_heartbeat_prompt()` parameter `task_focused=True` and `_build_task_focused_environment_context()` in `heartbeat_service.py`.
 
@@ -224,16 +228,27 @@ Key contents:
 - Kevin's working style preferences
 - Response policy (concise summaries, no-op skipping)
 
+## 8A. Role-Isolated Runtime Model
+
+Heartbeat and Task Hub execution no longer share the same Simone daemon session.
+
+| Runtime | Session ID | Allowed work |
+| --- | --- | --- |
+| Heartbeat daemon | `daemon_simone_heartbeat` | Heartbeat prompts, health checks, mediation follow-up |
+| ToDo daemon | `daemon_simone_todo` | Task Hub claim, execution, delegation, review, final delivery |
+
+This split prevents run-log/transcript cross-talk between heartbeat supervision and email/task execution.
+
 ## 9. Implementation Files
 
 | File | Role |
 | --- | --- |
 | `src/universal_agent/heartbeat_service.py` | Main service: scheduling, execution, prompt composition, retry queue, post-write validation, synthetic fallback |
 | `src/universal_agent/services/dispatch_service.py` | Core dispatch functions: `dispatch_immediate()`, `dispatch_on_approval()`, `dispatch_scheduled_due()`, `dispatch_sweep()` — all dispatch paths enrich tasks with Simone-first routing metadata |
-| `src/universal_agent/services/todo_dispatch_service.py` | ToDo Dispatch Service: session-based dispatch orchestration (decoupled from heartbeat as of 2026-03-29); manages wake signals and scheduler loop for claimed task execution |
+| `src/universal_agent/services/todo_dispatch_service.py` | Dedicated ToDo execution service: session-based dispatch orchestration for `todo_execution` runtimes only; manages wake signals and scheduler loop for claimed Task Hub execution |
 | `src/universal_agent/utils/heartbeat_findings_schema.py` | `HeartbeatFindings` + `HeartbeatFinding` Pydantic models with permissive defaults and normalizers |
 | `src/universal_agent/utils/json_utils.py` | `extract_json_payload()`: 5-layer JSON repair (json.loads → json_repair → regex extraction → Pydantic validation) |
-| `src/universal_agent/gateway_server.py` | `_heartbeat_findings_from_artifacts()`: reads + repairs + classifies findings; `_emit_heartbeat_event()`: mediation dispatch; registers sessions with ToDoDispatchService |
+| `src/universal_agent/gateway_server.py` | `_heartbeat_findings_from_artifacts()`: reads + repairs + classifies findings; `_emit_heartbeat_event()`: mediation dispatch; routes sessions to heartbeat vs ToDo services by `session_role` |
 | `src/universal_agent/heartbeat_mediation.py` | `sanitize_heartbeat_recommendation_text()`: rewrite stale provider-specific language in mediation output |
 | `src/universal_agent/process_heartbeat.py` | OS-level liveness writer (daemon thread, separate from this service) |
 | `src/universal_agent/hooks_service.py` | Hook completion handling for Simone heartbeat investigations |

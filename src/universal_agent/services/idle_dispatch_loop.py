@@ -132,17 +132,26 @@ async def idle_dispatch_loop(
             if not heartbeat_service:
                 continue
 
-            # 1. Find all sessions — prefer gateway sessions, fall back to
-            #    heartbeat-registered sessions (includes daemon sessions)
-            sessions = get_sessions_fn()
-            if not sessions and get_heartbeat_sessions_fn:
-                sessions = get_heartbeat_sessions_fn()
+            # 1. Find candidate sessions.
+            #    When the dedicated ToDo dispatcher is available, only use its
+            #    registered execution sessions. Otherwise fall back to the
+            #    legacy heartbeat-oriented session discovery.
+            if todo_dispatch_service:
+                sessions = dict(getattr(todo_dispatch_service, "active_sessions", {}) or {})
+            else:
+                sessions = get_sessions_fn()
+                if not sessions and get_heartbeat_sessions_fn:
+                    sessions = get_heartbeat_sessions_fn()
 
             if not sessions:
                 continue
 
-            # 2. Find idle agents (not in busy_sessions set)
-            busy = heartbeat_service.busy_sessions or set()
+            # 2. Find idle agents using the canonical executor's busy state
+            busy = (
+                getattr(todo_dispatch_service, "busy_sessions", set()) or set()
+                if todo_dispatch_service
+                else (heartbeat_service.busy_sessions or set())
+            )
             idle_sessions = [
                 sid for sid in sessions.keys()
                 if sid not in busy

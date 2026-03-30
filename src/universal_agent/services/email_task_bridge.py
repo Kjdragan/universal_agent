@@ -2,14 +2,13 @@
 
 Pure-Python service (no LLM calls) that converts trusted inbound AgentMail
 emails into Task Hub entries so they appear on the To-Do List dashboard
-and get picked up by the heartbeat scheduler.
+and get picked up by the dedicated ToDo dispatcher.
 
 Key design decisions:
   - Thread-level deduplication: one task per email thread; subsequent emails
     on the same thread UPDATE the existing task.
   - Task Hub entry → source_kind='email', labels=['email-task','agent-ready'].
-  - HEARTBEAT.md auto-append: active email tasks are written into the
-    heartbeat file so the heartbeat cron job picks them up.
+  - Delivery mode is inferred once at materialization and stored with the task.
   - All operations are idempotent and crash-safe (SQLite UPSERT semantics).
 """
 
@@ -30,8 +29,6 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-_HEARTBEAT_SECTION_HEADER = "## Email-Driven Active Tasks"
-_HEARTBEAT_SECTION_FOOTER = "<!-- end email-driven-tasks -->"
 _EMAIL_TASK_SOURCE_KIND = "email"
 _EMAIL_TASK_PROJECT_KEY = "immediate"
 _EMAIL_TASK_DEFAULT_LABELS = ["email-task", "agent-ready"]
@@ -48,6 +45,20 @@ def _deterministic_task_id(thread_id: str) -> str:
     """Generate a stable, deterministic task_id from an email thread_id."""
     h = hashlib.sha256(f"email_thread:{thread_id}".encode()).hexdigest()[:16]
     return f"email:{h}"
+
+
+def infer_delivery_mode(*, subject: str = "", body: str = "") -> str:
+    """Infer the preferred outbound delivery mode for an email task."""
+    candidate = f"{subject}\n{body}".strip().lower()
+    if not candidate:
+        return "standard_report"
+    if any(token in candidate for token in ("infographic", "audio", "video", "notebooklm", "podcast", "slide deck")):
+        return "enhanced_report"
+    if any(token in candidate for token in ("quick", "short answer", "brief summary", "right away", "asap")):
+        return "fast_summary"
+    if any(token in candidate for token in ("comprehensive report", "intelligence brief", "full report", "detailed analysis")):
+        return "standard_report"
+    return "standard_report"
 
 
 def _workflow_lineage_lines(
@@ -307,9 +318,6 @@ class EmailTaskBridge:
             real_message_id=real_message_id,
         )
 
-        # ③ Update HEARTBEAT.md
-        self._update_heartbeat(subject=subject, thread_id=thread_id, task_id=task_id)
-
         result = {
             "task_id": task_id,
             "master_key": master_key,
@@ -321,6 +329,7 @@ class EmailTaskBridge:
             "workflow_run_id": resolved_workflow_run_id,
             "workflow_attempt_id": resolved_workflow_attempt_id,
             "provider_session_id": resolved_provider_session_id,
+            "delivery_mode": infer_delivery_mode(subject=subject, body=reply_text),
         }
         logger.info(
             "📧→📋 Email task materialized: task_id=%s thread=%s master=%s is_update=%s messages=%d trusted=%s",
@@ -583,6 +592,8 @@ class EmailTaskBridge:
                 "message_count": message_count,
                 "session_key": session_key,
                 "source_system": "agentmail",
+                "delivery_mode": infer_delivery_mode(subject=subject, body=reply_text),
+                "canonical_execution_owner": "todo_dispatcher",
             }
             if workflow_run_id:
                 metadata["workflow_run_id"] = workflow_run_id
@@ -622,74 +633,14 @@ class EmailTaskBridge:
         thread_id: str,
         task_id: str,
     ) -> None:
-        """Append or update email task entry in HEARTBEAT.md."""
-        try:
-            hb_path = Path(self._heartbeat_path)
-            if not hb_path.exists():
-                logger.debug("📧→📋 HEARTBEAT.md not found at %s, skipping", hb_path)
-                return
+        """Compatibility shim retained for callers during migration.
 
-            content = hb_path.read_text(encoding="utf-8")
-            now_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            entry_marker = f"<!-- email-task:{thread_id} -->"
-
-            # Build the task entry line
-            safe_subject = subject.replace("\n", " ")[:80]
-            entry_line = (
-                f"- [ ] Email Task: {safe_subject} "
-                f"(thread: {thread_id[:20]}, task: {task_id}) "
-                f"{entry_marker}\n"
-                f"  - Last update: {now_date}. Follow up on email conversation.\n"
-            )
-
-            if entry_marker in content:
-                # Update existing entry — replace the old lines
-                pattern = re.compile(
-                    rf"- \[ \] Email Task:.*{re.escape(entry_marker)}.*\n"
-                    rf"(?:  - .*\n)*",
-                    re.MULTILINE,
-                )
-                content = pattern.sub(entry_line, content)
-            elif _HEARTBEAT_SECTION_HEADER in content:
-                # Section exists, append before footer
-                if _HEARTBEAT_SECTION_FOOTER in content:
-                    content = content.replace(
-                        _HEARTBEAT_SECTION_FOOTER,
-                        f"{entry_line}{_HEARTBEAT_SECTION_FOOTER}",
-                    )
-                else:
-                    # Section exists but no footer — append at end of section
-                    idx = content.index(_HEARTBEAT_SECTION_HEADER) + len(_HEARTBEAT_SECTION_HEADER)
-                    # Find end of section header line
-                    nl_idx = content.find("\n", idx)
-                    if nl_idx >= 0:
-                        content = (
-                            content[: nl_idx + 1]
-                            + entry_line
-                            + content[nl_idx + 1 :]
-                        )
-            else:
-                # Section doesn't exist — create it before Response Policy
-                insert_before = "## Response Policy"
-                if insert_before in content:
-                    content = content.replace(
-                        insert_before,
-                        (
-                            f"{_HEARTBEAT_SECTION_HEADER}\n"
-                            f"{entry_line}"
-                            f"{_HEARTBEAT_SECTION_FOOTER}\n\n"
-                            f"{insert_before}"
-                        ),
-                    )
-                else:
-                    # Append at end
-                    content += (
-                        f"\n{_HEARTBEAT_SECTION_HEADER}\n"
-                        f"{entry_line}"
-                        f"{_HEARTBEAT_SECTION_FOOTER}\n"
-                    )
-
-            hb_path.write_text(content, encoding="utf-8")
-            logger.debug("📧→📋 HEARTBEAT.md updated for thread=%s", thread_id)
-        except Exception as exc:
-            logger.warning("📧→📋 HEARTBEAT.md update failed: %s", exc)
+        Email tasks no longer mirror into HEARTBEAT.md because Task Hub / ToDo
+        is the canonical execution path for trusted email missions.
+        """
+        logger.debug(
+            "📧→📋 Skipping legacy HEARTBEAT.md email-task mirror thread=%s task_id=%s subject=%s",
+            thread_id,
+            task_id,
+            subject[:80],
+        )

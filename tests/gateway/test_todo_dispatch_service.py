@@ -21,10 +21,10 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     callback = AsyncMock(return_value={"decision": "accepted", "turn_id": "turn-1"})
     service = ToDoDispatchService(execution_callback=callback)
     session = GatewaySession(
-        session_id="daemon_simone",
+        session_id="daemon_simone_todo",
         user_id="daemon",
-        workspace_dir="/tmp/daemon_simone",
-        metadata={"source": "daemon"},
+        workspace_dir="/tmp/daemon_simone_todo",
+        metadata={"source": "daemon", "session_role": "todo_execution", "run_kind": "todo_execution"},
     )
 
     monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", lambda *a, **k: conn)
@@ -50,18 +50,21 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     )
     monkeypatch.setattr(
         "universal_agent.task_hub.get_agent_activity",
-        lambda _conn: {"active_assignments": [{"agent_id": "todo:daemon_simone", "task_id": "email:x", "title": "Existing"}]},
+        lambda _conn: {"active_assignments": [{"agent_id": "todo:daemon_simone_todo", "task_id": "email:x", "title": "Existing"}]},
     )
 
+    service.register_session(session)
     await service._process_session(session)
 
     callback.assert_awaited_once()
     called_session_id, request = callback.await_args.args
-    assert called_session_id == "daemon_simone"
+    assert called_session_id == "daemon_simone_todo"
     assert request.metadata["source"] == "todo_dispatcher"
+    assert request.metadata["run_kind"] == "todo_execution"
     assert request.metadata["claimed_task_ids"] == ["email:1"]
     assert "batch triage" in request.user_input.lower()
     assert "capacity snapshot" in request.user_input.lower()
+    assert "delivery contract" in request.user_input.lower()
 
 
 @pytest.mark.asyncio
@@ -70,10 +73,10 @@ async def test_todo_dispatch_service_requeues_when_capacity_blocked(monkeypatch)
     callback = AsyncMock()
     service = ToDoDispatchService(execution_callback=callback)
     session = GatewaySession(
-        session_id="daemon_simone",
+        session_id="daemon_simone_todo",
         user_id="daemon",
-        workspace_dir="/tmp/daemon_simone",
-        metadata={"source": "daemon"},
+        workspace_dir="/tmp/daemon_simone_todo",
+        metadata={"source": "daemon", "session_role": "todo_execution", "run_kind": "todo_execution"},
     )
 
     monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", lambda *a, **k: conn)
@@ -85,4 +88,18 @@ async def test_todo_dispatch_service_requeues_when_capacity_blocked(monkeypatch)
     await service._process_session(session)
 
     callback.assert_not_called()
-    assert "daemon_simone" in service.wake_sessions
+    assert "daemon_simone_todo" in service.wake_sessions
+
+
+def test_todo_dispatch_service_ignores_non_todo_sessions():
+    service = ToDoDispatchService()
+    session = GatewaySession(
+        session_id="session_hook_agentmail_test",
+        user_id="webhook",
+        workspace_dir="/tmp/hook",
+        metadata={"source": "webhook", "session_role": "email_triage", "run_kind": "email_triage"},
+    )
+
+    service.register_session(session)
+
+    assert service.active_sessions == {}

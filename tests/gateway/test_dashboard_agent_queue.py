@@ -263,7 +263,7 @@ async def test_agent_queue_derives_in_progress_and_review_lanes(monkeypatch, tmp
                     assignment_id, task_id, agent_id, provider_session_id, workspace_dir, state, started_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                ("asg-running", "tq-prog", "todo:daemon_simone", "daemon_simone", "/tmp/ws", "running", datetime.now(timezone.utc).isoformat()),
+                ("asg-running", "tq-prog", "todo:daemon_simone_todo", "daemon_simone_todo", "/tmp/ws", "running", datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
         finally:
@@ -276,9 +276,11 @@ async def test_agent_queue_derives_in_progress_and_review_lanes(monkeypatch, tmp
     items = {item["task_id"]: item for item in response["items"]}
     assert items["tq-open"]["board_lane"] == "not_assigned"
     assert items["tq-prog"]["board_lane"] == "in_progress"
-    assert items["tq-prog"]["assigned_agent_id"] == "todo:daemon_simone"
-    assert items["tq-prog"]["assigned_session_id"] == "daemon_simone"
+    assert items["tq-prog"]["assigned_agent_id"] == "todo:daemon_simone_todo"
+    assert items["tq-prog"]["assigned_session_id"] == "daemon_simone_todo"
     assert items["tq-prog"]["assignment_state"] == "running"
+    assert items["tq-prog"]["session_role"] == "todo_execution"
+    assert items["tq-prog"]["run_kind"] == "todo_execution"
     assert items["tq-review"]["board_lane"] == "needs_review"
     assert items["tq-review"]["requires_simone_review"] is True
 
@@ -288,7 +290,7 @@ async def test_task_history_includes_forensics(monkeypatch, tmp_path):
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
 
-    workspace = tmp_path / "run_daemon_simone_20260330_120000_abcd1234"
+    workspace = tmp_path / "run_daemon_simone_todo_20260330_120000_abcd1234"
     workspace.mkdir()
     (workspace / "run.log").write_text("log", encoding="utf-8")
     (workspace / "transcript.md").write_text("transcript", encoding="utf-8")
@@ -332,8 +334,8 @@ async def test_task_history_includes_forensics(monkeypatch, tmp_path):
                 (
                     "asg-history",
                     "email:history",
-                    "todo:daemon_simone",
-                    "daemon_simone",
+                    "todo:daemon_simone_todo",
+                    "daemon_simone_todo",
                     str(workspace),
                     "completed",
                     datetime.now(timezone.utc).isoformat(),
@@ -358,7 +360,7 @@ async def test_task_history_includes_forensics(monkeypatch, tmp_path):
                     2,
                     "run-1",
                     "attempt-1",
-                    "daemon_simone",
+                    "daemon_simone_todo",
                     datetime.now(timezone.utc).isoformat(),
                     datetime.now(timezone.utc).isoformat(),
                     datetime.now(timezone.utc).isoformat(),
@@ -374,6 +376,8 @@ async def test_task_history_includes_forensics(monkeypatch, tmp_path):
     assert response["task"]["board_lane"] == "needs_review"
     assert response["email_mapping"]["thread_id"] == "thread-1"
     assert response["reconciliation"]["completion_unverified"] is True
+    assert response["delivery_mode"] == "standard_report"
+    assert response["canonical_execution"]["session_role"] == "todo_execution"
     assert response["assignments"][0]["links"]["run_log_href"]
     assert response["assignments"][0]["links"]["transcript_href"]
 

@@ -43,10 +43,12 @@ class MissionContract:
 class MissionGuardrailTracker:
     """Tracks tool calls and evaluates whether inferred requirements were met."""
 
-    def __init__(self, contract: MissionContract):
+    def __init__(self, contract: MissionContract, *, run_kind: str = "user"):
         self.contract = contract
+        self.run_kind = str(run_kind or "user").strip().lower() or "user"
         self.tool_names: list[str] = []
         self._tool_flow: list[str] = []
+        self.task_actions: list[str] = []
         self.email_send_count = 0
         self.gmail_send_count = 0
 
@@ -61,6 +63,7 @@ class MissionGuardrailTracker:
             self.email_send_count += 1
         if _is_gmail_send_tool(low):
             self.gmail_send_count += 1
+        self.task_actions.extend(_extract_task_hub_actions(low, tool_input))
         for nested_tool in _extract_nested_tool_names(tool_input):
             nested_lower = nested_tool.lower()
             self._tool_flow.append(nested_lower)
@@ -70,30 +73,89 @@ class MissionGuardrailTracker:
                 self.gmail_send_count += 1
 
     def evaluate(self) -> dict[str, Any]:
+        if self.run_kind == "email_triage":
+            return self._result(
+                passed=True,
+                stage_status="triaged",
+                terminal=False,
+                missing=[],
+            )
+        if self.run_kind.startswith("heartbeat"):
+            return self._result(
+                passed=True,
+                stage_status="heartbeat",
+                terminal=False,
+                missing=[],
+            )
+
         missing: list[dict[str, Any]] = []
+        stage_status = "completed"
+        terminal = True
+        lifecycle_actions = {action for action in self.task_actions if action}
         if self.contract.email_required:
             observed = self.email_send_count
             required = self.contract.min_email_sends
             if observed < required:
-                missing.append(
-                    {
-                        "requirement": "email_send",
-                        "required": required,
-                        "observed": observed,
-                        "message": "Required email delivery steps were not completed.",
-                    }
-                )
+                if self.run_kind == "todo_execution":
+                    if "delegate" in lifecycle_actions:
+                        stage_status = "delegated"
+                        terminal = False
+                    elif any(action in lifecycle_actions for action in ("review", "block", "park")):
+                        stage_status = "awaiting_final_delivery"
+                        terminal = False
+                    elif any(action in lifecycle_actions for action in ("complete", "approve")):
+                        missing.append(
+                            {
+                                "requirement": "email_send",
+                                "required": required,
+                                "observed": observed,
+                                "message": "Final completion attempted without the required email delivery step.",
+                            }
+                        )
+                    else:
+                        stage_status = "in_progress"
+                        terminal = False
+                else:
+                    missing.append(
+                        {
+                            "requirement": "email_send",
+                            "required": required,
+                            "observed": observed,
+                            "message": "Required email delivery steps were not completed.",
+                        }
+                    )
+        elif self.run_kind == "todo_execution" and "delegate" in lifecycle_actions:
+            stage_status = "delegated"
+            terminal = False
 
         passed = len(missing) == 0
+        return self._result(
+            passed=passed,
+            stage_status=stage_status,
+            terminal=terminal if passed else False,
+            missing=missing,
+        )
+
+    def _result(
+        self,
+        *,
+        passed: bool,
+        stage_status: str,
+        terminal: bool,
+        missing: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         research_pipeline_adherence = _evaluate_research_pipeline_adherence(self._tool_flow)
         return {
             "passed": passed,
+            "stage_status": stage_status,
+            "terminal": terminal,
             "contract": self.contract.to_dict(),
             "observed": {
                 "email_send_count": self.email_send_count,
                 "gmail_send_count": self.gmail_send_count,
                 "tool_calls_total": len(self.tool_names),
                 "tool_names": self.tool_names[-100:],
+                "task_actions": self.task_actions[-100:],
                 "research_pipeline_adherence": research_pipeline_adherence,
             },
             "missing": missing,
@@ -160,6 +222,15 @@ def _extract_nested_tool_names(tool_input: Any) -> list[str]:
         if slug:
             names.append(slug)
     return names
+
+
+def _extract_task_hub_actions(tool_name_lower: str, tool_input: Any) -> list[str]:
+    if "task_hub_task_action" not in tool_name_lower:
+        return []
+    if not isinstance(tool_input, dict):
+        return []
+    action = str(tool_input.get("action") or "").strip().lower()
+    return [action] if action else []
 
 
 def _evaluate_research_pipeline_adherence(tool_flow: list[str]) -> dict[str, Any]:

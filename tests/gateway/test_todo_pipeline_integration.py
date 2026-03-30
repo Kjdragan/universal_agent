@@ -37,6 +37,7 @@ def _seed_email_task(conn: sqlite3.Connection, *, task_id: str, title: str, scor
             "score_confidence": 0.9,
             "trigger_type": "immediate",
             "labels": ["agent-ready", "email"],
+            "metadata": {"delivery_mode": "standard_report", "canonical_execution_owner": "todo_dispatcher"},
         },
     )
 
@@ -128,8 +129,8 @@ def _wire_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return db_path
 
 
-def _make_session(tmp_path: Path, *, session_id: str = "daemon_simone") -> tuple[GatewaySession, Path]:
-    workspace = tmp_path / "run_daemon_simone_20260330_120000_abcd1234"
+def _make_session(tmp_path: Path, *, session_id: str = "daemon_simone_todo") -> tuple[GatewaySession, Path]:
+    workspace = tmp_path / "run_daemon_simone_todo_20260330_120000_abcd1234"
     workspace.mkdir()
     (workspace / "run.log").write_text("run log", encoding="utf-8")
     (workspace / "transcript.md").write_text("transcript", encoding="utf-8")
@@ -137,7 +138,7 @@ def _make_session(tmp_path: Path, *, session_id: str = "daemon_simone") -> tuple
         session_id=session_id,
         user_id="daemon",
         workspace_dir=str(workspace),
-        metadata={"source": "daemon"},
+        metadata={"source": "daemon", "session_role": "todo_execution", "run_kind": "todo_execution"},
     )
     return session, workspace
 
@@ -168,7 +169,7 @@ async def test_todo_pipeline_completed_without_explicit_disposition_flows_to_rev
         assert item is not None
         assert item["status"] == task_hub.TASK_STATUS_IN_PROGRESS
         assert item["seizure_state"] == "seized"
-        assert history["assignments"][0]["agent_id"] == "todo:daemon_simone"
+        assert history["assignments"][0]["agent_id"] == "todo:daemon_simone_todo"
         assignment_id = history["assignments"][0]["assignment_id"]
     with _db_connect(tmp_path / "runtime_state.db") as runtime_conn:
         runtime_tables = runtime_conn.execute(
@@ -197,13 +198,18 @@ async def test_todo_pipeline_completed_without_explicit_disposition_flows_to_rev
 
     queue_item = next(item for item in queue["items"] if item["task_id"] == "email:review-flow")
     assert overview["todo_dispatch"]["registered_session_count"] == 1
-    assert overview["todo_dispatch"]["last_claimed_session_id"] == "daemon_simone"
+    assert overview["todo_dispatch"]["last_claimed_session_id"] == "daemon_simone_todo"
     assert overview["todo_dispatch"]["last_dispatch_decision"] == "accepted"
     assert queue_item["board_lane"] == "needs_review"
     assert queue_item["requires_simone_review"] is True
+    assert queue_item["delivery_mode"] == "standard_report"
+    assert queue_item["session_role"] == "todo_execution"
+    assert queue_item["run_kind"] == "todo_execution"
     assert history_response["reconciliation"]["completion_unverified"] is True
     assert history_response["email_mapping"]["thread_id"] == "thread-email:review-flow"
     assert history_response["assignments"][0]["links"]["run_log_href"]
+    assert history_response["assignments"][0]["session_role"] == "todo_execution"
+    assert history_response["canonical_execution"]["session_id"] == session.session_id
     assert history_response["artifacts"]["transcript_href"]
 
 
@@ -232,7 +238,7 @@ async def test_todo_pipeline_explicit_completion_stays_completed_and_visible(mon
             task_id="email:completed-flow",
             action="complete",
             reason="delivered to Kevin",
-            agent_id="todo:daemon_simone",
+            agent_id="todo:daemon_simone_todo",
         )
         history = task_hub.get_task_history(conn, task_id="email:completed-flow", limit=10)
         assignment_id = history["assignments"][0]["assignment_id"]

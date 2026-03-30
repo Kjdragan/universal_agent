@@ -2874,13 +2874,17 @@ def _todo_dispatch_runtime_snapshot() -> dict[str, Any]:
             for session_id in getattr(_todo_dispatch_service, "active_sessions", {}).keys()
         )
         pending_wakes = sorted(str(session_id) for session_id in getattr(_todo_dispatch_service, "wake_sessions", set()))
+        busy_sessions = sorted(str(session_id) for session_id in getattr(_todo_dispatch_service, "busy_sessions", set()))
     else:
         active_sessions = []
         pending_wakes = []
+        busy_sessions = []
     data["registered_sessions"] = active_sessions
     data["registered_session_count"] = len(active_sessions)
     data["pending_wake_sessions"] = pending_wakes
     data["pending_wake_count"] = len(pending_wakes)
+    data["busy_sessions"] = busy_sessions
+    data["busy_session_count"] = len(busy_sessions)
     data["sleeping_session_warning"] = bool(
         data.get("last_wake_requested_session_id")
         and data.get("last_wake_registered") is False
@@ -3883,6 +3887,23 @@ def _session_runtime_snapshot(session_id: str) -> dict[str, Any]:
 def _normalize_run_source(value: Any) -> str:
     source = str(value or "user").strip().lower()
     return source or "user"
+
+
+def _normalize_run_kind(value: Any, *, request_source: str = "", session: Any = None) -> str:
+    kind = str(value or "").strip().lower()
+    if kind:
+        return kind
+    if request_source == "todo_dispatcher":
+        return "todo_execution"
+    if request_source.startswith("heartbeat"):
+        return "heartbeat"
+    if request_source == "webhook":
+        session_role = _session_role(session) if session is not None else ""
+        if session_role:
+            return session_role
+        return "hook"
+    session_kind = _session_run_kind(session) if session is not None else ""
+    return session_kind or request_source or "user"
 
 
 def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
@@ -5793,10 +5814,7 @@ async def _admit_hook_turn(session_id: str, request: GatewayRequest) -> dict[str
                 candidate = gateway_sessions.get(session_id)
                 if candidate is not None:
                     store_session(candidate)
-                    if _heartbeat_service:
-                        _heartbeat_service.register_session(candidate)
-                    if _todo_dispatch_service:
-                        _todo_dispatch_service.register_session(candidate)
+                    _register_session_with_runtime_services(candidate)
         except Exception as exc:
             logger.warning("Failed to sync hook session into gateway state (session=%s): %s", session_id, exc)
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
@@ -5971,16 +5989,22 @@ async def _run_gateway_session_request(
 ) -> None:
     gateway = get_gateway()
     session_id = session.session_id
-    request_source = _normalize_run_source(
-        request.metadata.get("source") if isinstance(request.metadata, dict) else None
+    request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    request_source = _normalize_run_source(request_metadata.get("source"))
+    request_run_kind = _normalize_run_kind(
+        request_metadata.get("run_kind"),
+        request_source=request_source,
+        session=session,
     )
     saw_streaming_text = False
     tool_call_count = 0
     execution_duration_seconds = 0.0
     execution_start_ts = time.time()
     terminal_reason: Optional[str] = None
-    if _heartbeat_service:
+    if _heartbeat_service and request_run_kind == "heartbeat":
         _heartbeat_service.busy_sessions.add(session_id)
+    if _todo_dispatch_service and request_run_kind == "todo_execution":
+        _todo_dispatch_service.busy_sessions.add(session_id)
 
     run_log_handle = None
     if session.workspace_dir:
@@ -6001,7 +6025,10 @@ async def _run_gateway_session_request(
             except Exception:
                 pass
 
-    mission_tracker = MissionGuardrailTracker(build_mission_contract(request.user_input))
+    mission_tracker = MissionGuardrailTracker(
+        build_mission_contract(request.user_input),
+        run_kind=request_run_kind,
+    )
 
     try:
         async for event in gateway.execute(session, request):
@@ -6166,6 +6193,81 @@ async def _run_gateway_session_request(
             terminal_reason = "goal_unsatisfied"
             return
 
+        stage_status = str(goal_satisfaction.get("stage_status") or "completed").strip().lower()
+        terminal = bool(goal_satisfaction.get("terminal", True))
+        if not terminal:
+            stage_map = {
+                "triaged": (
+                    "email_triaged",
+                    "Email Triaged",
+                    "Trusted email triage completed. Task Hub / ToDo remains the canonical execution owner.",
+                ),
+                "delegated": (
+                    "mission_delegated",
+                    "Delegated To VP",
+                    "Task execution was durably delegated to a VP worker and remains in progress.",
+                ),
+                "awaiting_final_delivery": (
+                    "awaiting_final_delivery",
+                    "Awaiting Final Delivery",
+                    "Work progressed, but final delivery is still pending in the canonical task lifecycle.",
+                ),
+                "in_progress": (
+                    "mission_in_progress",
+                    "Task Claimed",
+                    "Task execution is in progress under the canonical ToDo pipeline.",
+                ),
+            }
+            notification = stage_map.get(stage_status)
+            if notification is not None:
+                _add_notification(
+                    kind=notification[0],
+                    title=notification[1],
+                    message=notification[2],
+                    session_id=session_id,
+                    severity="info",
+                    requires_action=False,
+                    metadata={
+                        "goal_satisfaction": goal_satisfaction,
+                        "run_kind": request_run_kind,
+                        "stage_status": stage_status,
+                    },
+                )
+            await manager.broadcast(
+                session_id,
+                {
+                    "type": "status",
+                    "data": {
+                        "status": stage_status,
+                        "turn_id": turn_id,
+                        "goal_satisfaction": goal_satisfaction,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            await manager.broadcast(
+                session_id,
+                {
+                    "type": "query_complete",
+                    "data": {
+                        "turn_id": turn_id,
+                        "goal_satisfaction": goal_satisfaction,
+                        "completed": False,
+                        "stage_status": stage_status,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            async with _session_turn_lock(session_id):
+                _finalize_turn(
+                    session_id,
+                    turn_id,
+                    TURN_STATUS_COMPLETED,
+                    completion=completion_summary,
+                )
+            terminal_reason = stage_status or "in_progress"
+            return
+
         _add_notification(
             kind="mission_complete",
             title="Mission Completed",
@@ -6282,8 +6384,10 @@ async def _run_gateway_session_request(
             run_source=request_source,
             terminal_reason=terminal_reason,
         )
-        if _heartbeat_service:
+        if _heartbeat_service and request_run_kind == "heartbeat":
             _heartbeat_service.busy_sessions.discard(session_id)
+        if _todo_dispatch_service and request_run_kind == "todo_execution":
+            _todo_dispatch_service.busy_sessions.discard(session_id)
 
 
 async def _dispatch_gateway_request_to_session(
@@ -6301,10 +6405,7 @@ async def _dispatch_gateway_request_to_session(
                 candidate = gateway_sessions.get(session_id)
                 if candidate is not None:
                     store_session(candidate)
-                    if _heartbeat_service:
-                        _heartbeat_service.register_session(candidate)
-                    if _todo_dispatch_service:
-                        _todo_dispatch_service.register_session(candidate)
+                    _register_session_with_runtime_services(candidate)
         except Exception as exc:
             logger.warning("Failed to sync session into gateway runtime (session=%s): %s", session_id, exc)
 
@@ -6554,26 +6655,92 @@ def _gateway_live_session_summaries() -> list[Any]:
     return live_summaries
 
 
+def _session_metadata_dict(session: Any) -> dict[str, Any]:
+    metadata = getattr(session, "metadata", None)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _session_role(session: Any) -> str:
+    metadata = _session_metadata_dict(session)
+    return str(metadata.get("session_role") or "").strip().lower()
+
+
+def _session_run_kind(session: Any) -> str:
+    metadata = _session_metadata_dict(session)
+    return str(metadata.get("run_kind") or "").strip().lower()
+
+
+def _should_register_with_heartbeat(session: Any) -> bool:
+    role = _session_role(session)
+    return role not in {"todo_execution", "todo", "email_triage", "hook"}
+
+
+def _should_register_with_todo_dispatch(session: Any) -> bool:
+    role = _session_role(session)
+    return role in {"todo_execution", "todo"}
+
+
+def _register_session_with_runtime_services(session: Any) -> None:
+    if _heartbeat_service and _should_register_with_heartbeat(session):
+        _heartbeat_service.register_session(session)
+    if _todo_dispatch_service and _should_register_with_todo_dispatch(session):
+        _todo_dispatch_service.register_session(session)
+
+
 def _collect_live_heartbeat_targets(
     *,
     register_with_heartbeat: bool = False,
     include_heartbeat_active: bool = False,
 ) -> set[str]:
-    target_sessions: set[str] = {str(sid) for sid in _sessions.keys() if str(sid)}
+    target_sessions: set[str] = set()
+    for sid, session in _sessions.items():
+        clean_sid = str(sid or "").strip()
+        if clean_sid and _should_register_with_heartbeat(session):
+            target_sessions.add(clean_sid)
     for session in _gateway_live_session_summaries():
         sid = str(getattr(session, "session_id", "") or "").strip()
         if not sid:
             continue
+        if not _should_register_with_heartbeat(session):
+            continue
         target_sessions.add(sid)
         if register_with_heartbeat and _heartbeat_service:
             try:
-                _heartbeat_service.register_session(session)
-                if _todo_dispatch_service:
-                    _todo_dispatch_service.register_session(session)
+                _register_session_with_runtime_services(session)
             except Exception:
                 logger.debug("Failed to register live session %s with heartbeat", sid)
     if include_heartbeat_active and _heartbeat_service and hasattr(_heartbeat_service, "active_sessions"):
         for sid in getattr(_heartbeat_service, "active_sessions", set()) or set():
+            clean = str(sid or "").strip()
+            if clean:
+                target_sessions.add(clean)
+    return target_sessions
+
+
+def _collect_live_todo_targets(
+    *,
+    register_with_todo: bool = False,
+    include_todo_active: bool = False,
+) -> set[str]:
+    target_sessions: set[str] = set()
+    for sid, session in _sessions.items():
+        clean_sid = str(sid or "").strip()
+        if clean_sid and _should_register_with_todo_dispatch(session):
+            target_sessions.add(clean_sid)
+    for session in _gateway_live_session_summaries():
+        sid = str(getattr(session, "session_id", "") or "").strip()
+        if not sid:
+            continue
+        if not _should_register_with_todo_dispatch(session):
+            continue
+        target_sessions.add(sid)
+        if register_with_todo and _todo_dispatch_service:
+            try:
+                _register_session_with_runtime_services(session)
+            except Exception:
+                logger.debug("Failed to register live session %s with todo_dispatch", sid)
+    if include_todo_active and _todo_dispatch_service:
+        for sid in getattr(_todo_dispatch_service, "active_sessions", {}).keys():
             clean = str(sid or "").strip()
             if clean:
                 target_sessions.add(clean)
@@ -12304,8 +12471,9 @@ async def lifespan(app: FastAPI):
         try:
             seeded = 0
             for existing_session in _gateway_live_session_summaries():
-                _heartbeat_service.register_session(existing_session)
-                seeded += 1
+                if _should_register_with_heartbeat(existing_session):
+                    _register_session_with_runtime_services(existing_session)
+                    seeded += 1
             if seeded > 0:
                 logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
         except Exception as exc:
@@ -12323,7 +12491,8 @@ async def lifespan(app: FastAPI):
         await _todo_dispatch_service.start()
         try:
             for existing_session in _gateway_live_session_summaries():
-                _todo_dispatch_service.register_session(existing_session)
+                if _should_register_with_todo_dispatch(existing_session):
+                    _register_session_with_runtime_services(existing_session)
         except Exception as exc:
             logger.warning("Failed to seed tododispatch sessions at startup: %s", exc)
 
@@ -12492,26 +12661,51 @@ async def lifespan(app: FastAPI):
         """Priority-aware immediate dispatch for inbound emails.
 
         Called by AgentMailService after priority classification.
-        For P0/P1: wakes heartbeat immediately so Simone picks up the task.
-        If all agents are busy, emits a notification with what they're working on.
+        For P0/P1: wakes the dedicated ToDo executor immediately.
+        If all ToDo executors are busy, emits a notification with what they're working on.
         """
-        if not _heartbeat_service:
-            return {"dispatched": False, "reason": "heartbeat_unavailable"}
+        if not _todo_dispatch_service:
+            _add_notification(
+                kind="todo_dispatch_unavailable",
+                title="ToDo Dispatcher Unavailable",
+                message="Trusted email was materialized, but no ToDo executor runtime is currently available.",
+                severity="warning",
+                requires_action=False,
+                metadata={
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "priority": priority,
+                    "reason": reason,
+                },
+            )
+            return {"dispatched": False, "reason": "todo_dispatch_unavailable"}
 
-        target_sessions = _collect_live_heartbeat_targets(include_heartbeat_active=True)
-        # Include daemon sessions (always-on agents) as dispatch targets
+        target_sessions = _collect_live_todo_targets(register_with_todo=True, include_todo_active=True)
 
         if not target_sessions:
-            return {"dispatched": False, "reason": "no_sessions"}
+            _add_notification(
+                kind="todo_dispatch_unavailable",
+                title="ToDo Executor Not Registered",
+                message="Trusted email was queued, but no dedicated ToDo executor session is registered.",
+                severity="warning",
+                requires_action=False,
+                metadata={
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "priority": priority,
+                    "reason": reason,
+                },
+            )
+            return {"dispatched": False, "reason": "no_todo_sessions"}
 
         # Check which sessions are idle vs busy
-        busy = _heartbeat_service.busy_sessions
+        busy = getattr(_todo_dispatch_service, "busy_sessions", set()) or set()
         idle_sessions = [sid for sid in target_sessions if sid not in busy]
         all_busy = len(idle_sessions) == 0
 
         if all_busy:
             # All agents busy — send a notification with ETA
-            busy_info = _get_busy_agent_summary()
+            busy_info = _get_busy_todo_summary()
             _add_notification(
                 kind="agent_busy_signal",
                 title=f"Agent Busy — queued {priority.upper()} email task",
@@ -12531,11 +12725,9 @@ async def lifespan(app: FastAPI):
                     "total_sessions": len(target_sessions),
                 },
             )
-            # Still queue heartbeat wake so it fires as soon as the agent finishes
+            # Queue one wake so it fires as soon as the executor finishes.
             for sid in sorted(target_sessions)[:1]:  # Wake one session
-                _heartbeat_service.request_heartbeat_now(
-                    sid, reason=f"priority_email_{priority}:{reason}"
-                )
+                _todo_dispatch_service.request_dispatch_now(sid)
             return {
                 "dispatched": True,
                 "reason": "queued_busy",
@@ -12544,7 +12736,6 @@ async def lifespan(app: FastAPI):
             }
 
         # Idle agent(s) available — wake them immediately
-        wake_reason = f"priority_email_{priority}:{reason}"
         woke_count = 0
         live_sessions_by_id = {
             str(getattr(session, "session_id", "") or "").strip(): session
@@ -12554,12 +12745,10 @@ async def lifespan(app: FastAPI):
             session = live_sessions_by_id.get(sid)
             if session is not None:
                 try:
-                    _heartbeat_service.register_session(session)
-                    if _todo_dispatch_service:
-                        _todo_dispatch_service.register_session(session)
+                    _register_session_with_runtime_services(session)
                 except Exception:
                     pass
-            _heartbeat_service.request_heartbeat_now(sid, reason=wake_reason)
+            _todo_dispatch_service.request_dispatch_now(sid)
             woke_count += 1
 
         _add_notification(
@@ -12586,12 +12775,12 @@ async def lifespan(app: FastAPI):
             "woke_count": woke_count,
         }
 
-    def _get_busy_agent_summary() -> str:
-        """Summarize what busy agents are working on for notifications."""
-        if not _heartbeat_service:
+    def _get_busy_todo_summary() -> str:
+        """Summarize what busy ToDo executors are working on for notifications."""
+        if not _todo_dispatch_service:
             return "unknown"
         parts: list[str] = []
-        for sid in _heartbeat_service.busy_sessions:
+        for sid in getattr(_todo_dispatch_service, "busy_sessions", set()) or set():
             session = _sessions.get(sid)
             if session:
                 runtime = session.metadata.get("runtime", {}) if isinstance(session.metadata, dict) else {}
@@ -14174,8 +14363,8 @@ async def get_artifact_file(file_path: str):
 def _resolve_session_workspace(session_id: str) -> Path:
     """Resolve a session ID to its actual workspace directory on disk.
 
-    Daemon sessions (e.g. ``daemon_simone``) use timestamped workspace dirs
-    (``run_daemon_simone_20260327_224414_xxx``) that may live under
+    Daemon sessions (e.g. ``daemon_simone_todo``) use timestamped workspace dirs
+    (``run_daemon_simone_todo_20260327_224414_xxx``) that may live under
     ``WORKSPACES_DIR/`` (active) or ``WORKSPACES_DIR/_daemon_archives/``
     (recycled).  This helper checks, in order:
 
@@ -14190,7 +14379,7 @@ def _resolve_session_workspace(session_id: str) -> Path:
 
     Raises ``HTTPException(404)`` if no workspace is found.
     """
-    # (1) In-memory live session (works for daemon_simone → timestamped dir)
+    # (1) In-memory live session (works for daemon_simone_todo → timestamped dir)
     live_ws = _workspace_dir_for_session(session_id)
     if live_ws is not None and live_ws.is_dir():
         return live_ws
@@ -14207,10 +14396,9 @@ def _resolve_session_workspace(session_id: str) -> Path:
     if archive_exact.is_dir():
         return archive_exact
 
-    # (4) Glob fallback — find the most recent run_daemon_{agent}_* workspace.
-    #     The session_id for daemons is "daemon_{agent}", strip the prefix.
+    # (4) Glob fallback — find the most recent run_{session_id}_* workspace.
     if safe_id.startswith("daemon_"):
-        agent_slug = safe_id  # e.g. "daemon_simone"
+        agent_slug = safe_id  # e.g. "daemon_simone_todo"
         prefix = f"run_{agent_slug}_"
 
         candidates: list[Path] = []
@@ -14238,7 +14426,7 @@ async def list_session_files(session_id: str = "", path: str = ""):
     """List files/dirs inside a session workspace (query-param based).
 
     This is the endpoint that the session explorer's ``buildDurableFileListUrl``
-    calls: ``GET /api/files?session_id=daemon_simone&path=.``
+    calls: ``GET /api/files?session_id=daemon_simone_todo&path=.``
     """
     session_id = (session_id or "").strip()
     if not session_id:
@@ -14410,10 +14598,8 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
         session.metadata["policy"] = _policy_metadata_snapshot(policy)
         store_session(session)
         _increment_metric("sessions_created")
-        if _heartbeat_service:
-            _heartbeat_service.register_session(session)
-        if _todo_dispatch_service:
-            _todo_dispatch_service.register_session(session)
+        if _heartbeat_service or _todo_dispatch_service:
+            _register_session_with_runtime_services(session)
         else:
             logger.warning("Heartbeat service not available in create_session")
         return CreateSessionResponse(
@@ -17814,7 +18000,7 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
         }
 
     # For daemon sessions, the workspace_dir is the actual timestamped directory
-    # (e.g. run_daemon_simone_20260327_224414_076ac652).
+    # (e.g. run_daemon_simone_todo_20260327_224414_076ac652).
     # After recycling, it moves to _daemon_archives/.  Resolve the best path.
     resolved_workspace_name = ""
     resolved_workspace_path = ""
@@ -17838,7 +18024,7 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
                 resolved_workspace_name = workspace_name
                 resolved_workspace_path = str(wdir_path)
 
-    # Build effective session_href: use the stored session_id (daemon_simone etc.)
+    # Build effective session_href: use the stored session_id (daemon_simone_todo etc.)
     session_href = f"/dashboard/sessions?session_id={urllib.parse.quote(sid, safe='')}" if sid else ""
 
     # Build run_log path: use the actual workspace directory
@@ -17870,6 +18056,34 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
         "transcript_path": transcript_abs,
         "workspace_dir": resolved_workspace_path or wdir,
         "workspace_name": resolved_workspace_name,
+    }
+
+
+def _execution_profile_for_session(session_id: str, *, workspace_dir: str = "") -> dict[str, Any]:
+    sid = str(session_id or "").strip()
+    workspace = str(workspace_dir or "").strip()
+    session = _sessions.get(sid)
+    role = ""
+    run_kind = ""
+    if session is not None:
+        role = _session_role(session)
+        run_kind = _session_run_kind(session)
+        if not workspace:
+            workspace = str(getattr(session, "workspace_dir", "") or "").strip()
+    if not role and sid.startswith("daemon_"):
+        if sid.endswith("_heartbeat"):
+            role = "heartbeat"
+            run_kind = "heartbeat"
+        elif sid.endswith("_todo"):
+            role = "todo_execution"
+            run_kind = "todo_execution"
+    if not role and sid.startswith("session_hook_"):
+        role = "email_triage"
+        run_kind = "email_triage"
+    return {
+        "session_role": role or None,
+        "run_kind": run_kind or role or None,
+        "workspace_dir": workspace or None,
     }
 
 
@@ -17915,6 +18129,31 @@ def _task_hub_active_assignment_for_task(conn: sqlite3.Connection, task_id: str)
         WHERE task_id = ?
           AND state IN ('seized', 'running')
         ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (str(task_id or "").strip(),),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "assignment_id": str(row["assignment_id"] or ""),
+        "agent_id": str(row["agent_id"] or ""),
+        "provider_session_id": str(row["provider_session_id"] or ""),
+        "workspace_dir": str(row["workspace_dir"] or ""),
+        "state": str(row["state"] or ""),
+        "started_at": str(row["started_at"] or ""),
+        "ended_at": str(row["ended_at"] or ""),
+        "result_summary": str(row["result_summary"] or ""),
+    }
+
+
+def _task_hub_latest_assignment_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT assignment_id, agent_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+        ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC
         LIMIT 1
         """,
         (str(task_id or "").strip(),),
@@ -18011,11 +18250,26 @@ def _task_hub_board_projection(
 def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
     task_id = str(item.get("task_id") or "").strip()
     active_assignment = _task_hub_active_assignment_for_task(conn, task_id) if task_id else None
+    latest_assignment = _task_hub_latest_assignment_for_task(conn, task_id) if task_id and not active_assignment else active_assignment
     projection = _task_hub_board_projection(item=item, active_assignment=active_assignment)
     flags = _task_hub_reconciliation_flags(item=item, active_assignment=active_assignment)
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    session_profile = _execution_profile_for_session(
+        str((latest_assignment or {}).get("provider_session_id") or projection.get("assigned_session_id") or ""),
+        workspace_dir=str((latest_assignment or {}).get("workspace_dir") or ""),
+    )
     serialized = dict(item)
     serialized.update(projection)
     serialized["reconciliation"] = flags
+    serialized["delivery_mode"] = str(metadata.get("delivery_mode") or "standard_report")
+    serialized["session_role"] = session_profile.get("session_role")
+    serialized["run_kind"] = session_profile.get("run_kind")
+    serialized["canonical_execution_session_id"] = (
+        str((latest_assignment or {}).get("provider_session_id") or projection.get("assigned_session_id") or "") or None
+    )
+    serialized["canonical_execution_workspace"] = (
+        str((latest_assignment or {}).get("workspace_dir") or session_profile.get("workspace_dir") or "") or None
+    )
     return serialized
 
 
@@ -18163,18 +18417,53 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
             str(record.get("session_id") or ""),
             workspace_dir=str(record.get("workspace_dir") or ""),
         )
+        profile = _execution_profile_for_session(
+            str(record.get("session_id") or ""),
+            workspace_dir=str(record.get("workspace_dir") or ""),
+        )
         record["links"] = links
+        record["session_role"] = profile.get("session_role")
+        record["run_kind"] = profile.get("run_kind")
         enriched_assignments.append(record)
     history["assignments"] = enriched_assignments
     latest_links = {}
+    canonical_execution = {
+        "session_id": None,
+        "workspace_dir": None,
+        "session_role": None,
+        "run_kind": None,
+    }
     if enriched_assignments:
         latest_links = dict(enriched_assignments[0].get("links") or {})
+        canonical_execution = {
+            "session_id": enriched_assignments[0].get("session_id"),
+            "workspace_dir": enriched_assignments[0].get("workspace_dir") or latest_links.get("workspace_dir"),
+            "session_role": enriched_assignments[0].get("session_role"),
+            "run_kind": enriched_assignments[0].get("run_kind"),
+        }
     elif isinstance(email_mapping, dict):
         latest_links = _task_history_links_for_session(
             str(email_mapping.get("provider_session_id") or ""),
             workspace_dir="",
         )
+        email_profile = _execution_profile_for_session(str(email_mapping.get("provider_session_id") or ""))
+        canonical_execution = {
+            "session_id": str(email_mapping.get("provider_session_id") or "") or None,
+            "workspace_dir": latest_links.get("workspace_dir"),
+            "session_role": email_profile.get("session_role"),
+            "run_kind": email_profile.get("run_kind"),
+        }
     history["artifacts"] = latest_links
+    task_meta = history.get("task") if isinstance(history.get("task"), dict) else {}
+    history["delivery_mode"] = str(
+        (
+            task_meta.get("metadata")
+            if isinstance(task_meta.get("metadata"), dict)
+            else {}
+        ).get("delivery_mode")
+        or "standard_report"
+    )
+    history["canonical_execution"] = canonical_execution
     return {"status": "ok", **history}
 
 
@@ -23418,10 +23707,7 @@ async def get_session_info(session_id: str, request: Request):
             session.metadata["policy"] = _policy_metadata_snapshot(policy)
             store_session(session)
             _increment_metric("resume_successes")
-            if _heartbeat_service:
-                _heartbeat_service.register_session(session)
-            if _todo_dispatch_service:
-                _todo_dispatch_service.register_session(session)
+            _register_session_with_runtime_services(session)
         except ValueError:
             _increment_metric("resume_failures")
             raise HTTPException(status_code=404, detail="Session not found")
@@ -25338,10 +25624,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             
             session.metadata["user_id"] = session.user_id
             store_session(session)
-            if _heartbeat_service:
-                _heartbeat_service.register_session(session)
-            if _todo_dispatch_service:
-                _todo_dispatch_service.register_session(session)
+            _register_session_with_runtime_services(session)
         except ValueError:
             # Session Not Found - do NOT count as continuity failure
             await websocket.close(code=4004, reason="Session not found")

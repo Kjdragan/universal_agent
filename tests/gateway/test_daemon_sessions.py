@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from universal_agent.services.daemon_sessions import (
+    DAEMON_ROLE_HEARTBEAT,
+    DAEMON_ROLE_TODO,
     DAEMON_SESSION_PREFIX,
     DaemonSessionManager,
     configured_daemon_agents,
@@ -57,9 +59,7 @@ def test_configured_daemon_agents_default():
     with patch.dict(os.environ, {}, clear=True):
         os.environ.pop("UA_DAEMON_SESSION_AGENTS", None)
         agents = configured_daemon_agents()
-        assert "simone" in agents
-        assert "atlas" in agents
-        assert "cody" in agents
+        assert agents == ["simone"]
 
 
 def test_configured_daemon_agents_override():
@@ -98,14 +98,15 @@ def manager(workspaces_dir, mock_heartbeat):
 class TestDaemonSessionManager:
     def test_ensure_daemon_sessions_creates_sessions(self, manager, mock_heartbeat):
         created = manager.ensure_daemon_sessions()
-        assert len(created) == 2
-        assert "daemon_simone" in created
-        assert "daemon_atlas" in created
+        assert len(created) == 3
+        assert "daemon_simone_heartbeat" in created
+        assert "daemon_simone_todo" in created
+        assert "daemon_atlas_heartbeat" in created
         assert mock_heartbeat.register_session.call_count == 2
 
     def test_sessions_have_workspaces(self, manager):
         manager.ensure_daemon_sessions()
-        for session_id in ["daemon_simone", "daemon_atlas"]:
+        for session_id in ["daemon_simone_heartbeat", "daemon_simone_todo", "daemon_atlas_heartbeat"]:
             session = manager.get_session(session_id)
             assert session is not None
             ws_path = Path(session.workspace_dir)
@@ -115,16 +116,24 @@ class TestDaemonSessionManager:
 
     def test_session_metadata(self, manager):
         manager.ensure_daemon_sessions()
-        session = manager.get_session("daemon_simone")
+        session = manager.get_session("daemon_simone_todo")
         assert session.user_id == "daemon"
         assert session.metadata["source"] == "daemon"
         assert session.metadata["daemon_agent"] == "simone"
+        assert session.metadata["daemon_role"] == DAEMON_ROLE_TODO
+        assert session.metadata["session_role"] == "todo_execution"
 
     def test_get_session_for_agent(self, manager):
         manager.ensure_daemon_sessions()
         session = manager.get_session_for_agent("simone")
         assert session is not None
-        assert session.session_id == "daemon_simone"
+        assert session.session_id == "daemon_simone_todo"
+
+    def test_get_session_for_agent_role(self, manager):
+        manager.ensure_daemon_sessions()
+        session = manager.get_session_for_agent("simone", role=DAEMON_ROLE_HEARTBEAT)
+        assert session is not None
+        assert session.session_id == "daemon_simone_heartbeat"
 
     def test_get_session_for_agent_case_insensitive(self, manager):
         manager.ensure_daemon_sessions()
@@ -137,10 +146,10 @@ class TestDaemonSessionManager:
 
     def test_recycle_session(self, manager):
         manager.ensure_daemon_sessions()
-        session = manager.get_session("daemon_simone")
+        session = manager.get_session("daemon_simone_todo")
         old_workspace = session.workspace_dir
 
-        new_workspace = manager.recycle_session("daemon_simone")
+        new_workspace = manager.recycle_session("daemon_simone_todo")
         assert new_workspace is not None
         assert new_workspace != old_workspace
         # Old workspace should be archived (moved)
@@ -156,19 +165,21 @@ class TestDaemonSessionManager:
     def test_session_ids_property(self, manager):
         manager.ensure_daemon_sessions()
         sids = manager.session_ids
-        assert "daemon_simone" in sids
-        assert "daemon_atlas" in sids
+        assert "daemon_simone_heartbeat" in sids
+        assert "daemon_simone_todo" in sids
+        assert "daemon_atlas_heartbeat" in sids
 
     def test_sessions_property(self, manager):
         manager.ensure_daemon_sessions()
         sessions = manager.sessions
-        assert "daemon_simone" in sessions
-        assert "daemon_atlas" in sessions
+        assert "daemon_simone_heartbeat" in sessions
+        assert "daemon_simone_todo" in sessions
+        assert "daemon_atlas_heartbeat" in sessions
 
     def test_shutdown(self, manager, mock_heartbeat):
         manager.ensure_daemon_sessions()
         manager.shutdown()
-        assert mock_heartbeat.unregister_session.call_count == 2
+        assert mock_heartbeat.unregister_session.call_count == 3
         assert len(manager.sessions) == 0
 
     def test_cleanup_old_archives(self, manager, workspaces_dir):
@@ -176,7 +187,7 @@ class TestDaemonSessionManager:
         # Create a fake old archive
         archive_dir = workspaces_dir / "_daemon_archives"
         archive_dir.mkdir(exist_ok=True)
-        old_archive = archive_dir / "run_daemon_simone_20200101_000000_abc12345"
+        old_archive = archive_dir / "run_daemon_simone_todo_20200101_000000_abc12345"
         old_archive.mkdir()
         # Set modification time to 72 hours ago
         old_mtime = time.time() - (72 * 3600)
@@ -187,7 +198,7 @@ class TestDaemonSessionManager:
         assert not old_archive.exists()
 
     def test_cleanup_stale_workspaces_archives_run_daemon_workspaces(self, manager, workspaces_dir):
-        stale_workspace = workspaces_dir / "run_daemon_simone_20200101_000000_abc12345"
+        stale_workspace = workspaces_dir / "run_daemon_simone_todo_20200101_000000_abc12345"
         stale_workspace.mkdir()
 
         archived = manager._cleanup_stale_workspaces()
@@ -216,7 +227,7 @@ class TestHeartbeatDaemonExemption:
         hb = HeartbeatService(mock_gateway, mock_manager)
 
         daemon_session = GatewaySession(
-            session_id="daemon_simone",
+            session_id="daemon_simone_heartbeat",
             user_id="daemon",
             workspace_dir="/tmp/daemon_ws",
             metadata={},
