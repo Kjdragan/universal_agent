@@ -5,7 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-27 — **Simone-First Orchestration** adopted;
+> **Last updated:** 2026-03-30 — **`task_hub_decompose`** tool documented alongside `task_hub_task_action` in Agent Tools section; Simone-First Orchestration adopted;
 > all tasks route through Simone who decides delegation to VPs.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
@@ -95,7 +95,7 @@ graph LR
 | Brainstorm pipeline | Manual Todoist labels (Inbox→Triaging→Candidate) | **6-stage LLM refinement** (raw_idea→actionable) |
 | Task entry points | Todoist API sync only | **6 ingress paths**: CSI, Email, Calendar, Dashboard, Heartbeat, Brainstorm |
 | Morning report | Not implemented | **Deterministic snapshot** injected into heartbeat prompts |
-| Agent tools | `todoist_*` tool family | **`task_hub_task_action`** — review, complete, block, park, unblock |
+| Agent tools | `todoist_*` tool family | **`task_hub_task_action`** — review, complete, block, park, unblock, delegate, approve<br>**`task_hub_decompose`** — split multi-part tasks into linked subtasks |
 
 ---
 
@@ -611,18 +611,51 @@ The Task Hub dashboard exposes a comprehensive REST API through the gateway:
 
 ## 12. Agent Tools
 
-Agents interact with the Task Hub through the `task_hub_task_action` tool
-registered via Claude Agent SDK:
+Agents interact with the Task Hub through **two MCP tools** registered via Claude Agent SDK:
+
+### task_hub_task_action
+
+Lifecycle management for existing tasks:
 
 ```python
 @tool(name="task_hub_task_action")
 async def task_hub_task_action_wrapper(args):
-    # Allowed actions: review, complete, block, park, unblock
+    # Allowed actions: review, complete, block, park, unblock, delegate, approve
     ...
 ```
 
-This tool is available to the heartbeat agent during proactive cycles, allowing
-it to transition tasks through their lifecycle based on work outcomes.
+| Action | Purpose |
+|--------|---------|
+| `review` | Mark task for human review |
+| `complete` | Mark task as completed |
+| `block` | Park with blocked reason |
+| `park` | Defer without blocking |
+| `unblock` | Remove blocked status |
+| `delegate` | Assign to VP (reason=vp_id, note=mission_id) |
+| `approve` | Sign off on VP-completed task |
+
+### task_hub_decompose
+
+Decompose a multi-part task into linked subtasks (non-LLM):
+
+```python
+@tool(name="task_hub_decompose")
+async def task_hub_decompose_wrapper(args):
+    # Splits parent into N linked subtasks with parent_task_id
+    # Parent marked as 'decomposed'; auto-completes when all children finish
+    ...
+```
+
+Use when a single task contains multiple distinct work items that should be
+tracked and potentially delegated independently. Input is a JSON array of
+subtask objects, each with at minimum `title`, and optionally `description`,
+`priority`, and `labels`.
+
+**Note:** This is distinct from `decomposition_agent.py` which uses LLM to
+automatically generate subtasks. Use `task_hub_decompose` when you already
+know the subtask structure and just need to materialize it.
+
+Both tools are available to Simone and VP agents during execution cycles.
 
 ---
 
@@ -682,7 +715,7 @@ is advisory, never blocks heartbeat execution.
 | [`reflection_engine.py`](../../src/universal_agent/services/reflection_engine.py) | Overnight autonomous work generator — time windows, budget tracking, memory-driven context assembly |
 | [`refinement_agent.py`](../../src/universal_agent/services/refinement_agent.py) | LLM-powered brainstorm refinement (6-stage progression) |
 | [`decomposition_agent.py`](../../src/universal_agent/services/decomposition_agent.py) | LLM-powered task decomposition into 2-5 subtasks |
-| [`task_hub_bridge.py`](../../src/universal_agent/tools/task_hub_bridge.py) | Agent-facing `task_hub_task_action` tool (Claude SDK) |
+| [`task_hub_bridge.py`](../../src/universal_agent/tools/task_hub_bridge.py) | Agent-facing MCP tools: `task_hub_task_action` (lifecycle), `task_hub_decompose` (split into subtasks) |
 | [`feature_flags.py`](../../src/universal_agent/feature_flags.py) | `heartbeat_enabled()`, `cron_enabled()` — master switches |
 
 ### Memory Files
@@ -1051,7 +1084,7 @@ The proactive pipeline has extensive unit test coverage across **15 test modules
 |-------------|-------|-------|
 | `test_task_hub_lifecycle.py` | ~30 | CRUD, status transitions (`open → in_progress → review → completed`), assignment finalization, stale detection, scoring heuristics, `perform_task_action()` lifecycle |
 | `test_task_hub_schema_extensions.py` | 18 | Comments (CRUD, scoping, limits), question queue (enqueue/answer/expiry), subtask decomposition (parent→child hierarchy, custom IDs, progress tracking, tree traversal, depth limits), refinement lifecycle (stage advancement, invalid stage rejection), `trigger_type` defaults, `parent_task_id` column |
-| `test_task_hub_bridge.py` | 2 | MCP tool wiring — `_task_hub_task_action_impl` accepts lifecycle actions and rejects unsupported actions |
+| `test_task_hub_bridge.py` | 2 | MCP tool wiring — `task_hub_task_action` (lifecycle actions), `task_hub_decompose` (subtask creation from JSON) |
 
 ### Dispatch Layer Tests
 
