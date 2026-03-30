@@ -2576,6 +2576,135 @@ class HooksService:
             metadata=metadata,
         )
 
+    def _complete_email_task_hub_entries(
+        self,
+        *,
+        session_key: str,
+        session_id: str,
+        execution_summary: str = "",
+    ) -> None:
+        """Complete task hub entries associated with a finished email hook session.
+
+        When an AgentMailInbound hook session completes successfully, this
+        method looks up the matching task(s) in ``task_hub_items`` by
+        ``session_key`` stored in ``metadata_json`` and transitions them
+        to ``completed``.  If a completed task is a subtask (has a
+        ``parent_task_id``), the parent is auto-completed when all siblings
+        are done.
+
+        This is the critical bridge that was missing — without it,
+        email-decomposed tasks would perpetually sit in 'open' status even
+        after Simone finished the work and sent the reply email.
+        """
+        import sqlite3 as _sqlite3
+
+        try:
+            from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+            from universal_agent.task_hub import (
+                ensure_schema,
+                perform_task_action,
+                complete_subtask_and_check_parent,
+                get_item,
+            )
+
+            conn = connect_runtime_db(get_activity_db_path())
+            conn.row_factory = _sqlite3.Row
+            ensure_schema(conn)
+
+            # Look up task(s) by session_key in metadata_json
+            # Primary: json_extract (SQLite 3.38+)
+            matched_tasks: list[dict[str, Any]] = []
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT task_id, status, parent_task_id
+                    FROM task_hub_items
+                    WHERE json_extract(metadata_json, '$.session_key') = ?
+                      AND status NOT IN ('completed', 'cancelled', 'parked')
+                    """,
+                    (session_key,),
+                ).fetchall()
+                matched_tasks = [dict(r) for r in rows]
+            except Exception:
+                # Fallback: LIKE search for older SQLite
+                rows = conn.execute(
+                    """
+                    SELECT task_id, status, parent_task_id
+                    FROM task_hub_items
+                    WHERE metadata_json LIKE ?
+                      AND status NOT IN ('completed', 'cancelled', 'parked')
+                    """,
+                    (f'%"session_key": "{session_key}"%',),
+                ).fetchall()
+                matched_tasks = [dict(r) for r in rows]
+
+            if not matched_tasks:
+                logger.debug(
+                    "📧→📋 No open task hub entries found for session_key=%s",
+                    session_key,
+                )
+                conn.close()
+                return
+
+            for task_row in matched_tasks:
+                task_id = str(task_row["task_id"])
+                parent_task_id = task_row.get("parent_task_id")
+
+                try:
+                    if parent_task_id:
+                        # Use complete_subtask_and_check_parent for proper
+                        # parent auto-completion when all siblings finish.
+                        result = complete_subtask_and_check_parent(conn, task_id)
+                        parent_completed = result.get("parent_completed", False)
+                        logger.info(
+                            "📧→📋✅ Email task %s completed (subtask of %s, parent_auto_completed=%s) "
+                            "session_key=%s session_id=%s",
+                            task_id, parent_task_id, parent_completed,
+                            session_key, session_id,
+                        )
+                    else:
+                        # Standalone task — use perform_task_action directly.
+                        perform_task_action(
+                            conn,
+                            task_id=task_id,
+                            action="complete",
+                            reason=execution_summary[:200] if execution_summary else "hook_session_completed",
+                            agent_id="simone_hook",
+                        )
+                        logger.info(
+                            "📧→📋✅ Email task %s completed session_key=%s session_id=%s",
+                            task_id, session_key, session_id,
+                        )
+                except Exception as task_exc:
+                    logger.warning(
+                        "📧→📋⚠️ Failed to complete task %s for session_key=%s: %s",
+                        task_id, session_key, task_exc,
+                    )
+
+            # Also mark the email_task_mappings bridge table
+            try:
+                # session_key format: agentmail_{thread_id} or agentmail_{thread_id}_{index}
+                # Extract thread_id for the bridge table
+                from datetime import datetime, timezone
+                parts = session_key.split("_", 1)
+                if len(parts) > 1:
+                    bridge_thread_id = parts[1]  # everything after 'agentmail_'
+                    conn.execute(
+                        "UPDATE email_task_mappings SET status = 'completed', updated_at = ? WHERE thread_id = ?",
+                        (datetime.now(timezone.utc).isoformat(), bridge_thread_id),
+                    )
+                    conn.commit()
+            except Exception:
+                pass  # Bridge table may not exist; non-fatal
+
+            conn.close()
+
+        except Exception as exc:
+            logger.warning(
+                "📧→📋⚠️ Email task hub completion failed for session_key=%s: %s",
+                session_key, exc,
+            )
+
     def _tutorial_run_rel_path(self, run_dir: Path) -> str:
         try:
             artifacts_root = Path(str(resolve_artifacts_dir())).resolve()
@@ -4966,6 +5095,16 @@ class HooksService:
                     session_id=session_id,
                     session_key=session_key,
                     workspace_root=session_workspace,
+                )
+            # ── Email Task Hub Completion ──
+            # When an AgentMailInbound hook completes successfully, mark
+            # the corresponding task_hub_items entry as 'completed' so
+            # the dashboard To-Do List reflects the finished work.
+            if str(action.name or "").strip() == "AgentMailInbound" and session_key:
+                self._complete_email_task_hub_entries(
+                    session_key=session_key,
+                    session_id=session_id,
+                    execution_summary=execution_summary,
                 )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, hook_name)
             terminal_reason = "completed"
