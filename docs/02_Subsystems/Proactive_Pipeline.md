@@ -330,7 +330,7 @@ flowchart TD
 
     subgraph "Automated Dispatch"
         D3["Timer loop<br/>dispatch_scheduled_due()"]
-        D4["Heartbeat sweep<br/>dispatch_sweep()"]
+        D4["Dedicated ToDo loop<br/>dispatch_sweep()"]
     end
 
     subgraph "Task Hub Core"
@@ -350,7 +350,7 @@ flowchart TD
 | `dispatch_immediate()` | Dashboard "Start Now" | `dashboard` | Sets `trigger_type='immediate'`, rebuilds queue, claims |
 | `dispatch_on_approval()` | Dashboard "Approve" | `dashboard` | Transitions review → open + `human_approved`, claims |
 | `dispatch_scheduled_due()` | Timer loop | `scheduler` | Finds all tasks whose `due_at` has arrived, claims each |
-| `dispatch_sweep()` | Heartbeat cycle | `heartbeat` | Generic sweep — claims top N regardless of trigger type |
+| `dispatch_sweep()` | Dedicated ToDo dispatcher | `todo:<session_id>` | Generic sweep — claims top N regardless of trigger type, then executes through the shared gateway runner |
 
 ---
 
@@ -569,8 +569,8 @@ The Task Hub dashboard exposes a comprehensive REST API through the gateway:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/v1/dashboard/todolist/overview` | GET | Summary counts and stats |
-| `/api/v1/dashboard/todolist/agent-queue` | GET | Agent-ready tasks (open, scored) |
+| `/api/v1/dashboard/todolist/overview` | GET | Summary counts, heartbeat runtime snapshot, and ToDo dispatcher health snapshot |
+| `/api/v1/dashboard/todolist/agent-queue` | GET | Queue items plus derived board projection (`board_lane`, assignment/session lineage, review flags) |
 | `/api/v1/dashboard/todolist/personal-queue` | GET | Human-attention tasks (review, blocked) |
 | `/api/v1/dashboard/todolist/completed` | GET | Completed tasks with session links |
 | `/api/v1/dashboard/todolist/email-tasks` | GET | Email-originated tasks with thread context |
@@ -587,7 +587,7 @@ The Task Hub dashboard exposes a comprehensive REST API through the gateway:
 | `/api/v1/dashboard/todolist/tasks/{id}/approve` | POST | **Approve** — approve + dispatch a review task |
 | `/api/v1/dashboard/todolist/tasks/{id}/decompose` | POST | LLM decomposition into subtasks |
 | `/api/v1/dashboard/todolist/tasks/{id}/complete-subtask` | POST | Complete subtask, auto-complete parent if all done |
-| `/api/v1/dashboard/todolist/tasks/{id}/history` | GET | Full assignment history with session links |
+| `/api/v1/dashboard/todolist/tasks/{id}/history` | GET | Full assignment history plus email mapping, reconciliation flags, transcript/run-log links |
 | `DELETE /api/v1/dashboard/todolist/completed/{id}` | DELETE | Hide a completed task (parks it) |
 | `/api/v1/dashboard/todolist/dispatch-queue/rebuild` | POST | Force dispatch queue rebuild |
 
@@ -606,6 +606,12 @@ The Task Hub dashboard exposes a comprehensive REST API through the gateway:
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/v1/dashboard/todolist/morning-report` | GET | Deterministic morning snapshot |
+
+The ToDo dashboard also surfaces a dispatcher-health panel derived from the overview payload. That panel is meant to answer operational questions such as:
+- Was the last wake targeted at a registered session?
+- Did the ToDo driver claim work after waking?
+- Was execution deferred by capacity or rejected at admission?
+- Are wake requests piling up faster than registered sessions can consume them?
 
 ---
 
@@ -746,7 +752,7 @@ is advisory, never blocks heartbeat execution.
 | `finalize_assignments()` | `task_hub.py` | Post-execution: mark complete/review/reopen |
 | `perform_task_action()` | `task_hub.py` | Lifecycle transitions (complete, block, park, etc.) |
 | `dispatch_immediate()` | `dispatch_service.py` | Dashboard "Start Now" handler |
-| `dispatch_sweep()` | `dispatch_service.py` | Heartbeat drop-in replacement |
+| `dispatch_sweep()` | `dispatch_service.py` | Dedicated ToDo dispatcher claim path |
 | `build_morning_report()` | `proactive_advisor.py` | Deterministic morning snapshot for prompts |
 | `build_brainstorm_context()` | `proactive_advisor.py` | Brainstorm task context for prompts |
 | `classify_email_priority()` | `priority_classifier.py` | Deterministic email → P0-P3 |
@@ -799,7 +805,7 @@ flowchart TD
     E3 -->|"dispatch_immediate()"| TH
     E4 -->|"dispatch_on_approval()"| TH
     T1 -->|"dispatch_sweep()"| TH
-    T2 -->|"wake heartbeat"| T1
+    T2 -->|"wake ToDo dispatcher"| T1
     T3 -->|"dispatch_scheduled_due()"| TH
     H1 -->|"source_kind='dashboard_quick_add'"| TH
     H2 -->|"source_kind='brainstorm'"| TH
@@ -1053,7 +1059,7 @@ This creates a **chained execution model**: `Task A completes → immediate wake
 
   | Location | Hook | Purpose |
   |----------|------|---------|
-  | `heartbeat_service.py` | `can_dispatch()` before `dispatch_sweep()` | Skip task claiming when at capacity |
+  | `todo_dispatch_service.py` | `can_dispatch()` before `dispatch_sweep()` | Skip ToDo claiming when at capacity |
   | `auto_refinement_loop.py` | `can_dispatch()` before refinement cycle | Defer LLM work under pressure |
   | `refinement_agent.py` | `report_rate_limit()` in error handler | Feed 429s into backoff |
   | `decomposition_agent.py` | `report_rate_limit()` in error handler | Feed 429s into backoff |

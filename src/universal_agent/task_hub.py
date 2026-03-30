@@ -1111,6 +1111,10 @@ def _session_id_from_agent_id(agent_id: Any) -> str:
         return ""
     if raw.startswith("heartbeat:"):
         return raw.split(":", 1)[1].strip()
+    if raw.startswith("todo:"):
+        return raw.split(":", 1)[1].strip()
+    if raw.startswith("daemon_"):
+        return raw
     return ""
 
 
@@ -1297,6 +1301,149 @@ def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80)
     }
 
 
+def _email_side_effects_detected(conn: sqlite3.Connection, task_id: str) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT email_sent_at FROM email_task_mappings WHERE task_id = ? LIMIT 1",
+            (str(task_id or "").strip(),),
+        ).fetchone()
+    except Exception:
+        return False
+    if not row:
+        return False
+    return bool(str(row["email_sent_at"] or "").strip())
+
+
+def reconcile_task_lifecycle(
+    conn: sqlite3.Connection,
+    *,
+    running_session_ids: Optional[set[str]] = None,
+) -> dict[str, int]:
+    """Repair obviously orphaned lifecycle rows at startup or on-demand.
+
+    - Reopen or review tasks stuck in ``in_progress`` without a live assignment.
+    - Flag auto-completed rows with no explicit disposition as ``needs_review``.
+    """
+    ensure_schema(conn)
+    running_session_ids = {str(v).strip() for v in (running_session_ids or set()) if str(v).strip()}
+    now_iso = _now_iso()
+    reopened = 0
+    reviewed = 0
+    completion_flagged = 0
+
+    in_progress_rows = conn.execute(
+        """
+        SELECT task_id, metadata_json
+        FROM task_hub_items
+        WHERE status = ?
+        """,
+        (TASK_STATUS_IN_PROGRESS,),
+    ).fetchall()
+
+    for row in in_progress_rows:
+        task_id = str(row["task_id"] or "").strip()
+        metadata = _json_loads_obj(row["metadata_json"], default={})
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        active_assignment_id = str(dispatch_meta.get("active_assignment_id") or "").strip()
+        active_session_id = str(dispatch_meta.get("active_provider_session_id") or "").strip()
+        if active_session_id and active_session_id in running_session_ids:
+            continue
+
+        assignment_row = None
+        if active_assignment_id:
+            assignment_row = conn.execute(
+                """
+                SELECT state
+                FROM task_hub_assignments
+                WHERE assignment_id = ?
+                LIMIT 1
+                """,
+                (active_assignment_id,),
+            ).fetchone()
+        else:
+            assignment_row = conn.execute(
+                """
+                SELECT assignment_id, state
+                FROM task_hub_assignments
+                WHERE task_id = ?
+                  AND state IN ('seized', 'running')
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+
+        if assignment_row and str(assignment_row["state"] or "").strip().lower() in {"seized", "running"}:
+            continue
+
+        dispatch_meta["completion_unverified"] = False
+        dispatch_meta["reconciled_at"] = now_iso
+        metadata["dispatch"] = dispatch_meta
+        if _email_side_effects_detected(conn, task_id):
+            dispatch_meta["last_disposition"] = TASK_STATUS_REVIEW
+            dispatch_meta["last_disposition_reason"] = "reconciled_orphaned_in_progress_with_side_effects"
+            conn.execute(
+                """
+                UPDATE task_hub_items
+                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+            )
+            reviewed += 1
+        else:
+            dispatch_meta["last_disposition"] = TASK_STATUS_OPEN
+            dispatch_meta["last_disposition_reason"] = "reconciled_orphaned_in_progress"
+            conn.execute(
+                """
+                UPDATE task_hub_items
+                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+            )
+            reopened += 1
+
+    completed_rows = conn.execute(
+        """
+        SELECT task_id, metadata_json
+        FROM task_hub_items
+        WHERE status = ?
+        """,
+        (TASK_STATUS_COMPLETED,),
+    ).fetchall()
+    for row in completed_rows:
+        task_id = str(row["task_id"] or "").strip()
+        metadata = _json_loads_obj(row["metadata_json"], default={})
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        last_reason = str(dispatch_meta.get("last_disposition_reason") or "").strip().lower()
+        if last_reason not in {"heartbeat_auto_completed", "todo_auto_completed"}:
+            continue
+        dispatch_meta["completion_unverified"] = True
+        dispatch_meta["reconciled_at"] = now_iso
+        dispatch_meta["last_disposition"] = TASK_STATUS_REVIEW
+        dispatch_meta["last_disposition_reason"] = "reconciled_completion_unverified"
+        metadata["dispatch"] = dispatch_meta
+        conn.execute(
+            """
+            UPDATE task_hub_items
+            SET status=?, seizure_state=?, completion_token=NULL, metadata_json=?, updated_at=?
+            WHERE task_id=?
+            """,
+            (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        reviewed += 1
+        completion_flagged += 1
+
+    conn.commit()
+    rebuild_dispatch_queue(conn)
+    return {
+        "reopened": reopened,
+        "reviewed": reviewed,
+        "completion_flagged": completion_flagged,
+    }
+
+
 def finalize_assignments(
     conn: sqlite3.Connection,
     *,
@@ -1395,30 +1542,48 @@ def finalize_assignments(
         dispatch_meta.pop("active_workflow_attempt_id", None)
 
         if task_status == TASK_STATUS_COMPLETED:
+            metadata["dispatch"] = dispatch_meta
+            conn.execute(
+                "UPDATE task_hub_items SET metadata_json=? WHERE task_id=?",
+                (_json_dumps(metadata), task_id),
+            )
             completed += 1
             continue
         if task_status == TASK_STATUS_REVIEW:
+            metadata["dispatch"] = dispatch_meta
+            conn.execute(
+                "UPDATE task_hub_items SET metadata_json=? WHERE task_id=?",
+                (_json_dumps(metadata), task_id),
+            )
             reviewed += 1
             continue
         if task_status != TASK_STATUS_IN_PROGRESS:
+            metadata["dispatch"] = dispatch_meta
+            conn.execute(
+                "UPDATE task_hub_items SET metadata_json=? WHERE task_id=?",
+                (_json_dumps(metadata), task_id),
+            )
             continue
 
         if policy_norm == "heartbeat":
             if run_state == "completed":
-                dispatch_meta["last_disposition"] = "completed"
-                dispatch_meta["last_disposition_reason"] = "heartbeat_auto_completed"
+                dispatch_meta["last_disposition"] = "needs_review"
+                dispatch_meta["last_disposition_reason"] = "heartbeat_completed_without_disposition"
+                dispatch_meta["completion_unverified"] = True
                 metadata["dispatch"] = dispatch_meta
-                _completion_token = f"hb_{uuid.uuid4().hex[:12]}_{now_iso}"
                 conn.execute(
                     """
                     UPDATE task_hub_items
-                    SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=?
+                    SET status=?, seizure_state=?, completion_token=NULL, metadata_json=?, updated_at=?
                     WHERE task_id=?
                     """,
-                    (TASK_STATUS_COMPLETED, "unseized", _completion_token, _json_dumps(metadata), now_iso, task_id),
+                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
                 )
-                completed += 1
-                logger.info("Task Hub heartbeat finalize auto-completed task %s (token=%s)", task_id, _completion_token[:24])
+                reviewed += 1
+                logger.warning(
+                    "Task Hub heartbeat finalize moved task %s to needs_review after completed run without explicit disposition",
+                    task_id,
+                )
                 continue
 
             retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
@@ -1445,39 +1610,23 @@ def finalize_assignments(
                     heartbeat_retry_limit,
                 )
             else:
-                # ── Side-effect-aware retry guard ──────────────────────
-                # Before reopening for retry, check if irreversible side
-                # effects already occurred (e.g. email already sent).
-                # If so, force-complete to prevent duplicate execution.
-                side_effects_detected = False
-                try:
-                    _se_row = conn.execute(
-                        "SELECT email_sent_at FROM email_task_mappings WHERE task_id = ? LIMIT 1",
-                        (task_id,),
-                    ).fetchone()
-                    if _se_row and _se_row["email_sent_at"]:
-                        side_effects_detected = True
-                except Exception:
-                    pass  # table may not exist — safe to skip
-
-                if side_effects_detected:
-                    dispatch_meta["last_disposition"] = "completed"
-                    dispatch_meta["last_disposition_reason"] = "side_effects_detected_force_complete"
+                if _email_side_effects_detected(conn, task_id):
+                    dispatch_meta["last_disposition"] = "needs_review"
+                    dispatch_meta["last_disposition_reason"] = "heartbeat_retryable_with_side_effects"
+                    dispatch_meta["completion_unverified"] = True
                     metadata["dispatch"] = dispatch_meta
-                    _completion_token = f"se_{uuid.uuid4().hex[:12]}_{now_iso}"
                     conn.execute(
                         """
                         UPDATE task_hub_items
-                        SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=?
+                        SET status=?, seizure_state=?, metadata_json=?, updated_at=?
                         WHERE task_id=?
                         """,
-                        (TASK_STATUS_COMPLETED, "unseized", _completion_token, _json_dumps(metadata), now_iso, task_id),
+                        (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
                     )
-                    completed += 1
+                    reviewed += 1
                     logger.warning(
-                        "🛡️ Task Hub finalize FORCE-COMPLETED task %s — side effects already occurred "
-                        "(email_sent_at set), preventing duplicate execution (retry %s/%s)",
-                        task_id, retry_count, heartbeat_retry_limit,
+                        "Task Hub heartbeat finalize moved task %s to needs_review because side effects already occurred",
+                        task_id,
                     )
                 else:
                     dispatch_meta["last_disposition"] = "reopened"
@@ -1497,6 +1646,26 @@ def finalize_assignments(
                         retry_count,
                         heartbeat_retry_limit,
                     )
+            continue
+
+        if policy_norm == "todo" and run_state == "completed":
+            dispatch_meta["last_disposition"] = "needs_review"
+            dispatch_meta["last_disposition_reason"] = "todo_completed_without_disposition"
+            dispatch_meta["completion_unverified"] = True
+            metadata["dispatch"] = dispatch_meta
+            conn.execute(
+                """
+                UPDATE task_hub_items
+                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+            )
+            reviewed += 1
+            logger.warning(
+                "Task Hub ToDo finalize moved task %s to needs_review after completed run without explicit disposition",
+                task_id,
+            )
             continue
 
         metadata["dispatch"] = dispatch_meta
@@ -1602,22 +1771,32 @@ def prune_settled_tasks(
 def release_stale_assignments(
     conn: sqlite3.Connection,
     *,
-    agent_id_prefix: str = "heartbeat:",
+    agent_id_prefix: Any = "heartbeat:",
     stale_after_seconds: int = 1800,
     limit: int = 500,
 ) -> dict[str, int]:
     ensure_schema(conn)
     stale_after_seconds = max(1, int(stale_after_seconds))
+    raw_prefixes = agent_id_prefix
+    if isinstance(raw_prefixes, (list, tuple, set)):
+        prefixes = [str(v).strip() for v in raw_prefixes if str(v).strip()]
+    else:
+        prefixes = [str(raw_prefixes).strip()] if str(raw_prefixes).strip() else []
+    if not prefixes:
+        prefixes = ["heartbeat:"]
+
+    clauses = " OR ".join("agent_id LIKE ?" for _ in prefixes)
+    params = tuple(f"{prefix}%" for prefix in prefixes) + (max(1, int(limit)),)
     rows = conn.execute(
-        """
+        f"""
         SELECT assignment_id, started_at
         FROM task_hub_assignments
         WHERE state IN ('seized', 'running')
-          AND agent_id LIKE ?
+          AND ({clauses})
         ORDER BY started_at ASC
         LIMIT ?
         """,
-        (f"{agent_id_prefix}%", max(1, int(limit))),
+        params,
     ).fetchall()
 
     now_dt = datetime.now(timezone.utc)
@@ -1683,7 +1862,7 @@ def list_agent_queue(
         """
         SELECT *
         FROM task_hub_items
-        WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review')
+        WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review', 'delegated', 'pending_review')
           AND agent_ready = 1
         ORDER BY
           CASE

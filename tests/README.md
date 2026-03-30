@@ -31,17 +31,20 @@ tests/
 
 ## Running Component Tests
 
-If you are working on a specific subsystem, run `pytest` targeted at that directory:
+If you are working on a specific subsystem, run tests through the project-managed environment. Prefer `uv run pytest` or the `make` targets rather than bare `pytest`, so you don't accidentally use the wrong interpreter.
 
 ```bash
 # Gateway Logic
-pytest tests/gateway/ -v
+uv run pytest tests/gateway/ -v
 
 # Durable Execution logic
-pytest tests/durable/ -v
+uv run pytest tests/durable/ -v
 
 # Memory System
-pytest tests/letta/ -v
+uv run pytest tests/letta/ -v
+
+# Whole suite
+make test
 ```
 
 ## CI Integration

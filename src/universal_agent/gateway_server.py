@@ -2595,6 +2595,33 @@ _activity_runtime_metrics: dict[str, Any] = {
         "digest_immediate_bypass_total": 0,
     },
 }
+_todo_dispatch_runtime_state: dict[str, Any] = {
+    "last_wake_requested_at": None,
+    "last_wake_requested_session_id": None,
+    "last_wake_registered": None,
+    "last_claimed_at": None,
+    "last_claimed_session_id": None,
+    "last_claimed_task_count": 0,
+    "last_submitted_at": None,
+    "last_submitted_session_id": None,
+    "last_dispatch_decision": None,
+    "last_deferred_at": None,
+    "last_deferred_session_id": None,
+    "last_deferred_reason": None,
+    "last_failure_at": None,
+    "last_failure_session_id": None,
+    "last_failure_error": None,
+    "last_no_tasks_at": None,
+    "last_no_tasks_session_id": None,
+    "last_processing_started_at": None,
+    "last_processing_session_id": None,
+    "last_idle_at": None,
+    "last_idle_session_id": None,
+    "last_session_registered_at": None,
+    "last_session_registered_id": None,
+    "last_session_unregistered_at": None,
+    "last_session_unregistered_id": None,
+}
 SCHED_PUSH_ENABLED = (
     os.getenv("UA_SCHED_PUSH_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 )
@@ -2760,6 +2787,104 @@ def _activity_runtime_metrics_snapshot() -> dict[str, Any]:
         "dashboard_events_sse_enabled": bool(_dashboard_events_sse_enabled),
         "activity_digest_enabled": bool(_activity_digest_enabled),
     }
+    return data
+
+
+def _todo_dispatch_runtime_record(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        return
+    event_type = str(payload.get("type") or "").strip().lower()
+    ts = str(payload.get("timestamp") or _now_iso())
+    session_id = str(payload.get("session_id") or "").strip() or None
+
+    if event_type == "todo_dispatch_wake_requested":
+        _todo_dispatch_runtime_state["last_wake_requested_at"] = ts
+        _todo_dispatch_runtime_state["last_wake_requested_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_wake_registered"] = bool(payload.get("registered"))
+        _activity_counter_inc("todo_dispatch_wake_requests")
+        return
+
+    if event_type == "todo_dispatch_session_registered":
+        _todo_dispatch_runtime_state["last_session_registered_at"] = ts
+        _todo_dispatch_runtime_state["last_session_registered_id"] = session_id
+        _activity_counter_inc("todo_dispatch_session_registered")
+        return
+
+    if event_type == "todo_dispatch_session_unregistered":
+        _todo_dispatch_runtime_state["last_session_unregistered_at"] = ts
+        _todo_dispatch_runtime_state["last_session_unregistered_id"] = session_id
+        _activity_counter_inc("todo_dispatch_session_unregistered")
+        return
+
+    if event_type == "todo_dispatch_claimed":
+        _todo_dispatch_runtime_state["last_claimed_at"] = ts
+        _todo_dispatch_runtime_state["last_claimed_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_claimed_task_count"] = int(payload.get("task_count") or 0)
+        _activity_counter_inc("todo_dispatch_claimed_batches")
+        return
+
+    if event_type == "todo_dispatch_submitted":
+        _todo_dispatch_runtime_state["last_submitted_at"] = ts
+        _todo_dispatch_runtime_state["last_submitted_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_dispatch_decision"] = str(payload.get("decision") or "unknown")
+        _activity_counter_inc("todo_dispatch_submitted")
+        return
+
+    if event_type == "todo_dispatch_deferred":
+        _todo_dispatch_runtime_state["last_deferred_at"] = ts
+        _todo_dispatch_runtime_state["last_deferred_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_deferred_reason"] = str(payload.get("reason") or "")
+        _activity_counter_inc("todo_dispatch_deferred")
+        return
+
+    if event_type == "todo_dispatch_failed":
+        _todo_dispatch_runtime_state["last_failure_at"] = ts
+        _todo_dispatch_runtime_state["last_failure_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_failure_error"] = str(payload.get("error") or "")
+        _activity_counter_inc("todo_dispatch_failed")
+        return
+
+    if event_type == "todo_dispatch_no_tasks":
+        _todo_dispatch_runtime_state["last_no_tasks_at"] = ts
+        _todo_dispatch_runtime_state["last_no_tasks_session_id"] = session_id
+        _activity_counter_inc("todo_dispatch_empty_polls")
+        return
+
+    if event_type == "agent_state_changed":
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        if str(event.get("source") or "").strip().lower() != "todo_dispatcher":
+            return
+        state = str(event.get("state") or "").strip().lower()
+        event_ts = str(event.get("timestamp") or ts)
+        if state == "processing":
+            _todo_dispatch_runtime_state["last_processing_started_at"] = event_ts
+            _todo_dispatch_runtime_state["last_processing_session_id"] = session_id
+            _activity_counter_inc("todo_dispatch_processing_started")
+        elif state == "idle":
+            _todo_dispatch_runtime_state["last_idle_at"] = event_ts
+            _todo_dispatch_runtime_state["last_idle_session_id"] = session_id
+            _activity_counter_inc("todo_dispatch_processing_finished")
+
+
+def _todo_dispatch_runtime_snapshot() -> dict[str, Any]:
+    data = json.loads(json.dumps(_todo_dispatch_runtime_state))
+    if _todo_dispatch_service:
+        active_sessions = sorted(
+            str(session_id)
+            for session_id in getattr(_todo_dispatch_service, "active_sessions", {}).keys()
+        )
+        pending_wakes = sorted(str(session_id) for session_id in getattr(_todo_dispatch_service, "wake_sessions", set()))
+    else:
+        active_sessions = []
+        pending_wakes = []
+    data["registered_sessions"] = active_sessions
+    data["registered_session_count"] = len(active_sessions)
+    data["pending_wake_sessions"] = pending_wakes
+    data["pending_wake_count"] = len(pending_wakes)
+    data["sleeping_session_warning"] = bool(
+        data.get("last_wake_requested_session_id")
+        and data.get("last_wake_registered") is False
+    )
     return data
 
 
@@ -5837,6 +5962,401 @@ def _finish_session_run(
     )
 
 
+async def _run_gateway_session_request(
+    *,
+    session: GatewaySession,
+    request: GatewayRequest,
+    turn_id: str,
+    clear_pending_gate_on_success: bool = False,
+) -> None:
+    gateway = get_gateway()
+    session_id = session.session_id
+    request_source = _normalize_run_source(
+        request.metadata.get("source") if isinstance(request.metadata, dict) else None
+    )
+    saw_streaming_text = False
+    tool_call_count = 0
+    execution_duration_seconds = 0.0
+    execution_start_ts = time.time()
+    terminal_reason: Optional[str] = None
+    if _heartbeat_service:
+        _heartbeat_service.busy_sessions.add(session_id)
+
+    run_log_handle = None
+    if session.workspace_dir:
+        try:
+            run_log_path = Path(session.workspace_dir) / "run.log"
+            run_log_handle = open(run_log_path, "a", encoding="utf-8")
+            ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            run_log_handle.write(f"[{ts0}] 👤 USER: {request.user_input}\n")
+            run_log_handle.flush()
+        except Exception:
+            run_log_handle = None
+
+    def _rl_write(line: str) -> None:
+        if run_log_handle:
+            try:
+                run_log_handle.write(line + "\n")
+                run_log_handle.flush()
+            except Exception:
+                pass
+
+    mission_tracker = MissionGuardrailTracker(build_mission_contract(request.user_input))
+
+    try:
+        async for event in gateway.execute(session, request):
+            if event.type == EventType.TOOL_CALL:
+                tool_call_count += 1
+                if isinstance(event.data, dict):
+                    mission_tracker.record_tool_call(
+                        str(event.data.get("name") or ""),
+                        tool_input=event.data.get("input"),
+                    )
+            elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
+                execution_duration_seconds = float(
+                    event.data.get("duration_seconds") or execution_duration_seconds
+                )
+                if isinstance(event.data.get("tool_calls"), int):
+                    tool_call_count = int(event.data["tool_calls"])
+            if (
+                event.type == EventType.TEXT
+                and isinstance(event.data, dict)
+                and event.data.get("final") is True
+                and saw_streaming_text
+            ):
+                continue
+            if (
+                event.type == EventType.TEXT
+                and isinstance(event.data, dict)
+                and event.data.get("time_offset") is not None
+            ):
+                saw_streaming_text = True
+            if event.type == EventType.ERROR:
+                log_tail = None
+                if session.workspace_dir:
+                    log_tail = _read_run_log_tail(session.workspace_dir)
+                if isinstance(event.data, dict):
+                    if "message" not in event.data and "error" in event.data:
+                        event.data["message"] = event.data.get("error")
+                    if log_tail and "log_tail" not in event.data:
+                        event.data["log_tail"] = log_tail
+                logger.error(
+                    "Agent error event (session=%s): %s",
+                    session_id,
+                    event.data,
+                )
+            await manager.broadcast(session_id, agent_event_to_wire(event))
+
+            rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            if event.type == EventType.TEXT and isinstance(event.data, dict):
+                rl_text = (event.data.get("text") or "").rstrip()
+                if rl_text and event.data.get("final") is True:
+                    _rl_write(f"[{rl_ts}] 🤖 ASSISTANT: {rl_text}")
+            elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
+                tool_name = event.data.get("name") or "unknown"
+                _rl_write(f"[{rl_ts}] 🔧 TOOL CALL: {tool_name}")
+            elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
+                tool_size = event.data.get("content_size") or 0
+                _rl_write(f"[{rl_ts}] 📦 TOOL RESULT ({tool_size} bytes)")
+            elif event.type == EventType.ERROR and isinstance(event.data, dict):
+                err = event.data.get("message") or event.data.get("error") or "unknown"
+                _rl_write(f"[{rl_ts}] ERROR: {err}")
+
+        if run_log_handle:
+            try:
+                rl_ts_end = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                run_log_handle.write(f"[{rl_ts_end}] === Turn completed ({tool_call_count} tool calls) ===\n")
+                run_log_handle.close()
+            except Exception:
+                pass
+            run_log_handle = None
+
+        if execution_duration_seconds <= 0:
+            execution_duration_seconds = round(time.time() - execution_start_ts, 3)
+        goal_satisfaction = mission_tracker.evaluate()
+        completion_summary = {
+            "tool_calls": tool_call_count,
+            "duration_seconds": execution_duration_seconds,
+            "goal_satisfaction": goal_satisfaction,
+        }
+
+        try:
+            from universal_agent.session_checkpoint import SessionCheckpointGenerator
+
+            workspace_path = Path(session.workspace_dir)
+            generator = SessionCheckpointGenerator(workspace_path)
+            checkpoint_result = SimpleNamespace(
+                tool_calls=tool_call_count,
+                execution_time_seconds=execution_duration_seconds,
+                goal_satisfaction=goal_satisfaction,
+            )
+            checkpoint = generator.generate_from_result(
+                session_id=session_id,
+                original_request=request.user_input,
+                result=checkpoint_result,
+            )
+            generator.save(checkpoint)
+            logger.info("Saved run checkpoint: %s", workspace_path / "run_checkpoint.json")
+        except Exception as ckpt_err:
+            logger.warning("Failed to save checkpoint for %s: %s", session_id, ckpt_err)
+
+        if not bool(goal_satisfaction.get("passed")):
+            missing_items = goal_satisfaction.get("missing")
+            goal_message = "Mission requirements were not satisfied."
+            if isinstance(missing_items, list) and missing_items:
+                first_missing = missing_items[0] if isinstance(missing_items[0], dict) else {}
+                missing_message = str(first_missing.get("message") or "").strip()
+                missing_requirement = str(first_missing.get("requirement") or "").strip()
+                if missing_message:
+                    goal_message = f"{goal_message} {missing_message}"
+                elif missing_requirement:
+                    goal_message = f"{goal_message} Missing requirement: {missing_requirement}."
+            _add_notification(
+                kind="assistance_needed",
+                title="Mission Guardrail Blocked Completion",
+                message=goal_message,
+                session_id=session_id,
+                severity="error",
+                requires_action=True,
+                metadata={"goal_satisfaction": goal_satisfaction},
+            )
+            await manager.broadcast(
+                session_id,
+                {
+                    "type": "status",
+                    "data": {
+                        "status": "goal_satisfaction_failed",
+                        "turn_id": turn_id,
+                        "goal_satisfaction": goal_satisfaction,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            await manager.broadcast(
+                session_id,
+                {
+                    "type": "error",
+                    "data": {
+                        "message": goal_message,
+                        "goal_satisfaction": goal_satisfaction,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            await manager.broadcast(
+                session_id,
+                {
+                    "type": "query_complete",
+                    "data": {
+                        "turn_id": turn_id,
+                        "goal_satisfaction": goal_satisfaction,
+                        "completed": False,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            async with _session_turn_lock(session_id):
+                _finalize_turn(
+                    session_id,
+                    turn_id,
+                    TURN_STATUS_FAILED,
+                    error_message=goal_message,
+                    completion=completion_summary,
+                )
+            terminal_reason = "goal_unsatisfied"
+            return
+
+        _add_notification(
+            kind="mission_complete",
+            title="Mission Completed",
+            message="Session completed execution successfully.",
+            session_id=session_id,
+            severity="info",
+            metadata={
+                "tool_calls": tool_call_count,
+                "duration_seconds": execution_duration_seconds,
+                "goal_satisfaction": goal_satisfaction,
+            },
+        )
+
+        await manager.broadcast(
+            session_id,
+            {
+                "type": "query_complete",
+                "data": {
+                    "turn_id": turn_id,
+                    "goal_satisfaction": goal_satisfaction,
+                    "completed": True,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await manager.broadcast(
+            session_id,
+            {"type": "pong", "data": {}, "timestamp": datetime.now(timezone.utc).isoformat()},
+        )
+        logger.info("Gateway execute complete (session=%s, source=%s)", session_id, request_source)
+        if clear_pending_gate_on_success:
+            _pending_gated_requests.pop(session_id, None)
+        async with _session_turn_lock(session_id):
+            _finalize_turn(
+                session_id,
+                turn_id,
+                TURN_STATUS_COMPLETED,
+                completion=completion_summary,
+            )
+        terminal_reason = "completed"
+    except asyncio.CancelledError:
+        terminal_reason = "cancelled"
+        logger.warning("Execution cancelled for session %s turn %s", session_id, turn_id)
+        await manager.broadcast(
+            session_id,
+            {
+                "type": "status",
+                "data": {
+                    "status": "turn_cancelled",
+                    "turn_id": turn_id,
+                    "message": "Execution cancelled.",
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await manager.broadcast(
+            session_id,
+            {
+                "type": "query_complete",
+                "data": {"turn_id": turn_id, "cancelled": True},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        async with _session_turn_lock(session_id):
+            _finalize_turn(
+                session_id,
+                turn_id,
+                TURN_STATUS_CANCELLED,
+                error_message="cancelled",
+                completion={
+                    "tool_calls": tool_call_count,
+                    "duration_seconds": round(time.time() - execution_start_ts, 3),
+                },
+            )
+        raise
+    except Exception as exc:
+        terminal_reason = "failed"
+        logger.error("Execution error for session %s: %s", session_id, exc, exc_info=True)
+        _add_notification(
+            kind="assistance_needed",
+            title="Session Failed",
+            message=str(exc),
+            session_id=session_id,
+            severity="error",
+            requires_action=True,
+        )
+        await manager.broadcast(
+            session_id,
+            {
+                "type": "error",
+                "data": {"message": str(exc)},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        async with _session_turn_lock(session_id):
+            _finalize_turn(
+                session_id,
+                turn_id,
+                TURN_STATUS_FAILED,
+                error_message=str(exc),
+                completion={
+                    "tool_calls": tool_call_count,
+                    "duration_seconds": round(time.time() - execution_start_ts, 3),
+                },
+            )
+    finally:
+        if run_log_handle:
+            try:
+                run_log_handle.close()
+            except Exception:
+                pass
+        _finish_session_run(
+            session_id,
+            run_source=request_source,
+            terminal_reason=terminal_reason,
+        )
+        if _heartbeat_service:
+            _heartbeat_service.busy_sessions.discard(session_id)
+
+
+async def _dispatch_gateway_request_to_session(
+    session_id: str,
+    request: GatewayRequest,
+    *,
+    connection_id: str = "internal_dispatch",
+    clear_pending_gate_on_success: bool = False,
+) -> dict[str, Any]:
+    if session_id not in _sessions:
+        try:
+            gateway = get_gateway()
+            gateway_sessions = getattr(gateway, "_sessions", {})
+            if isinstance(gateway_sessions, dict):
+                candidate = gateway_sessions.get(session_id)
+                if candidate is not None:
+                    store_session(candidate)
+                    if _heartbeat_service:
+                        _heartbeat_service.register_session(candidate)
+                    if _todo_dispatch_service:
+                        _todo_dispatch_service.register_session(candidate)
+        except Exception as exc:
+            logger.warning("Failed to sync session into gateway runtime (session=%s): %s", session_id, exc)
+
+    session = get_session(session_id)
+    if session is None:
+        raise ValueError(f"Unknown session_id: {session_id}")
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    client_turn_id = _normalize_client_turn_id(metadata.get("client_turn_id"))
+    user_input = str(request.user_input or "")
+    force_complex = bool(request.force_complex)
+
+    async with _session_turn_lock(session_id):
+        admission = _admit_turn(
+            session_id=session_id,
+            connection_id=connection_id,
+            user_input=user_input,
+            force_complex=force_complex,
+            metadata=metadata,
+            client_turn_id=client_turn_id,
+        )
+    decision = str(admission.get("decision", "accepted"))
+    admitted_turn_id = str(admission.get("turn_id") or "")
+    if decision != "accepted":
+        return {
+            "decision": decision,
+            "turn_id": admitted_turn_id,
+            "record": admission.get("record"),
+        }
+
+    request_metadata = {
+        **metadata,
+        "turn_id": admitted_turn_id,
+        "source": _normalize_run_source(metadata.get("source")),
+    }
+    if client_turn_id:
+        request_metadata["client_turn_id"] = client_turn_id
+    request.metadata = request_metadata
+
+    _increment_session_active_runs(session_id, run_source=request_metadata["source"])
+    execution_task = asyncio.create_task(
+        _run_gateway_session_request(
+            session=session,
+            request=request,
+            turn_id=admitted_turn_id,
+            clear_pending_gate_on_success=clear_pending_gate_on_success,
+        )
+    )
+    _register_execution_task(session_id, execution_task)
+    return {"decision": "accepted", "turn_id": admitted_turn_id}
+
+
 def _emit_cron_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "cron_event")
     _scheduling_record_event("cron", event_type)
@@ -6254,6 +6774,14 @@ def _heartbeat_session_already_investigated(session_id: str) -> bool:
 
 def _emit_heartbeat_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "heartbeat_event")
+    if (
+        event_type.startswith("todo_dispatch_")
+        or (
+            event_type == "agent_state_changed"
+            and str(((payload.get("event") or {}) if isinstance(payload.get("event"), dict) else {}).get("source") or "").strip().lower() == "todo_dispatcher"
+        )
+    ):
+        _todo_dispatch_runtime_record(payload)
     _scheduling_record_event("heartbeat", event_type)
     _scheduling_event_bus.publish("heartbeat", event_type, payload)
     _scheduling_counter_inc("event_bus_published")
@@ -11748,28 +12276,6 @@ async def lifespan(app: FastAPI):
             event_sink=_emit_heartbeat_event,
             heartbeat_scope=_FACTORY_POLICY.heartbeat_scope,
         )
-        await _heartbeat_service.start()
-        try:
-            seeded = 0
-            for existing_session in _gateway_live_session_summaries():
-                _heartbeat_service.register_session(existing_session)
-                seeded += 1
-            if seeded > 0:
-                logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
-        except Exception as exc:
-            logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
-
-        from universal_agent.services.todo_dispatch_service import ToDoDispatchService
-        _todo_dispatch_service = ToDoDispatchService(
-            connection_manager=manager,
-            event_callback=_emit_heartbeat_event
-        )
-        await _todo_dispatch_service.start()
-        try:
-            for existing_session in _gateway_live_session_summaries():
-                _todo_dispatch_service.register_session(existing_session)
-        except Exception as exc:
-            logger.warning("Failed to seed tododispatch sessions at startup: %s", exc)
 
         # --- Persistent Daemon Sessions (always-on agents) ---
         try:
@@ -11794,6 +12300,33 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed creating daemon sessions")
 
+        await _heartbeat_service.start()
+        try:
+            seeded = 0
+            for existing_session in _gateway_live_session_summaries():
+                _heartbeat_service.register_session(existing_session)
+                seeded += 1
+            if seeded > 0:
+                logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
+        except Exception as exc:
+            logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
+
+        from universal_agent.services.todo_dispatch_service import ToDoDispatchService
+        _todo_dispatch_service = ToDoDispatchService(
+            execution_callback=lambda session_id, request: _dispatch_gateway_request_to_session(
+                session_id,
+                request,
+                connection_id="todo_dispatch",
+            ),
+            event_callback=_emit_heartbeat_event,
+        )
+        await _todo_dispatch_service.start()
+        try:
+            for existing_session in _gateway_live_session_summaries():
+                _todo_dispatch_service.register_session(existing_session)
+        except Exception as exc:
+            logger.warning("Failed to seed tododispatch sessions at startup: %s", exc)
+
         # ── Startup Recovery: Release orphaned task assignments ──────────
         # When the gateway crashes, in-progress tasks with seized assignments
         # are left orphaned. Release them here with a short stale threshold
@@ -11805,8 +12338,17 @@ async def lifespan(app: FastAPI):
             _recovery_task_hub.ensure_schema(_recovery_conn)
             _recovery_result = _recovery_task_hub.release_stale_assignments(
                 _recovery_conn,
-                agent_id_prefix="heartbeat:",
+                agent_id_prefix=["heartbeat:", "todo:"],
                 stale_after_seconds=300,  # 5 minutes — short at startup since process was dead
+            )
+            _running_sessions = {
+                str(session.session_id or "").strip()
+                for session in _gateway_live_session_summaries()
+                if getattr(session, "session_id", None)
+            }
+            _reconciled = _recovery_task_hub.reconcile_task_lifecycle(
+                _recovery_conn,
+                running_session_ids=_running_sessions,
             )
             if int(_recovery_result.get("finalized") or 0) > 0:
                 logger.warning(
@@ -11814,6 +12356,8 @@ async def lifespan(app: FastAPI):
                     int(_recovery_result.get("finalized") or 0),
                     int(_recovery_result.get("reopened") or 0),
                 )
+            if any(int(_reconciled.get(key) or 0) > 0 for key in ("reopened", "reviewed", "completion_flagged")):
+                logger.warning("Startup task lifecycle reconciliation: %s", _reconciled)
             _recovery_conn.close()
         except Exception as _recovery_exc:
             logger.warning("Startup task recovery sweep failed (non-fatal): %s", _recovery_exc)
@@ -16540,6 +17084,7 @@ async def dashboard_todolist_overview():
             data["mode_default"] = "agent"
             data["status"] = "ok"
             data["heartbeat"] = _heartbeat_runtime_snapshot()
+            data["todo_dispatch"] = _todo_dispatch_runtime_snapshot()
             return data
         finally:
             conn.close()
@@ -16746,7 +17291,7 @@ async def dashboard_todolist_agent_queue(
                         pass
                     hydrated["score"] = score_val
 
-                    items.append({
+                    items.append(_serialize_task_hub_queue_item(conn, {
                         "task_id": hydrated.get("task_id"),
                         "title": hydrated.get("title"),
                         "description": hydrated.get("description") or None,
@@ -16760,7 +17305,9 @@ async def dashboard_todolist_agent_queue(
                         "updated_at": hydrated.get("updated_at"),
                         "due_at": hydrated.get("due_at") or None,
                         "source_kind": hydrated.get("source_kind") or None,
-                    })
+                        "metadata": hydrated.get("metadata") or {},
+                        "seizure_state": hydrated.get("seizure_state") or "",
+                    }))
 
                 return {
                     "status": "ok",
@@ -16786,7 +17333,11 @@ async def dashboard_todolist_agent_queue(
             )
             return {
                 "status": "ok",
-                "items": queue.get("items") if isinstance(queue, dict) else [],
+                "items": [
+                    _serialize_task_hub_queue_item(conn, dict(item))
+                    for item in (queue.get("items") if isinstance(queue, dict) else [])
+                    if isinstance(item, dict)
+                ],
                 "pagination": queue.get("pagination") if isinstance(queue, dict) else {},
             }
         finally:
@@ -17252,7 +17803,15 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
     wdir = str(workspace_dir or "").strip()
 
     if not sid and not wdir:
-        return {"session_id": "", "session_href": "", "run_log_href": "", "run_log_path": "", "workspace_dir": ""}
+        return {
+            "session_id": "",
+            "session_href": "",
+            "run_log_href": "",
+            "run_log_path": "",
+            "transcript_href": "",
+            "transcript_path": "",
+            "workspace_dir": "",
+        }
 
     # For daemon sessions, the workspace_dir is the actual timestamped directory
     # (e.g. run_daemon_simone_20260327_224414_076ac652).
@@ -17286,23 +17845,178 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
     if resolved_workspace_name:
         run_log_rel = f"{resolved_workspace_name}/run.log"
         run_log_abs = str(Path(resolved_workspace_path) / "run.log")
+        transcript_rel = f"{resolved_workspace_name}/transcript.md"
+        transcript_abs = str(Path(resolved_workspace_path) / "transcript.md")
     elif sid:
         run_log_rel = f"{sid}/run.log"
         run_log_abs = str((WORKSPACES_DIR / sid / "run.log").resolve())
+        transcript_rel = f"{sid}/transcript.md"
+        transcript_abs = str((WORKSPACES_DIR / sid / "transcript.md").resolve())
     else:
         run_log_rel = ""
         run_log_abs = ""
+        transcript_rel = ""
+        transcript_abs = ""
 
     run_log_href = _storage_explorer_href(scope="workspaces", path=run_log_rel, preview=run_log_rel) if run_log_rel else ""
+    transcript_href = _storage_explorer_href(scope="workspaces", path=transcript_rel, preview=transcript_rel) if transcript_rel else ""
 
     return {
         "session_id": sid,
         "session_href": session_href,
         "run_log_href": run_log_href,
         "run_log_path": run_log_abs,
+        "transcript_href": transcript_href,
+        "transcript_path": transcript_abs,
         "workspace_dir": resolved_workspace_path or wdir,
         "workspace_name": resolved_workspace_name,
     }
+
+
+def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
+    try:
+        row = conn.execute(
+            """
+            SELECT thread_id, subject, sender_email, status, last_message_id, message_count,
+                   workflow_run_id, workflow_attempt_id, provider_session_id, created_at, updated_at,
+                   email_sent_at
+            FROM email_task_mappings
+            WHERE task_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (str(task_id or "").strip(),),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {
+        "thread_id": str(row["thread_id"] or ""),
+        "subject": str(row["subject"] or ""),
+        "sender_email": str(row["sender_email"] or ""),
+        "status": str(row["status"] or ""),
+        "last_message_id": str(row["last_message_id"] or ""),
+        "message_count": int(row["message_count"] or 0),
+        "workflow_run_id": str(row["workflow_run_id"] or ""),
+        "workflow_attempt_id": str(row["workflow_attempt_id"] or ""),
+        "provider_session_id": str(row["provider_session_id"] or ""),
+        "email_sent_at": str(row["email_sent_at"] or ""),
+        "created_at": str(row["created_at"] or ""),
+        "updated_at": str(row["updated_at"] or ""),
+    }
+
+
+def _task_hub_active_assignment_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT assignment_id, agent_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+          AND state IN ('seized', 'running')
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (str(task_id or "").strip(),),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "assignment_id": str(row["assignment_id"] or ""),
+        "agent_id": str(row["agent_id"] or ""),
+        "provider_session_id": str(row["provider_session_id"] or ""),
+        "workspace_dir": str(row["workspace_dir"] or ""),
+        "state": str(row["state"] or ""),
+        "started_at": str(row["started_at"] or ""),
+        "ended_at": str(row["ended_at"] or ""),
+        "result_summary": str(row["result_summary"] or ""),
+    }
+
+
+def _task_hub_reconciliation_flags(
+    *,
+    item: dict[str, Any],
+    active_assignment: Optional[dict[str, Any]] = None,
+) -> dict[str, bool]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+    status = str(item.get("status") or "").strip().lower()
+    active_assignment_id = str(dispatch_meta.get("active_assignment_id") or "").strip()
+    completion_unverified = bool(dispatch_meta.get("completion_unverified"))
+    last_reason = str(dispatch_meta.get("last_disposition_reason") or "").strip().lower()
+    orphaned_in_progress = (
+        status == task_hub.TASK_STATUS_IN_PROGRESS
+        and not active_assignment
+        and not active_assignment_id
+    )
+    if status == task_hub.TASK_STATUS_COMPLETED and last_reason in {"heartbeat_auto_completed", "todo_auto_completed"}:
+        completion_unverified = True
+    return {
+        "orphaned_in_progress": orphaned_in_progress,
+        "completion_unverified": completion_unverified,
+    }
+
+
+def _task_hub_board_projection(
+    *,
+    item: dict[str, Any],
+    active_assignment: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+    delegation = metadata.get("delegation") if isinstance(metadata.get("delegation"), dict) else {}
+    status = str(item.get("status") or "").strip().lower()
+    assigned_agent_id = ""
+    assigned_session_id = ""
+    assignment_state = ""
+
+    if active_assignment:
+        assigned_agent_id = str(active_assignment.get("agent_id") or "")
+        assigned_session_id = str(active_assignment.get("provider_session_id") or "") or task_hub._session_id_from_agent_id(assigned_agent_id)
+        assignment_state = str(active_assignment.get("state") or "")
+    elif status in {task_hub.TASK_STATUS_DELEGATED, task_hub.TASK_STATUS_PENDING_REVIEW}:
+        assigned_agent_id = str(delegation.get("delegate_target") or "")
+        assignment_state = "delegated"
+    elif str(dispatch_meta.get("active_agent_id") or "").strip():
+        assigned_agent_id = str(dispatch_meta.get("active_agent_id") or "")
+        assigned_session_id = str(dispatch_meta.get("active_provider_session_id") or "")
+        assignment_state = "seized"
+
+    if status in {task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW}:
+        board_lane = "needs_review"
+    elif status == task_hub.TASK_STATUS_COMPLETED:
+        board_lane = "completed"
+    elif status == task_hub.TASK_STATUS_PARKED:
+        board_lane = "parked"
+    elif status == task_hub.TASK_STATUS_BLOCKED:
+        board_lane = "blocked"
+    elif status == task_hub.TASK_STATUS_DELEGATED:
+        board_lane = "in_progress"
+    elif status == task_hub.TASK_STATUS_IN_PROGRESS:
+        board_lane = "in_progress"
+    elif assigned_agent_id or assigned_session_id:
+        board_lane = "in_progress"
+    else:
+        board_lane = "not_assigned"
+
+    return {
+        "board_lane": board_lane,
+        "assigned_agent_id": assigned_agent_id or None,
+        "assigned_session_id": assigned_session_id or None,
+        "assignment_state": assignment_state or None,
+        "requires_simone_review": board_lane == "needs_review",
+    }
+
+
+def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(item.get("task_id") or "").strip()
+    active_assignment = _task_hub_active_assignment_for_task(conn, task_id) if task_id else None
+    projection = _task_hub_board_projection(item=item, active_assignment=active_assignment)
+    flags = _task_hub_reconciliation_flags(item=item, active_assignment=active_assignment)
+    serialized = dict(item)
+    serialized.update(projection)
+    serialized["reconciliation"] = flags
+    return serialized
 
 
 @app.get("/api/v1/dashboard/todolist/completed")
@@ -17427,6 +18141,15 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
                 task_id=str(task_id or "").strip(),
                 limit=max(1, min(int(limit), 500)),
             )
+            email_mapping = _task_hub_email_mapping_for_task(conn, str(task_id or "").strip())
+            task_item = history.get("task") if isinstance(history.get("task"), dict) else {}
+            active_assignment = _task_hub_active_assignment_for_task(conn, str(task_item.get("task_id") or task_id or "").strip())
+            history["task"] = _serialize_task_hub_queue_item(conn, dict(task_item)) if task_item else {}
+            history["email_mapping"] = email_mapping
+            history["reconciliation"] = _task_hub_reconciliation_flags(
+                item=dict(task_item) if task_item else {},
+                active_assignment=active_assignment,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         finally:
@@ -17443,6 +18166,15 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
         record["links"] = links
         enriched_assignments.append(record)
     history["assignments"] = enriched_assignments
+    latest_links = {}
+    if enriched_assignments:
+        latest_links = dict(enriched_assignments[0].get("links") or {})
+    elif isinstance(email_mapping, dict):
+        latest_links = _task_history_links_for_session(
+            str(email_mapping.get("provider_session_id") or ""),
+            workspace_dir="",
+        )
+    history["artifacts"] = latest_links
     return {"status": "ok", **history}
 
 
@@ -25046,329 +25778,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         session.user_id,
                         len(user_input),
                     )
-                    mission_tracker = MissionGuardrailTracker(build_mission_contract(user_input))
                     _increment_session_active_runs(session_id, run_source=request_source)
-
-                    async def run_execution(turn_id: str):
-                        saw_streaming_text = False
-                        tool_call_count = 0
-                        execution_duration_seconds = 0.0
-                        execution_start_ts = time.time()
-                        terminal_reason: Optional[str] = None
-                        if _heartbeat_service:
-                            _heartbeat_service.busy_sessions.add(session.session_id)
-
-                        # Open run.log for append so session history can be rehydrated later
-                        _run_log_handle = None
-                        if session.workspace_dir:
-                            try:
-                                _rl_path = Path(session.workspace_dir) / "run.log"
-                                _run_log_handle = open(_rl_path, "a", encoding="utf-8")
-                                _ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                                _run_log_handle.write(f"[{_ts0}] 👤 USER: {user_input}\n")
-                                _run_log_handle.flush()
-                            except Exception:
-                                _run_log_handle = None
-
-                        def _rl_write(line: str) -> None:
-                            if _run_log_handle:
-                                try:
-                                    _run_log_handle.write(line + "\n")
-                                    _run_log_handle.flush()
-                                except Exception:
-                                    pass
-
-                        try:
-                            # Execute the request and stream to all attached clients for this session.
-                            async for event in gateway.execute(exec_session, request):
-                                if event.type == EventType.TOOL_CALL:
-                                    tool_call_count += 1
-                                    if isinstance(event.data, dict):
-                                        mission_tracker.record_tool_call(
-                                            str(event.data.get("name") or ""),
-                                            tool_input=event.data.get("input"),
-                                        )
-                                elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
-                                    execution_duration_seconds = float(
-                                        event.data.get("duration_seconds") or execution_duration_seconds
-                                    )
-                                    # Prefer engine-provided count if available
-                                    if isinstance(event.data.get("tool_calls"), int):
-                                        tool_call_count = int(event.data["tool_calls"])
-                                if (
-                                    event.type == EventType.TEXT
-                                    and isinstance(event.data, dict)
-                                    and event.data.get("final") is True
-                                    and saw_streaming_text
-                                ):
-                                    continue
-                                if (
-                                    event.type == EventType.TEXT
-                                    and isinstance(event.data, dict)
-                                    and event.data.get("time_offset") is not None
-                                ):
-                                    saw_streaming_text = True
-                                if event.type == EventType.ERROR:
-                                    log_tail = None
-                                    if session.workspace_dir:
-                                        log_tail = _read_run_log_tail(session.workspace_dir)
-                                    # Normalize error payload for clients
-                                    if isinstance(event.data, dict):
-                                        if "message" not in event.data and "error" in event.data:
-                                            event.data["message"] = event.data.get("error")
-                                        if log_tail and "log_tail" not in event.data:
-                                            event.data["log_tail"] = log_tail
-                                    logger.error(
-                                        "Agent error event (session=%s): %s",
-                                        session.session_id,
-                                        event.data,
-                                    )
-                                await manager.broadcast(session_id, agent_event_to_wire(event))
-
-                                # Persist event to run.log for later rehydration
-                                _rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                                if event.type == EventType.TEXT and isinstance(event.data, dict):
-                                    _rl_text = (event.data.get("text") or "").rstrip()
-                                    if _rl_text and event.data.get("final") is True:
-                                        _rl_write(f"[{_rl_ts}] 🤖 ASSISTANT: {_rl_text}")
-                                elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
-                                    _rl_tname = event.data.get("name") or "unknown"
-                                    _rl_write(f"[{_rl_ts}] 🔧 TOOL CALL: {_rl_tname}")
-                                elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
-                                    _rl_tsize = event.data.get("content_size") or 0
-                                    _rl_write(f"[{_rl_ts}] 📦 TOOL RESULT ({_rl_tsize} bytes)")
-                                elif event.type == EventType.ERROR and isinstance(event.data, dict):
-                                    _rl_err = event.data.get("message") or event.data.get("error") or "unknown"
-                                    _rl_write(f"[{_rl_ts}] ERROR: {_rl_err}")
-
-                            # Close the run.log handle
-                            if _run_log_handle:
-                                try:
-                                    _rl_ts_end = datetime.now(timezone.utc).strftime("%H:%M:%S")
-                                    _run_log_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_call_count} tool calls) ===\n")
-                                    _run_log_handle.close()
-                                except Exception:
-                                    pass
-                                _run_log_handle = None
-
-                            if execution_duration_seconds <= 0:
-                                execution_duration_seconds = round(time.time() - execution_start_ts, 3)
-                            goal_satisfaction = mission_tracker.evaluate()
-                            completion_summary = {
-                                "tool_calls": tool_call_count,
-                                "duration_seconds": execution_duration_seconds,
-                                "goal_satisfaction": goal_satisfaction,
-                            }
-
-                            # Generate checkpoint for next session/follow-up
-                            try:
-                                from universal_agent.session_checkpoint import SessionCheckpointGenerator
-                                workspace_path = Path(session.workspace_dir)
-                                generator = SessionCheckpointGenerator(workspace_path)
-                                checkpoint_result = SimpleNamespace(
-                                    tool_calls=tool_call_count,
-                                    execution_time_seconds=execution_duration_seconds,
-                                    goal_satisfaction=goal_satisfaction,
-                                )
-                                checkpoint = generator.generate_from_result(
-                                    session_id=session.session_id,
-                                    original_request=user_input,
-                                    result=checkpoint_result,
-                                )
-                                generator.save(checkpoint)
-                                logger.info(f"✅ Saved run checkpoint: {workspace_path / 'run_checkpoint.json'}")
-                            except Exception as ckpt_err:
-                                logger.warning(f"⚠️ Failed to save checkpoint: {ckpt_err}")
-
-                            if not bool(goal_satisfaction.get("passed")):
-                                missing_items = goal_satisfaction.get("missing")
-                                goal_message = "Mission requirements were not satisfied."
-                                if isinstance(missing_items, list) and missing_items:
-                                    first_missing = missing_items[0] if isinstance(missing_items[0], dict) else {}
-                                    missing_message = str(first_missing.get("message") or "").strip()
-                                    missing_requirement = str(first_missing.get("requirement") or "").strip()
-                                    if missing_message:
-                                        goal_message = f"{goal_message} {missing_message}"
-                                    elif missing_requirement:
-                                        goal_message = (
-                                            f"{goal_message} Missing requirement: {missing_requirement}."
-                                        )
-                                _add_notification(
-                                    kind="assistance_needed",
-                                    title="Mission Guardrail Blocked Completion",
-                                    message=goal_message,
-                                    session_id=session.session_id,
-                                    severity="error",
-                                    requires_action=True,
-                                    metadata={"goal_satisfaction": goal_satisfaction},
-                                )
-                                await manager.broadcast(
-                                    session_id,
-                                    {
-                                        "type": "status",
-                                        "data": {
-                                            "status": "goal_satisfaction_failed",
-                                            "turn_id": turn_id,
-                                            "goal_satisfaction": goal_satisfaction,
-                                        },
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    },
-                                )
-                                await manager.broadcast(
-                                    session_id,
-                                    {
-                                        "type": "error",
-                                        "data": {
-                                            "message": goal_message,
-                                            "goal_satisfaction": goal_satisfaction,
-                                        },
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    },
-                                )
-                                await manager.broadcast(
-                                    session_id,
-                                    {
-                                        "type": "query_complete",
-                                        "data": {
-                                            "turn_id": turn_id,
-                                            "goal_satisfaction": goal_satisfaction,
-                                            "completed": False,
-                                        },
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    },
-                                )
-                                async with _session_turn_lock(session_id):
-                                    _finalize_turn(
-                                        session_id,
-                                        turn_id,
-                                        TURN_STATUS_FAILED,
-                                        error_message=goal_message,
-                                        completion=completion_summary,
-                                    )
-                                terminal_reason = "goal_unsatisfied"
-                                return
-
-                            _add_notification(
-                                kind="mission_complete",
-                                title="Mission Completed",
-                                message="Session completed execution successfully.",
-                                session_id=session.session_id,
-                                severity="info",
-                                metadata={
-                                    "tool_calls": tool_call_count,
-                                    "duration_seconds": execution_duration_seconds,
-                                    "goal_satisfaction": goal_satisfaction,
-                                },
-                            )
-
-                            await manager.broadcast(
-                                session_id,
-                                {
-                                    "type": "query_complete",
-                                    "data": {
-                                        "turn_id": turn_id,
-                                        "goal_satisfaction": goal_satisfaction,
-                                        "completed": True,
-                                    },
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
-                            )
-
-                            await manager.broadcast(
-                                session_id,
-                                {"type": "pong", "data": {}, "timestamp": datetime.now(timezone.utc).isoformat()},
-                            )
-                            logger.info("WS execute complete (session=%s)", session_id)
-                            if clear_pending_gate_on_success:
-                                _pending_gated_requests.pop(session_id, None)
-                            async with _session_turn_lock(session_id):
-                                _finalize_turn(
-                                    session_id,
-                                    turn_id,
-                                    TURN_STATUS_COMPLETED,
-                                    completion=completion_summary,
-                                )
-                            terminal_reason = "completed"
-                        except asyncio.CancelledError:
-                            terminal_reason = "cancelled"
-                            logger.warning("Execution cancelled for session %s turn %s", session_id, turn_id)
-                            await manager.broadcast(
-                                session_id,
-                                {
-                                    "type": "status",
-                                    "data": {
-                                        "status": "turn_cancelled",
-                                        "turn_id": turn_id,
-                                        "message": "Execution cancelled.",
-                                    },
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
-                            )
-                            await manager.broadcast(
-                                session_id,
-                                {
-                                    "type": "query_complete",
-                                    "data": {"turn_id": turn_id, "cancelled": True},
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
-                            )
-                            async with _session_turn_lock(session_id):
-                                _finalize_turn(
-                                    session_id,
-                                    turn_id,
-                                    TURN_STATUS_CANCELLED,
-                                    error_message="cancelled",
-                                    completion={
-                                        "tool_calls": tool_call_count,
-                                        "duration_seconds": round(time.time() - execution_start_ts, 3),
-                                    },
-                                )
-                            raise
-                        except Exception as e:
-                            terminal_reason = "failed"
-                            logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
-                            _add_notification(
-                                kind="assistance_needed",
-                                title="Session Failed",
-                                message=str(e),
-                                session_id=session.session_id,
-                                severity="error",
-                                requires_action=True,
-                            )
-                            await manager.broadcast(
-                                session_id,
-                                {
-                                    "type": "error",
-                                    "data": {"message": str(e)},
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
-                            )
-                            async with _session_turn_lock(session_id):
-                                _finalize_turn(
-                                    session_id,
-                                    turn_id,
-                                    TURN_STATUS_FAILED,
-                                    error_message=str(e),
-                                    completion={
-                                        "tool_calls": tool_call_count,
-                                        "duration_seconds": round(time.time() - execution_start_ts, 3),
-                                    },
-                                )
-                        finally:
-                            if _run_log_handle:
-                                try:
-                                    _run_log_handle.close()
-                                except Exception:
-                                    pass
-                            _finish_session_run(
-                                session_id,
-                                run_source=request_source,
-                                terminal_reason=terminal_reason,
-                            )
-                            if _heartbeat_service:
-                                _heartbeat_service.busy_sessions.discard(session.session_id)
-
-                    execution_task = asyncio.create_task(run_execution(admitted_turn_id))
+                    execution_task = asyncio.create_task(
+                        _run_gateway_session_request(
+                            session=exec_session,
+                            request=request,
+                            turn_id=admitted_turn_id,
+                            clear_pending_gate_on_success=clear_pending_gate_on_success,
+                        )
+                    )
                     _register_execution_task(session_id, execution_task)
                 
                 elif msg_type == "input_response":

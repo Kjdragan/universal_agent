@@ -74,8 +74,6 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Architectural and Integration Review From Canonical Review (2026-03-06)](03_Operations/94_Architectural_Integration_Review_From_Canonical_Review_2026-03-06.md)**: Strategic cross-system architectural review identifying integration coherence, incongruities, missed integrations, and structural improvement opportunities across all subsystems.
 - **[Heartbeat Issue Mediation and Auto-Triage (2026-03-12)](03_Operations/95_Heartbeat_Issue_Mediation_And_Auto_Triage_2026-03-12.md)**: Canonical operations note for structured heartbeat findings, Simone auto-investigation, operator review escalation, and the no-auto-remediation safety boundary.
 - **[VPS Host Security Hardening Runbook (2026-02-12)](03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md)**: Solo-dev-safe VPS hardening steps with validation and rollback.
-- **[Todoist Heartbeat and Triage Operational Runbook (2026-02-16)](03_Operations/41_Todoist_Heartbeat_And_Triage_Operational_Runbook_2026-02-16.md)**: Daily operating cadence for Todoist-backed heartbeat inputs, manual brainstorming triage, and guarded verification checks.
-- **[CSI Todoist Sync Debugging Lessons (2026-02-26)](03_Operations/77_CSI_Todoist_Sync_Debugging_Lessons_2026-02-26.md)**: Root-cause findings and hardening changes for CSI -> Todoist sync failures, including credential diagnostics and repeatable verification steps.
 - **[Daily Autonomous Briefing Reliability and Input Diagnostics (2026-02-26)](03_Operations/78_Daily_Autonomous_Briefing_Reliability_And_Input_Diagnostics_2026-02-26.md)**: Root-cause analysis and hardening changes that prevent empty/ambiguous briefings after resets and upstream ingest failures.
 - **[Agent Skills Directory (2026-03-17)](03_Operations/98_Agent_Skills_Directory.md)**: Documentation for the `.agents/skills/` directory containing clean-code, agentmail, skill-judge, systematic-debugging, and vp-orchestration skills.
 - **[Documentation Drift Maintenance Pipeline (2026-03-19)](03_Operations/99_Documentation_Drift_Maintenance_Pipeline.md)**: Canonical reference for the automated documentation maintenance system — Stage 1 drift auditor, Stage 2 maintenance agent, VP mission dispatch, issue batching, and verify-before-fix rules.
@@ -170,7 +168,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 11. [Reports](reports)
 
-- **[Todoist Task Pipeline Audit (2026-03-11)](reports/todolist-task-pipeline-audit-2026-03-11.md)**: Todoist pipeline audit.
+- **[To Do List Task Pipeline Audit (2026-03-11)](reports/todolist-task-pipeline-audit-2026-03-11.md)**: Historical audit of the early `/dashboard/todolist` task pipeline before the dedicated ToDo dispatcher refactor.
 
 ---
 

@@ -172,7 +172,7 @@ These are the authoritative references for each subsystem. When any other docume
 
 | Doc | Subject |
 |-----|---------|
-| todolist-task-pipeline-audit-2026-03-11.md | Todoist pipeline audit |
+| todolist-task-pipeline-audit-2026-03-11.md | Historical audit of the early `/dashboard/todolist` pipeline before the dedicated ToDo dispatcher refactor |
 
 ## Remaining Operational References (03_Operations/)
 
@@ -195,9 +195,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 30 | Memory System Architecture And Health |
 | 31 | VPS Deployment Decision Tree |
 | 32 | VPS FileBrowser Setup And Access |
-| 41 | Todoist Heartbeat And Triage Operational Runbook |
 | 76 | Sandbox Permissioning And Exception Profile |
-| 77 | CSI Todoist Sync Debugging Lessons |
 | 78 | Daily Autonomous Briefing Reliability |
 | 79 | Golden Run Research Report Pipeline Reference |
 | 80 | Google Workspace Integration Retrospective Memo |

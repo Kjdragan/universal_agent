@@ -2,13 +2,13 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-03-26
+> **Last updated:** 2026-03-30
 
 ---
 
 ## 1. Overview
 
-The Task Hub Dashboard is the primary UI for managing proactive tasks within Universal Agent. It replaces the legacy Todoist-based task management interface with a fully integrated, in-house Kanban board built as a Next.js client-side component consuming Python backend APIs.
+The Task Hub Dashboard is the primary UI for managing proactive tasks within Universal Agent. It is the in-house Kanban control surface for Task Hub, built as a Next.js client-side component consuming Python backend APIs.
 
 **Key design principles:**
 - **Glassmorphism-first**: All panels use `glass`/`tactical-panel` CSS classes with backdrop blur and translucent backgrounds
@@ -88,10 +88,10 @@ page.tsx ("use client")
 ├── Quick-Add Input Bar (planned: Phase 6b)
 ├── Morning Report Banner (planned: Phase 6c)
 └── Kanban Board
-    ├── Column: To Do (status: "open")
-    ├── Column: In Progress (status: "in_progress")  
-    ├── Column: Review (status: "needs_review")
-    └── Column: Done (status: "completed")
+    ├── Column: Not Assigned (derived lane: `not_assigned`)
+    ├── Column: In Progress (derived lane: `in_progress`)
+    ├── Column: Needs Review (derived lane: `needs_review`)
+    └── Column: Done (derived lane: `completed`)
 ```
 
 ### 4.2 Task Card Components
@@ -103,13 +103,22 @@ Each task card renders:
 - **Labels**: Tag chips for `agent-ready`, brainstorm stage, etc.
 - **Action buttons**: Contextual lifecycle actions per column
 
-### 4.3 Helper Functions
+### 4.3 Dispatcher Health Panel
+
+The ToDo dashboard includes a dedicated dispatcher-health strip for the separate non-heartbeat execution driver. It shows:
+- Last wake request and target session
+- Whether that wake targeted a registered session
+- Last claim batch size and claiming session
+- Last execution decision and latest failure/defer reason
+- Pending wake count versus registered-session count
+
+### 4.4 Helper Functions
 
 | Function | Purpose |
 |----------|---------|
 | `priorityColorClass(priority)` | Maps P0–P3 → Tailwind color classes (`kcd-error`, `kcd-warning`, `kcd-accent`, `kcd-text-muted`) |
 | `sourceKindPill(sourceKind)` | Renders origin badge (email, heartbeat, manual, brainstorm) |
-| `statusColumns` | Maps task statuses to Kanban column definitions |
+| Derived board projection | Maps canonical task status + assignment lineage to UI lanes (`not_assigned`, `in_progress`, `needs_review`, `completed`) |
 
 ---
 
@@ -121,23 +130,21 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/task-hub/items` | GET | List all tasks (with optional status/label filters) |
-| `/api/task-hub/items/{task_id}` | GET | Get single task details |
-| `/api/task-hub/queue` | GET | Get current dispatch queue state |
-| `/api/task-hub/morning-report` | GET | Get deterministic morning report snapshot |
-| `/api/task-hub/comments/{task_id}` | GET | List comments for a task |
-| `/api/task-hub/questions/pending` | GET | List pending clarification questions |
+| `/api/v1/dashboard/todolist/overview` | GET | Summary counts, heartbeat runtime, and ToDo dispatcher health |
+| `/api/v1/dashboard/todolist/agent-queue` | GET | Queue items plus derived board lanes and assignment/session lineage |
+| `/api/v1/dashboard/todolist/completed` | GET | Completed tasks with session/workspace links |
+| `/api/v1/dashboard/todolist/tasks/{task_id}/history` | GET | Assignment/evaluation trail, email mapping, transcript/run-log links |
+| `/api/v1/dashboard/todolist/morning-report` | GET | Deterministic morning report snapshot |
 
 ### 5.2 Write Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/task-hub/items` | POST | Create/upsert a task (quick-add) |
-| `/api/task-hub/items/{task_id}/action` | POST | Lifecycle action: `complete`, `block`, `park`, `review`, `reopen` |
-| `/api/task-hub/dispatch/immediate/{task_id}` | POST | "Start Now" — immediate dispatch to agent |
-| `/api/task-hub/dispatch/approve/{task_id}` | POST | Approve a task for agent execution |
-| `/api/task-hub/comments/{task_id}` | POST | Add a comment to a task |
-| `/api/task-hub/questions/{question_id}/answer` | POST | Answer a pending clarification question |
+| `/api/v1/dashboard/todolist/tasks` | POST | Create/upsert a task (quick-add) |
+| `/api/v1/dashboard/todolist/tasks/{task_id}/action` | POST | Lifecycle action: `complete`, `block`, `park`, `review`, `reopen` |
+| `/api/v1/dashboard/todolist/tasks/{task_id}/dispatch` | POST | "Start Now" — immediate dispatch to agent |
+| `/api/v1/dashboard/todolist/tasks/{task_id}/approve` | POST | Approve a task for agent execution |
+| `/api/v1/heartbeat/wake` | POST | Manually nudge heartbeat/system supervision |
 
 ### 5.3 Data Flow
 
@@ -173,14 +180,23 @@ graph LR
 
 ## 6. Task Lifecycle on the Dashboard
 
-### 6.1 Status Columns
+### 6.1 Board Lanes
 
-| Column | Status | Available Actions |
-|--------|--------|-------------------|
-| **To Do** | `open` | Start Now (dispatch), Park, Delete |
-| **In Progress** | `in_progress` | Complete, Block, Review, Park |
-| **Review** | `needs_review` | Complete, Reopen, Park |
-| **Done** | `completed` | Reopen |
+| Column | Derived From | Available Actions |
+|--------|--------------|-------------------|
+| **Not Assigned** | `open` with no active assignment/delegation | Dispatch, Seize, Block, Park |
+| **In Progress** | `in_progress`, `delegated`, or active seized/running assignment | Complete, Block, Review, Park |
+| **Needs Review** | `needs_review`, `pending_review`, or unverified completion flagged by reconciliation | Complete, Park |
+| **Done** | `completed` | Inspect, review history, hide |
+
+Blocked and parked items remain available through queue data and filters, but they are no longer primary board columns.
+
+### 6.3 Visibility And Forensics
+
+The board is intentionally more diagnostic than before:
+- **Dispatcher Health** makes wake/claim/defer/failure state visible without checking logs first
+- **Task History** exposes session lineage, email mapping, reconciliation flags, and transcript/run-log links
+- **Orphaned** card badges highlight tasks whose lifecycle state no longer matches an active assignment
 
 ### 6.2 Action → API Mapping
 

@@ -40,6 +40,15 @@ type AgentQueueItem = {
   source_kind?: string;
   source_ref?: string;
   url?: string;
+  board_lane?: string;
+  assigned_agent_id?: string | null;
+  assigned_session_id?: string | null;
+  assignment_state?: string | null;
+  requires_simone_review?: boolean;
+  reconciliation?: {
+    orphaned_in_progress?: boolean;
+    completion_unverified?: boolean;
+  };
 };
 
 type ApprovalRow = {
@@ -103,6 +112,34 @@ type OverviewPayload = {
     latest_last_run_epoch?: number | null;
     nearest_next_run_epoch?: number | null;
   };
+  todo_dispatch?: {
+    last_wake_requested_at?: string | null;
+    last_wake_requested_session_id?: string | null;
+    last_wake_registered?: boolean | null;
+    last_claimed_at?: string | null;
+    last_claimed_session_id?: string | null;
+    last_claimed_task_count?: number;
+    last_submitted_at?: string | null;
+    last_submitted_session_id?: string | null;
+    last_dispatch_decision?: string | null;
+    last_deferred_at?: string | null;
+    last_deferred_session_id?: string | null;
+    last_deferred_reason?: string | null;
+    last_failure_at?: string | null;
+    last_failure_session_id?: string | null;
+    last_failure_error?: string | null;
+    last_no_tasks_at?: string | null;
+    last_no_tasks_session_id?: string | null;
+    last_processing_started_at?: string | null;
+    last_processing_session_id?: string | null;
+    last_idle_at?: string | null;
+    last_idle_session_id?: string | null;
+    registered_sessions?: string[];
+    registered_session_count?: number;
+    pending_wake_sessions?: string[];
+    pending_wake_count?: number;
+    sleeping_session_warning?: boolean;
+  };
 };
 
 type ApprovalHighlightPayload = {
@@ -128,6 +165,8 @@ type TaskHistoryLinks = {
   session_href?: string;
   run_log_href?: string;
   run_log_path?: string;
+  transcript_href?: string;
+  transcript_path?: string;
   workspace_dir?: string;
   workspace_name?: string;
 };
@@ -189,6 +228,20 @@ type TaskHistoryPayload = {
   task: AgentQueueItem;
   assignments: TaskAssignmentHistory[];
   evaluations: TaskEvaluationHistory[];
+  email_mapping?: {
+    thread_id?: string;
+    subject?: string;
+    sender_email?: string;
+    status?: string;
+    message_count?: number;
+    provider_session_id?: string;
+    email_sent_at?: string;
+  } | null;
+  reconciliation?: {
+    orphaned_in_progress?: boolean;
+    completion_unverified?: boolean;
+  };
+  artifacts?: TaskHistoryLinks;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -581,13 +634,20 @@ export default function ToDoListDashboardPage() {
 
   const allQueueItems = useMemo(() => Array.isArray(agentQueue?.items) ? agentQueue!.items : [], [agentQueue]);
 
-  // Time-horizon buckets
-  const futureItems = useMemo(
-    () => allQueueItems.filter((i) => ["open", "parked", "blocked"].includes(String(i.status || "open"))),
+  const notAssignedItems = useMemo(
+    () => allQueueItems.filter((i) => String(i.board_lane || "") === "not_assigned"),
     [allQueueItems],
   );
-  const nowItems = useMemo(
-    () => allQueueItems.filter((i) => ["in_progress", "needs_review"].includes(String(i.status || ""))),
+  const inProgressItems = useMemo(
+    () => allQueueItems.filter((i) => String(i.board_lane || "") === "in_progress"),
+    [allQueueItems],
+  );
+  const needsReviewItems = useMemo(
+    () => allQueueItems.filter((i) => String(i.board_lane || "") === "needs_review"),
+    [allQueueItems],
+  );
+  const blockedItems = useMemo(
+    () => allQueueItems.filter((i) => String(i.board_lane || "") === "blocked"),
     [allQueueItems],
   );
 
@@ -651,6 +711,24 @@ export default function ToDoListDashboardPage() {
     return alerts;
   }, [overview?.heartbeat]);
 
+  const todoDispatch = overview?.todo_dispatch;
+  const todoDispatchAlerts = useMemo(() => {
+    const alerts: string[] = [];
+    if (todoDispatch?.sleeping_session_warning) {
+      alerts.push("Last wake targeted a session that was not registered");
+    }
+    if (Number(todoDispatch?.pending_wake_count || 0) > 0) {
+      alerts.push(`${todoDispatch?.pending_wake_count || 0} pending wake request${Number(todoDispatch?.pending_wake_count || 0) === 1 ? "" : "s"}`);
+    }
+    if ((todoDispatch?.last_dispatch_decision || "").toLowerCase() === "busy") {
+      alerts.push("Last dispatch was rejected because the target was busy");
+    }
+    if (todoDispatch?.last_deferred_reason) {
+      alerts.push(`Deferred: ${todoDispatch.last_deferred_reason}`);
+    }
+    return alerts;
+  }, [todoDispatch]);
+
   // ── Loading state ────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -676,8 +754,10 @@ export default function ToDoListDashboardPage() {
   const renderTaskCard = (item: AgentQueueItem, idx: number, showActions = true, onDelete?: (id: string) => void) => {
     const isPending = actionPendingTaskId === item.task_id;
     const pCls = priorityColorClass(item.priority);
-    const isProcessing = String(item.status || "") === "in_progress";
-    const isAwaitingReview = String(item.status || "") === "needs_review";
+    const boardLane = String(item.board_lane || "");
+    const isProcessing = boardLane === "in_progress";
+    const isAwaitingReview = boardLane === "needs_review";
+    const isOrphaned = Boolean(item.reconciliation?.orphaned_in_progress);
     return (
       <article
         key={item.task_id}
@@ -701,6 +781,13 @@ export default function ToDoListDashboardPage() {
             <span className="material-symbols-outlined text-xs text-kcd-amber">rate_review</span>
             <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Awaiting Review</span>
             <span className="font-mono text-[9px] text-kcd-text-muted">· Run finished</span>
+          </div>
+        )}
+        {isOrphaned && (
+          <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-kcd-red/[0.08] border border-kcd-red/20 rounded-sm">
+            <span className="material-symbols-outlined text-xs text-kcd-red">error</span>
+            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-red uppercase">Orphaned</span>
+            <span className="font-mono text-[9px] text-kcd-text-muted">· Reconciliation needed</span>
           </div>
         )}
         {onDelete && (
@@ -769,6 +856,8 @@ export default function ToDoListDashboardPage() {
 
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
           {item.project_key && <span>{item.project_key}</span>}
+          {item.assigned_agent_id && <><span className="opacity-40">│</span><span>{item.assigned_agent_id}</span></>}
+          {item.assignment_state && <><span className="opacity-40">│</span><span>{item.assignment_state}</span></>}
           {item.due_at && <><span className="opacity-40">│</span><span className="text-kcd-amber">Due {item.due_at}</span></>}
           {item.updated_at && <><span className="opacity-40">│</span><span>Updated {formatTs(item.updated_at)}</span></>}
           {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold && (
@@ -1035,9 +1124,45 @@ export default function ToDoListDashboardPage() {
               <span>{taskHistory.task?.task_id}</span>
               {taskHistory.task?.status && <span className="opacity-40">│</span>}
               {taskHistory.task?.status && <span className="text-[10px] uppercase tracking-wider">{taskHistory.task.status}</span>}
+              {taskHistory.task?.board_lane && <><span className="opacity-40">│</span><span className="text-[10px] uppercase tracking-wider">{taskHistory.task.board_lane}</span></>}
               {taskHistory.task?.score !== undefined && <><span className="opacity-40">│</span><span className="text-[10px]">score {taskHistory.task.score}</span></>}
             </div>
           </div>
+          {(taskHistory.email_mapping || taskHistory.reconciliation) && (
+            <div className="rounded border border-border/70 bg-background/50 p-2">
+              <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Forensics</div>
+              <div className="space-y-1 text-[11px] text-foreground/80">
+                {taskHistory.email_mapping?.thread_id && (
+                  <div>
+                    Email thread <span className="font-mono text-muted-foreground">{taskHistory.email_mapping.thread_id}</span>
+                    {taskHistory.email_mapping.subject ? ` · ${taskHistory.email_mapping.subject}` : ""}
+                  </div>
+                )}
+                {taskHistory.email_mapping?.sender_email && (
+                  <div>Sender {taskHistory.email_mapping.sender_email}</div>
+                )}
+                {taskHistory.email_mapping?.email_sent_at && (
+                  <div>Email sent {formatTs(taskHistory.email_mapping.email_sent_at)}</div>
+                )}
+                {taskHistory.reconciliation?.orphaned_in_progress && (
+                  <div className="text-kcd-red">Flagged orphaned in-progress state</div>
+                )}
+                {taskHistory.reconciliation?.completion_unverified && (
+                  <div className="text-kcd-amber">Completion is unverified and requires Simone review</div>
+                )}
+                {taskHistory.artifacts?.transcript_href && (
+                  <a href={taskHistory.artifacts.transcript_href} className="text-sky-300 hover:underline">
+                    Open transcript
+                  </a>
+                )}
+                {taskHistory.artifacts?.run_log_href && (
+                  <a href={taskHistory.artifacts.run_log_href} className="text-sky-300 hover:underline">
+                    Open run log
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
           <div className="rounded border border-border/70 bg-background/50 p-2">
             <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
               Assignments ({taskHistory.assignments?.length || 0})
@@ -1203,6 +1328,67 @@ export default function ToDoListDashboardPage() {
           ))}
         </section>
 
+        {/* ── Dispatcher Health ── */}
+        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-lg text-kcd-cyan">lan</span>
+              <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-cyan uppercase m-0">Dispatcher Health</h2>
+            </div>
+            <div className="font-mono text-[10px] text-kcd-text-muted">
+              ToDo driver separate from heartbeat
+            </div>
+          </div>
+          <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-4">
+            {[
+              {
+                label: "Last Wake",
+                value: formatTs(todoDispatch?.last_wake_requested_at || null) || "Never",
+                sub: todoDispatch?.last_wake_requested_session_id || "No session",
+                cls: todoDispatch?.sleeping_session_warning ? "text-kcd-amber" : "text-kcd-text",
+              },
+              {
+                label: "Last Claim",
+                value: todoDispatch?.last_claimed_at ? `${todoDispatch?.last_claimed_task_count || 0} task(s)` : "No claim yet",
+                sub: todoDispatch?.last_claimed_at ? `${formatTs(todoDispatch?.last_claimed_at || null)} · ${todoDispatch?.last_claimed_session_id || "unknown"}` : "Waiting for eligible work",
+                cls: "text-kcd-cyan",
+              },
+              {
+                label: "Last Result",
+                value: todoDispatch?.last_dispatch_decision || "No submission yet",
+                sub: todoDispatch?.last_submitted_at ? `${formatTs(todoDispatch?.last_submitted_at || null)} · ${todoDispatch?.last_submitted_session_id || "unknown"}` : (todoDispatch?.last_failure_error || "No execution recorded"),
+                cls: (todoDispatch?.last_dispatch_decision || "").toLowerCase() === "accepted" ? "text-kcd-green" : "text-kcd-text",
+              },
+              {
+                label: "Wake Queue",
+                value: `${todoDispatch?.pending_wake_count || 0} pending`,
+                sub: `${todoDispatch?.registered_session_count || 0} registered sessions`,
+                cls: Number(todoDispatch?.pending_wake_count || 0) > 0 ? "text-kcd-amber" : "text-kcd-text",
+              },
+            ].map((card) => (
+              <article key={card.label} className="rounded-md border border-white/[0.06] bg-kcd-surface-high/60 p-3">
+                <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0">{card.label}</p>
+                <p className={`text-[15px] font-semibold mt-1 m-0 ${card.cls}`}>{card.value}</p>
+                <p className="text-[10px] text-kcd-text-muted mt-1 m-0">{card.sub}</p>
+              </article>
+            ))}
+          </div>
+          {(todoDispatchAlerts.length > 0 || heartbeatAlerts.length > 0) && (
+            <div className="mt-3 flex flex-col gap-1">
+              {todoDispatchAlerts.map((alert, idx) => (
+                <div key={`todo-alert-${idx}`} className="font-mono text-[10px] text-kcd-amber">
+                  ToDo: {alert}
+                </div>
+              ))}
+              {heartbeatAlerts.map((alert, idx) => (
+                <div key={`heartbeat-alert-${idx}`} className="font-mono text-[10px] text-kcd-text-muted">
+                  Heartbeat: {alert}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* ── NOW: Current Assignments ── */}
         <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -1246,12 +1432,15 @@ export default function ToDoListDashboardPage() {
       </section>
 
       {/* ── Kanban Time Horizon Board ── */}
-      <div className="grid gap-3 grid-cols-1 lg:grid-cols-3" onClick={(e) => e.stopPropagation()}>
-        <KanbanCol label="Future" icon="schedule" count={futureItems.length} accentColor="#22D3EE" emptyText="No queued tasks.">
-          {futureItems.map((item, idx) => renderTaskCard(item, idx, true))}
+      <div className="grid gap-3 grid-cols-1 xl:grid-cols-4" onClick={(e) => e.stopPropagation()}>
+        <KanbanCol label="Not Assigned" icon="schedule" count={notAssignedItems.length} accentColor="#22D3EE" emptyText="No unassigned tasks.">
+          {notAssignedItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
-        <KanbanCol label="In Progress" icon="bolt" count={nowItems.length} accentColor="#4ADE80" emptyText="Nothing actively in progress.">
-          {nowItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
+        <KanbanCol label="In Progress" icon="bolt" count={inProgressItems.length} accentColor="#4ADE80" emptyText="Nothing actively in progress.">
+          {inProgressItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
+        </KanbanCol>
+        <KanbanCol label="Needs Review" icon="rate_review" count={needsReviewItems.length} accentColor="#F59E0B" emptyText="Nothing awaiting Simone review.">
+          {needsReviewItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
         <KanbanCol label="Completed" icon="check_circle" count={visibleCompletedRows.length} accentColor="#4ADE80" emptyText="No completed tasks yet.">
           <>
@@ -1267,6 +1456,12 @@ export default function ToDoListDashboardPage() {
           </>
         </KanbanCol>
       </div>
+
+      {blockedItems.length > 0 && (
+        <div className="font-mono text-[10px] text-kcd-text-muted">
+          Blocked items are excluded from the main board lanes: <span className="text-kcd-amber">{blockedItems.length}</span>
+        </div>
+      )}
 
       {/* ── Allocation Breakdown ── */}
       {allQueueItems.length > 0 && (

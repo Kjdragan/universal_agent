@@ -24,6 +24,7 @@ def _seed_task(
     incident_key: str | None = None,
     due_at: str | None = None,
     source_kind: str = "manual",
+    metadata_json: str = "{}",
 ):
     """Insert a single task into task_hub_items."""
     import json
@@ -56,7 +57,7 @@ def _seed_task(
             "fresh",
             "unseized",
             "internal",
-            "{}",
+            metadata_json,
             now_iso,
             now_iso,
         ),
@@ -241,6 +242,140 @@ async def test_agent_queue_item_shape(monkeypatch, tmp_path):
     assert item["due_at"] == "2026-04-01T00:00:00Z"
     assert item["source_kind"] == "csi"
     assert "updated_at" in item
+    assert item["board_lane"] == "not_assigned"
+    assert item["requires_simone_review"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_queue_derives_in_progress_and_review_lanes(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.ensure_schema(conn)
+            _seed_task(conn, task_id="tq-open", title="Open task", status="open", metadata_json='{"dispatch":{}}')
+            _seed_task(conn, task_id="tq-prog", title="Running task", status="in_progress", metadata_json='{"dispatch":{"active_assignment_id":"asg-running"}}')
+            _seed_task(conn, task_id="tq-review", title="Review task", status="pending_review", metadata_json='{"delegation":{"delegate_target":"vp.general.primary"}}')
+            conn.execute(
+                """
+                INSERT INTO task_hub_assignments (
+                    assignment_id, task_id, agent_id, provider_session_id, workspace_dir, state, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("asg-running", "tq-prog", "todo:daemon_simone", "daemon_simone", "/tmp/ws", "running", datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    response = await gateway_server.dashboard_todolist_agent_queue(
+        offset=0, limit=10, status="pending",
+    )
+
+    items = {item["task_id"]: item for item in response["items"]}
+    assert items["tq-open"]["board_lane"] == "not_assigned"
+    assert items["tq-prog"]["board_lane"] == "in_progress"
+    assert items["tq-prog"]["assigned_agent_id"] == "todo:daemon_simone"
+    assert items["tq-prog"]["assigned_session_id"] == "daemon_simone"
+    assert items["tq-prog"]["assignment_state"] == "running"
+    assert items["tq-review"]["board_lane"] == "needs_review"
+    assert items["tq-review"]["requires_simone_review"] is True
+
+
+@pytest.mark.asyncio
+async def test_task_history_includes_forensics(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+
+    workspace = tmp_path / "run_daemon_simone_20260330_120000_abcd1234"
+    workspace.mkdir()
+    (workspace / "run.log").write_text("log", encoding="utf-8")
+    (workspace / "transcript.md").write_text("transcript", encoding="utf-8")
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.ensure_schema(conn)
+            conn.execute(
+                """
+                CREATE TABLE email_task_mappings (
+                    thread_id TEXT,
+                    task_id TEXT,
+                    subject TEXT,
+                    sender_email TEXT,
+                    status TEXT,
+                    last_message_id TEXT,
+                    message_count INTEGER,
+                    workflow_run_id TEXT,
+                    workflow_attempt_id TEXT,
+                    provider_session_id TEXT,
+                    email_sent_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+            _seed_task(
+                conn,
+                task_id="email:history",
+                title="History task",
+                status="needs_review",
+                metadata_json='{"dispatch":{"completion_unverified":true}}',
+            )
+            conn.execute(
+                """
+                INSERT INTO task_hub_assignments (
+                    assignment_id, task_id, agent_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "asg-history",
+                    "email:history",
+                    "todo:daemon_simone",
+                    "daemon_simone",
+                    str(workspace),
+                    "completed",
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
+                    "done",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO email_task_mappings (
+                    thread_id, task_id, subject, sender_email, status, last_message_id, message_count,
+                    workflow_run_id, workflow_attempt_id, provider_session_id, email_sent_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "thread-1",
+                    "email:history",
+                    "Subject",
+                    "kevin@example.com",
+                    "active",
+                    "msg-1",
+                    2,
+                    "run-1",
+                    "attempt-1",
+                    "daemon_simone",
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    response = await gateway_server.dashboard_todolist_task_history("email:history", limit=20)
+
+    assert response["status"] == "ok"
+    assert response["task"]["board_lane"] == "needs_review"
+    assert response["email_mapping"]["thread_id"] == "thread-1"
+    assert response["reconciliation"]["completion_unverified"] is True
+    assert response["assignments"][0]["links"]["run_log_href"]
+    assert response["assignments"][0]["links"]["transcript_href"]
 
 
 @pytest.mark.asyncio
@@ -327,3 +462,19 @@ async def test_agent_queue_description_null_when_empty(monkeypatch, tmp_path):
     # description column defaults to '' in the schema; hydrate_item preserves it.
     # The endpoint maps empty string to None.
     assert response["items"][0]["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_todolist_overview_includes_todo_dispatch_snapshot(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    monkeypatch.setattr(gateway_server, "_todo_dispatch_service", None)
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+    monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "15m")
+
+    response = await gateway_server.dashboard_todolist_overview()
+
+    assert response["status"] == "ok"
+    todo_dispatch = response.get("todo_dispatch") or {}
+    assert todo_dispatch["registered_session_count"] == 0
+    assert todo_dispatch["pending_wake_count"] == 0
+    assert todo_dispatch["sleeping_session_warning"] is False

@@ -250,4 +250,3 @@ Key contents:
 | [Heartbeat Issue Mediation and Auto-Triage (2026-03-12)](../03_Operations/95_Heartbeat_Issue_Mediation_And_Auto_Triage_2026-03-12.md) | Full mediation contract: notification model, Simone dispatch, operator escalation, UI badges |
 | [Factory Delegation, Heartbeat, and Registry (2026-03-06)](../03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md) | Redis transport, factory heartbeat (VP fleet registration), delegation context |
 | [Heartbeat Debug Fixes (2026-02-05)](../03_Operations/01_Heartbeat_Debug_Fixes.md) | Historical: no-op strictness, text dedup, UI visibility fixes |
-| [Todoist Heartbeat and Triage Runbook (2026-02-16)](../03_Operations/41_Todoist_Heartbeat_And_Triage_Operational_Runbook_2026-02-16.md) | Operational cadence for Todoist-backed heartbeat inputs |

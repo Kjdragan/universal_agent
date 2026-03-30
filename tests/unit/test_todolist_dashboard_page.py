@@ -23,22 +23,26 @@ def test_todolist_dashboard_includes_history_and_completed_sections():
 
 def test_todolist_dashboard_includes_heartbeat_force_controls():
     content = _PAGE.read_text(encoding="utf-8")
-    assert "Run Heartbeat" in content
+    assert "Heartbeat" in content
     assert "/api/v1/heartbeat/wake" in content
 
 
 def test_todolist_dashboard_mission_focused_layout():
     content = _PAGE.read_text(encoding="utf-8")
     # New mission-focused elements
-    assert "Task Command Center" in content
+    assert "Task Hub" in content
     assert "Dispatch Eligible" in content
     assert "Active Agents" in content
     assert "Completion Rate" in content
+    assert "Dispatcher Health" in content
+    assert "Last Wake" in content
+    assert "Wake Queue" in content
     assert "source_kind" in content
-    # Kanban time horizons
-    assert "Future" in content
+    # Kanban board lanes
+    assert "Not Assigned" in content
     assert "In Progress" in content
-    assert "Past" in content
+    assert "Needs Review" in content
+    assert "Completed" in content
     # Allocation breakdown
     assert "Work Allocation" in content
     # No CSI-specific content
@@ -58,4 +62,3 @@ def test_todolist_session_button_surfaces_inline():
     assert "renderSessionDetailModal" in content
     # Should include a fallback link to open full sessions tab
     assert "Open in Sessions Tab" in content
-
