@@ -1889,6 +1889,189 @@ class AgentMailService:
                 ),
             )
 
+    async def recover_abandoned_sessions(self) -> dict[str, int]:
+        """Recover email queue items orphaned by a gateway restart.
+
+        Called once at startup.  Three passes:
+
+        1. **Reset ``dispatching`` → ``queued``**:  Items that were mid-flight
+           when the process died get a chance to re-dispatch.
+        2. **Re-queue SIGTERM failures**:  Items whose ``last_error`` mentions
+           exit code 143 (SIGTERM) or similar crash indicators are reset to
+           ``queued`` — up to a max of 3 total attempts.
+        3. **Reconcile orphaned completions**:  Queue items marked ``completed``
+           whose corresponding ``task_hub_items`` are still ``open`` get their
+           Task Hub status bridged retroactively (fills the gap for sessions
+           that finished before the completion bridge was deployed).
+
+        Returns a dict with counts for each recovery action taken.
+        """
+        import sqlite3 as _sqlite3
+
+        _SIGTERM_PATTERNS = ("exit code 143", "exit code: 143", "sigterm", "startup_recovery_reset")
+        _MAX_RETRY_ATTEMPTS = 3
+        stats: dict[str, int] = {
+            "reset_dispatching": 0,
+            "requeued_sigterm": 0,
+            "reconciled_completed": 0,
+        }
+
+        # ── Pass 1: Reset dispatching → queued ──────────────────────────
+        try:
+            now = _iso_now()
+            with self._queue_connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE agentmail_inbox_queue
+                    SET status = ?, next_attempt_at = NULL,
+                        last_error = 'startup_recovery: was dispatching', updated_at = ?
+                    WHERE status = ?
+                    """,
+                    (_QUEUE_STATUS_QUEUED, now, _QUEUE_STATUS_DISPATCHING),
+                )
+                stats["reset_dispatching"] = int(cur.rowcount or 0)
+                if stats["reset_dispatching"] > 0:
+                    logger.warning(
+                        "📧🔄 Startup recovery: reset %d dispatching → queued",
+                        stats["reset_dispatching"],
+                    )
+        except Exception as exc:
+            logger.warning("📧🔄 Startup recovery pass-1 (dispatching reset) failed: %s", exc)
+
+        # ── Pass 2: Re-queue SIGTERM / restart failures ─────────────────
+        try:
+            with self._queue_connect() as conn:
+                failed_rows = conn.execute(
+                    """
+                    SELECT queue_id, attempt_count, last_error
+                    FROM agentmail_inbox_queue
+                    WHERE status = ?
+                    """,
+                    (_QUEUE_STATUS_FAILED,),
+                ).fetchall()
+
+            now = _iso_now()
+            for row in failed_rows:
+                queue_id = str(row["queue_id"])
+                attempts = int(row["attempt_count"] or 0)
+                error = str(row["last_error"] or "").lower()
+
+                # Only re-queue if the error looks like a process crash
+                if not any(pat in error for pat in _SIGTERM_PATTERNS):
+                    continue
+                # Honour the retry cap
+                if attempts >= _MAX_RETRY_ATTEMPTS:
+                    logger.info(
+                        "📧🔄 Startup recovery: skipping %s (attempts=%d ≥ max=%d)",
+                        queue_id, attempts, _MAX_RETRY_ATTEMPTS,
+                    )
+                    continue
+
+                with self._queue_connect() as conn:
+                    conn.execute(
+                        """
+                        UPDATE agentmail_inbox_queue
+                        SET status = ?, next_attempt_at = NULL,
+                            last_error = 'startup_recovery: was sigterm/restart failure',
+                            updated_at = ?
+                        WHERE queue_id = ? AND status = ?
+                        """,
+                        (_QUEUE_STATUS_QUEUED, now, queue_id, _QUEUE_STATUS_FAILED),
+                    )
+                stats["requeued_sigterm"] += 1
+                logger.info(
+                    "📧🔄 Startup recovery: re-queued SIGTERM failure %s (attempt %d/%d)",
+                    queue_id, attempts, _MAX_RETRY_ATTEMPTS,
+                )
+        except Exception as exc:
+            logger.warning("📧🔄 Startup recovery pass-2 (SIGTERM re-queue) failed: %s", exc)
+
+        # ── Pass 3: Reconcile completed queue items with open task hub ──
+        try:
+            with self._queue_connect() as conn:
+                completed_rows = conn.execute(
+                    """
+                    SELECT queue_id, session_key, thread_id
+                    FROM agentmail_inbox_queue
+                    WHERE status = ?
+                    """,
+                    (_QUEUE_STATUS_COMPLETED,),
+                ).fetchall()
+
+            if completed_rows:
+                try:
+                    from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+                    from universal_agent.task_hub import (
+                        ensure_schema as _th_ensure_schema,
+                        perform_task_action,
+                        complete_subtask_and_check_parent,
+                    )
+
+                    th_conn = connect_runtime_db(get_activity_db_path())
+                    th_conn.row_factory = _sqlite3.Row
+                    _th_ensure_schema(th_conn)
+
+                    for row in completed_rows:
+                        session_key = str(row["session_key"] or "")
+                        if not session_key:
+                            continue
+
+                        # Find task_hub_items still open for this session_key
+                        try:
+                            open_tasks = th_conn.execute(
+                                """
+                                SELECT task_id, parent_task_id
+                                FROM task_hub_items
+                                WHERE json_extract(metadata_json, '$.session_key') = ?
+                                  AND status NOT IN ('completed', 'cancelled', 'parked')
+                                """,
+                                (session_key,),
+                            ).fetchall()
+                        except Exception:
+                            # Fallback for older SQLite without json_extract
+                            open_tasks = th_conn.execute(
+                                """
+                                SELECT task_id, parent_task_id
+                                FROM task_hub_items
+                                WHERE metadata_json LIKE ?
+                                  AND status NOT IN ('completed', 'cancelled', 'parked')
+                                """,
+                                (f'%"session_key": "{session_key}"%',),
+                            ).fetchall()
+
+                        for task_row in open_tasks:
+                            task_id = str(task_row["task_id"])
+                            parent_task_id = task_row["parent_task_id"]
+                            try:
+                                if parent_task_id:
+                                    complete_subtask_and_check_parent(th_conn, task_id)
+                                else:
+                                    perform_task_action(
+                                        th_conn,
+                                        task_id=task_id,
+                                        action="complete",
+                                        reason="startup_recovery: queue completed but task was open",
+                                        agent_id="startup_recovery",
+                                    )
+                                stats["reconciled_completed"] += 1
+                                logger.info(
+                                    "📧🔄 Startup recovery: reconciled task %s (session_key=%s)",
+                                    task_id, session_key,
+                                )
+                            except Exception as task_exc:
+                                logger.warning(
+                                    "📧🔄 Startup recovery: failed to reconcile task %s: %s",
+                                    task_id, task_exc,
+                                )
+
+                    th_conn.close()
+                except ImportError:
+                    logger.debug("📧🔄 Startup recovery pass-3 skipped: task_hub imports unavailable")
+        except Exception as exc:
+            logger.warning("📧🔄 Startup recovery pass-3 (task hub reconciliation) failed: %s", exc)
+
+        return stats
+
     async def _trusted_inbox_queue_loop(self) -> None:
         while not self._ws_stop_event.is_set():
             try:

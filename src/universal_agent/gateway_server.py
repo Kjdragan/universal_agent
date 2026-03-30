@@ -12069,6 +12069,18 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed starting AgentMail service")
 
+    # Recover email queue items orphaned by a previous gateway restart
+    try:
+        _email_recovery_stats = await _agentmail_service.recover_abandoned_sessions()
+        if any(v > 0 for v in _email_recovery_stats.values()):
+            logger.warning(
+                "📧🔄 Email queue startup recovery: %s", _email_recovery_stats
+            )
+        else:
+            logger.info("📧🔄 No email queue items required startup recovery")
+    except Exception:
+        logger.exception("Email queue startup recovery failed (non-fatal)")
+
     try:
         recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
     except Exception:
