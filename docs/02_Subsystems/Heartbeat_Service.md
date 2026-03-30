@@ -229,9 +229,11 @@ Key contents:
 | File | Role |
 | --- | --- |
 | `src/universal_agent/heartbeat_service.py` | Main service: scheduling, execution, prompt composition, retry queue, post-write validation, synthetic fallback |
+| `src/universal_agent/services/dispatch_service.py` | Core dispatch functions: `dispatch_immediate()`, `dispatch_on_approval()`, `dispatch_scheduled_due()`, `dispatch_sweep()` — all dispatch paths enrich tasks with Simone-first routing metadata |
+| `src/universal_agent/services/todo_dispatch_service.py` | ToDo Dispatch Service: session-based dispatch orchestration (decoupled from heartbeat as of 2026-03-29); manages wake signals and scheduler loop for claimed task execution |
 | `src/universal_agent/utils/heartbeat_findings_schema.py` | `HeartbeatFindings` + `HeartbeatFinding` Pydantic models with permissive defaults and normalizers |
 | `src/universal_agent/utils/json_utils.py` | `extract_json_payload()`: 5-layer JSON repair (json.loads → json_repair → regex extraction → Pydantic validation) |
-| `src/universal_agent/gateway_server.py` | `_heartbeat_findings_from_artifacts()`: reads + repairs + classifies findings; `_emit_heartbeat_event()`: mediation dispatch |
+| `src/universal_agent/gateway_server.py` | `_heartbeat_findings_from_artifacts()`: reads + repairs + classifies findings; `_emit_heartbeat_event()`: mediation dispatch; registers sessions with ToDoDispatchService |
 | `src/universal_agent/heartbeat_mediation.py` | `sanitize_heartbeat_recommendation_text()`: rewrite stale provider-specific language in mediation output |
 | `src/universal_agent/process_heartbeat.py` | OS-level liveness writer (daemon thread, separate from this service) |
 | `src/universal_agent/hooks_service.py` | Hook completion handling for Simone heartbeat investigations |
