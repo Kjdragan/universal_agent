@@ -47,3 +47,38 @@ def test_todo_execution_complete_without_email_still_fails():
 
     assert result["passed"] is False
     assert result["missing"][0]["requirement"] == "email_send"
+
+
+def test_todo_execution_vp_dispatch_without_manual_delegate_requests_auto_delegate():
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Create a comprehensive report and email it to me."),
+        run_kind="todo_execution",
+    )
+    tracker.record_tool_call(
+        "mcp__internal__vp_dispatch_mission",
+        tool_input={"vp_id": "vp.general.primary", "objective": "Handle task email:1"},
+    )
+    tracker.record_tool_result(
+        "mcp__internal__vp_dispatch_mission",
+        tool_input={"vp_id": "vp.general.primary", "objective": "Handle task email:1"},
+        tool_result='{"ok": true, "mission_id": "mission-123", "vp_id": "vp.general.primary"}',
+    )
+
+    result = tracker.evaluate()
+
+    assert result["passed"] is True
+    assert result["stage_status"] == "auto_delegate"
+    assert result["terminal"] is False
+    assert result["observed"]["successful_vp_dispatches"][0]["mission_id"] == "mission-123"
+
+
+def test_todo_execution_without_lifecycle_mutation_fails():
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Create a comprehensive report and email it to me."),
+        run_kind="todo_execution",
+    )
+
+    result = tracker.evaluate()
+
+    assert result["passed"] is False
+    assert result["missing"][0]["requirement"] == "lifecycle_mutation"

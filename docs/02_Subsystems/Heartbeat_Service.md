@@ -258,6 +258,8 @@ This split prevents run-log/transcript cross-talk between heartbeat supervision 
 | `memory/HEARTBEAT.md` | Agent-facing operating instructions and active monitors |
 | `src/universal_agent/main.py` | Bootstraps the service during agent initialization |
 
+Heartbeat is not a fallback executor for trusted email work. If the ToDo runtime is unavailable, the task remains queued and visible to operators; heartbeat must not absorb that mission path.
+
 ## 10. Related Documentation
 
 | Document | Scope |

@@ -5980,6 +5980,188 @@ def _finish_session_run(
     )
 
 
+def _todo_claimed_task_snapshots(
+    conn: sqlite3.Connection,
+    *,
+    task_ids: list[str],
+) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
+    for task_id in task_ids:
+        item = task_hub.get_item(conn, task_id)
+        if not item:
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+        active_assignment = conn.execute(
+            """
+            SELECT assignment_id, state, started_at, provider_session_id
+            FROM task_hub_assignments
+            WHERE task_id = ?
+              AND state IN ('seized', 'running')
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        snapshots.append(
+            {
+                "task_id": task_id,
+                "item": item,
+                "status": str(item.get("status") or "").strip().lower(),
+                "seizure_state": str(item.get("seizure_state") or "").strip().lower(),
+                "active_assignment_id": str(dispatch_meta.get("active_assignment_id") or "").strip(),
+                "active_assignment": dict(active_assignment) if active_assignment else None,
+            }
+        )
+    return snapshots
+
+
+def _todo_task_has_durable_lifecycle(snapshot: dict[str, Any]) -> bool:
+    status = str(snapshot.get("status") or "").strip().lower()
+    seizure_state = str(snapshot.get("seizure_state") or "").strip().lower()
+    active_assignment_id = str(snapshot.get("active_assignment_id") or "").strip()
+    active_assignment = snapshot.get("active_assignment")
+    return (
+        status != task_hub.TASK_STATUS_IN_PROGRESS
+        or seizure_state != "seized"
+        or (not active_assignment_id and not active_assignment)
+    )
+
+
+def _match_auto_delegate_targets(
+    *,
+    unresolved_snapshots: list[dict[str, Any]],
+    successful_dispatches: list[dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    if not unresolved_snapshots or not successful_dispatches:
+        return []
+
+    unresolved_ids = [str(snapshot.get("task_id") or "").strip() for snapshot in unresolved_snapshots]
+    matches: list[tuple[str, dict[str, Any]]] = []
+    used_task_ids: set[str] = set()
+
+    for dispatch in successful_dispatches:
+        objective = str(dispatch.get("objective") or "")
+        matched_task_ids = [task_id for task_id in unresolved_ids if task_id and task_id in objective]
+        if len(matched_task_ids) == 1 and matched_task_ids[0] not in used_task_ids:
+            used_task_ids.add(matched_task_ids[0])
+            matches.append((matched_task_ids[0], dispatch))
+
+    if matches:
+        return matches
+
+    if len(unresolved_snapshots) == 1 and len(successful_dispatches) == 1:
+        return [(unresolved_ids[0], successful_dispatches[0])]
+
+    return []
+
+
+def _enforce_todo_execution_lifecycle(
+    *,
+    session: GatewaySession,
+    request: GatewayRequest,
+    mission_tracker: MissionGuardrailTracker,
+    goal_satisfaction: dict[str, Any],
+) -> dict[str, Any]:
+    request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    claimed_task_ids = [
+        str(task_id).strip()
+        for task_id in (request_metadata.get("claimed_task_ids") or [])
+        if str(task_id).strip()
+    ]
+    claimed_assignment_ids = [
+        str(assignment_id).strip()
+        for assignment_id in (request_metadata.get("claimed_assignment_ids") or [])
+        if str(assignment_id).strip()
+    ]
+    if not claimed_task_ids:
+        return goal_satisfaction
+
+    from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+    with connect_runtime_db(get_activity_db_path()) as conn:
+        snapshots = _todo_claimed_task_snapshots(conn, task_ids=claimed_task_ids)
+        unresolved = [snapshot for snapshot in snapshots if not _todo_task_has_durable_lifecycle(snapshot)]
+
+        if unresolved and mission_tracker.successful_vp_dispatches:
+            auto_delegate_matches = _match_auto_delegate_targets(
+                unresolved_snapshots=unresolved,
+                successful_dispatches=mission_tracker.successful_vp_dispatches,
+            )
+            for task_id, dispatch in auto_delegate_matches:
+                mission_id = str(dispatch.get("mission_id") or "").strip()
+                vp_id = str(dispatch.get("vp_id") or "").strip() or "vp.general.primary"
+                if not mission_id:
+                    continue
+                task_hub.perform_task_action(
+                    conn,
+                    task_id=task_id,
+                    action="delegate",
+                    reason=vp_id,
+                    note=f"mission_id={mission_id} auto_linked_from_vp_dispatch",
+                    agent_id=f"todo:{session.session_id}",
+                )
+
+            snapshots = _todo_claimed_task_snapshots(conn, task_ids=claimed_task_ids)
+            unresolved = [snapshot for snapshot in snapshots if not _todo_task_has_durable_lifecycle(snapshot)]
+            if auto_delegate_matches and not unresolved:
+                goal_satisfaction = dict(goal_satisfaction)
+                goal_satisfaction["passed"] = True
+                goal_satisfaction["stage_status"] = "delegated"
+                goal_satisfaction["terminal"] = False
+                observed = dict(goal_satisfaction.get("observed") or {})
+                observed["auto_delegate_applied"] = True
+                observed["auto_delegate_task_ids"] = [task_id for task_id, _dispatch in auto_delegate_matches]
+                goal_satisfaction["observed"] = observed
+                _add_notification(
+                    kind="mission_delegated",
+                    title="Delegated To VP",
+                    message="A successful VP dispatch was automatically linked into Task Hub delegation.",
+                    session_id=session.session_id,
+                    severity="info",
+                    requires_action=False,
+                    metadata={
+                        "goal_satisfaction": goal_satisfaction,
+                        "auto_delegate_task_ids": observed["auto_delegate_task_ids"],
+                    },
+                )
+                return goal_satisfaction
+
+        if unresolved:
+            unresolved_assignment_ids = [
+                str((snapshot.get("active_assignment") or {}).get("assignment_id") or "").strip()
+                for snapshot in unresolved
+                if str((snapshot.get("active_assignment") or {}).get("assignment_id") or "").strip()
+            ]
+            fallback_assignment_ids = unresolved_assignment_ids or claimed_assignment_ids
+            if fallback_assignment_ids:
+                task_hub.finalize_assignments(
+                    conn,
+                    assignment_ids=fallback_assignment_ids,
+                    state="failed",
+                    result_summary="todo_execution_missing_lifecycle_mutation",
+                    reopen_in_progress=True,
+                    policy="todo",
+                )
+            goal_satisfaction = dict(goal_satisfaction)
+            goal_satisfaction["passed"] = False
+            goal_satisfaction["terminal"] = False
+            goal_satisfaction["stage_status"] = "invalid"
+            goal_satisfaction["missing"] = [
+                {
+                    "requirement": "lifecycle_mutation",
+                    "required": 1,
+                    "observed": 0,
+                    "message": "ToDo execution ended without a durable Task Hub lifecycle mutation.",
+                }
+            ]
+            observed = dict(goal_satisfaction.get("observed") or {})
+            observed["invalid_task_ids"] = [str(snapshot.get("task_id") or "") for snapshot in unresolved]
+            goal_satisfaction["observed"] = observed
+
+    return goal_satisfaction
+
+
 async def _run_gateway_session_request(
     *,
     session: GatewaySession,
@@ -5998,6 +6180,7 @@ async def _run_gateway_session_request(
     )
     saw_streaming_text = False
     tool_call_count = 0
+    tool_calls_by_id: dict[str, dict[str, Any]] = {}
     execution_duration_seconds = 0.0
     execution_start_ts = time.time()
     terminal_reason: Optional[str] = None
@@ -6035,10 +6218,37 @@ async def _run_gateway_session_request(
             if event.type == EventType.TOOL_CALL:
                 tool_call_count += 1
                 if isinstance(event.data, dict):
+                    tool_call_id = str(
+                        event.data.get("tool_use_id")
+                        or event.data.get("tool_call_id")
+                        or event.data.get("id")
+                        or ""
+                    ).strip()
+                    if tool_call_id:
+                        tool_calls_by_id[tool_call_id] = {
+                            "name": str(event.data.get("name") or ""),
+                            "input": event.data.get("input"),
+                        }
                     mission_tracker.record_tool_call(
                         str(event.data.get("name") or ""),
                         tool_input=event.data.get("input"),
                     )
+            elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
+                tool_result_id = str(
+                    event.data.get("tool_use_id")
+                    or event.data.get("tool_call_id")
+                    or event.data.get("id")
+                    or ""
+                ).strip()
+                tool_call = tool_calls_by_id.get(tool_result_id, {})
+                mission_tracker.record_tool_result(
+                    str(tool_call.get("name") or ""),
+                    tool_input=tool_call.get("input"),
+                    tool_result=event.data.get("content_raw")
+                    if event.data.get("content_raw") is not None
+                    else event.data.get("content_preview"),
+                    is_error=bool(event.data.get("is_error")),
+                )
             elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
                 execution_duration_seconds = float(
                     event.data.get("duration_seconds") or execution_duration_seconds
@@ -6101,6 +6311,13 @@ async def _run_gateway_session_request(
         if execution_duration_seconds <= 0:
             execution_duration_seconds = round(time.time() - execution_start_ts, 3)
         goal_satisfaction = mission_tracker.evaluate()
+        if request_run_kind == "todo_execution":
+            goal_satisfaction = _enforce_todo_execution_lifecycle(
+                session=session,
+                request=request,
+                mission_tracker=mission_tracker,
+                goal_satisfaction=goal_satisfaction,
+            )
         completion_summary = {
             "tool_calls": tool_call_count,
             "duration_seconds": execution_duration_seconds,
@@ -6130,17 +6347,22 @@ async def _run_gateway_session_request(
         if not bool(goal_satisfaction.get("passed")):
             missing_items = goal_satisfaction.get("missing")
             goal_message = "Mission requirements were not satisfied."
+            notification_kind = "assistance_needed"
+            notification_title = "Mission Guardrail Blocked Completion"
             if isinstance(missing_items, list) and missing_items:
                 first_missing = missing_items[0] if isinstance(missing_items[0], dict) else {}
                 missing_message = str(first_missing.get("message") or "").strip()
                 missing_requirement = str(first_missing.get("requirement") or "").strip()
+                if request_run_kind == "todo_execution" and missing_requirement == "lifecycle_mutation":
+                    notification_kind = "execution_missing_lifecycle_mutation"
+                    notification_title = "Execution Missing Lifecycle Mutation"
                 if missing_message:
                     goal_message = f"{goal_message} {missing_message}"
                 elif missing_requirement:
                     goal_message = f"{goal_message} Missing requirement: {missing_requirement}."
             _add_notification(
-                kind="assistance_needed",
-                title="Mission Guardrail Blocked Completion",
+                kind=notification_kind,
+                title=notification_title,
                 message=goal_message,
                 session_id=session_id,
                 severity="error",
@@ -12525,7 +12747,7 @@ async def lifespan(app: FastAPI):
                     int(_recovery_result.get("finalized") or 0),
                     int(_recovery_result.get("reopened") or 0),
                 )
-            if any(int(_reconciled.get(key) or 0) > 0 for key in ("reopened", "reviewed", "completion_flagged")):
+            if any(int(_reconciled.get(key) or 0) > 0 for key in ("reopened", "reviewed", "completion_flagged", "delegated_backfilled")):
                 logger.warning("Startup task lifecycle reconciliation: %s", _reconciled)
             _recovery_conn.close()
         except Exception as _recovery_exc:
@@ -18089,6 +18311,9 @@ def _execution_profile_for_session(session_id: str, *, workspace_dir: str = "") 
 
 def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
     try:
+        from universal_agent.services.email_task_bridge import ensure_email_task_schema
+
+        ensure_email_task_schema(conn)
         row = conn.execute(
             """
             SELECT thread_id, subject, sender_email, status, last_message_id, message_count,
@@ -18102,7 +18327,20 @@ def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> 
             (str(task_id or "").strip(),),
         ).fetchone()
     except Exception:
-        return None
+        try:
+            row = conn.execute(
+                """
+                SELECT thread_id, subject, sender_email, status, last_message_id, message_count,
+                       workflow_run_id, workflow_attempt_id, provider_session_id, created_at, updated_at
+                FROM email_task_mappings
+                WHERE task_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (str(task_id or "").strip(),),
+            ).fetchone()
+        except Exception:
+            return None
     if not row:
         return None
     return {
@@ -18115,7 +18353,7 @@ def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> 
         "workflow_run_id": str(row["workflow_run_id"] or ""),
         "workflow_attempt_id": str(row["workflow_attempt_id"] or ""),
         "provider_session_id": str(row["provider_session_id"] or ""),
-        "email_sent_at": str(row["email_sent_at"] or ""),
+        "email_sent_at": str((row["email_sent_at"] if "email_sent_at" in row.keys() else "") or ""),
         "created_at": str(row["created_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
     }

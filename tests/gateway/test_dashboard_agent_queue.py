@@ -383,6 +383,71 @@ async def test_task_history_includes_forensics(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_task_history_tolerates_email_mapping_schema_without_email_sent_at(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_hub.ensure_schema(conn)
+            conn.execute(
+                """
+                CREATE TABLE email_task_mappings (
+                    thread_id TEXT,
+                    task_id TEXT,
+                    subject TEXT,
+                    sender_email TEXT,
+                    status TEXT,
+                    last_message_id TEXT,
+                    message_count INTEGER,
+                    workflow_run_id TEXT,
+                    workflow_attempt_id TEXT,
+                    provider_session_id TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+            _seed_task(
+                conn,
+                task_id="email:old-schema",
+                title="Old schema task",
+                status="open",
+            )
+            conn.execute(
+                """
+                INSERT INTO email_task_mappings (
+                    thread_id, task_id, subject, sender_email, status, last_message_id, message_count,
+                    workflow_run_id, workflow_attempt_id, provider_session_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "thread-old",
+                    "email:old-schema",
+                    "Subject",
+                    "kevin@example.com",
+                    "active",
+                    "msg-old",
+                    1,
+                    "run-old",
+                    "attempt-old",
+                    "daemon_simone_todo",
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    response = await gateway_server.dashboard_todolist_task_history("email:old-schema", limit=20)
+
+    assert response["status"] == "ok"
+    assert response["email_mapping"]["thread_id"] == "thread-old"
+    assert response["email_mapping"]["email_sent_at"] == ""
+
+
+@pytest.mark.asyncio
 async def test_agent_queue_limit_clamped(monkeypatch, tmp_path):
     """Limit is clamped to max 100."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))

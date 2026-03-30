@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from typing import Any
 
@@ -51,6 +52,7 @@ class MissionGuardrailTracker:
         self.task_actions: list[str] = []
         self.email_send_count = 0
         self.gmail_send_count = 0
+        self.successful_vp_dispatches: list[dict[str, Any]] = []
 
     def record_tool_call(self, tool_name: str, *, tool_input: Any = None) -> None:
         name = str(tool_name or "").strip()
@@ -71,6 +73,40 @@ class MissionGuardrailTracker:
                 self.email_send_count += 1
             if _is_gmail_send_tool(nested_lower):
                 self.gmail_send_count += 1
+
+    def record_tool_result(
+        self,
+        tool_name: str,
+        *,
+        tool_input: Any = None,
+        tool_result: Any = None,
+        is_error: bool = False,
+    ) -> None:
+        low = str(tool_name or "").strip().lower()
+        if not low or bool(is_error):
+            return
+        if "vp_dispatch_mission" not in low:
+            return
+
+        payload = _parse_tool_result_payload(tool_result)
+        mission_id = str(payload.get("mission_id") or "").strip()
+        if not mission_id or not bool(payload.get("ok", True)):
+            return
+
+        vp_id = str(payload.get("vp_id") or "").strip()
+        objective = ""
+        if isinstance(tool_input, dict):
+            objective = str(tool_input.get("objective") or "").strip()
+            if not vp_id:
+                vp_id = str(tool_input.get("vp_id") or "").strip()
+
+        self.successful_vp_dispatches.append(
+            {
+                "mission_id": mission_id,
+                "vp_id": vp_id,
+                "objective": objective,
+            }
+        )
 
     def evaluate(self) -> dict[str, Any]:
         if self.run_kind == "email_triage":
@@ -100,6 +136,9 @@ class MissionGuardrailTracker:
                     if "delegate" in lifecycle_actions:
                         stage_status = "delegated"
                         terminal = False
+                    elif self.successful_vp_dispatches:
+                        stage_status = "auto_delegate"
+                        terminal = False
                     elif any(action in lifecycle_actions for action in ("review", "block", "park")):
                         stage_status = "awaiting_final_delivery"
                         terminal = False
@@ -113,8 +152,14 @@ class MissionGuardrailTracker:
                             }
                         )
                     else:
-                        stage_status = "in_progress"
-                        terminal = False
+                        missing.append(
+                            {
+                                "requirement": "lifecycle_mutation",
+                                "required": 1,
+                                "observed": 0,
+                                "message": "ToDo execution ended without a durable Task Hub lifecycle mutation.",
+                            }
+                        )
                 else:
                     missing.append(
                         {
@@ -124,9 +169,22 @@ class MissionGuardrailTracker:
                             "message": "Required email delivery steps were not completed.",
                         }
                     )
-        elif self.run_kind == "todo_execution" and "delegate" in lifecycle_actions:
-            stage_status = "delegated"
-            terminal = False
+        elif self.run_kind == "todo_execution":
+            if "delegate" in lifecycle_actions:
+                stage_status = "delegated"
+                terminal = False
+            elif self.successful_vp_dispatches:
+                stage_status = "auto_delegate"
+                terminal = False
+            elif not any(action in lifecycle_actions for action in ("review", "complete", "block", "park", "approve")):
+                missing.append(
+                    {
+                        "requirement": "lifecycle_mutation",
+                        "required": 1,
+                        "observed": 0,
+                        "message": "ToDo execution ended without a durable Task Hub lifecycle mutation.",
+                    }
+                )
 
         passed = len(missing) == 0
         return self._result(
@@ -156,6 +214,7 @@ class MissionGuardrailTracker:
                 "tool_calls_total": len(self.tool_names),
                 "tool_names": self.tool_names[-100:],
                 "task_actions": self.task_actions[-100:],
+                "successful_vp_dispatches": self.successful_vp_dispatches[-50:],
                 "research_pipeline_adherence": research_pipeline_adherence,
             },
             "missing": missing,
@@ -231,6 +290,32 @@ def _extract_task_hub_actions(tool_name_lower: str, tool_input: Any) -> list[str
         return []
     action = str(tool_input.get("action") or "").strip().lower()
     return [action] if action else []
+
+
+def _parse_tool_result_payload(tool_result: Any) -> dict[str, Any]:
+    if isinstance(tool_result, dict):
+        if isinstance(tool_result.get("content"), list):
+            for block in tool_result.get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                text = str(block.get("text") or "").strip()
+                parsed = _parse_tool_result_payload(text)
+                if parsed:
+                    return parsed
+        return tool_result
+
+    text = str(tool_result or "").strip()
+    if not text:
+        return {}
+    if text.startswith("error:"):
+        return {"ok": False, "error": text}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    return {}
 
 
 def _evaluate_research_pipeline_adherence(tool_flow: list[str]) -> dict[str, Any]:

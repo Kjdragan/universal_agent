@@ -1118,6 +1118,51 @@ def _session_id_from_agent_id(agent_id: Any) -> str:
     return ""
 
 
+def _resolve_dispatch_metadata(
+    metadata: dict[str, Any],
+    *,
+    assignment_state: str,
+    now_iso: str,
+) -> dict[str, Any]:
+    """Roll active dispatch lineage into the last-* fields and clear ownership."""
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    dispatch_meta.update(
+        {
+            "last_assignment_state": assignment_state,
+            "last_assignment_ended_at": now_iso,
+            "last_provider_session_id": dispatch_meta.get("active_provider_session_id"),
+            "last_workspace_dir": dispatch_meta.get("active_workspace_dir"),
+            "last_workflow_run_id": dispatch_meta.get("active_workflow_run_id"),
+            "last_workflow_attempt_id": dispatch_meta.get("active_workflow_attempt_id"),
+        }
+    )
+    dispatch_meta.pop("active_assignment_id", None)
+    dispatch_meta.pop("active_agent_id", None)
+    dispatch_meta.pop("active_provider_session_id", None)
+    dispatch_meta.pop("active_workspace_dir", None)
+    dispatch_meta.pop("active_workflow_run_id", None)
+    dispatch_meta.pop("active_workflow_attempt_id", None)
+    metadata["dispatch"] = dispatch_meta
+    return metadata
+
+
+def _complete_active_assignments_for_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    result_summary: str,
+    ended_at: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE task_hub_assignments
+        SET state='completed', ended_at=?, result_summary=?
+        WHERE task_id=? AND state IN ('seized', 'running')
+        """,
+        (ended_at, result_summary.strip() or None, task_id),
+    )
+
+
 def list_due_scheduled_tasks(
     conn: sqlite3.Connection,
     *,
@@ -1330,6 +1375,7 @@ def reconcile_task_lifecycle(
     reopened = 0
     reviewed = 0
     completion_flagged = 0
+    delegated_backfilled = 0
 
     in_progress_rows = conn.execute(
         """
@@ -1353,7 +1399,7 @@ def reconcile_task_lifecycle(
         if active_assignment_id:
             assignment_row = conn.execute(
                 """
-                SELECT state
+                SELECT assignment_id, state, started_at, provider_session_id
                 FROM task_hub_assignments
                 WHERE assignment_id = ?
                 LIMIT 1
@@ -1363,7 +1409,7 @@ def reconcile_task_lifecycle(
         else:
             assignment_row = conn.execute(
                 """
-                SELECT assignment_id, state
+                SELECT assignment_id, state, started_at, provider_session_id
                 FROM task_hub_assignments
                 WHERE task_id = ?
                   AND state IN ('seized', 'running')
@@ -1373,9 +1419,80 @@ def reconcile_task_lifecycle(
                 (task_id,),
             ).fetchone()
 
-        if assignment_row and str(assignment_row["state"] or "").strip().lower() in {"seized", "running"}:
+        assignment_live = bool(
+            assignment_row
+            and str(assignment_row["state"] or "").strip().lower() in {"seized", "running"}
+        )
+        assignment_session_id = str(
+            active_session_id or (assignment_row["provider_session_id"] if assignment_row else "") or ""
+        ).strip()
+        if assignment_live and assignment_session_id in running_session_ids:
             continue
+        if assignment_live:
+            mission_id = ""
+            vp_id = ""
+            assignment_started_at = str(assignment_row["started_at"] or "").strip()
+            existing_delegation = metadata.get("delegation") if isinstance(metadata.get("delegation"), dict) else {}
+            existing_mission_id = str(existing_delegation.get("mission_id") or "").strip()
+            if not existing_mission_id:
+                try:
+                    tables_row = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='vp_missions' LIMIT 1"
+                    ).fetchone()
+                    if tables_row and assignment_session_id:
+                        candidate_rows = conn.execute(
+                            """
+                            SELECT mission_id, vp_id, payload_json, created_at
+                            FROM vp_missions
+                            WHERE created_at >= ?
+                            ORDER BY created_at DESC
+                            LIMIT 20
+                            """,
+                            (assignment_started_at or "1970-01-01T00:00:00+00:00",),
+                        ).fetchall()
+                        matches: list[tuple[str, str]] = []
+                        for candidate_row in candidate_rows:
+                            payload = _json_loads_obj(candidate_row["payload_json"], default={})
+                            if str(payload.get("source_session_id") or "").strip() != assignment_session_id:
+                                continue
+                            matches.append(
+                                (
+                                    str(candidate_row["mission_id"] or "").strip(),
+                                    str(candidate_row["vp_id"] or "").strip() or "vp.general.primary",
+                                )
+                            )
+                        if len(matches) == 1:
+                            mission_id, vp_id = matches[0]
+                except Exception:
+                    logger.exception("Failed reconciling VP mission linkage for task %s", task_id)
 
+            if mission_id:
+                perform_task_action(
+                    conn,
+                    task_id=task_id,
+                    action="delegate",
+                    reason=vp_id,
+                    note=f"mission_id={mission_id} reconciled_from_vp_mission",
+                    agent_id=f"todo:{assignment_session_id}" if assignment_session_id else "todo_recovery",
+                )
+                delegated_backfilled += 1
+                continue
+
+            conn.execute(
+                """
+                UPDATE task_hub_assignments
+                SET state='failed', ended_at=?, result_summary=?
+                WHERE assignment_id=?
+                """,
+                (now_iso, "reconciled_orphaned_assignment", str(assignment_row["assignment_id"] or "")),
+            )
+
+        metadata = _resolve_dispatch_metadata(
+            metadata,
+            assignment_state="failed" if assignment_live else "reconciled",
+            now_iso=now_iso,
+        )
+        dispatch_meta = dict(metadata.get("dispatch") or {})
         dispatch_meta["completion_unverified"] = False
         dispatch_meta["reconciled_at"] = now_iso
         metadata["dispatch"] = dispatch_meta
@@ -1441,6 +1558,7 @@ def reconcile_task_lifecycle(
         "reopened": reopened,
         "reviewed": reviewed,
         "completion_flagged": completion_flagged,
+        "delegated_backfilled": delegated_backfilled,
     }
 
 
@@ -2417,16 +2535,17 @@ def perform_task_action(
         raise ValueError("task not found")
 
     reason_text = str(reason or note or "").strip()
+    now_iso = _now_iso()
 
     if action_norm == "seize":
         assignment_id = f"asg_{uuid.uuid4().hex[:16]}"
         conn.execute(
             "INSERT INTO task_hub_assignments (assignment_id, task_id, agent_id, state, started_at) VALUES (?, ?, ?, ?, ?)",
-            (assignment_id, task_id, agent_id, "seized", _now_iso()),
+            (assignment_id, task_id, agent_id, "seized", now_iso),
         )
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_IN_PROGRESS, "seized", _now_iso(), task_id),
+            (TASK_STATUS_IN_PROGRESS, "seized", now_iso, task_id),
         )
         _record_evaluation(
             conn,
@@ -2443,7 +2562,7 @@ def perform_task_action(
         metadata["last_reject_reason"] = reason_text
         conn.execute(
             "UPDATE task_hub_items SET seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            ("rejected", _json_dumps(metadata), _now_iso(), task_id),
+            ("rejected", _json_dumps(metadata), now_iso, task_id),
         )
         _record_evaluation(
             conn,
@@ -2456,41 +2575,47 @@ def perform_task_action(
             judge_payload={"source": "manual_action"},
         )
     elif action_norm == "block":
-        conn.execute("UPDATE task_hub_items SET status=?, updated_at=? WHERE task_id=?", (TASK_STATUS_BLOCKED, _now_iso(), task_id))
-    elif action_norm == "unblock":
-        conn.execute("UPDATE task_hub_items SET status=?, updated_at=? WHERE task_id=?", (TASK_STATUS_OPEN, _now_iso(), task_id))
-    elif action_norm == "review":
-        conn.execute("UPDATE task_hub_items SET status=?, updated_at=? WHERE task_id=?", (TASK_STATUS_REVIEW, _now_iso(), task_id))
-    elif action_norm == "complete":
-        _completion_token = f"api_{uuid.uuid4().hex[:12]}_{_now_iso()}"
+        metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "blocked", ended_at=now_iso)
         conn.execute(
-            "UPDATE task_hub_items SET status=?, seizure_state=?, completion_token=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_COMPLETED, "completed", _completion_token, _now_iso(), task_id),
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_BLOCKED, "unseized", _json_dumps(metadata), now_iso, task_id),
         )
+    elif action_norm == "unblock":
+        conn.execute("UPDATE task_hub_items SET status=?, updated_at=? WHERE task_id=?", (TASK_STATUS_OPEN, now_iso, task_id))
+    elif action_norm == "review":
+        metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "needs_review", ended_at=now_iso)
         conn.execute(
-            """
-            UPDATE task_hub_assignments
-            SET state='completed', ended_at=?, result_summary=?
-            WHERE task_id=? AND state IN ('seized', 'running')
-            """,
-            (_now_iso(), reason_text or "completed", task_id),
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+    elif action_norm == "complete":
+        metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
+        _completion_token = f"api_{uuid.uuid4().hex[:12]}_{now_iso}"
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "completed", ended_at=now_iso)
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_COMPLETED, "completed", _completion_token, _json_dumps(metadata), now_iso, task_id),
         )
     elif action_norm == "park":
+        metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "parked", ended_at=now_iso)
         conn.execute(
-            "UPDATE task_hub_items SET status=?, stale_state=?, seizure_state=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_PARKED, "parked_manual", "unseized", _now_iso(), task_id),
+            "UPDATE task_hub_items SET status=?, stale_state=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_PARKED, "parked_manual", "unseized", _json_dumps(metadata), now_iso, task_id),
         )
     elif action_norm == "snooze":
         metadata = dict(item.get("metadata") or {})
         metadata["snoozed_note"] = reason_text
         conn.execute(
             "UPDATE task_hub_items SET metadata_json=?, updated_at=? WHERE task_id=?",
-            (_json_dumps(metadata), _now_iso(), task_id),
+            (_json_dumps(metadata), now_iso, task_id),
         )
     elif action_norm == "delegate":
         # Simone delegates this task to a VP agent.  reason_text should
         # contain the target agent slug (e.g. "vp.coder.primary").
-        metadata = dict(item.get("metadata") or {})
+        metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         delegate_meta = dict(metadata.get("delegation") or {})
         note_text = str(note or "").strip()
         # Extract mission_id from note if present (format: "mission_id=<id>")
@@ -2503,14 +2628,20 @@ def perform_task_action(
         delegate_meta.update({
             "delegate_target": reason_text or "vp.general.primary",
             "delegate_reason": note_text or "simone_triage",
-            "delegated_at": _now_iso(),
+            "delegated_at": now_iso,
         })
         if _mission_id_from_note:
             delegate_meta["mission_id"] = _mission_id_from_note
         metadata["delegation"] = delegate_meta
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=reason_text or f"delegated:{delegate_meta.get('mission_id') or 'vp'}",
+            ended_at=now_iso,
+        )
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_DELEGATED, "delegated", _json_dumps(metadata), _now_iso(), task_id),
+            (TASK_STATUS_DELEGATED, "delegated", _json_dumps(metadata), now_iso, task_id),
         )
         _record_evaluation(
             conn,
@@ -2526,15 +2657,16 @@ def perform_task_action(
     elif action_norm == "approve":
         # Simone approves a VP-completed task after reviewing deliverables.
         # Transitions pending_review → completed with sign-off metadata.
-        metadata = dict(item.get("metadata") or {})
+        metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         delegation = dict(metadata.get("delegation") or {})
-        delegation["approved_at"] = _now_iso()
+        delegation["approved_at"] = now_iso
         delegation["approved_by"] = agent_id or "simone"
         delegation["approval_note"] = str(note or "").strip() or "approved_by_simone"
         metadata["delegation"] = delegation
+        _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "approved", ended_at=now_iso)
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_COMPLETED, "completed", _json_dumps(metadata), _now_iso(), task_id),
+            (TASK_STATUS_COMPLETED, "completed", _json_dumps(metadata), now_iso, task_id),
         )
         _record_evaluation(
             conn,

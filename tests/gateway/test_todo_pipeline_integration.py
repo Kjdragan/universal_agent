@@ -10,7 +10,8 @@ import pytest
 
 from universal_agent import gateway_server
 from universal_agent import task_hub
-from universal_agent.gateway import GatewaySession
+from universal_agent.gateway import GatewayRequest, GatewaySession
+from universal_agent.mission_guardrails import MissionGuardrailTracker, build_mission_contract
 from universal_agent.services.todo_dispatch_service import ToDoDispatchService
 
 
@@ -293,3 +294,121 @@ async def test_todolist_overview_flags_sleeping_dispatch_targets(monkeypatch):
     assert response["todo_dispatch"]["last_wake_requested_session_id"] == "vp.general.primary"
     assert response["todo_dispatch"]["last_wake_registered"] is False
     assert response["todo_dispatch"]["sleeping_session_warning"] is True
+
+
+def test_todo_execution_lifecycle_auto_links_vp_dispatch(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path)
+
+    with _db_connect(db_path) as conn:
+        _seed_email_task(conn, task_id="email:auto-delegate", title="Mythos report")
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id="todo:daemon_simone_todo",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_id = history[0]["assignment_id"]
+
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Create a comprehensive report and email it to me."),
+        run_kind="todo_execution",
+    )
+    tracker.record_tool_call(
+        "mcp__internal__vp_dispatch_mission",
+        tool_input={
+            "vp_id": "vp.general.primary",
+            "objective": "Handle task email:auto-delegate and produce the full report",
+        },
+    )
+    tracker.record_tool_result(
+        "mcp__internal__vp_dispatch_mission",
+        tool_input={
+            "vp_id": "vp.general.primary",
+            "objective": "Handle task email:auto-delegate and produce the full report",
+        },
+        tool_result='{"ok": true, "mission_id": "mission-auto", "vp_id": "vp.general.primary"}',
+    )
+
+    result = gateway_server._enforce_todo_execution_lifecycle(
+        session=session,
+        request=GatewayRequest(
+            user_input="Create a comprehensive report and email it to me.",
+            metadata={
+                "source": "todo_dispatcher",
+                "run_kind": "todo_execution",
+                "claimed_task_ids": ["email:auto-delegate"],
+                "claimed_assignment_ids": [assignment_id],
+            },
+        ),
+        mission_tracker=tracker,
+        goal_satisfaction=tracker.evaluate(),
+    )
+
+    with _db_connect(db_path) as conn:
+        item = task_hub.get_item(conn, "email:auto-delegate")
+        assignment = conn.execute(
+            "SELECT state, ended_at FROM task_hub_assignments WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+
+    assert result["passed"] is True
+    assert result["stage_status"] == "delegated"
+    assert result["observed"]["auto_delegate_applied"] is True
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_DELEGATED
+    assert item["metadata"]["delegation"]["mission_id"] == "mission-auto"
+    assert assignment["state"] == "completed"
+    assert assignment["ended_at"]
+
+
+def test_todo_execution_lifecycle_reopens_task_when_no_mutation(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path)
+
+    with _db_connect(db_path) as conn:
+        _seed_email_task(conn, task_id="email:no-mutation", title="Smoke task")
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id="todo:daemon_simone_todo",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_id = history[0]["assignment_id"]
+
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Create a comprehensive report and email it to me."),
+        run_kind="todo_execution",
+    )
+
+    result = gateway_server._enforce_todo_execution_lifecycle(
+        session=session,
+        request=GatewayRequest(
+            user_input="Create a comprehensive report and email it to me.",
+            metadata={
+                "source": "todo_dispatcher",
+                "run_kind": "todo_execution",
+                "claimed_task_ids": ["email:no-mutation"],
+                "claimed_assignment_ids": [assignment_id],
+            },
+        ),
+        mission_tracker=tracker,
+        goal_satisfaction=tracker.evaluate(),
+    )
+
+    with _db_connect(db_path) as conn:
+        item = task_hub.get_item(conn, "email:no-mutation")
+        assignment = conn.execute(
+            "SELECT state, ended_at, result_summary FROM task_hub_assignments WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+
+    assert result["passed"] is False
+    assert result["missing"][0]["requirement"] == "lifecycle_mutation"
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_OPEN
+    assert item["seizure_state"] == "unseized"
+    assert assignment["state"] == "failed"
+    assert assignment["ended_at"]

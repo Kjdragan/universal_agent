@@ -166,3 +166,97 @@ def test_release_stale_assignments_accepts_multiple_prefixes():
     item = task_hub.get_item(conn, "email:stale")
     assert result["finalized"] == 1
     assert item["status"] == task_hub.TASK_STATUS_OPEN
+
+
+def test_delegate_action_closes_active_assignment_and_clears_dispatch():
+    conn = _conn()
+    _insert_task(
+        conn,
+        task_id="email:delegate-me",
+        status=task_hub.TASK_STATUS_IN_PROGRESS,
+        metadata_json='{"dispatch":{"active_assignment_id":"asg-delegate","active_provider_session_id":"daemon_simone_todo","active_workspace_dir":"/tmp/ws"}}',
+        seizure_state="seized",
+    )
+    conn.execute(
+        """
+        INSERT INTO task_hub_assignments (
+            assignment_id, task_id, agent_id, provider_session_id, state, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("asg-delegate", "email:delegate-me", "todo:daemon_simone_todo", "daemon_simone_todo", "running", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+    updated = task_hub.perform_task_action(
+        conn,
+        task_id="email:delegate-me",
+        action="delegate",
+        reason="vp.general.primary",
+        note="mission_id=mission-123",
+        agent_id="todo:daemon_simone_todo",
+    )
+
+    assignment = conn.execute(
+        "SELECT state, ended_at, result_summary FROM task_hub_assignments WHERE assignment_id = ?",
+        ("asg-delegate",),
+    ).fetchone()
+    assert updated["status"] == task_hub.TASK_STATUS_DELEGATED
+    assert updated["metadata"]["delegation"]["mission_id"] == "mission-123"
+    assert updated["metadata"]["dispatch"].get("active_assignment_id") in {None, ""}
+    assert assignment["state"] == "completed"
+    assert assignment["ended_at"]
+
+
+def test_reconcile_task_lifecycle_backfills_delegation_from_vp_mission():
+    conn = _conn()
+    _insert_task(
+        conn,
+        task_id="email:backfill",
+        status=task_hub.TASK_STATUS_IN_PROGRESS,
+        metadata_json='{"dispatch":{"active_assignment_id":"asg-backfill","active_provider_session_id":"daemon_simone_todo"}}',
+        seizure_state="seized",
+    )
+    conn.execute(
+        """
+        INSERT INTO task_hub_assignments (
+            assignment_id, task_id, agent_id, provider_session_id, state, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("asg-backfill", "email:backfill", "todo:daemon_simone_todo", "daemon_simone_todo", "running", "2026-03-30T20:27:48+00:00"),
+    )
+    conn.execute(
+        """
+        CREATE TABLE vp_missions (
+            mission_id TEXT,
+            vp_id TEXT,
+            payload_json TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO vp_missions (mission_id, vp_id, payload_json, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            "mission-456",
+            "vp.general.primary",
+            '{"source_session_id":"daemon_simone_todo"}',
+            "2026-03-30T20:27:49+00:00",
+        ),
+    )
+    conn.commit()
+
+    result = task_hub.reconcile_task_lifecycle(conn, running_session_ids=set())
+    item = task_hub.get_item(conn, "email:backfill")
+    assignment = conn.execute(
+        "SELECT state, ended_at FROM task_hub_assignments WHERE assignment_id = ?",
+        ("asg-backfill",),
+    ).fetchone()
+
+    assert result["delegated_backfilled"] == 1
+    assert item["status"] == task_hub.TASK_STATUS_DELEGATED
+    assert item["metadata"]["delegation"]["mission_id"] == "mission-456"
+    assert assignment["state"] == "completed"
+    assert assignment["ended_at"]

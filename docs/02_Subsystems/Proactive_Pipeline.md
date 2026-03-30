@@ -5,7 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-30 — trusted AgentMail inbound is now triage-only at the hook layer, Task Hub / ToDo is the sole canonical execution path for email work, Simone is split into role-isolated heartbeat and ToDo runtimes, and delivery-mode heuristics now select between fast summary, standard report, and enhanced report behavior.
+> **Last updated:** 2026-03-30 — trusted AgentMail inbound is now triage-only at the hook layer, Task Hub / ToDo is the sole canonical execution path for email work, Simone is split into role-isolated heartbeat and ToDo runtimes, delivery-mode heuristics now select between fast summary, standard report, and enhanced report behavior, and `todo_execution` now requires a durable Task Hub lifecycle mutation or a server-side auto-linked VP delegation.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
@@ -661,6 +661,8 @@ async def task_hub_task_action_wrapper(args):
 | `unblock` | Remove blocked status |
 | `delegate` | Assign to VP (reason=vp_id, note=mission_id) |
 | `approve` | Sign off on VP-completed task |
+
+**Enforcement rule**: a `todo_execution` turn is only considered valid if it ends with one of these lifecycle mutations. If Simone successfully dispatches a VP mission but forgets `task_hub_task_action(action='delegate', ...)`, the gateway auto-links the returned `mission_id` into Task Hub delegation. Pure prose like “mission queued” with no durable mutation is invalid and the task is reopened or routed to review instead of being left `in_progress` / `seized`.
 
 ### task_hub_decompose
 
