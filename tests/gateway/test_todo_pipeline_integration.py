@@ -94,11 +94,14 @@ def _insert_email_mapping(conn: sqlite3.Connection, *, task_id: str, provider_se
 
 def _wire_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     db_path = tmp_path / "activity_state.db"
+    runtime_db_path = tmp_path / "runtime_state.db"
 
-    def _connect_runtime_db() -> sqlite3.Connection:
-        return _db_connect(db_path)
+    def _connect_runtime_db(db_path_arg: str | None = None) -> sqlite3.Connection:
+        resolved = Path(db_path_arg) if db_path_arg else runtime_db_path
+        return _db_connect(resolved)
 
     monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", _connect_runtime_db)
+    monkeypatch.setattr("universal_agent.durable.db.get_activity_db_path", lambda: str(db_path))
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(db_path))
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setattr(
@@ -167,6 +170,11 @@ async def test_todo_pipeline_completed_without_explicit_disposition_flows_to_rev
         assert item["seizure_state"] == "seized"
         assert history["assignments"][0]["agent_id"] == "todo:daemon_simone"
         assignment_id = history["assignments"][0]["assignment_id"]
+    with _db_connect(tmp_path / "runtime_state.db") as runtime_conn:
+        runtime_tables = runtime_conn.execute(
+            "SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='task_hub_items'"
+        ).fetchone()
+        assert int(runtime_tables["c"]) == 0
 
     with _db_connect(db_path) as conn:
         result = task_hub.finalize_assignments(

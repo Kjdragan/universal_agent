@@ -113,13 +113,14 @@ class ToDoDispatchService:
                 await asyncio.sleep(5)
 
     async def _process_session(self, session: GatewaySession):
-        from universal_agent.durable.db import connect_runtime_db
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
         from universal_agent.services.dispatch_service import dispatch_sweep
         from universal_agent.services.capacity_governor import CapacityGovernor, capacity_snapshot
         from universal_agent import task_hub
         import traceback
 
         claimed_assignment_ids: list[str] = []
+        activity_db_path = get_activity_db_path()
         try:
             governor = CapacityGovernor.get_instance()
             capacity_ok, capacity_reason = governor.can_dispatch()
@@ -139,7 +140,8 @@ class ToDoDispatchService:
                 )
                 return
 
-            with connect_runtime_db() as conn:
+            # Task Hub state lives in the dedicated activity DB, not runtime_state.db.
+            with connect_runtime_db(activity_db_path) as conn:
                 task_hub_claimed = dispatch_sweep(
                     conn,
                     agent_id=f"todo:{session.session_id}",
@@ -191,7 +193,7 @@ class ToDoDispatchService:
             )
             lines.append("")
             lines.append("== ACTIVE ASSIGNMENTS ==")
-            with connect_runtime_db() as conn:
+            with connect_runtime_db(activity_db_path) as conn:
                 activity = task_hub.get_agent_activity(conn)
             active_assignments = activity.get("active_assignments") if isinstance(activity, dict) else []
             if isinstance(active_assignments, list) and active_assignments:
@@ -271,7 +273,7 @@ class ToDoDispatchService:
                 })
             if claimed_assignment_ids:
                 try:
-                    with connect_runtime_db() as conn:
+                    with connect_runtime_db(activity_db_path) as conn:
                         task_hub.finalize_assignments(
                             conn,
                             assignment_ids=claimed_assignment_ids,
