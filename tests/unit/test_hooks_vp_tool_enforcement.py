@@ -237,6 +237,36 @@ def test_vp_worker_lane_does_not_require_nested_vp_dispatch():
     assert result == {}
 
 
+def test_todo_dispatcher_source_does_not_infer_vp_routing_from_prompt_boilerplate(monkeypatch):
+    monkeypatch.setenv("UA_RUN_SOURCE", "todo_dispatcher")
+    hooks = AgentHookSet(run_id="unit-vp-enforcement-todo-source")
+    prompt = """
+You are Simone.
+### VP Delegation Fallback (CRITICAL):
+If you attempt to delegate a mission to a VP Gateway (e.g., `vp.general.primary` or `vp.coder.primary`) and the connection is refused, retry it.
+
+Task 1: Research cloud costs and summarize key points.
+"""
+    _run(hooks.on_user_prompt_skill_awareness({"prompt": prompt}))
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "research-specialist",
+                    "description": "Gather cloud pricing details",
+                    "prompt": "Collect 2026 prices from official docs.",
+                },
+            },
+            "tool-todo-no-vp",
+            {},
+        )
+    )
+
+    assert result == {}
+
+
 def test_blocks_primary_search_before_research_specialist_for_report_intent():
     hooks = AgentHookSet(run_id="unit-research-delegation-block-search")
     _run(

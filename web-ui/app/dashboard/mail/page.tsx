@@ -38,6 +38,7 @@ type Draft = {
   text_preview: string;
   send_status: string | null;
   send_at: string;
+  updated_at: string;
   created_at: string;
 };
 
@@ -147,6 +148,7 @@ export default function MailPage() {
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(null);
   const [draftSending, setDraftSending] = useState<string | null>(null);
+  const [draftDeleting, setDraftDeleting] = useState<string | null>(null);
   const [deletingThread, setDeletingThread] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"inbox" | "sent">("inbox");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
@@ -301,10 +303,12 @@ export default function MailPage() {
     }
   }, []);
 
-  const approveDraft = useCallback(async (draftId: string) => {
-    setDraftSending(draftId);
+  const approveDraft = useCallback(async (draft: Draft) => {
+    setDraftSending(draft.draft_id);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts/${draftId}/send`, {
+      const params = new URLSearchParams();
+      params.set("inbox_id", draft.inbox_id);
+      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts/${draft.draft_id}/send?${params}`, {
         method: "POST",
       });
       if (!res.ok) throw new Error(`send draft ${res.status}`);
@@ -312,11 +316,30 @@ export default function MailPage() {
       setDrafts(data.drafts);
     } catch (e) {
       console.error("Failed to send draft", e);
-      setError(`Failed to send draft ${draftId}: ${String(e)}`);
+      setError(`Failed to send draft ${draft.draft_id}: ${String(e)}`);
     } finally {
       setDraftSending(null);
     }
   }, [fetchDrafts]);
+
+  const discardDraft = useCallback(async (draft: Draft) => {
+    if (!confirm(`Discard draft "${draft.subject || "(no subject)"}"?`)) return;
+    setDraftDeleting(draft.draft_id);
+    try {
+      const params = new URLSearchParams();
+      params.set("inbox_id", draft.inbox_id);
+      const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts/${draft.draft_id}?${params}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`discard draft ${res.status}`);
+      setDrafts((prev) => prev.filter((item) => item.draft_id !== draft.draft_id));
+    } catch (e) {
+      console.error("Failed to discard draft", e);
+      setError(`Failed to discard draft ${draft.draft_id}: ${String(e)}`);
+    } finally {
+      setDraftDeleting(null);
+    }
+  }, []);
 
   const deleteThread = useCallback(async (thread: Thread) => {
     if (!confirm(`Delete thread "${thread.subject || '(no subject)'}"?`)) return;
@@ -626,18 +649,20 @@ export default function MailPage() {
         >
           {/* Draft Queue */}
           <div style={{ padding: "16px 16px 8px" }}>
-            <SectionTitle icon="edit_note" label="DRAFT QUEUE" count={drafts.length} />
+            <SectionTitle icon="edit_note" label="PENDING DRAFTS" count={drafts.length} />
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 16px" }}>
             {drafts.length === 0 ? (
-              <EmptyState message="No pending drafts" />
+              <EmptyState message="No pending manual-review drafts" />
             ) : (
               drafts.map((d) => (
                 <DraftCard
                   key={d.draft_id}
                   draft={d}
                   sending={draftSending === d.draft_id}
-                  onApprove={() => approveDraft(d.draft_id)}
+                  deleting={draftDeleting === d.draft_id}
+                  onApprove={() => approveDraft(d)}
+                  onDiscard={() => discardDraft(d)}
                 />
               ))
             )}
@@ -1218,12 +1243,17 @@ function ThreadRow({
 function DraftCard({
   draft,
   sending,
+  deleting,
   onApprove,
+  onDiscard,
 }: {
   draft: Draft;
   sending: boolean;
+  deleting: boolean;
   onApprove: () => void;
+  onDiscard: () => void;
 }) {
+  const busy = sending || deleting;
   return (
     <div
       style={{
@@ -1255,6 +1285,16 @@ function DraftCard({
       >
         → {draft.to || "?"}
       </div>
+      <div
+        style={{
+          fontSize: 10,
+          color: TOKENS.textMuted,
+          marginTop: 4,
+          fontFamily: TOKENS.fontMono,
+        }}
+      >
+        {draft.send_status ? `${draft.send_status} · ` : ""}created {timeAgo(draft.created_at)}
+      </div>
       {draft.text_preview && (
         <div
           style={{
@@ -1272,7 +1312,7 @@ function DraftCard({
       <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
         <button
           onClick={onApprove}
-          disabled={sending}
+          disabled={busy}
           style={{
             background: sending ? TOKENS.amberDim : TOKENS.amber,
             color: sending ? TOKENS.amber : TOKENS.bg,
@@ -1282,11 +1322,30 @@ function DraftCard({
             fontFamily: TOKENS.fontMono,
             fontSize: 10,
             fontWeight: 700,
-            cursor: sending ? "wait" : "pointer",
+            cursor: busy ? "wait" : "pointer",
             letterSpacing: "0.05em",
           }}
         >
           {sending ? "SENDING…" : "APPROVE & SEND"}
+        </button>
+        <button
+          onClick={onDiscard}
+          disabled={busy}
+          style={{
+            background: deleting ? TOKENS.redDim : "transparent",
+            color: TOKENS.red,
+            border: `1px solid ${TOKENS.red}`,
+            borderRadius: 0,
+            padding: "4px 10px",
+            fontFamily: TOKENS.fontMono,
+            fontSize: 10,
+            fontWeight: 700,
+            cursor: busy ? "wait" : "pointer",
+            letterSpacing: "0.05em",
+            opacity: busy && !deleting ? 0.5 : 1,
+          }}
+        >
+          {deleting ? "DISCARDING…" : "DISCARD"}
         </button>
       </div>
     </div>

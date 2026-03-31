@@ -974,6 +974,44 @@ def test_heartbeat_investigation_completion_updates_origin_and_sends_operator_em
     assert "VPS host firewall" in gateway_server._agentmail_service.calls[0]["text"]
 
 
+def test_ops_agentmail_send_draft_uses_requested_inbox(client, monkeypatch):
+    class _AgentMailStub:
+        async def send_draft(self, draft_id: str, *, inbox_id: str | None = None):
+            return {"status": "sent", "draft_id": draft_id, "inbox_id": inbox_id}
+
+    monkeypatch.setattr(gateway_server, "_agentmail_service", _AgentMailStub())
+
+    resp = client.post("/api/v1/ops/agentmail/drafts/drf_123/send?inbox_id=alerts@testdomain.com")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True,
+        "status": "sent",
+        "draft_id": "drf_123",
+        "inbox_id": "alerts@testdomain.com",
+    }
+
+
+def test_ops_agentmail_delete_draft_requires_inbox_and_discards(client, monkeypatch):
+    class _AgentMailStub:
+        async def delete_draft(self, draft_id: str, *, inbox_id: str | None = None):
+            return {"status": "deleted", "draft_id": draft_id, "inbox_id": inbox_id}
+
+    monkeypatch.setattr(gateway_server, "_agentmail_service", _AgentMailStub())
+
+    missing = client.delete("/api/v1/ops/agentmail/drafts/drf_123")
+    assert missing.status_code == 400
+    assert missing.json()["detail"] == "inbox_id query parameter is required"
+
+    resp = client.delete("/api/v1/ops/agentmail/drafts/drf_123?inbox_id=alerts@testdomain.com")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True,
+        "status": "deleted",
+        "draft_id": "drf_123",
+        "inbox_id": "alerts@testdomain.com",
+    }
+
+
 def test_dashboard_activity_actions_are_audited(client, monkeypatch):
     class _HookDispatchStub:
         async def dispatch_internal_action(self, action_payload: dict):

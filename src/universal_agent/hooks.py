@@ -71,6 +71,19 @@ _VP_EXPLICIT_INTENT_PATTERNS = (
     re.compile(r"\bdelegate\s+to\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
     re.compile(r"\bdelegate\s+to\s+(?:the\s+)?vp\s+(?:general(?:ist)?|coder)\b", re.IGNORECASE),
 )
+_PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
+    "cron",
+    "webhook",
+    "heartbeat",
+    "heartbeat_synthetic",
+    "task_run",
+    "email_hook",
+    "todo_dispatcher",
+}
+_TODO_DISPATCH_VP_FALLBACK_BLOCK = re.compile(
+    r"### VP Delegation Fallback \(CRITICAL\):.*?After finishing work, ALWAYS disposition every claimed task via `mcp__internal__task_hub_task_action` \(`complete`, `review`, `block`, or `park`\)\.",
+    re.IGNORECASE | re.DOTALL,
+)
 
 _RESEARCH_PIPELINE_SEARCH_MARKERS = (
     "search for",
@@ -459,6 +472,18 @@ def _looks_like_explicit_vp_intent(text: Any) -> bool:
     if not candidate:
         return False
     return any(pattern.search(candidate) for pattern in _VP_EXPLICIT_INTENT_PATTERNS)
+
+
+def _strip_prompt_vp_boilerplate(text: Any) -> str:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return ""
+    return _TODO_DISPATCH_VP_FALLBACK_BLOCK.sub("", candidate).strip()
+
+
+def _allow_prompt_inferred_vp_routing_for_hooks() -> bool:
+    source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
+    return source not in _PROMPT_INFERRED_VP_BLOCKED_SOURCES
 
 
 _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS = (
@@ -1733,8 +1758,10 @@ class AgentHookSet:
             or ""
         )
         self._current_turn_prompt = prompt_text
+        vp_inference_prompt = _strip_prompt_vp_boilerplate(prompt_text)
         self._requires_vp_tool_path = (
-            _looks_like_explicit_vp_intent(prompt_text)
+            _allow_prompt_inferred_vp_routing_for_hooks()
+            and _looks_like_explicit_vp_intent(vp_inference_prompt)
             and not self._is_vp_worker_lane
         )
         self._vp_dispatch_seen_this_turn = False

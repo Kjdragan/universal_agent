@@ -598,16 +598,42 @@ class AgentMailService:
         # Email notifications suppressed — dedicated Mail page provides visibility.
         return {"status": "draft", "draft_id": draft.draft_id, "inbox": self._inbox_address}
 
-    async def send_draft(self, draft_id: str) -> dict[str, Any]:
+    async def send_draft(
+        self,
+        draft_id: str,
+        *,
+        inbox_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         """Approve and send a previously created draft."""
         self._assert_ready()
+        target_inbox_id = str(inbox_id or self._inbox_id or "").strip()
+        if not target_inbox_id:
+            raise RuntimeError("agentmail_draft_send_missing_inbox")
         msg = await self._client.inboxes.drafts.send(
-            inbox_id=self._inbox_id,
+            inbox_id=target_inbox_id,
             draft_id=draft_id,
         )
         self._messages_sent += 1
-        logger.info("📧 Draft sent draft_id=%s", draft_id)
-        return {"status": "sent", "draft_id": draft_id}
+        logger.info("📧 Draft sent draft_id=%s inbox_id=%s", draft_id, target_inbox_id)
+        return {"status": "sent", "draft_id": draft_id, "inbox_id": target_inbox_id}
+
+    async def delete_draft(
+        self,
+        draft_id: str,
+        *,
+        inbox_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Discard a draft that no longer needs manual approval."""
+        self._assert_ready()
+        target_inbox_id = str(inbox_id or self._inbox_id or "").strip()
+        if not target_inbox_id:
+            raise RuntimeError("agentmail_draft_delete_missing_inbox")
+        await self._client.inboxes.drafts.delete(
+            inbox_id=target_inbox_id,
+            draft_id=draft_id,
+        )
+        logger.info("📧 Draft deleted draft_id=%s inbox_id=%s", draft_id, target_inbox_id)
+        return {"status": "deleted", "draft_id": draft_id, "inbox_id": target_inbox_id}
 
     async def _await_read(
         self,
@@ -659,6 +685,7 @@ class AgentMailService:
                 "text_preview": (getattr(d, "text", "") or "")[:200],
                 "send_status": getattr(d, "send_status", None),
                 "send_at": str(getattr(d, "send_at", "") or ""),
+                "updated_at": str(getattr(d, "updated_at", "") or ""),
                 "created_at": str(getattr(d, "created_at", "")),
             })
         return results

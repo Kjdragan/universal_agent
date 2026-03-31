@@ -20923,7 +20923,23 @@ async def ops_agentmail_send_draft(request: Request, draft_id: str):
     if _agentmail_service is None:
         raise HTTPException(status_code=503, detail="AgentMail service not initialized")
     try:
-        result = await _agentmail_service.send_draft(draft_id)
+        inbox_id = request.query_params.get("inbox_id")
+        result = await _agentmail_service.send_draft(draft_id, inbox_id=inbox_id)
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.delete("/api/v1/ops/agentmail/drafts/{draft_id}")
+async def ops_agentmail_delete_draft(request: Request, draft_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    inbox_id = request.query_params.get("inbox_id")
+    if not inbox_id:
+        raise HTTPException(status_code=400, detail="inbox_id query parameter is required")
+    try:
+        result = await _agentmail_service.delete_draft(draft_id, inbox_id=inbox_id)
         return {"ok": True, **result}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))

@@ -65,6 +65,8 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     assert "batch triage" in request.user_input.lower()
     assert "capacity snapshot" in request.user_input.lower()
     assert "delivery contract" in request.user_input.lower()
+    assert "vp.general.primary" not in request.user_input
+    assert "systemctl --user start ua-vp-general.service" not in request.user_input
 
 
 @pytest.mark.asyncio

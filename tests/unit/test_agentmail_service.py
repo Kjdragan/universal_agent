@@ -62,6 +62,7 @@ def mock_agentmail_client():
     mock_draft.draft_id = "drf_test_001"
     client.inboxes.drafts.create = AsyncMock(return_value=mock_draft)
     client.inboxes.drafts.send = AsyncMock(return_value=mock_msg)
+    client.inboxes.drafts.delete = AsyncMock(return_value=None)
 
     # Mock threads
     mock_thread = MagicMock()
@@ -224,6 +225,26 @@ class TestSendDraft:
         result = await service.send_draft("drf_test_001")
         assert result["status"] == "sent"
         mock_agentmail_client.inboxes.drafts.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_send_draft_uses_explicit_inbox_id(self, service, mock_agentmail_client):
+        await service.send_draft("drf_test_001", inbox_id="alerts@testdomain.com")
+        mock_agentmail_client.inboxes.drafts.send.assert_awaited_once_with(
+            inbox_id="alerts@testdomain.com",
+            draft_id="drf_test_001",
+        )
+
+
+class TestDeleteDraft:
+    @pytest.mark.asyncio
+    async def test_delete_draft_discards(self, service, mock_agentmail_client):
+        result = await service.delete_draft("drf_test_001", inbox_id="alerts@testdomain.com")
+        assert result["status"] == "deleted"
+        assert result["inbox_id"] == "alerts@testdomain.com"
+        mock_agentmail_client.inboxes.drafts.delete.assert_awaited_once_with(
+            inbox_id="alerts@testdomain.com",
+            draft_id="drf_test_001",
+        )
 
 
 class TestReply:
