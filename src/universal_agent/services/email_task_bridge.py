@@ -164,6 +164,81 @@ def ensure_email_task_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def reconcile_terminal_email_task_mappings(conn: sqlite3.Connection) -> dict[str, int]:
+    """Repair stale email thread rows after Task Hub has already reached a terminal state."""
+    ensure_email_task_schema(conn)
+    now_iso = _now_iso()
+    completed_backfilled = 0
+    completed_status_synced = 0
+    reviewed_backfilled = 0
+    reviewed_status_synced = 0
+
+    rows = conn.execute(
+        """
+        SELECT
+            m.thread_id,
+            m.status AS mapping_status,
+            m.email_sent_at,
+            m.final_email_sent_at,
+            m.final_message_id,
+            m.final_draft_id,
+            i.status AS task_status,
+            i.updated_at AS task_updated_at
+        FROM email_task_mappings m
+        JOIN task_hub_items i ON i.task_id = m.task_id
+        WHERE i.status IN ('completed', 'needs_review')
+        """
+    ).fetchall()
+
+    for row in rows:
+        thread_id = str(row["thread_id"] or "").strip()
+        if not thread_id:
+            continue
+        task_status = str(row["task_status"] or "").strip().lower()
+        mapping_status = str(row["mapping_status"] or "").strip().lower()
+        final_seen = any(
+            str(row[field] or "").strip()
+            for field in ("final_email_sent_at", "final_message_id", "final_draft_id", "email_sent_at")
+        )
+        task_updated_at = str(row["task_updated_at"] or "").strip() or now_iso
+        if not final_seen:
+            conn.execute(
+                """
+                UPDATE email_task_mappings
+                SET final_email_sent_at = CASE WHEN final_email_sent_at = '' THEN ? ELSE final_email_sent_at END,
+                    email_sent_at = CASE WHEN email_sent_at = '' THEN ? ELSE email_sent_at END,
+                    updated_at = ?
+                WHERE thread_id = ?
+                """,
+                (task_updated_at, task_updated_at, now_iso, thread_id),
+            )
+            if task_status == "completed":
+                completed_backfilled += 1
+            elif task_status == "needs_review":
+                reviewed_backfilled += 1
+
+        if task_status == "completed" and mapping_status != "completed":
+            conn.execute(
+                "UPDATE email_task_mappings SET status = 'completed', updated_at = ? WHERE thread_id = ?",
+                (now_iso, thread_id),
+            )
+            completed_status_synced += 1
+        elif task_status == "needs_review" and mapping_status == "active":
+            conn.execute(
+                "UPDATE email_task_mappings SET status = 'waiting-on-reply', updated_at = ? WHERE thread_id = ?",
+                (now_iso, thread_id),
+            )
+            reviewed_status_synced += 1
+
+    conn.commit()
+    return {
+        "completed_backfilled": completed_backfilled,
+        "completed_status_synced": completed_status_synced,
+        "reviewed_backfilled": reviewed_backfilled,
+        "reviewed_status_synced": reviewed_status_synced,
+    }
+
+
 # ── EmailTaskBridge ──────────────────────────────────────────────────────────
 
 class EmailTaskBridge:
@@ -529,14 +604,13 @@ class EmailTaskBridge:
         self._conn.execute(
             """
             UPDATE email_task_mappings
-            SET ack_sent_at = CASE WHEN ? <> '' THEN ? ELSE ack_sent_at END,
+            SET ack_sent_at = CASE WHEN ack_sent_at = '' THEN ? ELSE ack_sent_at END,
                 ack_message_id = CASE WHEN ? <> '' THEN ? ELSE ack_message_id END,
                 ack_draft_id = CASE WHEN ? <> '' THEN ? ELSE ack_draft_id END,
                 updated_at = ?
             WHERE thread_id = ?
             """,
             (
-                str(message_id or "").strip(),
                 now,
                 str(message_id or "").strip(),
                 str(message_id or "").strip(),
@@ -554,21 +628,19 @@ class EmailTaskBridge:
         self._conn.execute(
             """
             UPDATE email_task_mappings
-            SET final_email_sent_at = CASE WHEN ? <> '' THEN ? ELSE final_email_sent_at END,
+            SET final_email_sent_at = CASE WHEN final_email_sent_at = '' THEN ? ELSE final_email_sent_at END,
                 final_message_id = CASE WHEN ? <> '' THEN ? ELSE final_message_id END,
                 final_draft_id = CASE WHEN ? <> '' THEN ? ELSE final_draft_id END,
-                email_sent_at = CASE WHEN ? <> '' THEN ? ELSE email_sent_at END,
+                email_sent_at = CASE WHEN email_sent_at = '' THEN ? ELSE email_sent_at END,
                 updated_at = ?
             WHERE thread_id = ?
             """,
             (
-                str(message_id or "").strip(),
                 now,
                 str(message_id or "").strip(),
                 str(message_id or "").strip(),
                 str(draft_id or "").strip(),
                 str(draft_id or "").strip(),
-                str(message_id or "").strip(),
                 now,
                 now,
                 str(thread_id or "").strip(),

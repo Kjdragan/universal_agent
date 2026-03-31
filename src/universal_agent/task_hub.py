@@ -1438,6 +1438,15 @@ def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80)
 
 
 def _email_side_effects_detected(conn: sqlite3.Connection, task_id: str) -> bool:
+    item = get_item(conn, str(task_id or "").strip())
+    if item:
+        dispatch_meta = dict(dict(item.get("metadata") or {}).get("dispatch") or {})
+        outbound = dict(dispatch_meta.get("outbound_delivery") or {})
+        if any(
+            str(outbound.get(field) or "").strip()
+            for field in ("sent_at", "message_id", "draft_id")
+        ):
+            return True
     try:
         row = conn.execute(
             "SELECT * FROM email_task_mappings WHERE task_id = ? LIMIT 1",
@@ -1451,6 +1460,47 @@ def _email_side_effects_detected(conn: sqlite3.Connection, task_id: str) -> bool
         str((row[field] if field in row.keys() else "") or "").strip()
         for field in ("email_sent_at", "final_email_sent_at", "final_message_id", "final_draft_id")
     )
+
+
+def record_task_outbound_delivery(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    channel: str = "agentmail",
+    message_id: str = "",
+    draft_id: str = "",
+    sent_at: Optional[str] = None,
+) -> dict[str, Any]:
+    """Persist a generic outbound-delivery marker on the Task Hub item.
+
+    This is the cross-ingress side-effect ledger used when the task did not
+    originate from an email thread and therefore has no ``email_task_mappings``
+    row to prove that final delivery already happened.
+    """
+    ensure_schema(conn)
+    current = get_item(conn, str(task_id or "").strip())
+    if not current:
+        raise ValueError(f"No task found with ID: {task_id}")
+
+    metadata = dict(current.get("metadata") or {})
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    outbound = dict(dispatch_meta.get("outbound_delivery") or {})
+    outbound.update(
+        {
+            "channel": str(channel or outbound.get("channel") or "agentmail").strip() or "agentmail",
+            "sent_at": str(sent_at or outbound.get("sent_at") or _now_iso()).strip(),
+            "message_id": str(message_id or outbound.get("message_id") or "").strip(),
+            "draft_id": str(draft_id or outbound.get("draft_id") or "").strip(),
+        }
+    )
+    dispatch_meta["outbound_delivery"] = outbound
+    metadata["dispatch"] = dispatch_meta
+    conn.execute(
+        "UPDATE task_hub_items SET metadata_json=?, updated_at=? WHERE task_id=?",
+        (_json_dumps(metadata), _now_iso(), str(task_id or "").strip()),
+    )
+    conn.commit()
+    return get_item(conn, str(task_id or "").strip()) or current
 
 
 def reconcile_task_lifecycle(

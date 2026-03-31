@@ -43,6 +43,33 @@ def _seed_email_task(conn: sqlite3.Connection, *, task_id: str, title: str, scor
     )
 
 
+def _seed_tracked_chat_task(conn: sqlite3.Connection, *, task_id: str, title: str, source_ref: str) -> None:
+    task_hub.ensure_schema(conn)
+    task_hub.upsert_item(
+        conn,
+        {
+            "task_id": task_id,
+            "title": title,
+            "description": "Create the requested report and email it to the user.",
+            "project_key": "immediate",
+            "priority": 1,
+            "source_kind": "chat_panel",
+            "source_ref": source_ref,
+            "status": task_hub.TASK_STATUS_OPEN,
+            "agent_ready": True,
+            "score": 8.0,
+            "score_confidence": 0.95,
+            "trigger_type": "immediate",
+            "labels": ["chat-panel", "interactive"],
+            "metadata": {
+                "delivery_mode": "standard_report",
+                "canonical_execution_owner": "interactive_chat_session",
+                "intake_channel": "chat_panel",
+            },
+        },
+    )
+
+
 def _ensure_email_mapping_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -411,4 +438,75 @@ def test_todo_execution_lifecycle_reopens_task_when_no_mutation(monkeypatch, tmp
     assert item["status"] == task_hub.TASK_STATUS_OPEN
     assert item["seizure_state"] == "unseized"
     assert assignment["state"] == "failed"
+    assert assignment["ended_at"]
+
+
+def test_todo_execution_auto_completes_chat_task_after_final_delivery(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path)
+
+    with _db_connect(db_path) as conn:
+        _seed_tracked_chat_task(
+            conn,
+            task_id="chat:session_chat_repeat:turn_001",
+            title="AI model releases report",
+            source_ref=session.session_id,
+        )
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id=f"todo:{session.session_id}",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_id = history[0]["assignment_id"]
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="chat:session_chat_repeat:turn_001",
+            channel="agentmail",
+            message_id="msg-chat-1",
+            sent_at="2026-03-31T15:00:00Z",
+        )
+
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Create a comprehensive report and email it to me."),
+        run_kind="todo_execution",
+    )
+    tracker.record_tool_call(
+        "mcp__internal__send_agentmail",
+        tool_input={"to": "kevin@example.com", "subject": "AI model releases report"},
+    )
+
+    result = gateway_server._enforce_todo_execution_lifecycle(
+        session=session,
+        request=GatewayRequest(
+            user_input="Create a comprehensive report and email it to me.",
+            metadata={
+                "source": "todo_dispatcher",
+                "run_kind": "todo_execution",
+                "claimed_task_ids": ["chat:session_chat_repeat:turn_001"],
+                "claimed_assignment_ids": [assignment_id],
+            },
+        ),
+        mission_tracker=tracker,
+        goal_satisfaction=tracker.evaluate(),
+    )
+
+    with _db_connect(db_path) as conn:
+        item = task_hub.get_item(conn, "chat:session_chat_repeat:turn_001")
+        assignment = conn.execute(
+            "SELECT state, ended_at, result_summary FROM task_hub_assignments WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+
+    assert result["passed"] is True
+    assert result["stage_status"] == "completed"
+    assert result["terminal"] is True
+    assert result["observed"]["auto_completed_after_delivery"] is True
+    assert result["observed"]["auto_completed_task_ids"] == ["chat:session_chat_repeat:turn_001"]
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+    assert item["seizure_state"] == "completed"
+    assert item["completion_token"]
+    assert assignment["state"] == "completed"
     assert assignment["ended_at"]

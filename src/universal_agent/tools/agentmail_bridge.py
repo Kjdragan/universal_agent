@@ -129,6 +129,12 @@ async def _send_agentmail_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         runtime, bridge, mapping, run_kind = _resolve_email_mapping_from_runtime()
         conn = getattr(bridge, "_conn", None) if bridge is not None else None
+        runtime_metadata = runtime.metadata if runtime and isinstance(runtime.metadata, dict) else {}
+        claimed_task_ids = [
+            str(task_id or "").strip()
+            for task_id in (runtime_metadata.get("claimed_task_ids") or [])
+            if str(task_id or "").strip()
+        ]
 
         if mapping:
             thread_id = str(mapping.get("thread_id") or "").strip()
@@ -147,6 +153,12 @@ async def _send_agentmail_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                         return _err("Receipt-style acknowledgements are not allowed during canonical ToDo execution.")
                     if bridge.has_final_outbound(thread_id):
                         return _err("Final email or draft already exists for this thread; duplicate final delivery blocked.")
+        if conn is not None and run_kind == "todo_execution":
+            from universal_agent import task_hub
+
+            for task_id in claimed_task_ids:
+                if task_hub._email_side_effects_detected(conn, task_id):
+                    return _err("Final email or draft already exists for this task; duplicate final delivery blocked.")
 
         result = await agentmail.send_email(
             to=to,
@@ -155,16 +167,27 @@ async def _send_agentmail_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             html=body,      # also pass body as html just in case
             force_send=not dry_run
         )
+        result_payload = result if isinstance(result, dict) else {}
+        message_id = str(result_payload.get("message_id") or "").strip()
+        draft_id = str(result_payload.get("draft_id") or "").strip()
         if mapping:
             thread_id = str(mapping.get("thread_id") or "").strip()
             if thread_id:
-                result_payload = result if isinstance(result, dict) else {}
-                message_id = str(result_payload.get("message_id") or "").strip()
-                draft_id = str(result_payload.get("draft_id") or "").strip()
                 if run_kind == "email_triage":
                     bridge.record_ack_outbound(thread_id, message_id=message_id, draft_id=draft_id)
                 elif run_kind == "todo_execution":
                     bridge.record_final_outbound(thread_id, message_id=message_id, draft_id=draft_id)
+        if conn is not None and run_kind == "todo_execution":
+            from universal_agent import task_hub
+
+            for task_id in claimed_task_ids:
+                task_hub.record_task_outbound_delivery(
+                    conn,
+                    task_id=task_id,
+                    channel="agentmail",
+                    message_id=message_id,
+                    draft_id=draft_id,
+                )
         return _ok({"status": "success", "result": result})
     except Exception as e:
         logger.error(f"Failed to send agentmail: {e}", exc_info=True)

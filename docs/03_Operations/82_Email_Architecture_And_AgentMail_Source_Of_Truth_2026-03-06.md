@@ -353,7 +353,7 @@ The bridge implements several guardrails to prevent email spam or duplicate resp
    - `email_triage`: Allows one acknowledgement per thread, blocks duplicate final responses
    - `todo_execution`: Blocks receipt-style acknowledgements entirely, allows one final response per thread
 
-4. **Thread-Level Deduplication**: Uses `EmailTaskBridge` to track sent messages per thread, preventing duplicate emails for the same task.
+4. **Thread-Level Deduplication**: Uses `EmailTaskBridge` to track sent messages per thread, preventing duplicate emails for the same task. Final-outbound timestamps are now stamped even when the provider does not return a message or draft ID, so a successful send cannot remain invisible to duplicate protection just because metadata came back sparse.
 
 ### Integration with EmailTaskBridge
 

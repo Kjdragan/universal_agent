@@ -6077,6 +6077,73 @@ def _match_auto_delegate_targets(
     return []
 
 
+def _todo_execution_auto_complete_after_final_delivery(
+    *,
+    conn: sqlite3.Connection,
+    session: GatewaySession,
+    goal_satisfaction: dict[str, Any],
+    unresolved: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    contract = goal_satisfaction.get("contract") if isinstance(goal_satisfaction, dict) else {}
+    observed = goal_satisfaction.get("observed") if isinstance(goal_satisfaction, dict) else {}
+    if not isinstance(contract, dict) or not isinstance(observed, dict):
+        return goal_satisfaction, unresolved
+
+    if not bool(contract.get("email_required")):
+        return goal_satisfaction, unresolved
+
+    required_email_sends = max(1, int(contract.get("min_email_sends") or 0))
+    observed_email_sends = max(0, int(observed.get("email_send_count") or 0))
+    if observed_email_sends < required_email_sends:
+        return goal_satisfaction, unresolved
+
+    lifecycle_actions = {
+        str(action or "").strip().lower()
+        for action in (observed.get("task_actions") or [])
+        if str(action or "").strip()
+    }
+    if lifecycle_actions:
+        return goal_satisfaction, unresolved
+
+    unresolved_task_ids = [str(snapshot.get("task_id") or "").strip() for snapshot in unresolved]
+    if not unresolved_task_ids or not all(task_hub._email_side_effects_detected(conn, task_id) for task_id in unresolved_task_ids):
+        return goal_satisfaction, unresolved
+
+    auto_completed_task_ids: list[str] = []
+    for task_id in unresolved_task_ids:
+        task_hub.perform_task_action(
+            conn,
+            task_id=task_id,
+            action="complete",
+            reason="auto_completed_after_final_outbound_delivery",
+            agent_id=f"todo:{session.session_id}",
+        )
+        auto_completed_task_ids.append(task_id)
+
+    refreshed_snapshots = _todo_claimed_task_snapshots(conn, task_ids=unresolved_task_ids)
+    remaining_unresolved = [
+        snapshot for snapshot in refreshed_snapshots if not _todo_task_has_durable_lifecycle(snapshot)
+    ]
+    if remaining_unresolved:
+        return goal_satisfaction, remaining_unresolved
+
+    goal_satisfaction = dict(goal_satisfaction)
+    goal_satisfaction["passed"] = True
+    goal_satisfaction["stage_status"] = "completed"
+    goal_satisfaction["terminal"] = True
+    observed_payload = dict(observed)
+    observed_payload["auto_completed_after_delivery"] = True
+    observed_payload["auto_completed_task_ids"] = auto_completed_task_ids
+    goal_satisfaction["observed"] = observed_payload
+    logger.info(
+        "Auto-completed %d Task Hub item(s) after final outbound delivery for todo_execution session %s: %s",
+        len(auto_completed_task_ids),
+        session.session_id,
+        auto_completed_task_ids,
+    )
+    return goal_satisfaction, remaining_unresolved
+
+
 def _enforce_todo_execution_lifecycle(
     *,
     session: GatewaySession,
@@ -6146,6 +6213,16 @@ def _enforce_todo_execution_lifecycle(
                         "auto_delegate_task_ids": observed["auto_delegate_task_ids"],
                     },
                 )
+                return goal_satisfaction
+
+        if unresolved:
+            goal_satisfaction, unresolved = _todo_execution_auto_complete_after_final_delivery(
+                conn=conn,
+                session=session,
+                goal_satisfaction=goal_satisfaction,
+                unresolved=unresolved,
+            )
+            if not unresolved:
                 return goal_satisfaction
 
         if unresolved:
@@ -12929,6 +13006,7 @@ async def lifespan(app: FastAPI):
         # (5 minutes) since we KNOW the process was dead.
         try:
             from universal_agent import task_hub as _recovery_task_hub
+            from universal_agent.services.email_task_bridge import reconcile_terminal_email_task_mappings
             _recovery_conn = connect_runtime_db(get_activity_db_path())
             _recovery_conn.row_factory = sqlite3.Row
             _recovery_task_hub.ensure_schema(_recovery_conn)
@@ -12946,6 +13024,7 @@ async def lifespan(app: FastAPI):
                 _recovery_conn,
                 running_session_ids=_running_sessions,
             )
+            _email_mapping_reconciled = reconcile_terminal_email_task_mappings(_recovery_conn)
             if int(_recovery_result.get("finalized") or 0) > 0:
                 logger.warning(
                     "🔄 Startup recovery: released %d orphaned task assignment(s) (reopened=%d)",
@@ -12954,6 +13033,8 @@ async def lifespan(app: FastAPI):
                 )
             if any(int(_reconciled.get(key) or 0) > 0 for key in ("reopened", "reviewed", "completion_flagged", "delegated_backfilled")):
                 logger.warning("Startup task lifecycle reconciliation: %s", _reconciled)
+            if any(int(_email_mapping_reconciled.get(key) or 0) > 0 for key in _email_mapping_reconciled):
+                logger.warning("Startup email mapping reconciliation: %s", _email_mapping_reconciled)
             _recovery_conn.close()
         except Exception as _recovery_exc:
             logger.warning("Startup task recovery sweep failed (non-fatal): %s", _recovery_exc)
