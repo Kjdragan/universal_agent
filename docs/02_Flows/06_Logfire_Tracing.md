@@ -24,6 +24,39 @@ logfire.instrument_anthropic()
 - The repository disables Logfire's automatic Pydantic plugin via `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` and configures Logfire explicitly in runtime entrypoints. This prevents optional observability plugin loading from becoming a hard startup dependency for gateway/API services.
 - Package bootstrap also installs a no-op `logfire` stub if real Logfire fails to import during service startup. Gateway, API, Telegram, and VP workers therefore fail open on observability issues instead of entering a restart loop.
 
+## Runtime Modes
+
+Health surfaces now report an `observability` object with the current runtime mode:
+
+- `mode=real` — real `logfire` imported successfully and the process is using the actual Logfire SDK
+- `mode=stub` — package bootstrap had to install the fail-open no-op stub because `import logfire` failed
+- `mode=disabled` — real `logfire` imported, but no `LOGFIRE_TOKEN` is configured for that process
+
+Additional health fields:
+
+- `token_present` — whether `LOGFIRE_TOKEN` is configured in the live process
+- `error` — exception class captured when the runtime fell back to the stub
+- `reason` — compact exception detail for the stub fallback
+
+This is intentionally separate from process health. A service can be operationally healthy while still reporting degraded observability through `mode=stub`.
+
+## Deploy-Time Observability Preflight
+
+Deploys now prove that the target `.venv` can load real tracing before any service restart:
+
+1. `scripts/validate_runtime_bootstrap.py`
+2. `scripts/verify_observability_runtime.py`
+3. `scripts/verify_service_imports.py`
+
+The observability preflight verifies:
+
+- `import opentelemetry.context` succeeds
+- the `opentelemetry_context` entry points include `contextvars_context`
+- `import logfire` succeeds directly
+- the imported `logfire` module is not the Universal Agent fail-open stub
+
+If that validation fails after the first `uv sync`, deploy deletes `.venv`, performs one clean rebuild, reruns the full validation stack, and aborts before restart if real tracing still cannot import.
+
 ## Span Hierarchy
 
 ### CLI Runs (`ua_cli_session`)

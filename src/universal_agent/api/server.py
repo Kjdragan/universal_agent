@@ -89,6 +89,7 @@ _SYSTEM_SESSION_OWNERS = {
 }
 
 # Import agent bridge
+from universal_agent import get_logfire_runtime_state
 from universal_agent.api.agent_bridge import get_agent_bridge
 from universal_agent.api.events import (
     WebSocketEvent,
@@ -1399,6 +1400,7 @@ async def health():
         "version": "2.0.0",
         "runtime_path": os.getenv("PATH", ""),
         "runtime_tools": runtime_tool_status(),
+        "observability": get_logfire_runtime_state(),
     }
 
 

@@ -34,7 +34,7 @@ Each deployed branch maps to a VPS checkout and runtime lane.
 | Web UI Port | `3001` | `3000` |
 | Web UI URL | `https://uaonvps:9443` (Tailnet) | `https://app.clearspringcg.com` (Public) <br> `https://uaonvps` (Tailnet) |
 | API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public) <br> `https://uaonvps:8443` (Tailnet) |
-| Service Restart Strategy | Deploy installs repo-managed staging systemd units, validates service imports, performs a clean `.venv` rebuild if those imports fail after the first sync, then restarts gateway/api/webui via `systemctl` or `service` fallback | Deploy installs repo-managed production systemd units plus the VP worker unit template, validates service imports, performs a clean `.venv` rebuild if those imports fail after the first sync, then restarts gateway/api/webui/telegram plus VP workers |
+| Service Restart Strategy | Deploy installs repo-managed staging systemd units, runs the centralized runtime preflight (`validate_runtime_bootstrap` -> `verify_observability_runtime` -> `verify_service_imports`), performs one clean `.venv` rebuild if preflight fails after the first sync, then restarts gateway/api/webui via `systemctl` or `service` fallback | Deploy installs repo-managed production systemd units plus the VP worker unit template, runs the same centralized runtime preflight, performs one clean `.venv` rebuild if preflight fails after the first sync, then restarts gateway/api/webui/telegram plus VP workers |
 | Post-Deploy Health | See `ci_cd_pipeline.md` > Post-Deploy Health Verification | See `ci_cd_pipeline.md` > Post-Deploy Health Verification |
 | Secrets Behavior | Bootstrap `.env` for stage `staging`; webui `.env.local` rendered from Infisical by deploy | Bootstrap `.env` for stage `production`; webui `.env.local` rendered from Infisical by deploy |
 
@@ -76,6 +76,9 @@ The base systemd units for deployed application services are part of the reposit
 - Staging deploy renders the canonical units for `universal-agent-staging-gateway`, `universal-agent-staging-api`, and `universal-agent-staging-webui` against `/opt/universal-agent-staging`.
 - This prevents host-local systemd drift from silently pinning a service to an old checkout, stale working directory, or missing `EnvironmentFile`.
 - The managed Python service units pin `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so Logfire's optional Pydantic plugin cannot auto-load during startup and turn observability into a hard startup dependency.
+- Runtime availability and tracing integrity are now separate concerns by design:
+  - package bootstrap keeps services fail-open if Logfire import breaks at runtime
+  - deploy preflight still blocks a new release unless the target `.venv` can import real OpenTelemetry + Logfire successfully
 
 ## Local Runtime Contract
 

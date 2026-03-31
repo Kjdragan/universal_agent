@@ -35,6 +35,38 @@ def _disable_implicit_pydantic_plugins() -> None:
     os.environ["PYDANTIC_DISABLE_PLUGINS"] = ",".join(tokens)
 
 
+def _logfire_token_present() -> bool:
+    return bool(str(os.getenv("LOGFIRE_TOKEN") or "").strip())
+
+
+_LOGFIRE_RUNTIME_STATE: dict[str, Any] = {
+    "mode": "disabled",
+    "token_present": _logfire_token_present(),
+    "error": None,
+    "reason": None,
+}
+
+
+def _set_logfire_runtime_state(
+    mode: str,
+    *,
+    error: str | None = None,
+    reason: str | None = None,
+) -> None:
+    _LOGFIRE_RUNTIME_STATE["mode"] = mode
+    _LOGFIRE_RUNTIME_STATE["token_present"] = _logfire_token_present()
+    _LOGFIRE_RUNTIME_STATE["error"] = error
+    _LOGFIRE_RUNTIME_STATE["reason"] = reason
+
+
+def get_logfire_runtime_state() -> dict[str, Any]:
+    """Return the current runtime tracing mode for health/status surfaces."""
+
+    state = dict(_LOGFIRE_RUNTIME_STATE)
+    state["token_present"] = _logfire_token_present()
+    return state
+
+
 class _NoopSpan:
     def __enter__(self) -> "_NoopSpan":
         return self
@@ -76,10 +108,20 @@ def _install_logfire_fail_open_stub() -> None:
     """
 
     if "logfire" in sys.modules:
+        existing = sys.modules["logfire"]
+        if getattr(existing, "__ua_stub__", False):
+            _set_logfire_runtime_state(
+                "stub",
+                error="StubActive",
+                reason=str(getattr(existing, "__ua_stub_error__", "")) or None,
+            )
+        else:
+            _set_logfire_runtime_state("real" if _logfire_token_present() else "disabled")
         return
 
     try:
         __import__("logfire")
+        _set_logfire_runtime_state("real" if _logfire_token_present() else "disabled")
         return
     except BaseException as exc:
         bootstrap_logger = logging.getLogger("universal_agent.bootstrap")
@@ -111,6 +153,11 @@ def _install_logfire_fail_open_stub() -> None:
 
         sys.modules["logfire"] = stub
         sys.modules["logfire.query_client"] = query_client_stub
+        _set_logfire_runtime_state(
+            "stub",
+            error=type(exc).__name__,
+            reason=str(exc) or repr(exc),
+        )
         bootstrap_logger.warning(
             "Logfire import failed during package bootstrap; using no-op stub",
             exc_info=exc,

@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover - degraded runtime fallback
     httpx = None  # type: ignore[assignment]
 
 BASE_DIR = Path(__file__).parent.parent.parent
+from universal_agent import get_logfire_runtime_state
 from universal_agent.auth.ops_auth import (
     allow_legacy_ops_auth,
     issue_ops_jwt,
@@ -13938,6 +13939,7 @@ async def health(response: Response):
         "db_error": db_error,
         "runtime_path": os.getenv("PATH", ""),
         "runtime_tools": runtime_tool_status(),
+        "observability": get_logfire_runtime_state(),
         "deployment_profile": _deployment_profile_defaults(),
     }
 

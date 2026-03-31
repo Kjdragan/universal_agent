@@ -21,6 +21,79 @@ This is a living operational reference, not a single-incident report.
 
 ---
 
+## 2026-03-31: Logfire Import Failure During Production Restart
+
+### Incident Summary
+
+Production services entered restart loops during deploy because startup hit this
+path:
+
+1. `import logfire`
+2. `import opentelemetry.context`
+3. `StopIteration` while OpenTelemetry tried to resolve its runtime context entry point
+
+The same damaged environment also later proved to be missing core runtime
+packages such as `uvicorn` and `pydantic-settings`, which confirmed the real
+problem was the integrity of the deployed `.venv`, not merely one tracing
+toggle.
+
+### Lesson 1: Optional Observability Must Never Be A Hard Startup Dependency
+
+The correct runtime behavior is fail-open.
+
+Reusable rule:
+
+1. keep the application available even if tracing libraries are broken
+2. isolate observability bootstrap from the main startup path
+3. prefer an explicit degraded-mode signal over a crash loop
+
+In this incident, package bootstrap moved Logfire behind a fail-open no-op stub
+so gateway/API/telegram/VP workers could still boot.
+
+### Lesson 2: Deploy Success Must Prove Real Imports In The Actual Service Venv
+
+A runtime safety stub is not a deployment success condition.
+
+Reusable rule:
+
+- run import validation inside the exact `.venv` that systemd services will use
+
+The deploy contract now validates, in order:
+
+1. runtime bootstrap identity and secret access
+2. real OpenTelemetry + Logfire imports
+3. service entrypoint imports
+
+If any of those fail after the first `uv sync`, deploy deletes `.venv`, does
+one clean rebuild, reruns validation, and aborts before restart if the runtime
+is still broken.
+
+### Lesson 3: A Broken Tracing Environment Can Coexist With Partial Observability
+
+Seeing spans in Logfire does not prove every deployed service is using the real
+SDK path.
+
+Reusable rule:
+
+- distinguish "the project is receiving some traces" from "this specific
+  service process is running with real tracing"
+
+That is why health endpoints now expose an explicit `observability.mode`
+(`real`, `stub`, or `disabled`) instead of treating observability as invisible
+background state.
+
+### Lesson 4: Rebuild The Environment, Do Not Paper Over Missing Runtime Packages
+
+Once `uvicorn` and `pydantic-settings` were missing from the production venv,
+the right fix was to rebuild `.venv` cleanly, not to keep adding package-by-
+package repairs.
+
+Reusable rule:
+
+- when the deployed virtualenv shows multiple independent import failures,
+  assume environment corruption first and prefer one clean rebuild over manual
+  incremental patching
+
 ## 2026-03-23: Tutorial Pipeline Proxy Failure
 
 ### Incident Summary

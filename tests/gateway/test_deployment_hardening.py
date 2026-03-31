@@ -25,15 +25,23 @@ class TestDeploymentHardening(unittest.TestCase):
             self.assertTrue(is_user_allowed("verified_user"))
             self.assertFalse(is_user_allowed("hacker"))
             
+    @patch("universal_agent.gateway_server.get_logfire_runtime_state")
     @patch("universal_agent.main.runtime_db_conn")
-    def test_health_check_deep(self, mock_db):
+    def test_health_check_deep(self, mock_db, mock_observability):
         """Test health check verifies DB connection."""
+        mock_observability.return_value = {
+            "mode": "real",
+            "token_present": True,
+            "error": None,
+            "reason": None,
+        }
         # Case A: DB Healthy
         mock_db.execute.return_value = True
         response = self.client.get("/api/v1/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "healthy")
         self.assertEqual(response.json()["db_status"], "connected")
+        self.assertEqual(response.json()["observability"]["mode"], "real")
         
         # Case B: DB Broken (Raises Exception)
         mock_db.execute.side_effect = Exception("Connection lost")
@@ -41,6 +49,7 @@ class TestDeploymentHardening(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["status"], "unhealthy")
         self.assertEqual(response.json()["db_status"], "error")
+        self.assertEqual(response.json()["observability"]["mode"], "real")
 
     @patch("universal_agent.gateway_server.get_gateway")
     @patch("universal_agent.gateway_server.ALLOWED_USERS", {"vip"})

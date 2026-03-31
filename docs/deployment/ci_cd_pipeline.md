@@ -149,8 +149,16 @@ deploy rather than editing keys in place.
 ## Deployed Runtime Tooling
 
 - Staging and production deploys install project dependencies with `uv sync`.
-- Staging and production deploys run `scripts/verify_service_imports.py` after dependency sync and bootstrap validation.
-- If service entrypoint imports fail after the first sync, the workflow deletes `.venv`, performs a clean `uv sync`, reruns bootstrap validation, and reruns import verification before any service restart is allowed.
+- Staging and production deploys run the shared helper `scripts/deploy_validate_runtime.sh` after writing the lane bootstrap `.env`.
+- That helper performs the same validation contract in both lanes:
+  1. ensure Python 3.12 is available to `uv`
+  2. run `uv sync`
+  3. run `scripts/validate_runtime_bootstrap.py`
+  4. run `scripts/verify_observability_runtime.py`
+  5. run `scripts/verify_service_imports.py`
+  6. if any of those checks fail, delete `.venv`, do one clean `uv sync`, and rerun the full validation sequence
+  7. if validation still fails, abort deploy before any service restart
+- `scripts/verify_observability_runtime.py` is stricter than the runtime fail-open bootstrap: deploy success requires a real `logfire` import and a healthy OpenTelemetry context entry-point load, not just the ability to limp forward on the stub.
 - Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
 - Staging and production deploys rebuild the MkDocs documentation site via `mkdocs build`. The generated static site is served by the `universal-agent-docs` systemd unit on `localhost:8100`, exposed to the tailnet via `tailscale serve`. See `scripts/configure_docs_server.sh` for one-time setup.
 - Staging and production deploys install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
@@ -202,7 +210,7 @@ VP workers are only restarted if `systemctl is-enabled` reports them as active. 
 
 Before those restarts, each deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files. Production deploy also refreshes the repo-managed VP worker unit template before restarting enabled VP workers.
 
-All managed Python service units set `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so the optional Logfire Pydantic plugin cannot crash gateway/API startup during model import.
+All managed Python service units set `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so the optional Logfire Pydantic plugin cannot crash gateway/API startup during model import. This remains a runtime backstop only; deploy success still requires `scripts/verify_observability_runtime.py` to prove that real Logfire/OpenTelemetry imports work in the target `.venv`.
 
 ### Deployment-Window Flag
 
