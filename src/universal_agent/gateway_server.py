@@ -6200,6 +6200,120 @@ def _record_todo_execution_result(
     )
 
 
+def _tracked_chat_task_title(user_input: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(user_input or "")).strip()
+    if not cleaned:
+        return "Interactive chat request"
+    if len(cleaned) <= 96:
+        return cleaned
+    return cleaned[:93].rstrip() + "..."
+
+
+def _infer_tracked_chat_delivery_mode(user_input: str) -> str:
+    text = str(user_input or "")
+    candidate = text.lower()
+    email_requested = bool(re.search(r"\b(gmail|e-?mail)\b", candidate)) and not bool(
+        re.search(r"\b(do\s*not|don['’]t|no)\s+(gmail|e-?mail)\b", candidate)
+    )
+    if not email_requested:
+        return "interactive_chat"
+
+    from universal_agent.services.email_task_bridge import infer_delivery_mode
+
+    return infer_delivery_mode(body=text)
+
+
+def _should_track_chat_panel_request(
+    *,
+    session: GatewaySession,
+    metadata: dict[str, Any],
+) -> bool:
+    if metadata.get("skip_task_hub_tracking"):
+        return False
+    if metadata.get("claimed_task_ids") or metadata.get("claimed_assignment_ids"):
+        return False
+    request_source = _normalize_run_source(metadata.get("source"))
+    request_run_kind = _normalize_run_kind(
+        metadata.get("run_kind"),
+        request_source=request_source,
+        session=session,
+    )
+    return request_run_kind in {"user", "chat_panel", "interactive_chat"}
+
+
+def _prepare_tracked_chat_execution(
+    *,
+    session: GatewaySession,
+    original_user_input: str,
+    turn_id: str,
+    client_turn_id: str = "",
+) -> dict[str, Any]:
+    from universal_agent.services.capacity_governor import capacity_snapshot
+    from universal_agent.services.todo_dispatch_service import build_todo_execution_prompt
+
+    task_id = f"chat:{session.session_id}:{turn_id}"
+    delivery_mode = _infer_tracked_chat_delivery_mode(original_user_input)
+    task_metadata = {
+        "delivery_mode": delivery_mode,
+        "canonical_execution_owner": "interactive_chat_session",
+        "intake_channel": "chat_panel",
+        "origin_session_id": session.session_id,
+        "origin_turn_id": turn_id,
+        "client_turn_id": client_turn_id or "",
+        "original_user_input": original_user_input,
+    }
+    task_row = {
+        "task_id": task_id,
+        "title": _tracked_chat_task_title(original_user_input),
+        "description": str(original_user_input or "").strip(),
+        "project_key": "immediate",
+        "priority": 1,
+        "source_kind": "chat_panel",
+        "source_ref": session.session_id,
+        "status": task_hub.TASK_STATUS_OPEN,
+        "agent_ready": True,
+        "trigger_type": "immediate",
+        "labels": ["chat-panel", "interactive"],
+        "metadata": task_metadata,
+    }
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            task_hub.upsert_item(conn, task_row)
+            claimed = task_hub.claim_task_for_agent(
+                conn,
+                task_id=task_id,
+                agent_id=f"todo:{session.session_id}",
+                provider_session_id=session.session_id,
+                workspace_dir=str(session.workspace_dir or "").strip() or None,
+                claim_reason="interactive_chat_intake",
+            )
+            claimed["_routing"] = {
+                "agent_id": "simone",
+                "confidence": "interactive_chat",
+                "reason": "Direct chat requests enter the canonical Simone-first Task Hub execution lane.",
+                "should_delegate": False,
+            }
+            activity = task_hub.get_agent_activity(conn)
+        finally:
+            conn.close()
+
+    active_assignments = activity.get("active_assignments") if isinstance(activity, dict) else []
+    prompt = build_todo_execution_prompt(
+        claimed_items=[claimed],
+        capacity_snapshot_data=capacity_snapshot(),
+        active_assignments=active_assignments,
+        origin_label=f"interactive_chat:{session.session_id}",
+    )
+    return {
+        "task_id": task_id,
+        "assignment_id": str(claimed.get("assignment_id") or "").strip(),
+        "prompt": prompt,
+        "delivery_mode": delivery_mode,
+    }
+
+
 async def _run_gateway_session_request(
     *,
     session: GatewaySession,
@@ -6246,8 +6360,12 @@ async def _run_gateway_session_request(
             except Exception:
                 pass
 
+    mission_contract_input = str(
+        request_metadata.get("mission_contract_input")
+        or request.user_input
+    )
     mission_tracker = MissionGuardrailTracker(
-        build_mission_contract(request.user_input),
+        build_mission_contract(mission_contract_input),
         run_kind=request_run_kind,
     )
     request_runtime_token = None
@@ -26026,8 +26144,14 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                 msg_type = msg.get("type", "")
                 logger.info("WS message received (session=%s): %s", session_id, msg_type)
 
-                if msg_type == "execute":
-                    user_input = msg.get("data", {}).get("user_input", "")
+                if msg_type in {"execute", "query"}:
+                    raw_data = msg.get("data", {}) or {}
+                    if not isinstance(raw_data, dict):
+                        raw_data = {}
+                    if msg_type == "query":
+                        user_input = str(raw_data.get("text") or "")
+                    else:
+                        user_input = str(raw_data.get("user_input") or "")
                     
                     user_input_strip = user_input.strip()
                     exec_session = session
@@ -26124,7 +26248,6 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         )
                         continue
 
-                    raw_data = msg.get("data", {}) or {}
                     client_turn_id = _normalize_client_turn_id(raw_data.get("client_turn_id"))
                     # Metadata already initialized above, just merge if needed
                     if raw_data.get("metadata"):
@@ -26398,6 +26521,37 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         request_metadata["client_turn_id"] = client_turn_id
                     request_source = _normalize_run_source(request_metadata.get("source"))
                     request_metadata["source"] = request_source
+                    original_user_input = user_input
+
+                    if _should_track_chat_panel_request(
+                        session=exec_session,
+                        metadata=request_metadata,
+                    ):
+                        tracked_chat = _prepare_tracked_chat_execution(
+                            session=exec_session,
+                            original_user_input=user_input,
+                            turn_id=admitted_turn_id,
+                            client_turn_id=client_turn_id,
+                        )
+                        user_input = str(tracked_chat["prompt"] or user_input)
+                        request_metadata = {
+                            **request_metadata,
+                            "source": "chat_panel_task_hub",
+                            "run_kind": "todo_execution",
+                            "mission_contract_input": str(
+                                metadata.get("mission_contract_input") or original_user_input
+                            ),
+                            "claimed_task_ids": [tracked_chat["task_id"]],
+                            "claimed_assignment_ids": [tracked_chat["assignment_id"]],
+                            "task_hub_task_id": tracked_chat["task_id"],
+                            "task_hub_assignment_id": tracked_chat["assignment_id"],
+                            "task_hub_origin": "chat_panel",
+                            "delivery_mode": tracked_chat["delivery_mode"],
+                            "original_user_input": str(
+                                metadata.get("original_user_input") or original_user_input
+                            ),
+                        }
+                        request_source = _normalize_run_source(request_metadata.get("source"))
 
                     request = GatewayRequest(
                         user_input=user_input,

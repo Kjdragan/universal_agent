@@ -1,6 +1,6 @@
 # Email Architecture and AgentMail Source of Truth
 
-> **Last updated: 2026-03-15** — Consolidated from original 2026-03-06 doc + triage→Simone architecture changes.
+> **Last updated: 2026-03-31** — trusted inbound email now defaults to one canonical Task Hub item per inbound request, pre-splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, and email is explicitly documented as transport-specific ingress that converges into the same Task Hub / `todo_execution` execution lane used by tracked chat.
 
 ## Purpose
 
@@ -26,22 +26,23 @@ Universal Agent uses **two distinct email identities**:
 - **AgentMail** — Simone's own email identity, default for all Simone-authored work
 - **Gmail via gws MCP** — Kevin's identity, used only when Simone explicitly acts as Kevin
 
-### The Inbound Pipeline: Triage → Simone
+### The Inbound Pipeline: Triage → Task Hub → Simone/ToDo
 
 ```
 Email arrives → AgentMailService (WebSocket)
   → Reply extraction (HTML-aware + email-reply-parser)
   → Trusted sender verification (transport-layer, not content-based)
-  → Immediate acknowledgement reply
+  → Canonical Task Hub materialization (one task per inbound request by default)
   → Queue to agentmail_inbox_queue (SQLite)
   → Dispatch to email-handler triage agent
     → Classify, enrich with thread context, security assessment
-    → Produce structured triage brief + memory note
-    → Brief delivered to Simone's main session
-  → Simone decides what to do (reply, investigate, delegate, etc.)
+    → Persist structured triage brief metadata
+    → Optional short receipt acknowledgement only when allowed
+  → Dedicated ToDo executor claims the Task Hub item
+  → Simone executes, delegates, reviews, and completes from the canonical lifecycle
 ```
 
-> **Critical design principle:** The email-handler is a **pure triage agent**. It never acts on emails — it classifies, enriches, and writes a brief. Simone (the orchestrator) handles all actions with her full capabilities.
+> **Critical design principle:** The email-handler is a **pure triage agent**. It never acts on emails — it classifies, enriches, and writes a brief. Canonical execution happens later from Task Hub / `todo_execution`, not inside the hook session.
 
 ### Trusted Sender Addresses
 
@@ -132,18 +133,19 @@ Implementation:
 
 This avoids confusing the triage agent with full quoted thread history. Kevin's new reply content is cleanly isolated from the quoted digest below it.
 
-### Disjointed Task Decoupling
+### Canonical Single-Task Intake
 
 Implementation:
-- `universal_agent.services.llm_classifier.extract_disjointed_tasks()`
+- `universal_agent.services.agentmail_service._extract_inbound_email_tasks()`
 - `AgentMailService._handle_inbound_email()`
 - `EmailTaskBridge.materialize()`
 
-When a single email contains multiple unrelated requests, it is split into "disjointed tasks". To prevent multiple tasks from the same email from overwriting each other in the `email_task_mappings` database:
-- `AgentMailService` generates a `virtual_thread_id` (e.g., `threadId_0`) for tracking purposes.
-- The `virtual_thread_id` is used as the primary key internally to decouple the rows in local databases and the Task Hub dashboard.
-- The **actual** AgentMail `thread_id` and `message_id` are persisted in the `real_thread_id` and `real_message_id` columns.
-- The `real_thread_id` is passed into the Task Hub metadata so that Simone can successfully execute MCP API calls (like replying) without hitting 404 errors from the external AgentMail API.
+Current behavior:
+
+- Trusted inbound mail becomes **one canonical Task Hub item per inbound request by default**.
+- This keeps email aligned with tracked chat: ingress-specific preprocessing first, then the shared Task Hub / `todo_execution` execution lane.
+- Pre-splitting multiple unrelated requests is still available, but only when `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS=1` is explicitly enabled.
+- When opt-in splitting is enabled, `AgentMailService` still uses virtual thread IDs to prevent sibling tasks from overwriting each other in `email_task_mappings`, while preserving the real AgentMail thread/message lineage in `real_thread_id` and `real_message_id`.
 
 ### Trusted Sender Handling
 
@@ -154,7 +156,7 @@ Implementation:
 Current behavior:
 - Trusted sender addresses read from env var or hardcoded defaults
 - Trust determined at **transport layer**, not by LLM prompt interpretation
-- Trusted inbound mail gets immediate in-thread acknowledgement
+- Trusted inbound mail may send a short receipt acknowledgement only when the triage contract allows it
 - Trusted inbound mail stored in `agentmail_inbox_queue` before dispatch
 - When target session is busy, queue retries with exponential backoff
 
@@ -196,6 +198,12 @@ After the email-handler triage agent completes:
 - `mark_queue_failed(queue_id, ...)` — Records crash/error, emits `agentmail_processing_failed` notification
 - `check_reply_sent_in_thread(thread_id, ...)` — Verifies Simone actually sent a reply (mandatory reply check)
 
+Canonical follow-up happens in Task Hub:
+
+- the hook session records triage metadata on the existing Task Hub item
+- `canonical_execution_owner` remains `todo_dispatcher`
+- the dedicated ToDo executor is responsible for claim, delegation, review, final delivery, and completion
+
 ---
 
 ## Email-Handler Triage Agent
@@ -212,6 +220,7 @@ The email-handler is a **pure triage and enrichment agent**. It:
 5. Writes a **memory note** for Kevin's emails (`work_products/email_memory_note.md`)
 
 It **never** acts on emails — no investigations, no delegations, no replies. Simone decides.
+It may permit a short receipt acknowledgement when the prompt allows it, but that acknowledgement is not execution and not final delivery.
 
 ### Classification System
 

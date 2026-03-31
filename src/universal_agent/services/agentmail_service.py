@@ -39,6 +39,35 @@ from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
 logger = logging.getLogger(__name__)
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _email_ingress_task_splitting_enabled() -> bool:
+    """Return whether trusted inbound email should be pre-split at ingress."""
+    return str(os.getenv("UA_AGENTMAIL_SPLIT_DISJOINT_TASKS", "0")).strip().lower() in _TRUTHY
+
+
+async def _extract_inbound_email_tasks(*, subject: str, body: str) -> list[dict[str, Any]]:
+    """Return canonical inbound tasks for an email request.
+
+    The default behavior is a single Task Hub item per inbound request so email
+    converges into the same canonical Simone/Task Hub execution lane as chat.
+    Optional LLM task splitting remains available behind an explicit env flag.
+    """
+    content = str(body or "").strip() or f"Subject: {subject}".strip()
+    if not _email_ingress_task_splitting_enabled():
+        return [
+            {
+                "task_content": content,
+                "reasoning": "Canonical single inbound request",
+            }
+        ]
+
+    from universal_agent.services.llm_classifier import extract_disjointed_tasks
+
+    tasks = await extract_disjointed_tasks(subject=subject, body=body)
+    return tasks or [{"task_content": content, "reasoning": "Fallback full body"}]
+
 
 def _strip_html_quotes(html_body: str) -> str:
     """Strip quoted reply blocks from HTML emails.
@@ -595,7 +624,20 @@ class AgentMailService:
             "📧 Draft created to=%s subject=%r draft_id=%s (awaiting approval)",
             to, subject, draft.draft_id,
         )
-        # Email notifications suppressed — dedicated Mail page provides visibility.
+        # Drafts represent pending human approval, so they stay visible in the
+        # notification stream even though routine mailbox activity does not.
+        self._emit_notification(
+            kind="agentmail_draft_created",
+            title="Email Draft Created",
+            message=f"Draft ready for {to}: {subject or '(no subject)'}",
+            severity="info",
+            metadata={
+                "draft_id": str(draft.draft_id),
+                "to": to,
+                "subject": subject,
+                "inbox": self._inbox_address,
+            },
+        )
         return {"status": "draft", "draft_id": draft.draft_id, "inbox": self._inbox_address}
 
     async def send_draft(
@@ -1077,8 +1119,7 @@ class AgentMailService:
                 sender, subject, thread_id, reply_is_extracted, sender_trusted,
             )
 
-            from universal_agent.services.llm_classifier import extract_disjointed_tasks
-            disjointed_tasks = await extract_disjointed_tasks(
+            disjointed_tasks = await _extract_inbound_email_tasks(
                 subject=subject,
                 body=reply_text or text_body or "",
             )

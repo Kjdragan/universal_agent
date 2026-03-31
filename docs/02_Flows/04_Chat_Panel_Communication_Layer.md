@@ -8,6 +8,8 @@ This document describes the complete data pipeline that populates the **Chat Pan
 
 The Chat Panel displays **agent dialogue** — what the agent (and its sub-agents) "say" and "think" in conversation with the user.
 
+As of 2026-03-31, the chat panel is also a **tracked Task Hub ingress** for normal user work. The transport is still the foreground websocket session, but accepted chat requests can be materialized into Task Hub and executed under the same canonical `todo_execution` lifecycle used by trusted email work.
+
 ### What Belongs Here
 
 | Content Type | Source Event | Example |
@@ -155,6 +157,23 @@ Previously, the same final agent text was emitted **3 times**:
 
 Now only emission #1 (the real-time streaming path) populates the chat. The `print()` statement for CLI output remains for terminal users.
 
+### 2.7 Tracked Chat Requests Enter Task Hub
+
+Normal chat-panel work now has two layers:
+
+1. **Transport layer**: the browser submits the request over the live websocket session.
+2. **Execution layer**: the gateway may materialize the request as a Task Hub item and run it as `todo_execution`.
+
+Key implementation points:
+
+- The Next.js client still submits over `/ws/agent`, which forwards into `/api/v1/sessions/{session_id}/stream`.
+- The gateway now accepts both `type: "query"` and `type: "execute"` websocket payloads for chat requests.
+- Tracked chat tasks get Task Hub IDs in the form `chat:{session_id}:{turn_id}`.
+- The current interactive session immediately claims that task instead of waiting for the background ToDo sweep.
+- The execution prompt is built from the same canonical Task Hub prompt builder used by the dedicated ToDo dispatcher.
+- Chat-originated tasks default to `delivery_mode="interactive_chat"` so final delivery stays in the chat session unless the user explicitly asks for email.
+- The original user request is preserved separately for mission-guardrail evaluation so the Task Hub wrapper prompt does not accidentally force email delivery semantics.
+
 ---
 
 ## 3. Transport: WebSocket
@@ -171,6 +190,13 @@ hook_events.emit_text_event()
 ```
 
 The gateway server applies a safety-net dedup filter: if `final: True` text is seen after streaming text was already sent, it's dropped (`gateway_server.py:1398-1404`).
+
+For chat transport compatibility, the gateway session stream now accepts both:
+
+- `{"type": "query", "data": {"text": "..."}}`
+- `{"type": "execute", "data": {"user_input": "..."}}`
+
+Both shapes converge into the same gateway request path before Task Hub tracking and execution.
 
 ---
 

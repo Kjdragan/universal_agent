@@ -24,7 +24,7 @@ Your only goal is to execute the assigned tasks, deliver results, then dispositi
 - To send emails, strictly use `mcp__internal__send_agentmail`.
 - NEVER write Python scripts, Bash scripts, or use `curl` to interact with AgentMail or Task Hub. Exclusively use the provided native MCP tools.
 - Legacy external task-manager flows are retired. ALL missions are managed through Task Hub.
-- You are the ONLY canonical executor for trusted email tasks. Hook sessions may triage and optionally send a short receipt acknowledgement, but they must not deliver the final report or final response.
+- You are the ONLY canonical executor for trusted email tasks and tracked interactive chat tasks. Hook sessions may triage and optionally send a short receipt acknowledgement, but they must not deliver the final report or final response.
 
 ### Execution Recovery (CRITICAL):
 If a dependency or downstream execution path is unavailable, recover only with tools that are actually available in this run.
@@ -33,6 +33,89 @@ If the task genuinely cannot proceed, disposition it via `mcp__internal__task_hu
 
 After finishing work, ALWAYS disposition every claimed task via `mcp__internal__task_hub_task_action` (`complete`, `review`, `block`, or `park`).
 """
+
+
+def build_todo_execution_prompt(
+    *,
+    claimed_items: list[dict[str, Any]],
+    capacity_snapshot_data: dict[str, Any] | None = None,
+    active_assignments: list[dict[str, Any]] | None = None,
+    origin_label: str = "",
+) -> str:
+    """Build the canonical Task Hub execution prompt."""
+    lines = ["== TASK QUEUE =="]
+    lines.append(f"You have {len(claimed_items)} task(s) to process.")
+    if origin_label:
+        lines.append(f"Origin: {origin_label}")
+    lines.append("")
+
+    delivery_modes = sorted(
+        {
+            str(
+                (
+                    item.get("metadata")
+                    if isinstance(item.get("metadata"), dict)
+                    else {}
+                ).get("delivery_mode")
+                or "standard_report"
+            ).strip()
+            for item in claimed_items
+        }
+    )
+    lines.append("== DELIVERY CONTRACT ==")
+    lines.append(
+        "delivery_modes={modes}".format(
+            modes=", ".join(delivery_modes) if delivery_modes else "standard_report"
+        )
+    )
+    lines.append(
+        "For standard_report and enhanced_report: send exactly one final email with an executive summary in the body and attach the full report artifact when available."
+    )
+    lines.append(
+        "For fast_summary: send exactly one concise body-only final email unless the task is explicitly upgraded."
+    )
+    lines.append(
+        "For interactive_chat: deliver the final answer in this chat session and do not send email unless the user explicitly asked for email delivery."
+    )
+    lines.append("")
+    lines.append("== CAPACITY SNAPSHOT ==")
+    snapshot = capacity_snapshot_data or {}
+    lines.append(
+        "available_slots={available_slots} active_slots={active_slots} max_concurrent={max_concurrent} in_backoff={in_backoff}".format(
+            available_slots=snapshot.get("available_slots"),
+            active_slots=snapshot.get("active_slots"),
+            max_concurrent=snapshot.get("max_concurrent"),
+            in_backoff=snapshot.get("in_backoff"),
+        )
+    )
+    lines.append("")
+    lines.append("== ACTIVE ASSIGNMENTS ==")
+    if isinstance(active_assignments, list) and active_assignments:
+        for assignment in active_assignments[:10]:
+            lines.append(
+                "- {agent} · {task_id} · {title}".format(
+                    agent=str(assignment.get("agent_id") or "unknown"),
+                    task_id=str(assignment.get("task_id") or ""),
+                    title=str(assignment.get("title") or "").strip() or "(untitled)",
+                )
+            )
+    else:
+        lines.append("- none")
+    lines.append("")
+    for idx, item in enumerate(claimed_items, 1):
+        t_id = str(item.get("task_id") or "")
+        title = str(item.get("title") or "(untitled)")
+        desc = str(item.get("description") or "").strip()
+        lines.append(f"Task {idx}: [{t_id}] {title}")
+        lines.append(f"Description: {desc}")
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        delivery_mode = str(metadata.get("delivery_mode") or "standard_report").strip()
+        lines.append(f"Delivery Mode: {delivery_mode}")
+        routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
+        if routing:
+            lines.append(f"Routing Hint: {routing}")
+    return f"{TODO_DISPATCH_PROMPT}\n\n" + "\n".join(lines)
+
 
 class ToDoDispatchService:
     def __init__(
@@ -185,77 +268,16 @@ class ToDoDispatchService:
                     "task_count": len(task_ids),
                 })
 
-            # Build Prompt
-            lines = ["== TASK QUEUE =="]
-            lines.append(f"You have {len(task_hub_claimed)} task(s) to process.")
             snapshot = capacity_snapshot()
-            lines.append("")
-            delivery_modes = sorted(
-                {
-                    str(
-                        (
-                            item.get("metadata")
-                            if isinstance(item.get("metadata"), dict)
-                            else {}
-                        ).get("delivery_mode")
-                        or "standard_report"
-                    ).strip()
-                    for item in task_hub_claimed
-                }
-            )
-            lines.append("== DELIVERY CONTRACT ==")
-            lines.append(
-                "delivery_modes={modes}".format(
-                    modes=", ".join(delivery_modes) if delivery_modes else "standard_report"
-                )
-            )
-            lines.append(
-                "For standard_report and enhanced_report: send exactly one final email with an executive summary in the body and attach the full report artifact when available."
-            )
-            lines.append(
-                "For fast_summary: send exactly one concise body-only final email unless the task is explicitly upgraded."
-            )
-            lines.append("")
-            lines.append("== CAPACITY SNAPSHOT ==")
-            lines.append(
-                "available_slots={available_slots} active_slots={active_slots} max_concurrent={max_concurrent} in_backoff={in_backoff}".format(
-                    available_slots=snapshot.get("available_slots"),
-                    active_slots=snapshot.get("active_slots"),
-                    max_concurrent=snapshot.get("max_concurrent"),
-                    in_backoff=snapshot.get("in_backoff"),
-                )
-            )
-            lines.append("")
-            lines.append("== ACTIVE ASSIGNMENTS ==")
             with connect_runtime_db(activity_db_path) as conn:
                 activity = task_hub.get_agent_activity(conn)
             active_assignments = activity.get("active_assignments") if isinstance(activity, dict) else []
-            if isinstance(active_assignments, list) and active_assignments:
-                for assignment in active_assignments[:10]:
-                    lines.append(
-                        "- {agent} · {task_id} · {title}".format(
-                            agent=str(assignment.get("agent_id") or "unknown"),
-                            task_id=str(assignment.get("task_id") or ""),
-                            title=str(assignment.get("title") or "").strip() or "(untitled)",
-                        )
-                    )
-            else:
-                lines.append("- none")
-            lines.append("")
-            for idx, item in enumerate(task_hub_claimed, 1):
-                t_id = str(item.get("task_id") or "")
-                title = str(item.get("title") or "(untitled)")
-                desc = str(item.get("description") or "").strip()
-                lines.append(f"Task {idx}: [{t_id}] {title}")
-                lines.append(f"Description: {desc}")
-                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-                delivery_mode = str(metadata.get("delivery_mode") or "standard_report").strip()
-                lines.append(f"Delivery Mode: {delivery_mode}")
-                routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
-                if routing:
-                    lines.append(f"Routing Hint: {routing}")
-            
-            prompt = f"{TODO_DISPATCH_PROMPT}\n\n" + "\n".join(lines)
+            prompt = build_todo_execution_prompt(
+                claimed_items=task_hub_claimed,
+                capacity_snapshot_data=snapshot,
+                active_assignments=active_assignments,
+                origin_label="todo_dispatcher",
+            )
 
             # Provide visibility of progress specifically for To-Do List Tab UI
             if self.event_callback:

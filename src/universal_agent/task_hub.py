@@ -1105,6 +1105,97 @@ def claim_next_dispatch_tasks(
     return claimed
 
 
+def claim_task_for_agent(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    agent_id: str,
+    workflow_run_id: Optional[str] = None,
+    workflow_attempt_id: Optional[str] = None,
+    provider_session_id: Optional[str] = None,
+    workspace_dir: Optional[str] = None,
+    claim_reason: str = "direct_claim",
+) -> dict[str, Any]:
+    """Claim a specific task for a specific agent/session.
+
+    This is the targeted companion to ``claim_next_dispatch_tasks`` for
+    interactive or explicit intake paths that should enter the same durable
+    Task Hub lifecycle without waiting for a background sweep.
+    """
+    current = get_item(conn, task_id)
+    if not current:
+        raise ValueError(f"task not found: {task_id}")
+    if str(current.get("status") or "") not in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
+        raise ValueError(f"task {task_id!r} cannot be claimed from status={current.get('status')!r}")
+    if current.get("completion_token"):
+        raise ValueError(f"task {task_id!r} is completion-locked")
+
+    assignment_id = f"asg_{uuid.uuid4().hex[:16]}"
+    resolved_provider_session_id = (
+        str(provider_session_id or "").strip() or _session_id_from_agent_id(agent_id)
+    )
+    resolved_workflow_run_id = str(workflow_run_id or "").strip() or None
+    resolved_workflow_attempt_id = str(workflow_attempt_id or "").strip() or None
+    resolved_workspace_dir = str(workspace_dir or "").strip() or None
+
+    conn.execute(
+        """
+        INSERT INTO task_hub_assignments (
+            assignment_id, task_id, agent_id, workflow_run_id, workflow_attempt_id, provider_session_id, workspace_dir, state, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            assignment_id,
+            task_id,
+            agent_id,
+            resolved_workflow_run_id,
+            resolved_workflow_attempt_id,
+            resolved_provider_session_id,
+            resolved_workspace_dir,
+            "seized",
+            _now_iso(),
+        ),
+    )
+
+    metadata = dict(current.get("metadata") or {})
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    dispatch_meta.update(
+        {
+            "active_assignment_id": assignment_id,
+            "active_agent_id": agent_id,
+            "active_provider_session_id": resolved_provider_session_id,
+            "active_workspace_dir": resolved_workspace_dir,
+            "active_workflow_run_id": resolved_workflow_run_id,
+            "active_workflow_attempt_id": resolved_workflow_attempt_id,
+            "last_assignment_started_at": _now_iso(),
+        }
+    )
+    metadata["dispatch"] = dispatch_meta
+    conn.execute(
+        "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+        (TASK_STATUS_IN_PROGRESS, "seized", _json_dumps(metadata), _now_iso(), task_id),
+    )
+    _record_evaluation(
+        conn,
+        task_id=task_id,
+        agent_id=agent_id,
+        decision="seize",
+        reason=claim_reason or "direct_claim",
+        score=_safe_float(current.get("score"), 0.0),
+        score_confidence=_safe_float(current.get("score_confidence"), 0.0),
+        judge_payload={"source": "direct_claim"},
+    )
+    rebuild_dispatch_queue(conn)
+    conn.commit()
+
+    updated = get_item(conn, task_id) or dict(current)
+    updated["assignment_id"] = assignment_id
+    updated["status"] = TASK_STATUS_IN_PROGRESS
+    updated["seizure_state"] = "seized"
+    updated["metadata"] = metadata
+    return updated
+
+
 def _session_id_from_agent_id(agent_id: Any) -> str:
     raw = str(agent_id or "").strip()
     if not raw:

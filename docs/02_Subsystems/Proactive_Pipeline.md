@@ -5,7 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-30 — trusted AgentMail inbound is now triage-only at the hook layer, Task Hub / ToDo is the sole canonical execution path for email work, Simone is split into role-isolated heartbeat and ToDo runtimes, delivery-mode heuristics now select between fast summary, standard report, and enhanced report behavior, and `todo_execution` now requires a durable Task Hub lifecycle mutation or a server-side auto-linked VP delegation.
+> **Last updated:** 2026-03-31 — trusted AgentMail inbound now defaults to one canonical Task Hub item per inbound request, disjoint email splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, tracked chat-panel requests now enter the same Task Hub / `todo_execution` lifecycle, the gateway accepts both `query` and `execute` websocket message types, and `todo_execution` still requires a durable Task Hub lifecycle mutation or a server-side auto-linked VP delegation.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
@@ -154,7 +154,7 @@ sequenceDiagram
 
 ## 3. Task Ingress — How Tasks Enter the Hub
 
-Tasks enter the Task Hub through five distinct ingress paths:
+Tasks enter the Task Hub through six distinct ingress paths:
 
 ```mermaid
 flowchart LR
@@ -162,8 +162,9 @@ flowchart LR
         I1["1. CSI Events<br/>(gateway_server.py)"]
         I2["2. Email/AgentMail<br/>(email_task_bridge.py)"]
         I3["3. Dashboard Quick-Add<br/>(POST /tasks)"]
-        I4["4. Brainstorm Refinement<br/>(refinement_agent.py)"]
-        I5["5. Heartbeat Standing<br/>Instructions"]
+        I4["4. Chat Panel Tracking<br/>(gateway websocket)"]
+        I5["5. Brainstorm Refinement<br/>(refinement_agent.py)"]
+        I6["6. Heartbeat Standing<br/>Instructions"]
     end
 
     subgraph "Task Hub"
@@ -173,8 +174,9 @@ flowchart LR
     I1 -->|"source_kind='csi'"| TH
     I2 -->|"source_kind='email'"| TH
     I3 -->|"source_kind='dashboard_quick_add'"| TH
-    I4 -->|"source_kind='brainstorm'"| TH
-    I5 -->|"via HEARTBEAT.md<br/>parsing"| TH
+    I4 -->|"source_kind='chat_panel'"| TH
+    I5 -->|"source_kind='brainstorm'"| TH
+    I6 -->|"via HEARTBEAT.md<br/>parsing"| TH
 ```
 
 ### 3.1 CSI Event Bridge
@@ -191,6 +193,7 @@ Converts trusted inbound AgentMail emails into trackable tasks:
 
 - **Thread-level deduplication**: One task per email thread; subsequent emails UPDATE the existing task
 - **Deterministic task IDs**: `email:<sha256(thread_id)[:16]>` — stable across restarts
+- **Canonical single-task intake by default**: A trusted inbound email becomes one Task Hub item unless `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS=1` explicitly re-enables pre-splitting
 - **Trust-based labeling**: Trusted sender → `['email-task', 'agent-ready']`; untrusted → `['email-task', 'external-untriaged']`
 - **Auto-reactivation**: If a thread was `waiting-on-reply` and a new inbound arrives, it auto-reactivates to `open`
 - **Delivery-mode inference**: `fast_summary`, `standard_report`, or `enhanced_report` is inferred from the prompt and stored in task metadata
@@ -198,7 +201,17 @@ Converts trusted inbound AgentMail emails into trackable tasks:
 - **Hook contract**: The AgentMail hook may record triage metadata and may send at most one short receipt acknowledgement when the prompt allows it, but it must not execute the mission or send the final deliverable
 - **Single-final guardrail**: If the inbound request says "one final response only", "one final email only", or "do not send multiple reports", the hook acknowledgement path is disabled and only the canonical final delivery remains allowed
 
-### 3.3 Dashboard Quick-Add (`POST /api/v1/dashboard/todolist/tasks`)
+### 3.3 Chat Panel Tracking (`/api/v1/sessions/{id}/stream`)
+
+Interactive chat requests can also enter the canonical Task Hub lifecycle:
+
+- **Per-turn task IDs**: `chat:{session_id}:{turn_id}`
+- **Immediate claim**: the current interactive session claims the freshly-created task directly instead of waiting for the background sweep
+- **Shared execution contract**: the gateway wraps the request in the same `todo_execution` prompt structure used by the dedicated ToDo dispatcher
+- **Delivery mode**: default is `interactive_chat`; explicit email requests still infer the normal email delivery modes
+- **Mission guardrail input**: the original user prompt is preserved separately so Task Hub execution instructions do not accidentally force email delivery for normal chat tasks
+
+### 3.4 Dashboard Quick-Add (`POST /api/v1/dashboard/todolist/tasks`)
 
 Human operators can add tasks directly from the dashboard:
 
@@ -213,18 +226,29 @@ Human operators can add tasks directly from the dashboard:
 
 Creates a task with `source_kind='dashboard_quick_add'`, `labels=['quick-add']`.
 
-### 3.4 Brainstorm Refinement
+### 3.5 Brainstorm Refinement
 
 Tasks with `refinement_stage` set are brainstorm items progressing through the
 6-stage pipeline. When they reach `actionable`, they become dispatch-eligible.
 
-### 3.5 Heartbeat Standing Instructions
+### 3.6 Heartbeat Standing Instructions
 
 The `HEARTBEAT.md` file contains standing instructions that the heartbeat
 service reads each cycle. These inform the agent's prompt but are not
 materialized as Task Hub entries directly.
 
-### 3.6 Trusted Email Canonical Flow
+### 3.7 Canonical Ingress Convergence
+
+The architectural rule is now explicit:
+
+- **Ingress is transport-specific**
+  - email still needs reply extraction, trust checks, queueing, and triage-only safety evaluation
+  - chat still arrives over the live websocket and may stay in the foreground session
+- **Execution is transport-agnostic**
+  - once a request is accepted for tracked work, it should execute under the Task Hub / `todo_execution` lifecycle
+  - decomposition is allowed inside canonical execution, not as a required pre-processing step at email ingress
+
+### 3.8 Trusted Email Canonical Flow
 
 Trusted inbound email now follows a single canonical execution chain:
 
@@ -245,6 +269,22 @@ Important invariants:
 - Final report email comes from the canonical Task Hub lifecycle only.
 - Automation-owned prompts must not trigger inferred VP routing just because the prompt text mentions a VP slug; only real user intent can do that.
 - `standard_report` and `enhanced_report` send one final email with executive summary in the body and the full artifact attached when available.
+
+### 3.9 Tracked Chat Canonical Flow
+
+```mermaid
+flowchart LR
+    Chat["Chat panel query"] --> Track["Task Hub materialization<br/>chat:{session}:{turn}"]
+    Track --> Claim["Claim current session<br/>todo_execution"]
+    Claim --> Exec["Canonical execution<br/>same lifecycle rules"]
+    Exec --> Review["review / pending_review"]
+    Review --> Done["Task Hub completed"]
+```
+
+Important invariants:
+- Chat tracking exists for lifecycle visibility and repeatability, not as a second execution pipeline.
+- The websocket transport can submit either `query` or `execute`; both converge into the same gateway request handling.
+- Normal chat tasks default to `interactive_chat` delivery, so the final answer stays in-session unless the user explicitly asked for email delivery.
 
 ---
 
