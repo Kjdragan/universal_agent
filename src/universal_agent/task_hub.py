@@ -1742,6 +1742,7 @@ def finalize_assignments(
         1,
         int(heartbeat_max_retries if heartbeat_max_retries is not None else _safe_int(os.getenv("UA_TASK_HUB_HEARTBEAT_MAX_RETRIES"), 3)),
     )
+    todo_retry_limit = max(1, _safe_int(os.getenv("UA_TASK_HUB_TODO_MAX_RETRIES"), 3))
     run_state = str(state or "").strip().lower()
     for row in rows:
         assignment_id = str(row["assignment_id"] or "").strip()
@@ -1949,16 +1950,42 @@ def finalize_assignments(
                 task_id,
             )
         else:
+            retry_count = max(0, _safe_int(dispatch_meta.get("todo_retry_count"), 0)) + 1
+            dispatch_meta["todo_retry_count"] = retry_count
+            dispatch_meta["todo_retry_limit"] = todo_retry_limit
             metadata["dispatch"] = dispatch_meta
-            conn.execute(
-                """
-                UPDATE task_hub_items
-                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
-                WHERE task_id=?
-                """,
-                (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
-            )
-            reopened += 1
+            if retry_count >= todo_retry_limit:
+                dispatch_meta["last_disposition"] = "needs_review"
+                dispatch_meta["last_disposition_reason"] = "todo_retry_exhausted"
+                dispatch_meta["completion_unverified"] = True
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reviewed += 1
+                retry_exhausted += 1
+                logger.warning(
+                    "Task Hub ToDo finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    task_id,
+                    retry_count,
+                    todo_retry_limit,
+                )
+            else:
+                dispatch_meta["last_disposition"] = "reopened"
+                dispatch_meta["last_disposition_reason"] = f"todo_{run_state or 'failed'}_retryable"
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reopened += 1
 
     # ── Dispatch queue invalidation ─────────────────────────────────
     # Purge completed/reviewed tasks from the snapshot table so they

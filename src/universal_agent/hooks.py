@@ -175,6 +175,35 @@ _YOUTUBE_SUBAGENT_ALIASES = {
     "youtube-explainer-expert",
 }
 
+_EXECUTION_MANIFEST_KEYS = (
+    "workflow_kind",
+    "delivery_mode",
+    "requires_pdf",
+    "final_channel",
+    "canonical_executor",
+)
+
+
+def _extract_execution_manifest(text: str) -> dict[str, Any]:
+    manifest: dict[str, Any] = {}
+    payload = str(text or "")
+    if "== EXECUTION MANIFEST ==" not in payload:
+        return manifest
+    for raw_line in payload.splitlines():
+        line = str(raw_line or "").strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in _EXECUTION_MANIFEST_KEYS:
+            continue
+        parsed_value = value.strip()
+        if key == "requires_pdf":
+            manifest[key] = parsed_value.lower() == "true"
+        else:
+            manifest[key] = parsed_value
+    return manifest
+
 def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
     return _shared_extract_task_stop_id(tool_input)
 
@@ -742,6 +771,7 @@ class AgentHookSet:
         self._vp_dispatch_seen_this_turn = False
         self._requires_research_delegate_first = False
         self._research_delegate_seen_this_turn = False
+        self._todo_execution_manifest: dict[str, Any] = {}
         self._notebooklm_intent_this_turn = False
         self._requires_youtube_skill_first = False
         self._youtube_skill_seen_this_turn = False
@@ -1094,6 +1124,27 @@ class AgentHookSet:
                 self._youtube_skill_seen_this_turn = True
 
         is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+        current_run_kind = self._get_cached_run_kind()
+
+        if current_run_kind == "todo_execution" and normalized_tool_name in {
+            "ask_user_questions",
+            "mcp__internal__ask_user_questions",
+        }:
+            return {
+                "systemMessage": (
+                    "⚠️ Task Hub work-item execution cannot ask the human to resolve internal policy or dependency conflicts.\n\n"
+                    "If the work item cannot continue, record a durable disposition with "
+                    "`mcp__internal__task_hub_task_action(action='review'| 'block', ...)` and explain the concrete issue."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "todo_execution must disposition blocked work via task_hub_task_action instead of ask_user_questions."
+                    ),
+                },
+            }
 
         if (
             self._requires_youtube_skill_first
@@ -1663,6 +1714,13 @@ class AgentHookSet:
             or ""
         )
         self._current_turn_prompt = prompt_text
+        current_run_kind = self._get_cached_run_kind()
+        self._todo_execution_manifest = (
+            _extract_execution_manifest(prompt_text)
+            if current_run_kind == "todo_execution"
+            else {}
+        )
+        manifest_workflow_kind = str(self._todo_execution_manifest.get("workflow_kind") or "").strip().lower()
         vp_inference_prompt = _strip_prompt_vp_boilerplate(prompt_text)
         self._requires_vp_tool_path = (
             _allow_prompt_inferred_vp_routing_for_hooks()
@@ -1671,7 +1729,10 @@ class AgentHookSet:
         )
         self._vp_dispatch_seen_this_turn = False
         self._requires_research_delegate_first = (
-            _looks_like_research_report_pipeline_intent(prompt_text)
+            (
+                _looks_like_research_report_pipeline_intent(prompt_text)
+                or manifest_workflow_kind.startswith("research_report")
+            )
             and not self._requires_vp_tool_path
             and not self._is_vp_worker_lane
             and not self._is_cron_lane

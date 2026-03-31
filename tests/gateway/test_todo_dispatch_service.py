@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from universal_agent.gateway import GatewaySession
-from universal_agent.services.todo_dispatch_service import ToDoDispatchService
+from universal_agent.services.todo_dispatch_service import ToDoDispatchService, build_execution_manifest
 
 
 def _conn() -> sqlite3.Connection:
@@ -36,6 +36,14 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
                 "assignment_id": "asg-1",
                 "title": "Weather report",
                 "description": "Get the Houston weather",
+                "metadata": {
+                    "delivery_mode": "standard_report",
+                    "workflow_manifest": build_execution_manifest(
+                        user_input="Get the Houston weather",
+                        delivery_mode="standard_report",
+                        final_channel="email",
+                    ),
+                },
                 "_routing": {"agent_id": "simone"},
             }
         ],
@@ -67,6 +75,8 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     assert "taskstop" in request.user_input.lower()
     assert "capacity snapshot" in request.user_input.lower()
     assert "delivery contract" in request.user_input.lower()
+    assert "work item 1" in request.user_input.lower()
+    assert "workflow_kind=research_report_email" in request.user_input
     assert "vp.general.primary" not in request.user_input
     assert "systemctl --user start ua-vp-general.service" not in request.user_input
 

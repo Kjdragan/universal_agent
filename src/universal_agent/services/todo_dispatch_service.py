@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Callable, Awaitable
@@ -12,28 +13,136 @@ logger = logging.getLogger(__name__)
 def _event_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+_CODE_WORKFLOW_MARKERS = (
+    "fix ",
+    "debug",
+    "refactor",
+    "implement",
+    "code change",
+    "update the code",
+    "update code",
+    "write code",
+    "repository",
+    "repo",
+    "typescript",
+    "javascript",
+    "python",
+    "unit test",
+    "test failure",
+    "api route",
+)
+
+_RESEARCH_WORKFLOW_MARKERS = (
+    "search for",
+    "latest information",
+    "latest developments",
+    "research",
+    "report",
+    "analysis",
+    "look up",
+    "what happened",
+    "pdf",
+)
+
+
+def infer_workflow_kind(
+    *,
+    user_input: str,
+    delivery_mode: str,
+    final_channel: str,
+) -> str:
+    """Infer the top-level workflow kind for one durable work item."""
+    text = str(user_input or "").strip().lower()
+    mode = str(delivery_mode or "").strip().lower()
+    channel = str(final_channel or "").strip().lower() or "chat"
+
+    if any(marker in text for marker in _CODE_WORKFLOW_MARKERS):
+        return "code_change"
+    if mode in {"standard_report", "enhanced_report"}:
+        suffix = "chat" if channel == "chat" else "email"
+        return f"research_report_{suffix}"
+    if any(marker in text for marker in _RESEARCH_WORKFLOW_MARKERS):
+        suffix = "chat" if channel == "chat" else "email"
+        return f"research_report_{suffix}"
+    if mode == "interactive_chat":
+        return "interactive_answer"
+    return "general_execution"
+
+
+def build_execution_manifest(
+    *,
+    user_input: str,
+    delivery_mode: str,
+    final_channel: str,
+    canonical_executor: str = "simone_first",
+) -> dict[str, Any]:
+    """Return the durable execution contract for a single work item."""
+    workflow_kind = infer_workflow_kind(
+        user_input=user_input,
+        delivery_mode=delivery_mode,
+        final_channel=final_channel,
+    )
+    text = str(user_input or "").strip().lower()
+    mode = str(delivery_mode or "").strip().lower() or "standard_report"
+    requires_pdf = mode in {"standard_report", "enhanced_report"} or "pdf" in text
+    return {
+        "workflow_kind": workflow_kind,
+        "delivery_mode": mode,
+        "requires_pdf": requires_pdf,
+        "final_channel": str(final_channel or "chat").strip().lower() or "chat",
+        "canonical_executor": str(canonical_executor or "simone_first").strip() or "simone_first",
+    }
+
+
+def resolve_execution_manifest(
+    metadata: dict[str, Any] | None,
+    *,
+    fallback_description: str = "",
+    final_channel: str = "",
+    canonical_executor: str = "simone_first",
+) -> dict[str, Any]:
+    """Normalize the stored execution manifest for prompt/runtime use."""
+    meta = metadata if isinstance(metadata, dict) else {}
+    manifest = meta.get("workflow_manifest") if isinstance(meta.get("workflow_manifest"), dict) else {}
+    if manifest:
+        return {
+            "workflow_kind": str(manifest.get("workflow_kind") or "general_execution").strip() or "general_execution",
+            "delivery_mode": str(manifest.get("delivery_mode") or meta.get("delivery_mode") or "standard_report").strip() or "standard_report",
+            "requires_pdf": bool(manifest.get("requires_pdf")),
+            "final_channel": str(manifest.get("final_channel") or final_channel or "chat").strip().lower() or "chat",
+            "canonical_executor": str(manifest.get("canonical_executor") or canonical_executor).strip() or canonical_executor,
+        }
+    return build_execution_manifest(
+        user_input=fallback_description,
+        delivery_mode=str(meta.get("delivery_mode") or "standard_report"),
+        final_channel=final_channel or ("chat" if str(meta.get("delivery_mode") or "").strip() == "interactive_chat" else "email"),
+        canonical_executor=canonical_executor,
+    )
+
 TODO_DISPATCH_PROMPT = """
-You are Simone, the Pipeline Orchestrator. Your exclusive job is to execute the assigned tasks from the Task Queue below to completion.
+You are Simone, the Pipeline Orchestrator. Your exclusive job is to execute the assigned work items from the Task Queue below to completion.
 Do not perform any system monitoring, infrastructure checks, or background reporting.
-The tasks listed below are already claimed and routed into the canonical Task Hub execution lane.
+The work items listed below are already claimed and routed into the canonical Task Hub execution lane.
 Do not re-triage them, do not re-claim them, and do not stop or replace the active Task Hub assignment.
-Your only goal is to execute the assigned tasks, deliver results, then disposition them durably in Task Hub.
+Your only goal is to execute the assigned work items, deliver results, then disposition them durably in Task Hub.
 
 ### Tool Constraints (CRITICAL):
-- To interact with Task Hub (the To-Do list framework where tasks are tracked), strictly use `mcp__internal__task_hub_task_action`.
+- To interact with Task Hub (the durable work-item framework shown in the To Do List), strictly use `mcp__internal__task_hub_task_action`.
 - To send emails, strictly use `mcp__internal__send_agentmail`.
 - NEVER write Python scripts, Bash scripts, or use `curl` to interact with AgentMail or Task Hub. Exclusively use the provided native MCP tools.
 - Legacy external task-manager flows are retired. ALL missions are managed through Task Hub.
 - You are the ONLY canonical executor for trusted email tasks and tracked interactive chat tasks. Hook sessions may triage and optionally send a short receipt acknowledgement, but they must not deliver the final report or final response.
-- Do NOT use Claude meta task tools such as `Task`, `TaskStop`, or `Agent` in this lane. They do not mutate Task Hub state.
+- Internal execution steps may use Claude delegation (`Task` / `Agent`) when the execution manifest calls for sanctioned specialist work.
+- Do NOT use `TaskStop` in this lane. It does not mutate Task Hub state and is never the right lifecycle primitive here.
 
 ### Execution Recovery (CRITICAL):
 If a dependency or downstream execution path is unavailable, recover only with tools that are actually available in this run.
 Do not invent fallback tools, do not assume Bash access, and do not force a delegation lane that the current task did not request.
-If you believe a task still needs a claim step, treat that as already satisfied and continue execution.
-If the task genuinely cannot proceed, disposition it via `mcp__internal__task_hub_task_action` with `review` or `block` and include the concrete missing dependency or system mismatch in the note.
+If you believe a work item still needs a claim step, treat that as already satisfied and continue execution.
+If the work item genuinely cannot proceed, disposition it via `mcp__internal__task_hub_task_action` with `review` or `block` and include the concrete missing dependency or system mismatch in the note.
 
-After finishing work, ALWAYS disposition every claimed task via `mcp__internal__task_hub_task_action` (`complete`, `review`, `block`, or `park`).
+After finishing work, ALWAYS disposition every claimed work item via `mcp__internal__task_hub_task_action` (`complete`, `review`, `block`, or `park`).
 """
 
 
@@ -46,7 +155,7 @@ def build_todo_execution_prompt(
 ) -> str:
     """Build the canonical Task Hub execution prompt."""
     lines = ["== TASK QUEUE =="]
-    lines.append(f"You have {len(claimed_items)} task(s) to process.")
+    lines.append(f"You have {len(claimed_items)} work item(s) to process.")
     if origin_label:
         lines.append(f"Origin: {origin_label}")
     lines.append("")
@@ -108,14 +217,25 @@ def build_todo_execution_prompt(
         t_id = str(item.get("task_id") or "")
         title = str(item.get("title") or "(untitled)")
         desc = str(item.get("description") or "").strip()
-        lines.append(f"Task {idx}: [{t_id}] {title}")
+        lines.append(f"Work Item {idx}: [{t_id}] {title}")
         lines.append(f"Description: {desc}")
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         delivery_mode = str(metadata.get("delivery_mode") or "standard_report").strip()
+        manifest = resolve_execution_manifest(
+            metadata,
+            fallback_description=desc,
+            final_channel="chat" if delivery_mode == "interactive_chat" else "email",
+        )
+        lines.append("== EXECUTION MANIFEST ==")
+        lines.append(f"workflow_kind={manifest['workflow_kind']}")
         lines.append(f"Delivery Mode: {delivery_mode}")
+        lines.append(f"requires_pdf={str(bool(manifest['requires_pdf'])).lower()}")
+        lines.append(f"final_channel={manifest['final_channel']}")
+        lines.append(f"canonical_executor={manifest['canonical_executor']}")
         routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
         if routing:
             lines.append(f"Routing Hint: {routing}")
+        lines.append("")
     return f"{TODO_DISPATCH_PROMPT}\n\n" + "\n".join(lines)
 
 

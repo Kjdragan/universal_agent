@@ -2589,6 +2589,7 @@ class HooksService:
 
         try:
             from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+            from universal_agent.services.todo_dispatch_service import build_execution_manifest
             from universal_agent.task_hub import (
                 ensure_schema,
                 get_item,
@@ -2639,6 +2640,8 @@ class HooksService:
                 try:
                     item = get_item(conn, task_id) or {}
                     metadata = dict(item.get("metadata") or {})
+                    title = str(item.get("title") or "").strip()
+                    description = str(item.get("description") or "").strip()
                     triage = dict(metadata.get("hook_triage") or {})
                     if isinstance(execution_summary, str):
                         summary_text = execution_summary
@@ -2659,6 +2662,15 @@ class HooksService:
                     )
                     metadata["hook_triage"] = triage
                     metadata.setdefault("canonical_execution_owner", "todo_dispatcher")
+                    metadata.setdefault(
+                        "workflow_manifest",
+                        build_execution_manifest(
+                            user_input="\n".join(part for part in (title, description) if part).strip(),
+                            delivery_mode=str(metadata.get("delivery_mode") or "standard_report"),
+                            final_channel="email",
+                            canonical_executor="simone_first",
+                        ),
+                    )
                     upsert_item(
                         conn,
                         {

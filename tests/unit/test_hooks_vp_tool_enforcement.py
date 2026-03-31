@@ -501,3 +501,59 @@ def test_delivery_only_creative_prompt_does_not_enforce_research_delegate_first(
         )
     )
     assert result == {}
+
+
+def test_todo_execution_manifest_enforces_research_delegate_first_without_prompt_keywords():
+    hooks = AgentHookSet(run_id="unit-todo-manifest-research")
+    hooks._resolved_run_kind = "todo_execution"
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {
+                "prompt": (
+                    "You are Simone.\n"
+                    "== EXECUTION MANIFEST ==\n"
+                    "workflow_kind=research_report_email\n"
+                    "delivery_mode=standard_report\n"
+                    "requires_pdf=true\n"
+                    "final_channel=email\n"
+                    "canonical_executor=simone_first\n\n"
+                    "Work Item 1: [email:1] Please help with this request."
+                )
+            }
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+                "tool_input": {"queries": [{"use_case": "search news"}]},
+            },
+            "tool-search-before-research-task",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "research-specialist" in str(result.get("systemMessage", ""))
+
+
+def test_todo_execution_blocks_ask_user_questions_and_requires_durable_disposition():
+    hooks = AgentHookSet(run_id="unit-todo-no-human-question")
+    hooks._resolved_run_kind = "todo_execution"
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__internal__ask_user_questions",
+                "tool_input": {
+                    "questions": "Please resolve this policy conflict.",
+                },
+            },
+            "tool-human-question",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "task_hub_task_action" in str(result.get("systemMessage", ""))

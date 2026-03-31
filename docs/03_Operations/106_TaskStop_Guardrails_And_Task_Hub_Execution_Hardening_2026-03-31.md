@@ -60,19 +60,25 @@ This system is mutated through Task Hub lifecycle tools such as:
 - `task_hub_task_action(action="park")`
 - `task_hub_task_action(action="delegate")`
 
-When a task is running in the canonical ToDo lane, **Task Hub is the source of truth**.
+When a work item is running in the canonical ToDo lane, **Task Hub is the source of truth** for the outer lifecycle.
+
+What changed after the March 31 follow-up alignment is important:
+
+- the durable **Task Hub work item** remains the only thing shown in the To Do List
+- SDK `Task` / `Agent` delegation is again allowed as an internal execution mechanism inside `todo_execution` when the work item's execution manifest requires the golden research/report path
+- `TaskStop` remains blocked because it collides with Task Hub lifecycle ownership
 
 ## 3. What Went Wrong Before
 
 Before this hardening work, `todo_execution` runs had two problems:
 
-### Problem 1: The model could still think in SDK-task terms
+### Problem 1: The model could still think in the wrong SDK-task terms
 
-Even though the task had already been claimed in Task Hub, the runtime still left enough room for the model to attempt Claude-side controls like `TaskStop`.
+Even though the work item had already been claimed in Task Hub, the runtime still left enough room for the model to attempt Claude-side controls like `TaskStop`.
 
 That caused bad behavior such as:
 
-- trying to stop a Task Hub item with an SDK stop tool
+- trying to stop a Task Hub work item with an SDK stop tool
 - treating `email:...` or `chat:...` IDs like Claude task IDs
 - producing work products without ever recording the correct Task Hub disposition
 
@@ -111,7 +117,7 @@ Simone starts real work
 Runtime drifts into SDK task-control mindset
         |
         v
-TaskStop is attempted against a Task Hub ID
+TaskStop is attempted against a Task Hub work-item ID
         |
         v
 Tool call errors or is semantically wrong
@@ -287,7 +293,7 @@ This work fits into the larger pipeline hardening completed at the same time:
 
 - trusted email now defaults to one canonical Task Hub item per inbound request
 - tracked chat can enter the same Task Hub lifecycle
-- `todo_execution` blocks Claude meta task tools as a second backstop
+- `todo_execution` blocks `TaskStop` as a second backstop while still allowing sanctioned SDK delegation inside the run
 - redundant claim attempts are idempotent in the Task Hub bridge
 
 Together, these changes moved the project closer to one central execution model instead of multiple partially-overlapping ones.
@@ -302,7 +308,7 @@ If you remember only one thing, remember this:
 
 ### Correct mental model
 
-"The transport can vary, but once work enters the canonical lane, Task Hub owns the lifecycle. SDK task controls are either blocked or tightly constrained."
+"The transport can vary, but once work enters the canonical lane, Task Hub owns the lifecycle. Internal SDK delegation may still happen inside the run, but `TaskStop` and lifecycle ownership stay constrained by Task Hub."
 
 That mental model is what makes the system repeatable.
 

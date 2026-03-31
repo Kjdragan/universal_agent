@@ -30,6 +30,8 @@ The primary agent (Simone) should produce this ordered tool sequence:
 ```
 
 > **Key rule:** The FIRST tool call must be productive work, not cleanup/housekeeping.
+>
+> **Task Hub note:** when this workflow runs through the canonical To Do lane, the outer durable object is still a single Task Hub **work item**. The `Task(research-specialist)` and `Task(report-writer)` calls below are transient internal execution steps, not extra Task Hub rows.
 
 ### Acceptable Variations
 

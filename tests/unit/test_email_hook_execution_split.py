@@ -63,6 +63,7 @@ def test_email_hook_triage_records_metadata_without_completing_task(monkeypatch,
     assert item is not None
     assert item["status"] == task_hub.TASK_STATUS_OPEN
     assert item["metadata"]["canonical_execution_owner"] == "todo_dispatcher"
+    assert item["metadata"]["workflow_manifest"]["canonical_executor"] == "simone_first"
     assert item["metadata"]["hook_triage"]["session_id"] == "session_hook_agentmail_thread_1"
 
 

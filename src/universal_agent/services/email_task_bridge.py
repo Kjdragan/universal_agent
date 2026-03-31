@@ -61,6 +61,18 @@ def infer_delivery_mode(*, subject: str = "", body: str = "") -> str:
     return "standard_report"
 
 
+def _build_email_execution_manifest(*, subject: str, body: str) -> dict[str, Any]:
+    from universal_agent.services.todo_dispatch_service import build_execution_manifest
+
+    delivery_mode = infer_delivery_mode(subject=subject, body=body)
+    return build_execution_manifest(
+        user_input=f"{subject}\n{body}".strip(),
+        delivery_mode=delivery_mode,
+        final_channel="email",
+        canonical_executor="simone_first",
+    )
+
+
 def _workflow_lineage_lines(
     *,
     workflow_run_id: str = "",
@@ -792,6 +804,7 @@ class EmailTaskBridge:
                 "source_system": "agentmail",
                 "delivery_mode": infer_delivery_mode(subject=subject, body=reply_text),
                 "canonical_execution_owner": "todo_dispatcher",
+                "workflow_manifest": _build_email_execution_manifest(subject=subject, body=reply_text),
             }
             if workflow_run_id:
                 metadata["workflow_run_id"] = workflow_run_id

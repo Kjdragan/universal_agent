@@ -1039,7 +1039,7 @@ export default function ToDoListDashboardPage() {
     );
   };
 
-  // ── Task details modal ────────────────────────────────────────────────────────
+  // ── Work item details modal ───────────────────────────────────────────────────
 
   const renderTaskDetailsModal = () => {
     if (!selectedTaskDetails) return null;
@@ -1048,7 +1048,7 @@ export default function ToDoListDashboardPage() {
         <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl">
           <div className="flex items-center justify-between border-b border-border bg-background/50 p-4">
             <div>
-              <h2 className="text-lg font-semibold text-foreground">Task Details</h2>
+              <h2 className="text-lg font-semibold text-foreground">Work Item Details</h2>
               <p className="text-xs text-muted-foreground">{selectedTaskDetails.task_id}</p>
             </div>
             <button
@@ -1154,14 +1154,14 @@ export default function ToDoListDashboardPage() {
     );
   };
 
-  // ── Task history panel ────────────────────────────────────────────────────────
+  // ── Work item history panel ───────────────────────────────────────────────────
 
   const renderTaskHistoryPanel = () => (
     <section className="rounded-xl border border-border bg-background/70 p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">Task History</h2>
-          <p className="text-xs text-muted-foreground">Assignment/evaluation trail and links to session artifacts.</p>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">Work Item History</h2>
+          <p className="text-xs text-muted-foreground">Assignment/evaluation trail and links to run artifacts.</p>
         </div>
         {taskHistory ? (
           <button
@@ -1173,12 +1173,12 @@ export default function ToDoListDashboardPage() {
         ) : null}
       </div>
       {!taskHistory ? (
-        <p className="text-xs text-muted-foreground italic">Select "Review" on any task to load run history.</p>
+        <p className="text-xs text-muted-foreground italic">Select "Review" on any work item to load run history.</p>
       ) : (
         <div className="space-y-3 text-xs">
           <div className="rounded border border-border/70 bg-background/50 p-2">
             <div className="font-semibold text-foreground flex items-baseline gap-2 min-w-0">
-              <span className="shrink-0">{taskHistory.task?.title || taskHistory.task?.task_id || "Task"}</span>
+              <span className="shrink-0">{taskHistory.task?.title || taskHistory.task?.task_id || "Work Item"}</span>
               {taskHistory.task?.description && (
                 <span className="text-[11px] font-normal text-muted-foreground truncate">— {taskHistory.task.description.slice(0, 100)}{taskHistory.task.description.length > 100 ? "…" : ""}</span>
               )}
@@ -1581,7 +1581,7 @@ export default function ToDoListDashboardPage() {
         </section>
       )}
 
-      {/* ── Task History Detail ── */}
+      {/* ── Work Item History Detail ── */}
       {renderTaskHistoryPanel()}
 
       {/* ── Heartbeat Status ── */}

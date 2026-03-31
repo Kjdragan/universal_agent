@@ -247,6 +247,65 @@ def test_finalize_assignments_heartbeat_keeps_explicitly_completed_items_complet
         conn.close()
 
 
+def test_finalize_assignments_todo_failure_retries_then_exhausts_to_review(monkeypatch) -> None:
+    conn = _conn()
+    monkeypatch.setenv("UA_TASK_HUB_TODO_MAX_RETRIES", "2")
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:todo-failure",
+                "source_kind": "email",
+                "title": "Work item retry candidate",
+                "description": "Should retry once then move to review",
+                "project_key": "immediate",
+                "priority": 4,
+                "labels": ["agent-ready", "must-complete"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "must_complete": True,
+                "agent_ready": True,
+            },
+        )
+
+        first_claim = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="todo:daemon_simone_todo")
+        first_assignment = str(first_claim[0]["assignment_id"])
+        first = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[first_assignment],
+            state="failed",
+            result_summary="todo_failed",
+            reopen_in_progress=True,
+            policy="todo",
+        )
+        assert first["reopened"] == 1
+        assert first["retry_exhausted"] == 0
+        reopened_item = task_hub.get_item(conn, "task:todo-failure")
+        assert reopened_item is not None
+        assert reopened_item["status"] == task_hub.TASK_STATUS_OPEN
+        assert reopened_item["metadata"]["dispatch"]["todo_retry_count"] == 1
+
+        second_claim = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="todo:daemon_simone_todo")
+        second_assignment = str(second_claim[0]["assignment_id"])
+        second = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[second_assignment],
+            state="failed",
+            result_summary="todo_failed_again",
+            reopen_in_progress=True,
+            policy="todo",
+        )
+        assert second["reopened"] == 0
+        assert second["reviewed"] == 1
+        assert second["retry_exhausted"] == 1
+        exhausted_item = task_hub.get_item(conn, "task:todo-failure")
+        assert exhausted_item is not None
+        assert exhausted_item["status"] == task_hub.TASK_STATUS_REVIEW
+        assert exhausted_item["metadata"]["dispatch"]["last_disposition_reason"] == "todo_retry_exhausted"
+    finally:
+        monkeypatch.delenv("UA_TASK_HUB_TODO_MAX_RETRIES", raising=False)
+        conn.close()
+
+
 def test_release_stale_assignments_abandons_old_heartbeat_claims() -> None:
     conn = _conn()
     try:

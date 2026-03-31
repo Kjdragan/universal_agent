@@ -41,15 +41,11 @@ DISALLOWED_TOOLS = [
 ]
 
 # ToDo execution is the canonical delivery lane for already-claimed Task Hub
-# work. Claude's own meta task/delegation tools create a parallel planner loop
-# that bypasses Task Hub state, so they are blocked only in that run kind.
+# work. The SDK's internal decomposition tools are still valid inside this lane;
+# only lifecycle-colliding controls such as TaskStop stay blocked here.
 TODO_EXECUTION_DISALLOWED_TOOLS = [
-    "Task",
-    "task",
     "TaskStop",
     "taskstop",
-    "Agent",
-    "agent",
 ]
 
 # Hook-level blocked tools: INTENTIONALLY EMPTY.

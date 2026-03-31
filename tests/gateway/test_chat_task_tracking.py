@@ -92,6 +92,8 @@ def test_prepare_tracked_chat_execution_claims_task_and_builds_prompt(monkeypatc
     assert item["status"] == task_hub.TASK_STATUS_IN_PROGRESS
     assert item["source_kind"] == "chat_panel"
     assert item["metadata"]["delivery_mode"] == "interactive_chat"
+    assert item["metadata"]["workflow_manifest"]["workflow_kind"] == "research_report_chat"
+    assert item["metadata"]["workflow_manifest"]["final_channel"] == "chat"
     assert history["assignments"][0]["provider_session_id"] == "session_chat_001"
 
 
@@ -164,4 +166,5 @@ def test_todo_execution_request_uses_stricter_tool_policy():
     policy = _extra_disallowed_tools_for_request({"run_kind": "todo_execution"})
 
     assert "TaskStop" in policy
-    assert "Agent" in policy
+    assert "Task" not in policy
+    assert "Agent" not in policy

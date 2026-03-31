@@ -6326,10 +6326,14 @@ def _prepare_tracked_chat_execution(
     client_turn_id: str = "",
 ) -> dict[str, Any]:
     from universal_agent.services.capacity_governor import capacity_snapshot
-    from universal_agent.services.todo_dispatch_service import build_todo_execution_prompt
+    from universal_agent.services.todo_dispatch_service import (
+        build_execution_manifest,
+        build_todo_execution_prompt,
+    )
 
     task_id = f"chat:{session.session_id}:{turn_id}"
     delivery_mode = _infer_tracked_chat_delivery_mode(original_user_input)
+    final_channel = "email" if delivery_mode != "interactive_chat" else "chat"
     task_metadata = {
         "delivery_mode": delivery_mode,
         "canonical_execution_owner": "interactive_chat_session",
@@ -6338,6 +6342,12 @@ def _prepare_tracked_chat_execution(
         "origin_turn_id": turn_id,
         "client_turn_id": client_turn_id or "",
         "original_user_input": original_user_input,
+        "workflow_manifest": build_execution_manifest(
+            user_input=original_user_input,
+            delivery_mode=delivery_mode,
+            final_channel=final_channel,
+            canonical_executor="simone_first",
+        ),
     }
     task_row = {
         "task_id": task_id,

@@ -101,7 +101,7 @@ const RefreshContext = createContext<RefreshContextType>({
   isRefreshing: false,
 });
 
-// Active Tasks Panel (Task Queue Overview)
+// Active Work Items Panel (Task Queue Overview)
 function ActiveTasksPanel() {
   const [loading, setLoading] = useState(true);
   const { refreshKey } = useContext(RefreshContext);
@@ -123,7 +123,7 @@ function ActiveTasksPanel() {
       const json = await res.json();
       setData(json as AgentQueuePayload);
     } catch (err: any) {
-      setError(err.message || "Failed to load active tasks");
+      setError(err.message || "Failed to load active work items");
     } finally {
       setLoading(false);
     }
@@ -139,7 +139,7 @@ function ActiveTasksPanel() {
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium text-foreground/80">Active Tasks</h2>
+            <h2 className="text-sm font-medium text-foreground/80">Active Work Items</h2>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -174,7 +174,7 @@ function ActiveTasksPanel() {
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium text-foreground/80">Active Tasks</h2>
+            <h2 className="text-sm font-medium text-foreground/80">Active Work Items</h2>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -213,7 +213,7 @@ function ActiveTasksPanel() {
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Active Tasks</h2>
+          <h2 className="text-sm font-medium text-foreground/80">Active Work Items</h2>
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -233,7 +233,7 @@ function ActiveTasksPanel() {
 
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No active tasks</p>
+          <p className="text-sm text-muted-foreground">No active work items</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">

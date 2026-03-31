@@ -5,7 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-31 — trusted AgentMail inbound now defaults to one canonical Task Hub item per inbound request, disjoint email splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, tracked chat-panel requests now enter the same Task Hub / `todo_execution` lifecycle, the gateway accepts both `query` and `execute` websocket message types, and `todo_execution` still requires a durable Task Hub lifecycle mutation or a server-side auto-linked VP delegation.
+> **Last updated:** 2026-03-31 — trusted AgentMail inbound now defaults to one canonical Task Hub item per inbound request, disjoint email splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, tracked chat-panel requests now enter the same Task Hub / `todo_execution` lifecycle, the gateway accepts both `query` and `execute` websocket message types, and `todo_execution` now preserves the golden-run delegation path while still requiring a durable Task Hub lifecycle mutation.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
@@ -712,9 +712,18 @@ async def task_hub_task_action_wrapper(args):
 
 **Enforcement rule**: a `todo_execution` turn is only considered valid if it ends with one of these lifecycle mutations. If Simone successfully dispatches a VP mission but forgets `task_hub_task_action(action='delegate', ...)`, the gateway auto-links the returned `mission_id` into Task Hub delegation. Pure prose like “mission queued” with no durable mutation is invalid and the task is reopened or routed to review instead of being left `in_progress` / `seized`. There is one narrow server-side repair path for final-delivery work: if the run satisfied the email-delivery contract, recorded a durable outbound-delivery side effect, and never wrote any Task Hub lifecycle action at all, the gateway now synthesizes `complete` on the claimed task instead of reopening it. If outbound final-delivery side effects already occurred but the run still cannot be safely auto-completed, retry is suppressed and the task is routed to review instead of being reopened.
 
-**Execution-lane contract**: `todo_execution` work is already claimed before Simone sees it. The prompt explicitly forbids re-triage and blocks hidden Claude meta tools such as `Task`, `TaskStop`, and `Agent` so the runtime stays inside the canonical Task Hub lifecycle instead of drifting into SDK-side task control.
+**Execution-lane contract**: `todo_execution` work is already claimed before Simone sees it. The outer durable object is one **Task Hub work item**. Internal decomposition inside the run remains transient: Simone may still use sanctioned Claude delegation such as `Task(research-specialist, ...)` or `Agent(report-writer, ...)` when the work item's execution manifest requires the golden research/report path. `TaskStop` remains blocked because it collides with Task Hub lifecycle ownership.
 
-**Hook guardrail**: even if `TaskStop` still appears in model output, the pre-tool guard now resolves the current `run_kind` from durable run state and hard-blocks it in `todo_execution`, `email_triage`, and `heartbeat*` lanes. In general lanes it only passes if the run has prior durable evidence of real SDK `Task`/`Agent` delegation. Block messages are corrective, not just prohibitive.
+**Hook guardrail**: even if `TaskStop` still appears in model output, the pre-tool guard now resolves the current `run_kind` from durable run state and hard-blocks it in `todo_execution`, `email_triage`, and `heartbeat*` lanes. In `todo_execution`, the hook also reads the per-work-item execution manifest embedded in the prompt: research/report manifests require the golden first delegation to `research-specialist`, while human-question tools are blocked so unresolved conflicts become durable `review` / `block` outcomes on the work item instead of conversational deadlocks.
+
+**Two-layer model**:
+
+- **Work item**: the durable Task Hub object shown in the To Do List.
+- **Assignment**: the claim tying a work item to Simone or another executor.
+- **Run**: one execution attempt for a claimed assignment.
+- **Step**: a transient internal execution step inside that run.
+
+Task Hub only tracks the outer work item and its assignment lifecycle. SDK `TodoWrite`, `Task`, and `Agent` remain transient run-local planning/delegation controls and are not mirrored back into Task Hub as separate rows.
 
 ### task_hub_decompose
 
