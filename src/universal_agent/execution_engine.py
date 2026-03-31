@@ -365,6 +365,7 @@ class EngineConfig:
     force_complex: bool = False
     max_iterations: int = 20
     run_id: Optional[str] = None
+    extra_disallowed_tools: list[str] = field(default_factory=list)
     
     def __post_init__(self):
         if not self.user_id:
@@ -409,6 +410,7 @@ class ProcessTurnAdapter:
         self._event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         self._pending_inputs: dict[str, asyncio.Future[str]] = {}
         self._trace: dict[str, Any] = {}
+        self._applied_extra_disallowed_tools: tuple[str, ...] = tuple()
         
     @property
     def workspace_dir(self) -> str:
@@ -459,17 +461,24 @@ class ProcessTurnAdapter:
             run_id_override=self.config.run_id,
             workspace_dir_override=self.config.workspace_dir,
             attach_stdio=False,
+            extra_disallowed_tools=list(self.config.extra_disallowed_tools or []),
         )
         
         # Update config with resolved values
         self.config.user_id = user_id
         self.config.workspace_dir = workspace_dir
-        
+        self._applied_extra_disallowed_tools = tuple(self.config.extra_disallowed_tools or [])
+
         self._initialized = True
         return self.session_info  # type: ignore
     
     async def _ensure_client(self) -> Any:
         """Lazily initialize and enter the persistent SDK client."""
+        desired_extra_disallowed = tuple(self.config.extra_disallowed_tools or [])
+        if desired_extra_disallowed != self._applied_extra_disallowed_tools:
+            await self.reset()
+            self._initialized = False
+            await self.initialize()
         if self._client is None:
             from claude_agent_sdk.client import ClaudeSDKClient
             from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport

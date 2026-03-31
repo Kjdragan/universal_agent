@@ -2640,12 +2640,21 @@ class HooksService:
                     item = get_item(conn, task_id) or {}
                     metadata = dict(item.get("metadata") or {})
                     triage = dict(metadata.get("hook_triage") or {})
+                    if isinstance(execution_summary, str):
+                        summary_text = execution_summary
+                    elif execution_summary is None:
+                        summary_text = ""
+                    else:
+                        try:
+                            summary_text = json.dumps(execution_summary, ensure_ascii=True, sort_keys=True)
+                        except Exception:
+                            summary_text = str(execution_summary)
                     triage.update(
                         {
                             "triaged_at": datetime.now(timezone.utc).isoformat(),
                             "session_key": session_key,
                             "session_id": session_id,
-                            "summary": execution_summary[:400] if execution_summary else "",
+                            "summary": summary_text[:400] if summary_text else "",
                         }
                     )
                     metadata["hook_triage"] = triage

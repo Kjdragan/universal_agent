@@ -62,7 +62,9 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     assert request.metadata["source"] == "todo_dispatcher"
     assert request.metadata["run_kind"] == "todo_execution"
     assert request.metadata["claimed_task_ids"] == ["email:1"]
-    assert "batch triage" in request.user_input.lower()
+    assert "already claimed" in request.user_input.lower()
+    assert "do not re-triage" in request.user_input.lower()
+    assert "taskstop" in request.user_input.lower()
     assert "capacity snapshot" in request.user_input.lower()
     assert "delivery contract" in request.user_input.lower()
     assert "vp.general.primary" not in request.user_input

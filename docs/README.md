@@ -83,6 +83,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Debugging Lessons Living Document (2026-03-23)](03_Operations/103_Debugging_Lessons_Living_Document.md)**: Living collection of reusable debugging lessons from complex incidents, including target-host verification, fresh-process versus live-service checks, and post-bootstrap env-mutation failures.
 - **[Run/Attempt Lifecycle and Nomenclature Migration Plan (2026-03-24)](03_Operations/104_Run_Attempt_Lifecycle_And_Nomenclature_Migration_Plan_2026-03-24.md)**: Canonical migration plan for moving durable work from session-based terminology to run/attempt/run-workspace terminology, including packet gates, rollback scope, and CSI boundary rules.
 - **[YouTube Tutorial Pipeline Run/Attempt Triage (2026-03-24)](03_Operations/105_YouTube_Tutorial_Pipeline_Run_Attempt_Triage_2026-03-24.md)**: Detailed operational report on the first notification-center audit after the run/attempt refactor, plus the follow-up closure update that moved tutorial hooks and cron admission onto durable run/attempt lifecycle handling.
+- **[TaskStop Guardrails and Task Hub Execution Hardening (2026-03-31)](03_Operations/106_TaskStop_Guardrails_And_Task_Hub_Execution_Hardening_2026-03-31.md)**: Official explainer for the March 31 hardening work, covering SDK task controls versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and why the unified pipeline is more reliable.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

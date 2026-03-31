@@ -41,6 +41,7 @@ from universal_agent.timeout_policy import (
     websocket_connect_kwargs,
 )
 from universal_agent.workspace import seed_workspace_bootstrap
+from universal_agent.constants import TODO_EXECUTION_DISALLOWED_TOOLS
 from universal_agent.vp import (
     CoderVPRuntime,
     MissionDispatchRequest,
@@ -159,6 +160,13 @@ def _allow_prompt_inferred_vp_routing(*, request_source: Any, request_run_kind: 
     if run_kind.startswith("heartbeat"):
         return False
     return True
+
+
+def _extra_disallowed_tools_for_request(metadata: dict[str, Any]) -> list[str]:
+    run_kind = str(metadata.get("run_kind") or "").strip().lower()
+    if run_kind == "todo_execution":
+        return list(TODO_EXECUTION_DISALLOWED_TOOLS)
+    return []
 
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -642,6 +650,7 @@ class InProcessGateway(Gateway):
         run_source = run_source_override or metadata.get("source", "user")
         adapter.config.__dict__["_run_source"] = run_source
         adapter.config.__dict__["_request_metadata"] = dict(metadata)
+        adapter.config.extra_disallowed_tools = _extra_disallowed_tools_for_request(metadata)
 
         memory_policy = metadata.get("memory_policy", {})
         if isinstance(memory_policy, dict):

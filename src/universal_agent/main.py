@@ -38,6 +38,7 @@ from typing import Any, Optional, Callable
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
 from universal_agent.task_stop_guardrails import (
+    evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
     extract_task_stop_id as _shared_extract_task_stop_id,
     task_stop_rejection_reason as _shared_task_stop_rejection_reason,
 )
@@ -1258,102 +1259,12 @@ _READ_BLOCK_IMAGE_EXTS = {
     ".heif",
 }
 
-_TASK_STOP_PLACEHOLDER_IDS = {
-    "",
-    "*",
-    "all",
-    "any",
-    "every",
-    "none",
-    "null",
-    "n/a",
-    "na",
-    "unknown",
-    "task",
-    "taskstop",
-    "task-stop",
-    "dummy",
-    "dummy-stop",
-    "placeholder",
-    "example",
-    "test",
-    "all-tasks",
-    "stop-all",
-    "cancel-all",
-}
-
-
 def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
-    for key in ("task_id", "id", "target_task_id"):
-        value = tool_input.get(key)
-        if value is None:
-            continue
-        return str(value).strip()
-    return ""
+    return _shared_extract_task_stop_id(tool_input)
 
 
 def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
-    """Return rejection reason if the task_id is fabricated, or None if valid.
-
-    Uses an ALLOWLIST approach: only SDK-emitted opaque tokens (ULIDs, UUIDs,
-    or similarly long random alphanumeric strings) are accepted. Everything
-    else — human-readable names, short IDs, descriptive names — is rejected.
-    """
-    clean_id = str(task_id or "").strip()
-    if not clean_id:
-        return "Missing `task_id`."
-
-    lowered = clean_id.lower()
-
-    # Obvious misuse patterns
-    if "," in clean_id:
-        return "Multiple task IDs are not supported in a single call."
-    if lowered in _TASK_STOP_PLACEHOLDER_IDS:
-        return f"Invalid placeholder `task_id` ({clean_id!r})."
-    if lowered in {"all-tasks", "stop-all", "cancel-all"}:
-        return f"Invalid bulk-stop token ({clean_id!r})."
-    if lowered.startswith("session_") or lowered.startswith("run_"):
-        return f"Invalid session/run identifier used as task_id ({clean_id!r})."
-
-    # ALLOWLIST: Real SDK task IDs are opaque tokens with high entropy.
-    # They follow patterns like: "task_01HZYQ7QF1ABCDE" (ULID-based) or
-    # full UUIDs. They do NOT contain human-readable English words.
-
-    # Strip known SDK prefixes to examine the token body
-    body = clean_id
-    for prefix in ("task_", "bg_", "background_"):
-        if lowered.startswith(prefix):
-            body = clean_id[len(prefix) :]
-            break
-
-    # Real SDK tokens are long (16+ chars) and mostly non-word characters
-    # Reject short IDs (< 12 chars in body) — SDK never emits these
-    if len(body) < 12:
-        return (
-            f"Untrusted short `task_id` ({clean_id!r}). Real SDK task IDs are long "
-            "opaque tokens. Begin productive work instead."
-        )
-
-    # Reject IDs containing English-looking word segments (3+ consecutive lowercase letters)
-    # Real SDK IDs use base32/hex which rarely forms English words
-    english_words = re.findall(r"[a-z]{3,}", body.lower())
-    if english_words:
-        # Check if any segment looks like an English word (not hex/base32)
-        hex_base32_chars = set("0123456789abcdef")
-        non_hex_words = [
-            w for w in english_words if not set(w).issubset(hex_base32_chars)
-        ]
-        if non_hex_words:
-            return (
-                f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
-                "are opaque tokens, not descriptive names. Begin productive work instead."
-            )
-
-    return None  # Looks like a real SDK token
-
-
-_extract_task_stop_id = _shared_extract_task_stop_id
-_task_stop_rejection_reason = _shared_task_stop_rejection_reason
+    return _shared_task_stop_rejection_reason(task_id)
 
 
 def _format_tool_display_name(tool_name: str, tool_input: Any) -> str:
@@ -1533,22 +1444,39 @@ async def on_pre_tool_use_ledger(
 
     if normalized_tool_name in ("taskstop", "task_stop"):
         task_id = _extract_task_stop_id(guard_tool_input)
-        reason = _task_stop_rejection_reason(task_id)
-        if reason:
+        decision = _shared_evaluate_task_stop_policy(
+            task_id=task_id,
+            runtime_db_conn=_ctx.runtime_db_conn,
+            run_id=_ctx.run_id,
+            already_stopped=task_id in _ctx.stopped_task_ids,
+            consecutive_failures=_ctx.taskstop_consecutive_failures,
+        )
+        if decision.decision == "block":
+            _ctx.taskstop_consecutive_failures += 1
+            logfire.warning(
+                "taskstop_blocked",
+                run_id=_ctx.run_id,
+                reason=decision.reason,
+                **decision.policy_context,
+            )
+            hook_events.emit_status_event(
+                "Hook: blocked TaskStop",
+                level="WARNING",
+                prefix="Hook",
+                run_id=_ctx.run_id,
+                reason=decision.reason,
+                **decision.policy_context,
+            )
             return {
-                "systemMessage": (
-                    "⚠️ Invalid TaskStop request blocked — no active tasks to manage.\n\n"
-                    f"{reason}\n"
-                    "Redirect: begin productive work now — delegate via Task(), "
-                    "call an MCP tool, or start a search."
-                ),
+                "systemMessage": decision.system_message,
                 "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
+                    "permissionDecisionReason": decision.reason,
                 },
             }
+        _ctx.taskstop_consecutive_failures = 0
 
     tool_call_id = str(tool_use_id or uuid.uuid4())
     if _ctx.gateway_mode_active:
@@ -2451,6 +2379,20 @@ async def on_post_tool_use_ledger(
     PostToolUse Hook: persist tool response to the ledger.
     """
     _ctx = _require_ctx()
+    raw_tool_name = str(input_data.get("tool_name", "") or "")
+    tool_input = input_data.get("tool_input", {}) or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    normalized_tool_name = raw_tool_name.strip().lower()
+    if normalized_tool_name in ("taskstop", "task_stop"):
+        tool_response = input_data.get("tool_response")
+        is_error = bool(input_data.get("is_error"))
+        if isinstance(tool_response, dict):
+            is_error = bool(is_error or tool_response.get("is_error") or tool_response.get("error"))
+        if not is_error:
+            task_id = _extract_task_stop_id(tool_input)
+            if task_id:
+                _ctx.stopped_task_ids.add(task_id)
     if _ctx.tool_ledger is None:
         return {}
 
@@ -2469,7 +2411,6 @@ async def on_post_tool_use_ledger(
         or ""
     )
     side_effect_class = (ledger_entry or {}).get("side_effect_class")
-    tool_input = input_data.get("tool_input", {}) or {}
 
     tool_response = input_data.get("tool_response")
     is_error = False
@@ -8288,6 +8229,7 @@ async def setup_session(
     workspace_dir_override: Optional[str] = None,
     session_prefix: str = "run_",
     attach_stdio: bool = True,
+    extra_disallowed_tools: Optional[list[str]] = None,
 ) -> tuple[ClaudeAgentOptions, Any, str, str, dict, Any]:
     """
     Initialize the agent session, tools, and options.
@@ -8576,6 +8518,15 @@ async def setup_session(
     tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
     disallowed_tools = list(DISALLOWED_TOOLS)
+    if extra_disallowed_tools:
+        disallowed_tools.extend(
+            [
+                str(tool_name).strip()
+                for tool_name in extra_disallowed_tools
+                if str(tool_name).strip()
+            ]
+        )
+        disallowed_tools = list(dict.fromkeys(disallowed_tools))
     if not memory_enabled():
         disallowed_tools.extend(
             [

@@ -203,6 +203,9 @@ Canonical follow-up happens in Task Hub:
 - the hook session records triage metadata on the existing Task Hub item
 - `canonical_execution_owner` remains `todo_dispatcher`
 - the dedicated ToDo executor is responsible for claim, delegation, review, final delivery, and completion
+- once handed off to `todo_execution`, Simone must not re-triage or call SDK meta task controls; execution stays inside Task Hub and must end with a durable lifecycle mutation such as `complete`, `review`, `block`, `park`, or `delegate`
+- hook-side `TaskStop` guardrails now hard-block both `email_triage` and downstream `todo_execution` use, with corrective guidance that points the agent back to triage-only behavior or `task_hub_task_action(...)` as appropriate
+- `task_hub_task_action(action="claim")` is treated as an alias for `seize` and is idempotent for already-claimed work, which prevents retry loops if the model redundantly asks to claim an in-progress task
 
 ---
 

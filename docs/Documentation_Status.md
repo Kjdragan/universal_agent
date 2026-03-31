@@ -201,6 +201,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 80 | Google Workspace Integration Retrospective Memo |
 | 99 | **Documentation Drift Maintenance Pipeline** — canonical source-of-truth |
 | 103 | Debugging Lessons Living Document — reusable debugging lessons from complex production incidents |
+| 106 | TaskStop Guardrails and Task Hub Execution Hardening — explainer for the March 31 hardening work: SDK task control versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and the resulting pipeline reliability improvements |
 
 ## Cleanup Summary
 

@@ -40,6 +40,18 @@ DISALLOWED_TOOLS = [
     "mcp__composio__COMPOSIO_FETCH_WEBPAGE",
 ]
 
+# ToDo execution is the canonical delivery lane for already-claimed Task Hub
+# work. Claude's own meta task/delegation tools create a parallel planner loop
+# that bypasses Task Hub state, so they are blocked only in that run kind.
+TODO_EXECUTION_DISALLOWED_TOOLS = [
+    "Task",
+    "task",
+    "TaskStop",
+    "taskstop",
+    "Agent",
+    "agent",
+]
+
 # Hook-level blocked tools: INTENTIONALLY EMPTY.
 # Subagent detection in PreToolUse hooks is UNRELIABLE for foreground Task calls.
 # transcript_path may not differ; parent_tool_use_id is NOT in PreToolUseHookInput.

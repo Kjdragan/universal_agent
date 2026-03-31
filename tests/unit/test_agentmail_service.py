@@ -22,6 +22,7 @@ _BASE_ENV = {
 def _env(monkeypatch, tmp_path):
     for k, v in _BASE_ENV.items():
         monkeypatch.setenv(k, v)
+    monkeypatch.delenv("UA_AGENTMAIL_INBOX_ADDRESSES", raising=False)
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "activity_state.db"))
 
 

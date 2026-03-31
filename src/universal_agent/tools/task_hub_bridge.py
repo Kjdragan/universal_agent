@@ -9,7 +9,10 @@ from claude_agent_sdk import tool
 from universal_agent import task_hub
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
-_LIFECYCLE_ACTIONS = {"review", "complete", "block", "park", "unblock", "delegate", "approve"}
+_ACTION_ALIASES = {
+    "claim": "seize",
+}
+_LIFECYCLE_ACTIONS = {"review", "complete", "block", "park", "unblock", "delegate", "approve", "seize", "claim"}
 
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -24,7 +27,7 @@ def _err(message: str) -> Dict[str, Any]:
     name="task_hub_task_action",
     description=(
         "Perform Task Hub lifecycle actions for an existing task. "
-        "Allowed actions: review, complete, block, park, unblock, delegate, approve. "
+        "Allowed actions: claim, seize, review, complete, block, park, unblock, delegate, approve. "
         "For delegate: set reason=<vp_id> (e.g. 'vp.general.primary') and note='mission_id=<id>'. "
         "For approve: marks a VP-completed pending_review task as completed with sign-off."
     ),
@@ -50,14 +53,34 @@ async def _task_hub_task_action_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         return _err(
             f"unsupported action: {action}. allowed actions: {', '.join(sorted(_LIFECYCLE_ACTIONS))}"
         )
+    action_norm = _ACTION_ALIASES.get(action, action)
 
     conn = connect_runtime_db(get_activity_db_path())
     conn.row_factory = sqlite3.Row
     try:
+        item = task_hub.get_item(conn, task_id)
+        if not item:
+            return _err(f"No task found with ID: {task_id}")
+
+        # ToDo execution tasks are already claimed by the dispatcher. If the
+        # model retries a claim, treat it as a no-op instead of creating a
+        # duplicate assignment or sending it into a retry loop.
+        if action_norm == "seize" and str(item.get("status") or "").strip().lower() == task_hub.TASK_STATUS_IN_PROGRESS:
+            return _ok(
+                {
+                    "success": True,
+                    "task_id": task_id,
+                    "action": action,
+                    "normalized_action": action_norm,
+                    "already_claimed": True,
+                    "item": item,
+                }
+            )
+
         updated = task_hub.perform_task_action(
             conn,
             task_id=task_id,
-            action=action,
+            action=action_norm,
             reason=str(args.get("reason", "") or "").strip(),
             note=str(args.get("note", "") or "").strip(),
             agent_id=str(args.get("agent_id", "heartbeat_agent") or "heartbeat_agent").strip() or "heartbeat_agent",
@@ -72,6 +95,7 @@ async def _task_hub_task_action_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             "success": True,
             "task_id": task_id,
             "action": action,
+            "normalized_action": action_norm,
             "item": updated,
         }
     )

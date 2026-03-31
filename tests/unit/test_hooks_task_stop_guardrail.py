@@ -1,10 +1,41 @@
 import asyncio
+import sqlite3
 
+from universal_agent.durable.ledger import ToolCallLedger
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import start_step, upsert_run
 from universal_agent.hooks import AgentHookSet
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _runtime_conn(*, run_id: str, run_kind: str = "", with_task_evidence: bool = False) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_schema(conn)
+    upsert_run(
+        conn,
+        run_id=run_id,
+        entrypoint="test",
+        run_spec={},
+        run_kind=run_kind or None,
+    )
+    if with_task_evidence:
+        step_id = f"step:{run_id}"
+        start_step(conn, run_id, step_id, 1)
+        ledger = ToolCallLedger(conn)
+        ledger.prepare_tool_call(
+            tool_call_id=f"tool:{run_id}:task",
+            run_id=run_id,
+            step_id=step_id,
+            tool_name="task",
+            tool_namespace="claude_code",
+            raw_tool_name="Task",
+            tool_input={"subagent_type": "research-specialist", "prompt": "collect data"},
+        )
+    return conn
 
 
 def _pre_task_stop(hooks: AgentHookSet, task_id: str | None):
@@ -71,13 +102,15 @@ def test_blocks_task_stop_with_natural_language_task_id():
 
 
 def test_allows_task_stop_with_concrete_task_id():
-    hooks = AgentHookSet(run_id="unit-taskstop-allow")
+    conn = _runtime_conn(run_id="unit-taskstop-allow", with_task_evidence=True)
+    hooks = AgentHookSet(run_id="unit-taskstop-allow", runtime_db_conn=conn)
     result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
     assert result == {}
 
 
 def test_blocks_duplicate_task_stop_after_successful_stop():
-    hooks = AgentHookSet(run_id="unit-taskstop-duplicate")
+    conn = _runtime_conn(run_id="unit-taskstop-duplicate", with_task_evidence=True)
+    hooks = AgentHookSet(run_id="unit-taskstop-duplicate", runtime_db_conn=conn)
     first = _pre_task_stop(hooks, "task_01HZYQ7QF1")
     assert first == {}
 
@@ -151,21 +184,24 @@ def test_blocks_short_id_with_digits():
 
 def test_allows_real_sdk_ulid():
     """Real SDK ULIDs like 'task_01HZYQ7QF1' should pass through."""
-    hooks = AgentHookSet(run_id="unit-taskstop-ulid")
+    conn = _runtime_conn(run_id="unit-taskstop-ulid", with_task_evidence=True)
+    hooks = AgentHookSet(run_id="unit-taskstop-ulid", runtime_db_conn=conn)
     result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
     assert result == {}
 
 
 def test_allows_real_toolu_style_id():
     """Real tool-use IDs like 'toolu_vrtx_01234ABCdef56789' should pass through."""
-    hooks = AgentHookSet(run_id="unit-taskstop-toolu")
+    conn = _runtime_conn(run_id="unit-taskstop-toolu", with_task_evidence=True)
+    hooks = AgentHookSet(run_id="unit-taskstop-toolu", runtime_db_conn=conn)
     result = _pre_task_stop(hooks, "toolu_vrtx_01234ABCdef56789")
     assert result == {}
 
 
 def test_allows_real_uuid_format():
     """Real UUID-format task IDs should pass through."""
-    hooks = AgentHookSet(run_id="unit-taskstop-uuid")
+    conn = _runtime_conn(run_id="unit-taskstop-uuid", with_task_evidence=True)
+    hooks = AgentHookSet(run_id="unit-taskstop-uuid", runtime_db_conn=conn)
     result = _pre_task_stop(hooks, "550e8400-e29b-41d4-a716-446655440000")
     assert result == {}
 
@@ -190,7 +226,8 @@ def test_circuit_breaker_after_consecutive_failures():
 
 def test_circuit_breaker_resets_on_valid_stop():
     """A valid TaskStop resets the circuit-breaker counter."""
-    hooks = AgentHookSet(run_id="unit-taskstop-cb-reset")
+    conn = _runtime_conn(run_id="unit-taskstop-cb-reset", with_task_evidence=True)
+    hooks = AgentHookSet(run_id="unit-taskstop-cb-reset", runtime_db_conn=conn)
     # One failure
     r1 = _pre_task_stop(hooks, "task_fake_001")
     assert r1.get("decision") == "block"
@@ -201,3 +238,54 @@ def test_circuit_breaker_resets_on_valid_stop():
     r3 = _pre_task_stop(hooks, "task_bad_001")
     assert r3.get("decision") == "block"
     assert "circuit-breaker" not in str(r3.get("systemMessage", "")).lower()
+
+
+def test_blocks_taskstop_in_todo_execution_even_with_valid_sdk_id():
+    conn = _runtime_conn(
+        run_id="unit-taskstop-todo",
+        run_kind="todo_execution",
+        with_task_evidence=True,
+    )
+    hooks = AgentHookSet(run_id="unit-taskstop-todo", runtime_db_conn=conn)
+    result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
+    assert result.get("decision") == "block"
+    text = str(result.get("systemMessage", "")).lower()
+    assert "task hub" in text
+    assert "task_hub_task_action" in text
+    assert "complete" in text
+    assert "review" in text
+
+
+def test_blocks_taskstop_in_email_triage_even_with_valid_sdk_id():
+    conn = _runtime_conn(
+        run_id="unit-taskstop-email-triage",
+        run_kind="email_triage",
+        with_task_evidence=True,
+    )
+    hooks = AgentHookSet(run_id="unit-taskstop-email-triage", runtime_db_conn=conn)
+    result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
+    assert result.get("decision") == "block"
+    text = str(result.get("systemMessage", "")).lower()
+    assert "triage-only" in text
+    assert "dedicated todo executor" in text
+    assert "final delivery" in text
+
+
+def test_blocks_taskstop_in_heartbeat_lane_even_with_valid_sdk_id():
+    conn = _runtime_conn(
+        run_id="unit-taskstop-heartbeat",
+        run_kind="heartbeat_health_check",
+        with_task_evidence=True,
+    )
+    hooks = AgentHookSet(run_id="unit-taskstop-heartbeat", runtime_db_conn=conn)
+    result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
+    assert result.get("decision") == "block"
+    assert "heartbeat/proactive workflow" in str(result.get("systemMessage", "")).lower()
+
+
+def test_blocks_valid_sdk_id_without_prior_task_evidence():
+    conn = _runtime_conn(run_id="unit-taskstop-no-sdk", run_kind="general")
+    hooks = AgentHookSet(run_id="unit-taskstop-no-sdk", runtime_db_conn=conn)
+    result = _pre_task_stop(hooks, "task_01HZYQ7QF1")
+    assert result.get("decision") == "block"
+    assert "no active sdk-managed task is known in this run" in str(result.get("systemMessage", "")).lower()

@@ -155,3 +155,13 @@ def test_gateway_ws_accepts_query_message_alias(ws_client, tmp_path, monkeypatch
                 seen_query_complete = True
                 break
         assert seen_query_complete is True
+
+
+def test_todo_execution_request_uses_stricter_tool_policy():
+    assert gateway_server._normalize_run_kind("todo_execution") == "todo_execution"
+    from universal_agent.gateway import _extra_disallowed_tools_for_request
+
+    policy = _extra_disallowed_tools_for_request({"run_kind": "todo_execution"})
+
+    assert "TaskStop" in policy
+    assert "Agent" in policy

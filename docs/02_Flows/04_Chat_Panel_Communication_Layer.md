@@ -171,6 +171,7 @@ Key implementation points:
 - Tracked chat tasks get Task Hub IDs in the form `chat:{session_id}:{turn_id}`.
 - The current interactive session immediately claims that task instead of waiting for the background ToDo sweep.
 - The execution prompt is built from the same canonical Task Hub prompt builder used by the dedicated ToDo dispatcher.
+- Because tracked chat work runs as `todo_execution`, the gateway also applies the same stricter tool policy used by the dedicated ToDo daemon and blocks Claude meta task controls such as `Task`, `TaskStop`, and `Agent`.
 - Chat-originated tasks default to `delivery_mode="interactive_chat"` so final delivery stays in the chat session unless the user explicitly asks for email.
 - The original user request is preserved separately for mission-guardrail evaluation so the Task Hub wrapper prompt does not accidentally force email delivery semantics.
 

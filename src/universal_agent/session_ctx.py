@@ -83,6 +83,8 @@ class SessionContext:
     forced_tool_queue: list = field(default_factory=list)
     forced_tool_active_ids: dict = field(default_factory=dict)
     forced_tool_mode_active: bool = False
+    stopped_task_ids: set = field(default_factory=set)
+    taskstop_consecutive_failures: int = 0
 
     # ------------------------------------------------------------------ transcript
     primary_transcript_path: Optional[str] = None

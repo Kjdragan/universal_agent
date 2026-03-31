@@ -37,7 +37,9 @@ from universal_agent.identity import (
     validate_recipient_policy,
 )
 from universal_agent.task_stop_guardrails import (
+    evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
     extract_task_stop_id as _shared_extract_task_stop_id,
+    resolve_task_stop_run_kind as _shared_resolve_task_stop_run_kind,
     task_stop_rejection_reason as _shared_task_stop_rejection_reason,
 )
 import logfire
@@ -173,99 +175,12 @@ _YOUTUBE_SUBAGENT_ALIASES = {
     "youtube-explainer-expert",
 }
 
-_TASK_STOP_PLACEHOLDER_IDS = {
-    "",
-    "*",
-    "all",
-    "any",
-    "every",
-    "none",
-    "null",
-    "n/a",
-    "na",
-    "unknown",
-    "task",
-    "taskstop",
-    "task-stop",
-    "dummy",
-    "dummy-stop",
-    "placeholder",
-    "example",
-    "test",
-}
-
-
 def _extract_task_stop_id(tool_input: dict[str, Any]) -> str:
-    for key in ("task_id", "id", "target_task_id"):
-        value = tool_input.get(key)
-        if value is None:
-            continue
-        return str(value).strip()
-    return ""
+    return _shared_extract_task_stop_id(tool_input)
 
 
 def _task_stop_rejection_reason(task_id: str) -> Optional[str]:
-    """Return rejection reason if the task_id is fabricated, or None if valid.
-    
-    Uses an ALLOWLIST approach: only SDK-emitted opaque tokens (ULIDs, UUIDs,
-    or similarly long random alphanumeric strings) are accepted. Everything
-    else — human-readable names, short IDs, descriptive names — is rejected.
-    """
-    clean_id = str(task_id or "").strip()
-    if not clean_id:
-        return "Missing `task_id`."
-
-    lowered = clean_id.lower()
-
-    # Obvious misuse patterns
-    if "," in clean_id:
-        return "Multiple task IDs are not supported in a single call."
-    if lowered in _TASK_STOP_PLACEHOLDER_IDS:
-        return f"Invalid placeholder `task_id` ({clean_id!r})."
-    if lowered in {"all-tasks", "stop-all", "cancel-all"}:
-        return f"Invalid bulk-stop token ({clean_id!r})."
-    if lowered.startswith("session_") or lowered.startswith("run_"):
-        return f"Invalid session/run identifier used as task_id ({clean_id!r})."
-
-    # ALLOWLIST: Real SDK task IDs are opaque tokens with high entropy.
-    # They follow patterns like: "task_01HZYQ7QF1ABCDE" (ULID-based) or 
-    # full UUIDs. They do NOT contain human-readable English words.
-    # Reject anything containing 3+ consecutive lowercase letters that
-    # form recognizable word patterns.
-    
-    # Strip known SDK prefixes to examine the token body
-    body = clean_id
-    for prefix in ("task_", "bg_", "background_"):
-        if lowered.startswith(prefix):
-            body = clean_id[len(prefix):]
-            break
-    
-    # Real SDK tokens are long (16+ chars) and mostly non-word characters
-    # Reject short IDs (< 12 chars in body) — SDK never emits these
-    if len(body) < 12:
-        return (
-            f"Untrusted short `task_id` ({clean_id!r}). Real SDK task IDs are long "
-            "opaque tokens. Begin productive work instead."
-        )
-    
-    # Reject IDs containing English-looking word segments (3+ consecutive lowercase letters)
-    # Real SDK IDs use base32/hex which rarely forms English words
-    english_words = re.findall(r'[a-z]{3,}', body.lower())
-    if english_words:
-        # Check if any segment looks like an English word (not hex/base32)
-        hex_base32_chars = set('0123456789abcdef')
-        non_hex_words = [w for w in english_words if not set(w).issubset(hex_base32_chars)]
-        if non_hex_words:
-            return (
-                f"Untrusted human-readable `task_id` ({clean_id!r}). Real SDK task IDs "
-                "are opaque tokens, not descriptive names. Begin productive work instead."
-            )
-
-    return None  # Looks like a real SDK token
-
-
-_extract_task_stop_id = _shared_extract_task_stop_id
-_task_stop_rejection_reason = _shared_task_stop_rejection_reason
+    return _shared_task_stop_rejection_reason(task_id)
 
 
 
@@ -832,6 +747,7 @@ class AgentHookSet:
         self._youtube_skill_seen_this_turn = False
         self._stopped_task_ids: set[str] = set()
         self._taskstop_consecutive_failures: int = 0
+        self._resolved_run_kind: Optional[str] = None
         self._initial_decomposition_prompt_injected = False
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
@@ -842,6 +758,15 @@ class AgentHookSet:
             "/agent_run_workspaces/cron_" in workspace_norm
             or os.getenv("UA_RUN_SOURCE", "").strip().lower() == "cron"
         )
+
+    def _get_cached_run_kind(self) -> str:
+        if self._resolved_run_kind is not None:
+            return self._resolved_run_kind
+        self._resolved_run_kind = _shared_resolve_task_stop_run_kind(
+            self.runtime_db_conn,
+            self.run_id,
+        )
+        return self._resolved_run_kind
 
     def build_hooks(self) -> dict:
         """Return the hook dictionary compatible with UniversalAgent."""
@@ -1115,60 +1040,40 @@ class AgentHookSet:
                 tool_input = patched_tool_input
 
         if normalized_tool_name in ("taskstop", "task_stop"):
-            # Circuit-breaker: after 2 consecutive failures, hard-redirect
-            if self._taskstop_consecutive_failures >= 2:
-                self._taskstop_consecutive_failures += 1
-                return {
-                    "systemMessage": (
-                        "⛔ Circuit-breaker: action blocked — no active tasks exist to manage. "
-                        f"({self._taskstop_consecutive_failures} consecutive invalid attempts).\n\n"
-                        "REDIRECT: Begin productive work NOW:\n"
-                        "→ Decompose the user request into steps\n"
-                        "→ Call `Task(subagent_type='research-specialist', ...)` or equivalent\n"
-                        "→ Chain results through the pipeline"
-                    ),
-                    "decision": "block",
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": "Circuit-breaker: too many consecutive invalid attempts.",
-                    },
-                }
             task_id = _extract_task_stop_id(tool_input)
-            reason = _task_stop_rejection_reason(task_id)
-            if reason:
+            decision = _shared_evaluate_task_stop_policy(
+                task_id=task_id,
+                runtime_db_conn=self.runtime_db_conn,
+                run_id=self.run_id,
+                explicit_run_kind=self._get_cached_run_kind(),
+                already_stopped=task_id in self._stopped_task_ids,
+                consecutive_failures=self._taskstop_consecutive_failures,
+            )
+            if decision.decision == "block":
                 self._taskstop_consecutive_failures += 1
+                logfire.warning(
+                    "taskstop_blocked",
+                    run_id=self.run_id,
+                    reason=decision.reason,
+                    **decision.policy_context,
+                )
+                emit_status_event(
+                    "Hook: blocked TaskStop",
+                    level="WARNING",
+                    prefix="Hook",
+                    run_id=self.run_id,
+                    reason=decision.reason,
+                    **decision.policy_context,
+                )
                 return {
-                    "systemMessage": (
-                        "⚠️ Invalid TaskStop request blocked — no active tasks to manage.\n\n"
-                        f"{reason}\n"
-                        "Redirect: begin productive work now — delegate via Task(), "
-                        "call an MCP tool, or start a search."
-                    ),
+                    "systemMessage": decision.system_message,
                     "decision": "block",
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
-                        "permissionDecisionReason": reason,
+                        "permissionDecisionReason": decision.reason,
                     },
                 }
-            if task_id in self._stopped_task_ids:
-                reason = f"Duplicate stop request for task_id {task_id!r}."
-                self._taskstop_consecutive_failures += 1
-                return {
-                    "systemMessage": (
-                        "⚠️ Action blocked — this task was already stopped.\n\n"
-                        f"{reason}\n"
-                        "Continue with productive work."
-                    ),
-                    "decision": "block",
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": reason,
-                    },
-                }
-            # Valid TaskStop — reset the circuit-breaker
             self._taskstop_consecutive_failures = 0
 
         # Track transcript paths to detect sub-agent context.
