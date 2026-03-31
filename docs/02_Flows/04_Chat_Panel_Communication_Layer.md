@@ -166,7 +166,8 @@ Normal chat-panel work now has two layers:
 
 Key implementation points:
 
-- The Next.js client still submits over `/ws/agent`, which forwards into `/api/v1/sessions/{session_id}/stream`.
+- The Next.js client still submits over `/ws/agent` on the current browser origin.
+- That browser-facing WebSocket is terminated by `src/universal_agent/api/server.py`, which resumes or creates the session and then bridges/proxies into the gateway session stream.
 - The gateway now accepts both `type: "query"` and `type: "execute"` websocket payloads for chat requests.
 - Tracked chat tasks get Task Hub IDs in the form `chat:{session_id}:{turn_id}`.
 - The current interactive session immediately claims that task instead of waiting for the background ToDo sweep.
@@ -182,11 +183,11 @@ Key implementation points:
 Events flow from the backend to the frontend via WebSocket:
 
 ```
-hook_events.emit_text_event()
-  → _emit_event() → ContextVar callback
-    → event_queue (asyncio.Queue)
-      → gateway.execute() async generator
-        → gateway_server.websocket_stream()
+browser `/ws/agent`
+  → api.server.websocket_agent()
+    → gateway/session bridge
+      → gateway_server.websocket_stream()
+        → gateway.execute() async generator
           → WebSocket JSON: {"type": "text", "data": {...}, "timestamp": "..."}
 ```
 

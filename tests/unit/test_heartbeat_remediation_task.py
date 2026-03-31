@@ -42,6 +42,7 @@ def test_creates_task_hub_item_with_recommended_step(_activity_db):
     assert result["agent_ready"] is True or result["agent_ready"] == 1
     assert result["status"] == "open"
     assert result["project_key"] == "proactive"
+    assert result["trigger_type"] == "immediate"
     assert "heartbeat-fix" in result.get("labels", [])
     assert "Fix the regex" in result.get("description", "")
 
@@ -155,6 +156,11 @@ async def test_investigation_creates_remediation_task_for_actionable_finding(
         gs, "_update_notification_record", lambda *a, **kw: None
     )
     monkeypatch.setattr(gs, "_record_activity_audit", lambda **kw: None)
+    nudge_reasons: list[str] = []
+    monkeypatch.setattr(
+        "universal_agent.services.idle_dispatch_loop.nudge_dispatch",
+        lambda reason="external": nudge_reasons.append(reason),
+    )
 
     created_tasks: list[dict] = []
     original_create = gs._create_heartbeat_remediation_task
@@ -183,6 +189,7 @@ async def test_investigation_creates_remediation_task_for_actionable_finding(
 
     assert len(created_tasks) == 1
     assert created_tasks[0]["task_id"] == "heartbeat_fix:parser_false_positive"
+    assert nudge_reasons == ["heartbeat_remediation:heartbeat_fix:parser_false_positive"]
 
 
 @pytest.mark.asyncio
@@ -205,6 +212,11 @@ async def test_investigation_skips_remediation_when_operator_review_required(
         lambda *a, **kw: (False, "stubbed"),
     )
     monkeypatch.setattr(gs, "_add_notification", lambda **kw: {"id": "stub"})
+    nudge_reasons: list[str] = []
+    monkeypatch.setattr(
+        "universal_agent.services.idle_dispatch_loop.nudge_dispatch",
+        lambda reason="external": nudge_reasons.append(reason),
+    )
 
     created_tasks: list[dict] = []
     original_create = gs._create_heartbeat_remediation_task
@@ -233,3 +245,4 @@ async def test_investigation_skips_remediation_when_operator_review_required(
 
     # Should NOT have created a remediation task
     assert len(created_tasks) == 0
+    assert nudge_reasons == []

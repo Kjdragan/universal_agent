@@ -26,7 +26,7 @@ const nextConfig = {
       },
       {
         source: '/ws/:path*',
-        destination: 'http://localhost:8002/ws/:path*',
+        destination: 'http://localhost:8001/ws/:path*',
       },
     ];
   },

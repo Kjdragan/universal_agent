@@ -22471,6 +22471,7 @@ def _create_heartbeat_remediation_task(
             "labels": ["heartbeat-fix", "agent-ready", "auto-created"],
             "status": "open",
             "agent_ready": True,
+            "trigger_type": "immediate",
             "score": 7.0,
             "score_confidence": 0.72,
             "metadata": {
@@ -22556,7 +22557,7 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
         metadata.get("proposed_changes")
     )
     if has_actionable_fix and not operator_review_required:
-        _create_heartbeat_remediation_task(
+        remediation_task = _create_heartbeat_remediation_task(
             origin_id=origin_id,
             classification=str(metadata.get("classification") or "unknown_issue").strip(),
             recommended_next_step=recommended_next_step,
@@ -22566,6 +22567,15 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
             run_id=str(payload.get("run_id") or metadata.get("run_id") or "").strip() or None,
             attempt_id=str(payload.get("attempt_id") or metadata.get("attempt_id") or "").strip() or None,
         )
+        if remediation_task:
+            try:
+                from universal_agent.services.idle_dispatch_loop import nudge_dispatch
+
+                nudge_dispatch(
+                    reason=f"heartbeat_remediation:{str(remediation_task.get('task_id') or origin_id)[:48]}"
+                )
+            except Exception as exc:
+                logger.debug("Heartbeat remediation dispatch nudge unavailable: %s", exc)
 
     if not should_notify:
         return

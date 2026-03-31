@@ -110,16 +110,16 @@ export class AgentWebSocket {
     }
 
     if (typeof window !== "undefined") {
-      // Use relative protocol (ws for http, wss for https)
+      // Default to the browser-facing websocket path on the current origin.
+      // The Next.js server or API server is responsible for forwarding this
+      // to the authenticated session bridge.
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const hostname = window.location.hostname;
-      const port = window.location.port === "3000" ? "8002" : window.location.port;
-      const host = port ? `${hostname}:${port}` : hostname;
+      const host = window.location.host;
       this.url = `${protocol}//${host}/ws/agent`;
       return;
     }
 
-    this.url = "ws://localhost:8002/ws/agent";
+    this.url = "ws://localhost:8001/ws/agent";
   }
 
   // ==========================================================================

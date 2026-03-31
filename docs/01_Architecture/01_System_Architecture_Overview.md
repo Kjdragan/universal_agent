@@ -17,6 +17,10 @@ graph TB
         CSI["CSI Ingester<br/>(separate process)"]
     end
 
+    subgraph "API Server (:8001)"
+        API["FastAPI API Bridge"]
+    end
+
     subgraph "Gateway Server (:8002)"
         GW["FastAPI Gateway"]
         IPG["InProcessGateway"]
@@ -53,7 +57,8 @@ graph TB
         REGDB[("Factory Registry DB")]
     end
 
-    WebUI <-->|WebSocket| GW
+    WebUI <-->|WebSocket| API
+    API <-->|WS + HTTP bridge| GW
     TG --> GW
     CLI --> IPG
     CSI -->|signed HTTP| GW
@@ -91,7 +96,7 @@ The system runs as **6+ systemd services** on VPS:
 | Service | Port | Purpose |
 |---------|------|---------|
 | `universal-agent-gateway` | 8002 | FastAPI gateway — sessions, WebSocket streaming, ops API, delegation bus |
-| `universal-agent-api` | 8001 | Lightweight API server — dashboard auth, session ownership |
+| `universal-agent-api` | 8001 | Browser-facing API bridge — dashboard auth, session ownership, WebSocket bridge to gateway |
 | `universal-agent-webui` | 3000 | Next.js dashboard — chat, sessions, events, corporation view |
 | `universal-agent-telegram` | — | Telegram bot — long-polling mode, interactive agent access |
 | `universal-agent-vp-worker@vp.general.primary` | — | VP general worker — executes delegated general tasks |

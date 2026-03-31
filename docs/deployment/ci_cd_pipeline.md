@@ -19,7 +19,7 @@ This is the only supported app deployment path in this repository.
 |------|---------|--------|
 | `Codex Review Develop PR` | Pull request to `develop` | Automated PR review |
 | `Deploy Staging` | Push to `develop` | Staging Service |
-| `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA, then dispatch production deploy |
+| `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA, then dispatch production deploy and fail if GitHub does not acknowledge the dispatch with HTTP `204` |
 | `Deploy Production` | Push to `main` | Production Service |
 
 ### Utility and Debug Workflows
@@ -119,6 +119,7 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 5. **Validate staging** against the exact merged `develop` SHA.
 6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
 7. **Production deploy** is dispatched explicitly by the promotion workflow after `main` is advanced.
+8. **Dispatch acknowledgement is mandatory**. The promotion workflow treats any non-`204` response from GitHub's workflow-dispatch API as a failed promotion so production cannot silently skip deployment after `main` moves.
 
 ## Bootstrap Identity Written By Deploys
 

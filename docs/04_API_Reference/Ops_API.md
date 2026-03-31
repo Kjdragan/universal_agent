@@ -143,14 +143,15 @@ These endpoints expose the durable run catalog. They are the canonical browsing 
 ## 5. WebSocket Streaming
 | Endpoint | Protocol | Description |
 |----------|----------|-------------|
-| `/ws/agent` | WebSocket | Primary UI event streaming (compat shim) |
-| `/api/v1/sessions/{session_id}/stream` | WebSocket | Canonical session event stream |
+| `/ws/agent` | WebSocket | Gateway compatibility shim; browser traffic normally reaches the API server's `/ws/agent` bridge first |
+| `/api/v1/sessions/{session_id}/stream` | WebSocket | Canonical gateway session event stream |
 
 ### Connection Flow
 
-1. Client connects to `/ws/agent?session_id=xxx` or `/api/v1/sessions/{session_id}/stream`
-2. Server validates auth if required
-3. Session events stream in real-time
+1. Browser clients normally connect to the API server's `/ws/agent` or `/api/v1/sessions/{session_id}/stream`
+2. The API server validates dashboard auth and owner access, then proxies/bridges to the gateway stream
+3. Trusted internal callers may connect directly to the gateway endpoints
+4. Session events stream in real-time
 
 ### Event Types
 

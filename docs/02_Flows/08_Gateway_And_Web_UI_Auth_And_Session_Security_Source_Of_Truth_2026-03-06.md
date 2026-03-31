@@ -191,10 +191,12 @@ Behavior:
 - enforces owner match if resuming an existing session
 - creates new sessions under the authenticated owner id
 - resumes existing session only after ownership check
+- is the intended browser-facing WebSocket entrypoint for the web UI
 
 Important current behavior:
 - if `UA_GATEWAY_URL` is configured, the API server passively subscribes to gateway session broadcasts so background/system events appear in the UI
 - duplicate active-query events are suppressed while a foreground query is in flight
+- browser traffic should terminate here or at the API server's `/api/v1/sessions/{session_id}/stream`, not directly on the gateway's token-gated WebSocket
 
 ## 2. `/api/v1/sessions/{session_id}/stream`
 
@@ -206,6 +208,7 @@ Behavior:
 - validates dashboard auth unless internal token bypass is present
 - enforces owner check before proxying
 - connects to the gateway stream endpoint and forwards raw stream messages
+- is the browser-facing direct-session attach path when the UI needs a specific existing session
 
 Current close reasons include:
 - `4401` for dashboard login required or unauthorized

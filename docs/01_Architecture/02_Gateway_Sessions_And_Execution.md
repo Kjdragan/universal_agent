@@ -76,6 +76,7 @@ Separately, each durable run has:
 ```mermaid
 sequenceDiagram
     participant Client as Web UI / Telegram
+    participant API as API Server
     participant GW as Gateway Server
     participant IPG as InProcessGateway
     participant PTA as ProcessTurnAdapter
@@ -88,10 +89,13 @@ sequenceDiagram
     IPG-->>GW: GatewaySession
     GW-->>Client: {session_id, workspace_dir}
 
-    Client->>GW: WebSocket /api/v1/sessions/{id}/stream
-    GW-->>Client: {type: "connected"}
+    Client->>API: WebSocket /ws/agent or /api/v1/sessions/{id}/stream
+    API->>GW: bridge to /api/v1/sessions/{id}/stream
+    GW-->>API: {type: "connected"}
+    API-->>Client: {type: "connected"}
 
-    Client->>GW: {type: "execute", user_input: "..."}
+    Client->>API: {type: "execute", user_input: "..."}
+    API->>GW: forward query/session traffic
     GW->>IPG: execute(session, request)
     IPG->>PTA: process_turn(input, workspace)
     PTA->>UA: run_turn(messages)
@@ -101,24 +105,28 @@ sequenceDiagram
     Tools-->>UA: tool result
     UA-->>PTA: AgentEvent(TEXT)
     PTA-->>GW: yield AgentEvent
-    GW-->>Client: {type: "text", data: {...}}
+    GW-->>API: {type: "text", data: {...}}
+    API-->>Client: {type: "text", data: {...}}
     UA-->>PTA: AgentEvent(TOOL_CALL)
     PTA-->>GW: yield AgentEvent
-    GW-->>Client: {type: "tool_call", data: {...}}
+    GW-->>API: {type: "tool_call", data: {...}}
+    API-->>Client: {type: "tool_call", data: {...}}
     UA-->>PTA: done
     PTA-->>GW: yield complete
-    GW-->>Client: {type: "query_complete"}
+    GW-->>API: {type: "query_complete"}
+    API-->>Client: {type: "query_complete"}
 ```
 
 Step-by-step:
 1. Client creates session via `POST /api/v1/sessions` or connects to existing session
-2. Client opens WebSocket to `/api/v1/sessions/{id}/stream`
-3. Client sends `{"type": "execute", "data": {"user_input": "..."}}` over WebSocket
-4. Gateway calls `InProcessGateway.execute()` which delegates to `ProcessTurnAdapter`
-5. `ProcessTurnAdapter` wraps the CLI's `process_turn()` to emit `AgentEvent` objects
-6. Events stream back over WebSocket as JSON messages
-7. `query_complete` event signals the end of execution
-8. **Trace Reconstruction**: Post-execution, `transcript_builder.py` consumes the `trace.json` file to rebuild a human-readable `transcript.md` file containing every event and interaction in order. It relies strictly on globally unique identifiers (`step_id`) rather than local counters (`iteration`) when compiling events, correctly distributing complex multi-turn logic into a sequential output history.
+2. Browser clients open the WebSocket on the API server via `/ws/agent` or `/api/v1/sessions/{id}/stream`
+3. The API server validates dashboard auth and bridges the socket into the gateway session stream
+4. Client sends `{"type": "execute", "data": {"user_input": "..."}}` over WebSocket
+5. Gateway calls `InProcessGateway.execute()` which delegates to `ProcessTurnAdapter`
+6. `ProcessTurnAdapter` wraps the CLI's `process_turn()` to emit `AgentEvent` objects
+7. Events stream back over the gateway and API bridge as JSON messages
+8. `query_complete` event signals the end of execution
+9. **Trace Reconstruction**: Post-execution, `transcript_builder.py` consumes the `trace.json` file to rebuild a human-readable `transcript.md` file containing every event and interaction in order. It relies strictly on globally unique identifiers (`step_id`) rather than local counters (`iteration`) when compiling events, correctly distributing complex multi-turn logic into a sequential output history.
 
 ### Session Ownership and Auth
 

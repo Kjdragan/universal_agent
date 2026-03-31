@@ -1,7 +1,8 @@
 // Staging-specific Next.js config.
 // At deploy time, deploy-staging.yml copies this file over next.config.js
 // inside /opt/universal-agent-staging/web-ui so the staging Next.js server
-// proxies API calls to the staging backend (port 9002) instead of production (8002).
+// proxies API calls to the staging API/gateway bridge (port 9001) and the
+// gateway-backed REST surface (port 9002).
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -32,7 +33,7 @@ const nextConfig = {
       },
       {
         source: '/ws/:path*',
-        destination: 'http://localhost:9002/ws/:path*',
+        destination: 'http://localhost:9001/ws/:path*',
       },
     ];
   },

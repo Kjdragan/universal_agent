@@ -8,22 +8,60 @@ It explains which WebSocket surfaces exist, which ones are primary in current pr
 
 ## Executive Summary
 
-Universal Agent currently uses WebSockets in **three distinct contexts**:
+Universal Agent currently uses WebSockets in **four distinct contexts**:
 
-1. **Gateway session streaming** — the primary user-facing real-time transport for the current web UI
-2. **AgentMail inbound email streaming** — a production WebSocket client connection from the gateway to AgentMail
-3. **Legacy/simple web server chat streaming** — an older standalone WebSocket surface in `src/web/server.py`
+1. **Browser-facing dashboard session streaming** — the authenticated WebSocket surface exposed by the API server for the current web UI
+2. **Gateway session streaming** — the canonical upstream session stream behind the browser-facing bridge
+3. **AgentMail inbound email streaming** — a production WebSocket client connection from the gateway to AgentMail
+4. **Legacy/simple web server chat streaming** — an older standalone WebSocket surface in `src/web/server.py`
 
 These are not the same subsystem and should not be documented as one thing.
 
 The current primary production WebSocket paths are:
-- `ws://.../ws/agent`
-- `ws://.../api/v1/sessions/{session_id}/stream`
+- browser-facing `ws://.../ws/agent`
+- browser-facing `ws://.../api/v1/sessions/{session_id}/stream`
+- upstream gateway `ws://gateway.../api/v1/sessions/{session_id}/stream`
 - AgentMail SDK WebSocket connection inside `AgentMailService`
 
 ## Canonical WebSocket Surfaces
 
-## 1. Gateway Session Streaming — Primary UI Transport
+## 1. Browser-Facing UI Session Streaming — Primary UI Transport
+
+Primary implementation:
+- `src/universal_agent/api/server.py`
+- `web-ui/lib/websocket.ts`
+- `web-ui/next.config.js`
+- `web-ui/next.config.staging.js`
+
+Primary endpoints:
+- `GET WS /ws/agent`
+- `GET WS /api/v1/sessions/{session_id}/stream`
+
+Role:
+- terminates the browser WebSocket on the authenticated API surface
+- validates dashboard login cookies and session ownership
+- creates or resumes sessions in the correct owner lane
+- bridges or proxies live session traffic into the gateway runtime
+
+### Current Architecture
+
+The browser-facing UI does **not** connect directly to the token-gated gateway WebSocket on VPS.
+
+Behavior:
+- frontend connects to `/ws/agent` on the current browser origin
+- local dev `:3000` rewrites `/ws/agent` to the API bridge on `:8001`
+- staging rewrites `/ws/agent` to the API bridge on `:9001`
+- the API server validates dashboard auth, resumes or creates the session, and then bridges into the gateway session runtime
+
+For direct session attach/proxy compatibility, the API server also exposes `/api/v1/sessions/{session_id}/stream`.
+
+It is responsible for:
+- dashboard cookie validation
+- owner-lane enforcement for resumed sessions
+- upstream gateway stream proxying when `UA_GATEWAY_URL` is configured
+- passive forwarding of background gateway events into the UI connection
+
+## 2. Gateway Session Streaming — Canonical Upstream Session Stream
 
 Primary implementation:
 - `src/universal_agent/gateway_server.py`
@@ -33,16 +71,15 @@ Primary endpoints:
 - `GET WS /api/v1/sessions/{session_id}/stream`
 
 Role:
-- streams session events between the gateway and the current Next.js web UI
-- supports new session creation and existing session resume
+- provides the canonical session stream inside the runtime tier
 - carries text updates, tool calls/results, status, approvals, and other live agent events
 
 ### Current Architecture
 
-`/ws/agent` is a compatibility shim for the web UI.
+Gateway `/ws/agent` is a compatibility shim for callers that intentionally reach the gateway directly.
 
 Behavior:
-- frontend connects to `/ws/agent`
+- browser traffic should normally arrive through the API server bridge, not directly here
 - optional `session_id` query parameter is used to resume a session
 - gateway delegates internally to the canonical route `/api/v1/sessions/{session_id}/stream`
 
@@ -77,14 +114,14 @@ Important points:
 - allowlist enforcement still applies after attach
 - `LOCAL_WORKER` role can disable the WebSocket API entirely
 
-## 2. Web UI WebSocket Client — Primary Browser Consumer
+## 3. Web UI WebSocket Client — Primary Browser Consumer
 
 Primary implementation:
 - `web-ui/lib/websocket.ts`
 
 Role:
 - browser-side WebSocket manager for the Next.js UI
-- connects to the gateway
+- connects to the browser-facing API surface on the current origin
 - resumes tab-scoped session ids
 - handles reconnect, ping/pong, stale detection, and event dispatch to the store
 
@@ -93,8 +130,8 @@ Role:
 Current client behavior:
 - uses `NEXT_PUBLIC_WS_URL` if explicitly set
 - otherwise derives `ws:` or `wss:` from browser location
-- when the UI is on port `3000`, it maps the WebSocket target to port `8002`
-- defaults to `/ws/agent`
+- otherwise stays on the current browser origin and connects to `/ws/agent`
+- on local development, that means the Next.js server on `:3000` forwards `/ws/agent` to the API bridge on `:8001`
 
 ### Browser-Side Reliability Features
 
@@ -116,7 +153,7 @@ Current browser-side WebSocket knobs in `.env.sample` include:
 - `NEXT_PUBLIC_UA_WS_PING_INTERVAL_MS`
 - `NEXT_PUBLIC_UA_WS_STALE_AFTER_MS`
 
-## 3. AgentMail WebSocket Listener — Primary Inbound Email Transport
+## 4. AgentMail WebSocket Listener — Primary Inbound Email Transport
 
 Primary implementation:
 - `src/universal_agent/services/agentmail_service.py`
@@ -153,7 +190,7 @@ Current AgentMail WebSocket knobs:
 - `UA_AGENTMAIL_WS_RECONNECT_BASE_DELAY`
 - `UA_AGENTMAIL_WS_RECONNECT_MAX_DELAY`
 
-## 4. Shared Transport Tuning
+## 5. Shared Transport Tuning
 
 Primary implementation:
 - `src/universal_agent/timeout_policy.py`
@@ -170,7 +207,7 @@ It currently exposes tuning for:
 
 This exists so WebSocket transport behavior remains discoverable and consistent rather than being scattered ad hoc.
 
-## 5. Legacy / Secondary Surface: `src/web/server.py`
+## 6. Legacy / Secondary Surface: `src/web/server.py`
 
 Implementation:
 - `src/web/server.py`
@@ -195,7 +232,8 @@ Treat it as:
 
 ### Primary / Current
 
-- gateway session streaming in `src/universal_agent/gateway_server.py`
+- browser-facing UI session streaming in `src/universal_agent/api/server.py`
+- gateway upstream session streaming in `src/universal_agent/gateway_server.py`
 - Next.js browser client in `web-ui/lib/websocket.ts`
 - AgentMail inbound WebSocket client in `src/universal_agent/services/agentmail_service.py`
 - shared timeout/tuning in `src/universal_agent/timeout_policy.py`
@@ -210,6 +248,7 @@ Treat it as:
 
 Healthy indicators:
 - successful connection to `/ws/agent`
+- browser websocket reaches the API server and receives a `connected` event
 - session attach/resume works
 - no sustained reconnect storm in browser logs
 - no repeated gateway send timeouts
@@ -237,8 +276,10 @@ Potential failure signs:
 ## Related Endpoints and Interfaces
 
 Gateway session WebSockets:
-- `/ws/agent`
-- `/api/v1/sessions/{session_id}/stream`
+- browser-facing `/ws/agent` on the API server
+- browser-facing `/api/v1/sessions/{session_id}/stream` on the API server
+- upstream `/ws/agent` on the gateway
+- upstream `/api/v1/sessions/{session_id}/stream` on the gateway
 
 AgentMail operational visibility:
 - `GET /api/v1/ops/agentmail`
@@ -264,8 +305,11 @@ Hooks readiness often matters indirectly when AgentMail dispatches inbound mail:
 ## Source Files That Define Current Truth
 
 Primary implementation:
+- `src/universal_agent/api/server.py`
 - `src/universal_agent/gateway_server.py`
 - `web-ui/lib/websocket.ts`
+- `web-ui/next.config.js`
+- `web-ui/next.config.staging.js`
 - `src/universal_agent/services/agentmail_service.py`
 - `src/universal_agent/timeout_policy.py`
 
@@ -280,12 +324,13 @@ Related docs:
 ## Bottom Line
 
 Universal Agent does not have one generic WebSocket subsystem. It has:
-- a primary gateway/UI session streaming transport
+- a primary browser-facing UI session transport on the API server
+- a canonical upstream gateway session stream behind that bridge
 - a primary backend AgentMail inbound WebSocket client
 - a legacy standalone chat WebSocket server
 
 The canonical current WebSocket story is therefore:
-- **gateway streaming for live sessions**
+- **API-terminated, gateway-backed session streaming for the web UI**
 - **AgentMail WebSockets for inbound email**
 - **shared timeout policy for transport tuning**
 - **legacy `/ws/chat` documented, but not treated as the primary app transport**
