@@ -1,4 +1,4 @@
-from universal_agent.gateway import _infer_explicit_vp_target
+from universal_agent.gateway import _allow_prompt_inferred_vp_routing, _infer_explicit_vp_target
 
 
 def test_infer_explicit_general_vp_from_vp_general_word_order():
@@ -23,3 +23,17 @@ def test_does_not_infer_deprecated_dp_alias():
     )
     assert vp_id is None
     assert mission_type is None
+
+
+def test_prompt_inferred_vp_routing_is_blocked_for_todo_dispatcher():
+    assert _allow_prompt_inferred_vp_routing(
+        request_source="todo_dispatcher",
+        request_run_kind="todo_execution",
+    ) is False
+
+
+def test_prompt_inferred_vp_routing_is_allowed_for_interactive_user_prompt():
+    assert _allow_prompt_inferred_vp_routing(
+        request_source="user",
+        request_run_kind="user",
+    ) is True

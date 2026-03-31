@@ -104,6 +104,7 @@ Each task card renders:
 - **Delivery mode**: `fast_summary`, `standard_report`, or `enhanced_report`
 - **Canonical execution role**: `email_triage`, `todo_execution`, `heartbeat`, or VP lineage surfaced from backend history
 - **Lifecycle enforcement visibility**: history and Mission Control now surface `execution_missing_lifecycle_mutation` and auto-linked delegation so prose-only “queued” claims are distinguishable from real Task Hub state
+- **Outbound delivery visibility**: task history can distinguish hook acknowledgements from final outbound artifacts so duplicate response incidents are diagnosable
 - **Action buttons**: Contextual lifecycle actions per column
 
 ### 4.3 Dispatcher Health Panel
@@ -116,6 +117,7 @@ The ToDo dashboard includes a dedicated dispatcher-health strip for the separate
 - Pending wake count versus registered-session count
 - Busy-session count so “agent asleep” vs “all executors busy” is visible without log inspection
 - Whether a successful VP dispatch was auto-linked into Task Hub delegation by the server because the model omitted the explicit lifecycle tool call
+- The latest final execution result rather than just dispatch admission, so repeated retries and reopened tasks do not masquerade as healthy accepted executions
 
 ### 4.4 Helper Functions
 

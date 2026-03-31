@@ -37,6 +37,7 @@ def test_todolist_dashboard_mission_focused_layout():
     assert "Dispatcher Health" in content
     assert "Last Wake" in content
     assert "Wake Queue" in content
+    assert "last_result_state" in content
     assert "source_kind" in content
     # Kanban board lanes
     assert "Not Assigned" in content
@@ -45,6 +46,8 @@ def test_todolist_dashboard_mission_focused_layout():
     assert "Completed" in content
     # Allocation breakdown
     assert "Work Allocation" in content
+    assert "Reopened" in content
+    assert "retryable after failed run" in content
     # No CSI-specific content
     assert "Open CSI Incidents" not in content
     assert "Human Intervention Required" not in content

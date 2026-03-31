@@ -2605,6 +2605,10 @@ _todo_dispatch_runtime_state: dict[str, Any] = {
     "last_submitted_at": None,
     "last_submitted_session_id": None,
     "last_dispatch_decision": None,
+    "last_result_at": None,
+    "last_result_session_id": None,
+    "last_result_state": None,
+    "last_result_detail": None,
     "last_deferred_at": None,
     "last_deferred_session_id": None,
     "last_deferred_reason": None,
@@ -2794,7 +2798,7 @@ def _todo_dispatch_runtime_record(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         return
     event_type = str(payload.get("type") or "").strip().lower()
-    ts = str(payload.get("timestamp") or _now_iso())
+    ts = _normalize_notification_timestamp(str(payload.get("timestamp") or _now_iso()))
     session_id = str(payload.get("session_id") or "").strip() or None
 
     if event_type == "todo_dispatch_wake_requested":
@@ -2830,10 +2834,22 @@ def _todo_dispatch_runtime_record(payload: dict[str, Any]) -> None:
         _activity_counter_inc("todo_dispatch_submitted")
         return
 
+    if event_type == "todo_dispatch_execution_result":
+        _todo_dispatch_runtime_state["last_result_at"] = ts
+        _todo_dispatch_runtime_state["last_result_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_result_state"] = str(payload.get("result") or "unknown")
+        _todo_dispatch_runtime_state["last_result_detail"] = str(payload.get("detail") or "")
+        _activity_counter_inc("todo_dispatch_execution_result")
+        return
+
     if event_type == "todo_dispatch_deferred":
         _todo_dispatch_runtime_state["last_deferred_at"] = ts
         _todo_dispatch_runtime_state["last_deferred_session_id"] = session_id
         _todo_dispatch_runtime_state["last_deferred_reason"] = str(payload.get("reason") or "")
+        _todo_dispatch_runtime_state["last_result_at"] = ts
+        _todo_dispatch_runtime_state["last_result_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_result_state"] = "deferred"
+        _todo_dispatch_runtime_state["last_result_detail"] = str(payload.get("reason") or "")
         _activity_counter_inc("todo_dispatch_deferred")
         return
 
@@ -2841,6 +2857,10 @@ def _todo_dispatch_runtime_record(payload: dict[str, Any]) -> None:
         _todo_dispatch_runtime_state["last_failure_at"] = ts
         _todo_dispatch_runtime_state["last_failure_session_id"] = session_id
         _todo_dispatch_runtime_state["last_failure_error"] = str(payload.get("error") or "")
+        _todo_dispatch_runtime_state["last_result_at"] = ts
+        _todo_dispatch_runtime_state["last_result_session_id"] = session_id
+        _todo_dispatch_runtime_state["last_result_state"] = "failed"
+        _todo_dispatch_runtime_state["last_result_detail"] = str(payload.get("error") or "")
         _activity_counter_inc("todo_dispatch_failed")
         return
 
@@ -6162,6 +6182,23 @@ def _enforce_todo_execution_lifecycle(
     return goal_satisfaction
 
 
+def _record_todo_execution_result(
+    *,
+    session_id: str,
+    result_state: str,
+    detail: str = "",
+) -> None:
+    _emit_heartbeat_event(
+        {
+            "type": "todo_dispatch_execution_result",
+            "session_id": session_id,
+            "timestamp": _utc_now_iso(),
+            "result": str(result_state or "unknown").strip() or "unknown",
+            "detail": str(detail or "").strip(),
+        }
+    )
+
+
 async def _run_gateway_session_request(
     *,
     session: GatewaySession,
@@ -6212,8 +6249,21 @@ async def _run_gateway_session_request(
         build_mission_contract(request.user_input),
         run_kind=request_run_kind,
     )
+    request_runtime_token = None
 
     try:
+        from universal_agent.request_runtime import RequestRuntimeContext, set_request_runtime
+
+        request_runtime_token = set_request_runtime(
+            RequestRuntimeContext(
+                session_id=session_id,
+                workspace_dir=str(session.workspace_dir or ""),
+                source=request_source,
+                run_kind=request_run_kind,
+                user_input=request.user_input,
+                metadata=dict(request_metadata),
+            )
+        )
         async for event in gateway.execute(session, request):
             if event.type == EventType.TOOL_CALL:
                 tool_call_count += 1
@@ -6360,6 +6410,12 @@ async def _run_gateway_session_request(
                     goal_message = f"{goal_message} {missing_message}"
                 elif missing_requirement:
                     goal_message = f"{goal_message} Missing requirement: {missing_requirement}."
+            if request_run_kind == "todo_execution":
+                _record_todo_execution_result(
+                    session_id=session_id,
+                    result_state="failed",
+                    detail=goal_message,
+                )
             _add_notification(
                 kind=notification_kind,
                 title=notification_title,
@@ -6418,6 +6474,12 @@ async def _run_gateway_session_request(
         stage_status = str(goal_satisfaction.get("stage_status") or "completed").strip().lower()
         terminal = bool(goal_satisfaction.get("terminal", True))
         if not terminal:
+            if request_run_kind == "todo_execution":
+                _record_todo_execution_result(
+                    session_id=session_id,
+                    result_state=stage_status or "in_progress",
+                    detail=str(goal_satisfaction.get("stage_status") or stage_status or ""),
+                )
             stage_map = {
                 "triaged": (
                     "email_triaged",
@@ -6502,6 +6564,11 @@ async def _run_gateway_session_request(
                 "goal_satisfaction": goal_satisfaction,
             },
         )
+        if request_run_kind == "todo_execution":
+            _record_todo_execution_result(
+                session_id=session_id,
+                result_state="completed",
+            )
 
         await manager.broadcast(
             session_id,
@@ -6532,6 +6599,12 @@ async def _run_gateway_session_request(
         terminal_reason = "completed"
     except asyncio.CancelledError:
         terminal_reason = "cancelled"
+        if request_run_kind == "todo_execution":
+            _record_todo_execution_result(
+                session_id=session_id,
+                result_state="cancelled",
+                detail="Execution cancelled.",
+            )
         logger.warning("Execution cancelled for session %s turn %s", session_id, turn_id)
         await manager.broadcast(
             session_id,
@@ -6567,6 +6640,12 @@ async def _run_gateway_session_request(
         raise
     except Exception as exc:
         terminal_reason = "failed"
+        if request_run_kind == "todo_execution":
+            _record_todo_execution_result(
+                session_id=session_id,
+                result_state="failed",
+                detail=str(exc),
+            )
         logger.error("Execution error for session %s: %s", session_id, exc, exc_info=True)
         _add_notification(
             kind="assistance_needed",
@@ -6596,6 +6675,13 @@ async def _run_gateway_session_request(
                 },
             )
     finally:
+        if request_runtime_token is not None:
+            try:
+                from universal_agent.request_runtime import reset_request_runtime
+
+                reset_request_runtime(request_runtime_token)
+            except Exception:
+                pass
         if run_log_handle:
             try:
                 run_log_handle.close()
@@ -18318,7 +18404,8 @@ def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> 
             """
             SELECT thread_id, subject, sender_email, status, last_message_id, message_count,
                    workflow_run_id, workflow_attempt_id, provider_session_id, created_at, updated_at,
-                   email_sent_at
+                   email_sent_at, ack_sent_at, ack_message_id, ack_draft_id,
+                   final_email_sent_at, final_message_id, final_draft_id
             FROM email_task_mappings
             WHERE task_id = ?
             ORDER BY updated_at DESC
@@ -18354,6 +18441,12 @@ def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> 
         "workflow_attempt_id": str(row["workflow_attempt_id"] or ""),
         "provider_session_id": str(row["provider_session_id"] or ""),
         "email_sent_at": str((row["email_sent_at"] if "email_sent_at" in row.keys() else "") or ""),
+        "ack_sent_at": str((row["ack_sent_at"] if "ack_sent_at" in row.keys() else "") or ""),
+        "ack_message_id": str((row["ack_message_id"] if "ack_message_id" in row.keys() else "") or ""),
+        "ack_draft_id": str((row["ack_draft_id"] if "ack_draft_id" in row.keys() else "") or ""),
+        "final_email_sent_at": str((row["final_email_sent_at"] if "final_email_sent_at" in row.keys() else "") or ""),
+        "final_message_id": str((row["final_message_id"] if "final_message_id" in row.keys() else "") or ""),
+        "final_draft_id": str((row["final_draft_id"] if "final_draft_id" in row.keys() else "") or ""),
         "created_at": str(row["created_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
     }

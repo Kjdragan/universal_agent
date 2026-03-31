@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import datetime, timezone
 
@@ -547,3 +548,43 @@ async def test_todolist_overview_includes_todo_dispatch_snapshot(monkeypatch):
     assert todo_dispatch["registered_session_count"] == 0
     assert todo_dispatch["pending_wake_count"] == 0
     assert todo_dispatch["sleeping_session_warning"] is False
+
+
+@pytest.mark.asyncio
+async def test_todolist_overview_normalizes_todo_dispatch_timestamps_and_tracks_final_result(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    monkeypatch.setattr(gateway_server, "_todo_dispatch_service", None)
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+    monkeypatch.setenv("UA_HEARTBEAT_INTERVAL", "15m")
+    monkeypatch.setattr(
+        gateway_server,
+        "_todo_dispatch_runtime_state",
+        copy.deepcopy(gateway_server._todo_dispatch_runtime_state),
+    )
+
+    gateway_server._todo_dispatch_runtime_record(
+        {
+            "type": "todo_dispatch_wake_requested",
+            "session_id": "daemon_simone_todo",
+            "timestamp": "2026-03-30T21:29:24.590818",
+            "registered": True,
+        }
+    )
+    gateway_server._todo_dispatch_runtime_record(
+        {
+            "type": "todo_dispatch_execution_result",
+            "session_id": "daemon_simone_todo",
+            "timestamp": "2026-03-30T21:29:26.039757",
+            "result": "failed",
+            "detail": "todo_execution_missing_lifecycle_mutation",
+        }
+    )
+
+    response = await gateway_server.dashboard_todolist_overview()
+
+    assert response["status"] == "ok"
+    todo_dispatch = response["todo_dispatch"]
+    assert todo_dispatch["last_wake_requested_at"].endswith("+00:00")
+    assert todo_dispatch["last_result_at"].endswith("+00:00")
+    assert todo_dispatch["last_result_state"] == "failed"
+    assert todo_dispatch["last_result_detail"] == "todo_execution_missing_lifecycle_mutation"

@@ -113,6 +113,13 @@ CREATE TABLE IF NOT EXISTS email_task_mappings (
     last_message_id TEXT NOT NULL DEFAULT '',
     real_thread_id TEXT NOT NULL DEFAULT '',
     real_message_id TEXT NOT NULL DEFAULT '',
+    email_sent_at TEXT NOT NULL DEFAULT '',
+    ack_sent_at TEXT NOT NULL DEFAULT '',
+    ack_message_id TEXT NOT NULL DEFAULT '',
+    ack_draft_id TEXT NOT NULL DEFAULT '',
+    final_email_sent_at TEXT NOT NULL DEFAULT '',
+    final_message_id TEXT NOT NULL DEFAULT '',
+    final_draft_id TEXT NOT NULL DEFAULT '',
     message_count INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -139,8 +146,14 @@ def ensure_email_task_schema(conn: sqlite3.Connection) -> None:
         ("provider_session_id", "''"),
         ("real_thread_id", "''"),
         ("real_message_id", "''"),
-        # Idempotency: tracks when an email response was sent for this thread
-        ("email_sent_at", "NULL"),
+        # Idempotency and delivery lifecycle tracking.
+        ("email_sent_at", "''"),
+        ("ack_sent_at", "''"),
+        ("ack_message_id", "''"),
+        ("ack_draft_id", "''"),
+        ("final_email_sent_at", "''"),
+        ("final_message_id", "''"),
+        ("final_draft_id", "''"),
     ]:
         try:
             conn.execute(
@@ -449,6 +462,119 @@ class EmailTaskBridge:
         )
         self._conn.commit()
         logger.info("📧 Marked email_sent_at=%s for thread=%s", now, thread_id)
+        return True
+
+    def get_mapping_for_task_id(self, task_id: str) -> Optional[dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM email_task_mappings WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (str(task_id or "").strip(),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_mapping_for_session_key(self, session_key: str) -> Optional[dict[str, Any]]:
+        key = str(session_key or "").strip()
+        if not key:
+            return None
+        task_id = ""
+        try:
+            row = self._conn.execute(
+                """
+                SELECT task_id
+                FROM task_hub_items
+                WHERE json_extract(metadata_json, '$.session_key') = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (key,),
+            ).fetchone()
+            if row:
+                task_id = str(row["task_id"] or "").strip()
+        except Exception:
+            row = self._conn.execute(
+                """
+                SELECT task_id
+                FROM task_hub_items
+                WHERE metadata_json LIKE ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (f'%"session_key": "{key}"%',),
+            ).fetchone()
+            if row:
+                task_id = str(row["task_id"] or "").strip()
+        if not task_id:
+            return None
+        return self.get_mapping_for_task_id(task_id)
+
+    def has_ack_outbound(self, thread_id: str) -> bool:
+        mapping = self._get_mapping(thread_id)
+        if not mapping:
+            return False
+        return any(
+            str(mapping.get(field) or "").strip()
+            for field in ("ack_sent_at", "ack_message_id", "ack_draft_id")
+        )
+
+    def has_final_outbound(self, thread_id: str) -> bool:
+        mapping = self._get_mapping(thread_id)
+        if not mapping:
+            return False
+        return any(
+            str(mapping.get(field) or "").strip()
+            for field in ("final_email_sent_at", "final_message_id", "final_draft_id", "email_sent_at")
+        )
+
+    def record_ack_outbound(self, thread_id: str, *, message_id: str = "", draft_id: str = "") -> bool:
+        now = _now_iso()
+        self._conn.execute(
+            """
+            UPDATE email_task_mappings
+            SET ack_sent_at = CASE WHEN ? <> '' THEN ? ELSE ack_sent_at END,
+                ack_message_id = CASE WHEN ? <> '' THEN ? ELSE ack_message_id END,
+                ack_draft_id = CASE WHEN ? <> '' THEN ? ELSE ack_draft_id END,
+                updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (
+                str(message_id or "").strip(),
+                now,
+                str(message_id or "").strip(),
+                str(message_id or "").strip(),
+                str(draft_id or "").strip(),
+                str(draft_id or "").strip(),
+                now,
+                str(thread_id or "").strip(),
+            ),
+        )
+        self._conn.commit()
+        return True
+
+    def record_final_outbound(self, thread_id: str, *, message_id: str = "", draft_id: str = "") -> bool:
+        now = _now_iso()
+        self._conn.execute(
+            """
+            UPDATE email_task_mappings
+            SET final_email_sent_at = CASE WHEN ? <> '' THEN ? ELSE final_email_sent_at END,
+                final_message_id = CASE WHEN ? <> '' THEN ? ELSE final_message_id END,
+                final_draft_id = CASE WHEN ? <> '' THEN ? ELSE final_draft_id END,
+                email_sent_at = CASE WHEN ? <> '' THEN ? ELSE email_sent_at END,
+                updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (
+                str(message_id or "").strip(),
+                now,
+                str(message_id or "").strip(),
+                str(message_id or "").strip(),
+                str(draft_id or "").strip(),
+                str(draft_id or "").strip(),
+                str(message_id or "").strip(),
+                now,
+                now,
+                str(thread_id or "").strip(),
+            ),
+        )
+        self._conn.commit()
         return True
 
     def was_email_sent(self, thread_id: str) -> bool:

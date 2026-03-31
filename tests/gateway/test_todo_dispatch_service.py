@@ -103,3 +103,23 @@ def test_todo_dispatch_service_ignores_non_todo_sessions():
     service.register_session(session)
 
     assert service.active_sessions == {}
+
+
+def test_todo_dispatch_service_emits_utc_timestamps():
+    events: list[dict[str, object]] = []
+    service = ToDoDispatchService(event_callback=events.append)
+    session = GatewaySession(
+        session_id="daemon_simone_todo",
+        user_id="daemon",
+        workspace_dir="/tmp/daemon_simone_todo",
+        metadata={"source": "daemon", "session_role": "todo_execution", "run_kind": "todo_execution"},
+    )
+
+    service.register_session(session)
+    service.request_dispatch_now("daemon_simone_todo")
+    service.unregister_session("daemon_simone_todo")
+
+    assert len(events) == 3
+    for event in events:
+        timestamp = str(event.get("timestamp") or "")
+        assert timestamp.endswith("+00:00")

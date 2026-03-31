@@ -195,7 +195,8 @@ Converts trusted inbound AgentMail emails into trackable tasks:
 - **Auto-reactivation**: If a thread was `waiting-on-reply` and a new inbound arrives, it auto-reactivates to `open`
 - **Delivery-mode inference**: `fast_summary`, `standard_report`, or `enhanced_report` is inferred from the prompt and stored in task metadata
 - **Canonical execution owner**: Trusted email tasks are stamped with `canonical_execution_owner="todo_dispatcher"`
-- **Hook contract**: The AgentMail hook may record triage metadata and optionally send a short receipt acknowledgement, but it must not execute the mission or send the final deliverable
+- **Hook contract**: The AgentMail hook may record triage metadata and may send at most one short receipt acknowledgement when the prompt allows it, but it must not execute the mission or send the final deliverable
+- **Single-final guardrail**: If the inbound request says "one final response only", "one final email only", or "do not send multiple reports", the hook acknowledgement path is disabled and only the canonical final delivery remains allowed
 
 ### 3.3 Dashboard Quick-Add (`POST /api/v1/dashboard/todolist/tasks`)
 
@@ -242,6 +243,7 @@ Important invariants:
 - The hook session is **not** an execution path.
 - Heartbeat is **not** a fallback executor for trusted email work.
 - Final report email comes from the canonical Task Hub lifecycle only.
+- Automation-owned prompts must not trigger inferred VP routing just because the prompt text mentions a VP slug; only real user intent can do that.
 - `standard_report` and `enhanced_report` send one final email with executive summary in the body and the full artifact attached when available.
 
 ---
@@ -662,7 +664,7 @@ async def task_hub_task_action_wrapper(args):
 | `delegate` | Assign to VP (reason=vp_id, note=mission_id) |
 | `approve` | Sign off on VP-completed task |
 
-**Enforcement rule**: a `todo_execution` turn is only considered valid if it ends with one of these lifecycle mutations. If Simone successfully dispatches a VP mission but forgets `task_hub_task_action(action='delegate', ...)`, the gateway auto-links the returned `mission_id` into Task Hub delegation. Pure prose like “mission queued” with no durable mutation is invalid and the task is reopened or routed to review instead of being left `in_progress` / `seized`.
+**Enforcement rule**: a `todo_execution` turn is only considered valid if it ends with one of these lifecycle mutations. If Simone successfully dispatches a VP mission but forgets `task_hub_task_action(action='delegate', ...)`, the gateway auto-links the returned `mission_id` into Task Hub delegation. Pure prose like “mission queued” with no durable mutation is invalid and the task is reopened or routed to review instead of being left `in_progress` / `seized`. If outbound final-delivery side effects already occurred (for example a draft or sent message exists), retry is suppressed and the task is routed to review instead of being reopened.
 
 ### task_hub_decompose
 

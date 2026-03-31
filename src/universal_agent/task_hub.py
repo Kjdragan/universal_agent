@@ -1349,14 +1349,17 @@ def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80)
 def _email_side_effects_detected(conn: sqlite3.Connection, task_id: str) -> bool:
     try:
         row = conn.execute(
-            "SELECT email_sent_at FROM email_task_mappings WHERE task_id = ? LIMIT 1",
+            "SELECT * FROM email_task_mappings WHERE task_id = ? LIMIT 1",
             (str(task_id or "").strip(),),
         ).fetchone()
     except Exception:
         return False
     if not row:
         return False
-    return bool(str(row["email_sent_at"] or "").strip())
+    return any(
+        str((row[field] if field in row.keys() else "") or "").strip()
+        for field in ("email_sent_at", "final_email_sent_at", "final_message_id", "final_draft_id")
+    )
 
 
 def reconcile_task_lifecycle(
@@ -1786,16 +1789,35 @@ def finalize_assignments(
             )
             continue
 
-        metadata["dispatch"] = dispatch_meta
-        conn.execute(
-            """
-            UPDATE task_hub_items
-            SET status=?, seizure_state=?, metadata_json=?, updated_at=?
-            WHERE task_id=?
-            """,
-            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
-        )
-        reopened += 1
+        if policy_norm == "todo" and _email_side_effects_detected(conn, task_id):
+            dispatch_meta["last_disposition"] = "needs_review"
+            dispatch_meta["last_disposition_reason"] = "todo_retryable_with_side_effects"
+            dispatch_meta["completion_unverified"] = True
+            metadata["dispatch"] = dispatch_meta
+            conn.execute(
+                """
+                UPDATE task_hub_items
+                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+            )
+            reviewed += 1
+            logger.warning(
+                "Task Hub ToDo finalize moved task %s to needs_review because outbound side effects already occurred",
+                task_id,
+            )
+        else:
+            metadata["dispatch"] = dispatch_meta
+            conn.execute(
+                """
+                UPDATE task_hub_items
+                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+            )
+            reopened += 1
 
     # ── Dispatch queue invalidation ─────────────────────────────────
     # Purge completed/reviewed tasks from the snapshot table so they

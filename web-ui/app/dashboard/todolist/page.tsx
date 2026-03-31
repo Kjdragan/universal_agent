@@ -54,6 +54,14 @@ type AgentQueueItem = {
     orphaned_in_progress?: boolean;
     completion_unverified?: boolean;
   };
+  metadata?: {
+    dispatch?: {
+      last_assignment_state?: string | null;
+      last_assignment_ended_at?: string | null;
+      last_provider_session_id?: string | null;
+      last_disposition_reason?: string | null;
+    };
+  };
 };
 
 type ApprovalRow = {
@@ -127,6 +135,10 @@ type OverviewPayload = {
     last_submitted_at?: string | null;
     last_submitted_session_id?: string | null;
     last_dispatch_decision?: string | null;
+    last_result_at?: string | null;
+    last_result_session_id?: string | null;
+    last_result_state?: string | null;
+    last_result_detail?: string | null;
     last_deferred_at?: string | null;
     last_deferred_session_id?: string | null;
     last_deferred_reason?: string | null;
@@ -265,7 +277,9 @@ type TaskHistoryPayload = {
 function formatTs(ts?: string | null): string {
   if (!ts) return "";
   try {
-    return formatDistanceToNow(parseISO(ts), { addSuffix: true });
+    const raw = String(ts).trim();
+    const normalized = raw.includes("T") && !/(Z|[+-]\d{2}:\d{2})$/i.test(raw) ? `${raw}Z` : raw;
+    return formatDistanceToNow(parseISO(normalized), { addSuffix: true });
   } catch {
     return ts;
   }
@@ -728,6 +742,21 @@ export default function ToDoListDashboardPage() {
   }, [overview?.heartbeat]);
 
   const todoDispatch = overview?.todo_dispatch;
+  const lastResultState = String(todoDispatch?.last_result_state || todoDispatch?.last_dispatch_decision || "").trim();
+  const lastResultDisplay = lastResultState || "No execution recorded";
+  const lastResultSub = todoDispatch?.last_result_at
+    ? `${formatTs(todoDispatch?.last_result_at || null)} · ${todoDispatch?.last_result_session_id || "unknown"}`
+    : todoDispatch?.last_submitted_at
+      ? `${formatTs(todoDispatch?.last_submitted_at || null)} · ${todoDispatch?.last_submitted_session_id || "unknown"}`
+      : (todoDispatch?.last_failure_error || "No execution recorded");
+  const lastResultClass = (() => {
+    const state = lastResultState.toLowerCase();
+    if (["completed", "delegated", "awaiting_final_delivery", "awaiting_review"].includes(state)) return "text-kcd-green";
+    if (["accepted", "triaged", "in_progress"].includes(state)) return "text-kcd-cyan";
+    if (["deferred", "cancelled"].includes(state)) return "text-kcd-amber";
+    if (["failed", "invalid"].includes(state)) return "text-kcd-red";
+    return "text-kcd-text";
+  })();
   const todoDispatchAlerts = useMemo(() => {
     const alerts: string[] = [];
     if (todoDispatch?.sleeping_session_warning) {
@@ -777,6 +806,9 @@ export default function ToDoListDashboardPage() {
     const isProcessing = boardLane === "in_progress";
     const isAwaitingReview = boardLane === "needs_review";
     const isOrphaned = Boolean(item.reconciliation?.orphaned_in_progress);
+    const lastDispatch = item.metadata?.dispatch;
+    const wasReopenedAfterFailure =
+      boardLane === "not_assigned" && String(lastDispatch?.last_assignment_state || "").toLowerCase() === "failed";
     return (
       <article
         key={item.task_id}
@@ -807,6 +839,15 @@ export default function ToDoListDashboardPage() {
             <span className="material-symbols-outlined text-xs text-kcd-red">error</span>
             <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-red uppercase">Orphaned</span>
             <span className="font-mono text-[9px] text-kcd-text-muted">· Reconciliation needed</span>
+          </div>
+        )}
+        {wasReopenedAfterFailure && (
+          <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-kcd-red/[0.08] border border-kcd-red/20 rounded-sm">
+            <span className="material-symbols-outlined text-xs text-kcd-red">replay</span>
+            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-red uppercase">Reopened</span>
+            <span className="font-mono text-[9px] text-kcd-text-muted">
+              · Last run failed {formatTs(lastDispatch?.last_assignment_ended_at || null) || "recently"}
+            </span>
           </div>
         )}
         {onDelete && (
@@ -879,6 +920,7 @@ export default function ToDoListDashboardPage() {
           {item.session_role && <><span className="opacity-40">│</span><span>{item.session_role}</span></>}
           {item.assigned_agent_id && <><span className="opacity-40">│</span><span>{item.assigned_agent_id}</span></>}
           {item.assignment_state && <><span className="opacity-40">│</span><span>{item.assignment_state}</span></>}
+          {wasReopenedAfterFailure && <><span className="opacity-40">│</span><span className="text-kcd-red">retryable after failed run</span></>}
           {item.due_at && <><span className="opacity-40">│</span><span className="text-kcd-amber">Due {item.due_at}</span></>}
           {item.updated_at && <><span className="opacity-40">│</span><span>Updated {formatTs(item.updated_at)}</span></>}
           {dispatchThreshold > 0 && Number(item.score ?? 0) < dispatchThreshold && (
@@ -1388,9 +1430,9 @@ export default function ToDoListDashboardPage() {
               },
               {
                 label: "Last Result",
-                value: todoDispatch?.last_dispatch_decision || "No submission yet",
-                sub: todoDispatch?.last_submitted_at ? `${formatTs(todoDispatch?.last_submitted_at || null)} · ${todoDispatch?.last_submitted_session_id || "unknown"}` : (todoDispatch?.last_failure_error || "No execution recorded"),
-                cls: (todoDispatch?.last_dispatch_decision || "").toLowerCase() === "accepted" ? "text-kcd-green" : "text-kcd-text",
+                value: lastResultDisplay,
+                sub: todoDispatch?.last_result_detail ? `${lastResultSub} · ${todoDispatch.last_result_detail}` : lastResultSub,
+                cls: lastResultClass,
               },
               {
                 label: "Wake Queue",

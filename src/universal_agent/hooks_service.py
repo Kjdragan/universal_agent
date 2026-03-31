@@ -5921,6 +5921,7 @@ class HooksService:
             "3. If safety_status is 'clean':",
             "   → Optionally send a SHORT receipt acknowledgement only if that would help the user",
             "   → Any acknowledgement must be receipt-only ('received / starting now') and must NOT contain substantive findings, analysis, recommendations, or a final answer",
+            "   → If the user asked for exactly one final response, one final email only, or said not to send multiple reports, do NOT send any acknowledgement",
             "   → Persist triage context and then STOP",
             "   → Do NOT run research, do NOT dispatch VP missions, do NOT decompose tasks, and do NOT send the final deliverable",
             "4. The dedicated ToDo executor will claim, delegate, review, and complete the task from Task Hub.",

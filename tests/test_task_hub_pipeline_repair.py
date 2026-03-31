@@ -110,6 +110,49 @@ def test_finalize_assignments_completed_heartbeat_requires_review():
     assert item["metadata"]["dispatch"]["completion_unverified"] is True
 
 
+def test_finalize_assignments_todo_with_final_draft_side_effects_moves_to_review():
+    conn = _conn()
+    conn.execute(
+        "ALTER TABLE email_task_mappings ADD COLUMN final_draft_id TEXT NOT NULL DEFAULT ''"
+    )
+    conn.execute(
+        "INSERT INTO email_task_mappings (task_id, email_sent_at, final_draft_id) VALUES (?, ?, ?)",
+        ("email:draft-review", "", "draft-123"),
+    )
+    _insert_task(
+        conn,
+        task_id="email:draft-review",
+        status=task_hub.TASK_STATUS_IN_PROGRESS,
+        metadata_json='{"dispatch":{"active_assignment_id":"asg-draft","active_provider_session_id":"daemon_simone_todo"}}',
+        seizure_state="seized",
+    )
+    conn.execute(
+        """
+        INSERT INTO task_hub_assignments (
+            assignment_id, task_id, agent_id, provider_session_id, state, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("asg-draft", "email:draft-review", "todo:daemon_simone_todo", "daemon_simone_todo", "running", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+    result = task_hub.finalize_assignments(
+        conn,
+        assignment_ids=["asg-draft"],
+        state="failed",
+        result_summary="todo_execution_missing_lifecycle_mutation",
+        reopen_in_progress=True,
+        policy="todo",
+    )
+
+    item = task_hub.get_item(conn, "email:draft-review")
+    assert result["reviewed"] == 1
+    assert result["reopened"] == 0
+    assert item["status"] == task_hub.TASK_STATUS_REVIEW
+    assert item["metadata"]["dispatch"]["last_disposition_reason"] == "todo_retryable_with_side_effects"
+    assert item["metadata"]["dispatch"]["completion_unverified"] is True
+
+
 def test_reconcile_task_lifecycle_repairs_orphaned_and_unverified_completed():
     conn = _conn()
     _insert_task(

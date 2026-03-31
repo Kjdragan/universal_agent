@@ -101,6 +101,26 @@ _EXPLICIT_CODER_VP_PATTERNS = (
     re.compile(r"\buse\s+(?:the\s+)?vp\s+coder\b", re.IGNORECASE),
 )
 
+_PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
+    "cron",
+    "webhook",
+    "heartbeat",
+    "heartbeat_synthetic",
+    "task_run",
+    "email_hook",
+    "todo_dispatcher",
+}
+_PROMPT_INFERRED_VP_BLOCKED_RUN_KINDS = {
+    "heartbeat",
+    "heartbeat_email_wake",
+    "heartbeat_cron_wake",
+    "todo_execution",
+    "email_triage",
+    "hook",
+    "task_run",
+    "cron_job_dispatch",
+}
+
 
 def _metadata_bool(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -127,6 +147,18 @@ def _infer_explicit_vp_target(user_input: str) -> tuple[Optional[str], Optional[
     if any(pattern.search(text) for pattern in _EXPLICIT_CODER_VP_PATTERNS):
         return coder_vp_id(), "coding_task"
     return None, None
+
+
+def _allow_prompt_inferred_vp_routing(*, request_source: Any, request_run_kind: Any) -> bool:
+    source = str(request_source or "").strip().lower()
+    run_kind = str(request_run_kind or "").strip().lower()
+    if source in _PROMPT_INFERRED_VP_BLOCKED_SOURCES:
+        return False
+    if run_kind in _PROMPT_INFERRED_VP_BLOCKED_RUN_KINDS:
+        return False
+    if run_kind.startswith("heartbeat"):
+        return False
+    return True
 
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -829,6 +861,11 @@ class InProcessGateway(Gateway):
             request_metadata = dict(request.metadata or {})
             request.metadata = request_metadata
             request_source = str(request_metadata.get("source") or "user").strip().lower()
+            request_run_kind = str(
+                request_metadata.get("run_kind")
+                or (session.metadata.get("run_kind") if isinstance(session.metadata, dict) else "")
+                or ""
+            ).strip().lower()
             requested_vp_id = str(request_metadata.get("delegate_vp_id") or "").strip()
             strict_external_vp = _metadata_bool(
                 request_metadata.get("require_external_vp"),
@@ -836,7 +873,13 @@ class InProcessGateway(Gateway):
             )
             inferred_explicit_vp = False
 
-            if not requested_vp_id and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
+            if (
+                not requested_vp_id
+                and _allow_prompt_inferred_vp_routing(
+                    request_source=request_source,
+                    request_run_kind=request_run_kind,
+                )
+            ):
                 inferred_vp_id, inferred_mission_type = _infer_explicit_vp_target(request.user_input)
                 if inferred_vp_id:
                     inferred_explicit_vp = True
@@ -989,7 +1032,13 @@ class InProcessGateway(Gateway):
 
             # Keep webhook/cron executions pinned to their explicit run workspace
             # for deterministic artifacts/log paths and easier ops visibility.
-            if self._coder_vp_runtime and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
+            if (
+                self._coder_vp_runtime
+                and _allow_prompt_inferred_vp_routing(
+                    request_source=request_source,
+                    request_run_kind=request_run_kind,
+                )
+            ):
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
                 if decision.use_coder_vp:
                     external_dispatch = (

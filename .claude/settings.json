@@ -1,0 +1,7 @@
+{
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true,
+    "claude-code-setup@claude-plugins-official": true,
+    "playground@claude-plugins-official": true
+  }
+}

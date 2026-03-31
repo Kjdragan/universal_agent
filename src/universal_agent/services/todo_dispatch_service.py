@@ -1,12 +1,16 @@
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Callable, Awaitable
 
 from universal_agent.gateway import GatewaySession, GatewayRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _event_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 TODO_DISPATCH_PROMPT = """
 You are Simone, the Pipeline Orchestrator. Your exclusive job is to execute the assigned tasks from the Task Queue below to completion.
@@ -78,7 +82,7 @@ class ToDoDispatchService:
             self.event_callback({
                 "type": "todo_dispatch_session_registered",
                 "session_id": session.session_id,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": _event_timestamp(),
                 "wake_pending": session.session_id in self.wake_sessions,
             })
 
@@ -89,7 +93,7 @@ class ToDoDispatchService:
             self.event_callback({
                 "type": "todo_dispatch_session_unregistered",
                 "session_id": session_id,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": _event_timestamp(),
             })
 
     def request_dispatch_now(self, session_id: str) -> None:
@@ -98,7 +102,7 @@ class ToDoDispatchService:
             self.event_callback({
                 "type": "todo_dispatch_wake_requested",
                 "session_id": session_id,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": _event_timestamp(),
                 "registered": session_id in self.active_sessions,
             })
         logger.info("ToDo dispatch requested for %s", session_id)
@@ -137,7 +141,7 @@ class ToDoDispatchService:
                     self.event_callback({
                         "type": "todo_dispatch_deferred",
                         "session_id": session.session_id,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": _event_timestamp(),
                         "reason": capacity_reason,
                     })
                 logger.info(
@@ -162,7 +166,7 @@ class ToDoDispatchService:
                     self.event_callback({
                         "type": "todo_dispatch_no_tasks",
                         "session_id": session.session_id,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": _event_timestamp(),
                     })
                 logger.debug("No tasks claimed for todo_dispatch.")
                 return
@@ -178,7 +182,7 @@ class ToDoDispatchService:
                 self.event_callback({
                     "type": "todo_dispatch_claimed",
                     "session_id": session.session_id,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": _event_timestamp(),
                     "task_ids": task_ids,
                     "assignment_ids": claimed_assignment_ids,
                     "task_count": len(task_ids),
@@ -264,7 +268,7 @@ class ToDoDispatchService:
                     "event": {
                         "state": "processing",
                         "source": "todo_dispatcher",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": _event_timestamp()
                     }
                 })
 
@@ -287,7 +291,7 @@ class ToDoDispatchService:
                     self.event_callback({
                         "type": "todo_dispatch_submitted",
                         "session_id": session.session_id,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": _event_timestamp(),
                         "decision": decision,
                         "task_ids": task_ids,
                         "assignment_ids": claimed_assignment_ids,
@@ -304,7 +308,7 @@ class ToDoDispatchService:
                 self.event_callback({
                     "type": "todo_dispatch_failed",
                     "session_id": session.session_id,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": _event_timestamp(),
                     "error": str(e)[:300],
                     "assignment_ids": claimed_assignment_ids,
                 })
@@ -330,6 +334,6 @@ class ToDoDispatchService:
                     "event": {
                         "state": "idle",
                         "source": "todo_dispatcher",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": _event_timestamp()
                     }
                 })
