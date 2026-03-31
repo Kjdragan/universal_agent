@@ -310,10 +310,64 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 
 ---
 
+## Internal MCP Tool: `mcp__internal__send_agentmail`
+
+### Purpose
+
+The `agentmail_bridge.py` module exposes AgentMail functionality as an internal MCP tool for use by Simone and sub-agents. This is the preferred way to send emails programmatically from within agent sessions.
+
+### Tool Schema
+
+```
+Tool: mcp__internal__send_agentmail
+Parameters:
+  - to (str, required): Recipient email address
+  - subject (str, required): Email subject line
+  - body (str, required): Email body content
+  - cc (str, optional): CC recipients
+  - bcc (str, optional): BCC recipients
+  - dry_run (bool, optional): If true, creates draft instead of sending
+```
+
+### Guardrails
+
+The bridge implements several guardrails to prevent email spam or duplicate responses:
+
+1. **Single Final Response Enforcement**: When the user input contains phrases like "one final response only" or "exactly one final", the tool blocks receipt acknowledgements to ensure only the final response is sent.
+
+2. **Receipt Acknowledgement Detection**: Short messages (<600 chars) containing patterns like "received", "starting", "will respond" are classified as receipt acknowledgements and may be blocked in certain run kinds.
+
+3. **Run Kind Distinction**:
+   - `email_triage`: Allows one acknowledgement per thread, blocks duplicate final responses
+   - `todo_execution`: Blocks receipt-style acknowledgements entirely, allows one final response per thread
+
+4. **Thread-Level Deduplication**: Uses `EmailTaskBridge` to track sent messages per thread, preventing duplicate emails for the same task.
+
+### Integration with EmailTaskBridge
+
+The tool integrates with `EmailTaskBridge` to:
+- Look up email-to-task mappings from the current session's runtime context
+- Track outbound messages at the thread level
+- Record acknowledgements and final responses appropriately
+
+### Usage in Agent Prompts
+
+When instructing agents to send emails, use this tool directly rather than bash scripts or SDK calls:
+
+```
+To send emails, use the native `mcp__internal__send_agentmail` tool.
+Do NOT write or run Python/Bash scripts to interact with AgentMail.
+```
+
+---
+
 ## Implementation Files
 
 ### Core Service
 - `src/universal_agent/services/agentmail_service.py` — Main service (send, receive, queue, lifecycle)
+
+### Internal MCP Tools
+- `src/universal_agent/tools/agentmail_bridge.py` — Internal MCP tool `mcp__internal__send_agentmail` for programmatic email sending with guardrails
 
 ### Gateway Integration
 - `src/universal_agent/gateway_server.py` — Startup, wiring, ops endpoints
