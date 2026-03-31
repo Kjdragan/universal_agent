@@ -149,6 +149,8 @@ deploy rather than editing keys in place.
 ## Deployed Runtime Tooling
 
 - Staging and production deploys install project dependencies with `uv sync`.
+- Staging and production deploys run `scripts/verify_service_imports.py` after dependency sync and bootstrap validation.
+- If service entrypoint imports fail after the first sync, the workflow deletes `.venv`, performs a clean `uv sync`, reruns bootstrap validation, and reruns import verification before any service restart is allowed.
 - Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
 - Staging and production deploys rebuild the MkDocs documentation site via `mkdocs build`. The generated static site is served by the `universal-agent-docs` systemd unit on `localhost:8100`, exposed to the tailnet via `tailscale serve`. See `scripts/configure_docs_server.sh` for one-time setup.
 - Staging and production deploys install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
@@ -198,7 +200,9 @@ Every deploy pulls code, syncs dependencies, rebuilds the web UI, and then **res
 
 VP workers are only restarted if `systemctl is-enabled` reports them as active. This allows new VPS nodes to deploy without VP worker units installed.
 
-Before those restarts, each deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files.
+Before those restarts, each deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files. Production deploy also refreshes the repo-managed VP worker unit template before restarting enabled VP workers.
+
+All managed Python service units set `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so the optional Logfire Pydantic plugin cannot crash gateway/API startup during model import.
 
 ### Deployment-Window Flag
 

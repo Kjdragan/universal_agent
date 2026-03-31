@@ -155,6 +155,27 @@ jobs:
             echo "--> Validating production runtime bootstrap..."
             run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment production --expect-runtime-stage production --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-production --require UA_OPS_TOKEN --json"
 
+            echo "--> Verifying service entrypoint imports before restart..."
+            if ! run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/verify_service_imports.py"; then
+              echo "--> Service import verification failed after sync; rebuilding production .venv from scratch..."
+              sudo rm -rf "$PROD_DIR/.venv"
+              run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
+
+              echo "---> Re-checking rebuilt venv Python binary..."
+              VENV_PY_TARGET="$(run_as_ua "readlink -f \"$PROD_DIR/.venv/bin/python3\" 2>/dev/null" || true)"
+              if [ -n "$VENV_PY_TARGET" ] && [ ! -x "$VENV_PY_TARGET" ]; then
+                echo "---> FIXING: $VENV_PY_TARGET lacks execute bit after rebuild; adding..."
+                sudo chmod +x "$VENV_PY_TARGET"
+              fi
+              run_as_ua "\"$PROD_DIR/.venv/bin/python3\" --version"
+
+              echo "--> Re-validating production runtime bootstrap after clean rebuild..."
+              run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/validate_runtime_bootstrap.py --profile vps --expect-environment production --expect-runtime-stage production --expect-factory-role HEADQUARTERS --expect-deployment-profile vps --expect-machine-slug vps-hq-production --require UA_OPS_TOKEN --json"
+
+              echo "--> Re-running service import verification after clean rebuild..."
+              run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && export PYTHONPATH=src && ./.venv/bin/python scripts/verify_service_imports.py"
+            fi
+
             echo "--> Rendering webui env from Infisical..."
             run_as_ua "export PATH=\"$PATH\"; cd $PROD_DIR && PYTHONPATH=src ./.venv/bin/python scripts/render_service_env_from_infisical.py --profile vps --output web-ui/.env.local --entry UA_DASHBOARD_OPS_TOKEN=UA_DASHBOARD_OPS_TOKEN,UA_OPS_TOKEN"
 
@@ -177,6 +198,8 @@ jobs:
 
             echo "--> Installing canonical production systemd units from repo templates..."
             sudo bash "$PROD_DIR/scripts/install_vps_systemd_units.sh" --lane production --app-root "$PROD_DIR"
+            echo "--> Installing canonical VP worker unit template from repo..."
+            sudo bash "$PROD_DIR/scripts/install_vp_worker_services.sh" vp.coder.primary vp.general.primary
 
             echo "--> Restarting production services..."
             if command -v systemctl >/dev/null 2>&1; then

@@ -20,6 +20,10 @@ logfire.instrument_anthropic()
 **Optional:**
 - `LOGFIRE_PROJECT_SLUG` — Defaults to `Kjdragan/composio-claudemultiagent`
 
+**Runtime safety note:**
+- The repository disables Logfire's automatic Pydantic plugin via `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` and configures Logfire explicitly in runtime entrypoints. This prevents optional observability plugin loading from becoming a hard startup dependency for gateway/API services.
+- Package bootstrap also installs a no-op `logfire` stub if real Logfire fails to import during service startup. Gateway, API, Telegram, and VP workers therefore fail open on observability issues instead of entering a restart loop.
+
 ## Span Hierarchy
 
 ### CLI Runs (`ua_cli_session`)

@@ -10,6 +10,7 @@ Group=__APP_USER__
 WorkingDirectory=__APP_ROOT__
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=__APP_ROOT__/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 Environment=UA_TELEGRAM_ALLOW_INPROCESS=0
 Environment=UA_TELEGRAM_PROCESS_HEARTBEAT_FILE=/var/lib/universal-agent/heartbeat/telegram.heartbeat
 EnvironmentFile=-__APP_ROOT__/.env

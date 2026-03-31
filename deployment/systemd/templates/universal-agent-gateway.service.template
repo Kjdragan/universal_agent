@@ -10,6 +10,7 @@ Group=__APP_USER__
 WorkingDirectory=__APP_ROOT__
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=__APP_ROOT__/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 EnvironmentFile=-__APP_ROOT__/.env
 ExecStart=__APP_ROOT__/.venv/bin/python -m universal_agent.gateway_server
 Restart=always

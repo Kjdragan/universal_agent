@@ -10,6 +10,7 @@ Group=ua
 WorkingDirectory=/opt/universal_agent
 EnvironmentFile=-/opt/universal_agent/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 Environment=PATH=/home/ua/.local/bin:/opt/universal_agent/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PYTHONPATH=/opt/universal_agent/src
 ExecStart=/opt/universal_agent/scripts/start_vp_worker.sh %i
