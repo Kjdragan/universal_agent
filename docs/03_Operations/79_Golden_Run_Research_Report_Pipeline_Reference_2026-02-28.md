@@ -105,12 +105,17 @@ From `run.log` and turn telemetry:
 ## Required Workspace Artifacts
 For this golden workflow, the following must exist:
 
-- `search_results/` with search outputs.
+- `tasks/<task_name>/search_results/` with finalized search archives and crawl outputs.
 - `tasks/<task_name>/refined_corpus.md`
 - `work_products/report.html`
 - `work_products/*.pdf`
 - `run.log`
 - `turns/turn_*.jsonl`
+
+Notes on current path resolution:
+- run-root `search_results/` may still be used transiently as an inbox before `run_research_phase` archives content into the task workspace
+- the canonical finalized research tree is task-scoped under `tasks/<task_name>/...`
+- live browser file views should prefer the run-backed file APIs so the real task tree is visible during execution
 
 Reference files from this run:
 - `tasks/russia_ukraine_news/refined_corpus.md`
@@ -153,4 +158,3 @@ This reference is not intended to constrain unrelated workflows. It is a strict 
 - report generation,
 - artifact production,
 - external delivery.
-

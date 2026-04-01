@@ -51,6 +51,28 @@ Current common contents include:
 - `work_products/`
 - sometimes `memory/`
 
+For research/report workflows, the canonical task-scoped layout is now:
+
+```text
+<run workspace>/
+  tasks/
+    <task_name>/
+      search_results/
+        crawl_*.md
+        processed_json/
+      filtered_corpus/
+      research_overview.md
+      refined_corpus.md
+  work_products/
+    report.html
+    *.pdf
+```
+
+Important storage rule:
+- `tasks/<task_name>/...` is the canonical home for task-specific research artifacts
+- run-root `search_results/` may still exist as a temporary inbox/staging area during execution, but finalized search archives and crawl outputs belong under `tasks/<task_name>/search_results/`
+- path strings such as `/opt/.../run_workspace/tasks/foo` must not be normalized into synthetic task names; task identity is resolved separately from workspace identity
+
 ### Workspace Identity Patterns
 
 Current workspace source inference uses prefixes such as:
@@ -133,6 +155,10 @@ Current VPS/mirror storage endpoints include:
 Current durable directory UI path:
 - dashboard directory listing prefers `/api/v1/ops/runs` plus run-enriched workspace summaries
 - falls back to legacy `/api/v1/sessions` in local-only mode
+
+Current Session Explorer rule:
+- when a live session has a resolved `run_id`, the browser should prefer `/api/v1/runs/{run_id}/files` over the weaker session-scoped `/api/files?session_id=...` fallback
+- session-scoped file routes remain compatibility surfaces, but run-backed browsing is the authoritative way to expose the real durable workspace tree in the right-panel file browser
 
 ## 5. Remote VPS Sync Model
 

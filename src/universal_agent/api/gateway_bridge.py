@@ -37,6 +37,18 @@ from universal_agent.timeout_policy import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_run_id(payload: dict) -> Optional[str]:
+    run_id = str(payload.get("run_id") or "").strip()
+    if run_id:
+        return run_id
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        run_id = str(metadata.get("run_id") or "").strip()
+        if run_id:
+            return run_id
+    return None
+
+
 class GatewayBridge:
     """
     Bridge that forwards Web UI requests to the external Gateway Server.
@@ -117,6 +129,8 @@ class GatewayBridge:
                 user_id=data.get("user_id", user_id or "user_ui"),
                 session_url=None,
                 logfire_enabled=bool(os.getenv("LOGFIRE_TOKEN")),
+                run_id=_extract_run_id(data),
+                is_live_session=bool(data.get("is_live_session", True)),
             )
             
         except httpx.HTTPError as e:
@@ -146,6 +160,8 @@ class GatewayBridge:
                 user_id=data.get("user_id", "user_ui"),
                 session_url=None,
                 logfire_enabled=bool(os.getenv("LOGFIRE_TOKEN")),
+                run_id=_extract_run_id(data),
+                is_live_session=bool(data.get("is_live_session", True)),
             )
             
         except httpx.HTTPError as e:

@@ -116,6 +116,7 @@ from universal_agent.heartbeat_service import (
 )
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
+from universal_agent.run_catalog import RunCatalogService
 from universal_agent.ops_config import (
     apply_merge_patch,
     load_ops_config,
@@ -1776,6 +1777,8 @@ class CreateSessionResponse(BaseModel):
     user_id: str
     workspace_dir: str
     metadata: dict = {}
+    run_id: Optional[str] = None
+    is_live_session: bool = True
 
 
 class SessionSummaryResponse(BaseModel):
@@ -1784,6 +1787,8 @@ class SessionSummaryResponse(BaseModel):
     status: str
     user_id: Optional[str] = None
     metadata: dict = {}
+    run_id: Optional[str] = None
+    is_live_session: bool = True
 
 
 class ExecuteRequest(BaseModel):
@@ -3958,6 +3963,45 @@ def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
     if not str(workspace):
         return None
     return workspace
+
+
+def _session_run_summary(session: GatewaySession) -> Optional[dict[str, Any]]:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    run_id = str(metadata.get("run_id") or "").strip()
+    if run_id:
+        summary = RunCatalogService().get_run(run_id)
+        if summary:
+            return summary
+    workspace_dir = str(session.workspace_dir or "").strip()
+    if not workspace_dir:
+        return None
+    return RunCatalogService().find_run_for_workspace(workspace_dir)
+
+
+def _session_run_id(session: GatewaySession) -> Optional[str]:
+    summary = _session_run_summary(session)
+    if not summary:
+        return None
+    run_id = str(summary.get("run_id") or "").strip()
+    if not run_id:
+        return None
+    if not isinstance(session.metadata, dict):
+        session.metadata = {}
+    session.metadata["run_id"] = run_id
+    return run_id
+
+
+def _live_session_payload(session: GatewaySession) -> dict[str, Any]:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    run_id = _session_run_id(session)
+    return {
+        "session_id": session.session_id,
+        "user_id": session.user_id,
+        "workspace_dir": session.workspace_dir,
+        "metadata": metadata,
+        "run_id": run_id,
+        "is_live_session": True,
+    }
 
 
 def _run_log_size(workspace_dir: Optional[Path]) -> int:
@@ -15126,6 +15170,8 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
             user_id=session.user_id,
             workspace_dir=session.workspace_dir,
             metadata=session.metadata,
+            run_id=_session_run_id(session),
+            is_live_session=True,
         )
     except Exception as e:
         logger.error(f"Failed to create session: {e}")
@@ -15146,6 +15192,8 @@ async def list_sessions(request: Request):
                     status=str(item.get("status") or "unknown"),
                     user_id=str(item.get("owner") or "") or None,
                     metadata=item,
+                    run_id=str(item.get("run_id") or "") or None,
+                    is_live_session=False,
                 ).model_dump()
                 for item in summaries
             ]
@@ -15153,11 +15201,11 @@ async def list_sessions(request: Request):
 
     gateway = get_gateway()
     summaries = gateway.list_sessions()
-    in_memory = {}
+    in_memory: dict[str, GatewaySession] = {}
     for summary in summaries:
         session = get_session(summary.session_id)
         if session:
-            in_memory[summary.session_id] = session.user_id
+            in_memory[summary.session_id] = session
     return {
         "sessions": [
             SessionSummaryResponse(
@@ -15166,9 +15214,11 @@ async def list_sessions(request: Request):
                 status=s.status,
                 user_id=(
                     (s.metadata.get("user_id") if isinstance(s.metadata, dict) else None)
-                    or in_memory.get(s.session_id)
+                    or (in_memory.get(s.session_id).user_id if in_memory.get(s.session_id) else None)
                 ),
                 metadata=s.metadata,
+                run_id=_session_run_id(in_memory[s.session_id]) if s.session_id in in_memory else (str((s.metadata or {}).get("run_id") or "") or None),
+                is_live_session=True,
             ).model_dump()
             for s in summaries
         ]
@@ -24291,6 +24341,8 @@ async def get_session_info(session_id: str, request: Request):
         user_id=session.user_id,
         workspace_dir=session.workspace_dir,
         metadata=session.metadata,
+        run_id=_session_run_id(session),
+        is_live_session=True,
     )
 
 
@@ -26223,13 +26275,28 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
         return
 
     # Send initial connection success message
+    session_payload = _live_session_payload(session)
     await manager.send_json(
         connection_id,
         {
             "type": "connected",
             "data": {
-                "session_id": session.session_id,
-                "workspace_dir": session.workspace_dir,
+                "message": "Connected to Universal Agent",
+                "session": {
+                    "session_id": session_payload["session_id"],
+                    "workspace": session_payload["workspace_dir"],
+                    "workspace_dir": session_payload["workspace_dir"],
+                    "user_id": session_payload["user_id"],
+                    "run_id": session_payload["run_id"],
+                    "is_live_session": session_payload["is_live_session"],
+                    "session_url": None,
+                    "logfire_enabled": bool(os.getenv("LOGFIRE_TOKEN")),
+                },
+                # Legacy flat aliases for older clients.
+                "session_id": session_payload["session_id"],
+                "workspace_dir": session_payload["workspace_dir"],
+                "run_id": session_payload["run_id"],
+                "is_live_session": session_payload["is_live_session"],
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },

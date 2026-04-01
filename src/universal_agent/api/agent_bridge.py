@@ -27,6 +27,17 @@ from universal_agent.run_catalog import RunCatalogService
 from universal_agent.workspace_catalog import list_workspace_summaries
 
 
+def _resolve_session_run_id(workspace_dir: str) -> Optional[str]:
+    workspace_key = str(workspace_dir or "").strip()
+    if not workspace_key:
+        return None
+    summary = RunCatalogService().find_run_for_workspace(workspace_key)
+    if not summary:
+        return None
+    run_id = str(summary.get("run_id") or "").strip()
+    return run_id or None
+
+
 class AgentBridge:
     """
     Bridge between FastAPI WebSocket server and UniversalAgent.
@@ -92,6 +103,8 @@ class AgentBridge:
             user_id=user_id,
             session_url=self.current_agent.session.mcp.url if self.current_agent.session else None,
             logfire_enabled=bool(os.getenv("LOGFIRE_TOKEN")),
+            run_id=_resolve_session_run_id(str(workspace_path)),
+            is_live_session=True,
         )
 
     async def resume_session(self, session_id: str) -> Optional[SessionInfo]:
@@ -122,6 +135,8 @@ class AgentBridge:
             user_id="user_ui",
             session_url=self.current_agent.session.mcp.url if self.current_agent.session else None,
             logfire_enabled=bool(os.getenv("LOGFIRE_TOKEN")),
+            run_id=_resolve_session_run_id(str(workspace_dir)),
+            is_live_session=True,
         )
 
     async def execute_query(self, query: str) -> AsyncGenerator[WebSocketEvent, None]:

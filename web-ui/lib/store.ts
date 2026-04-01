@@ -609,9 +609,30 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
     case "connected": {
       const data = event.data as Record<string, unknown>;
       store.setConnectionStatus("connected");
-      const sessionPayload = ((data.session as unknown as SessionInfo) ?? (data as unknown as SessionInfo));
-      if (sessionPayload?.session_id) {
-        store.setCurrentSession(sessionPayload);
+      const rawPayload = ((data.session as Record<string, unknown> | undefined) ?? data) as Record<string, unknown>;
+      const existing = store.currentSession;
+      const sessionId = String(rawPayload?.session_id || existing?.session_id || "").trim();
+      if (sessionId) {
+        const normalized: SessionInfo = {
+          session_id: sessionId,
+          workspace: String(rawPayload?.workspace || rawPayload?.workspace_dir || existing?.workspace || "").trim(),
+          user_id: String(rawPayload?.user_id || existing?.user_id || "user_ui").trim(),
+          session_url: (rawPayload?.session_url as string | undefined) ?? existing?.session_url,
+          logfire_enabled:
+            typeof rawPayload?.logfire_enabled === "boolean"
+              ? Boolean(rawPayload.logfire_enabled)
+              : Boolean(existing?.logfire_enabled),
+          run_id: String(rawPayload?.run_id || existing?.run_id || "").trim() || null,
+          is_live_session:
+            typeof rawPayload?.is_live_session === "boolean"
+              ? Boolean(rawPayload.is_live_session)
+              : existing?.is_live_session ?? true,
+          run_status: existing?.run_status ?? null,
+          run_kind: existing?.run_kind ?? null,
+          trigger_source: existing?.trigger_source ?? null,
+          attempt_count: existing?.attempt_count ?? null,
+        };
+        store.setCurrentSession(normalized);
       }
       break;
     }

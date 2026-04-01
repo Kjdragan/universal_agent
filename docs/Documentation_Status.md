@@ -73,6 +73,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 102 | E2BIG Kernel Limits and Prompt Architecture — 128KB execution limit constraints and prompt optimization strategy
 | 104 | Run/Attempt Lifecycle and Nomenclature Migration Plan — canonical migration plan for run/attempt terminology, packet rollout, rollback scope, and CSI boundary handling |
 | 105 | YouTube Tutorial Pipeline Run/Attempt Triage — notification-center audit of the tutorial hook flow after the refactor, plus the closure update that migrated tutorial hooks and cron admission onto durable run/attempt lifecycle handling |
+| 107 | Task Hub and Multi-Channel Execution Master Reference — central code-verified map of ingress channels, To Do execution, run workspaces, specialist delegation, delivery, lifecycle events, and Session Explorer file resolution |
 
 ## CSI Subsystem (04_CSI/)
 

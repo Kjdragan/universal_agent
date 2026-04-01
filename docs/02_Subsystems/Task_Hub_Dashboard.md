@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-03-30 — dispatcher health, canonical execution forensics, delivery-mode visibility, and role-separated heartbeat vs ToDo execution semantics documented.
+> **Last updated:** 2026-03-31 — dispatcher health, canonical execution forensics, tracked chat-panel Task Hub ingress, lifecycle-mutation failure visibility, and role-separated heartbeat vs ToDo execution semantics documented.
 
 ---
 
@@ -205,6 +205,8 @@ The board is intentionally more diagnostic than before:
 - **Task History** exposes session lineage, email mapping, reconciliation flags, and transcript/run-log links
 - **Orphaned** card badges highlight tasks whose lifecycle state no longer matches an active assignment
 - **Canonical execution hints** prevent hook-triage or heartbeat artifacts from being mistaken for the final execution owner
+- **Tracked chat visibility** means `source_kind='chat_panel'` work items use the same board, history, and lifecycle surfaces as email- or dashboard-originated tasks
+- **Lifecycle-failure visibility** means `execution_missing_lifecycle_mutation` incidents should be interpreted as "the task entered the canonical lane but the run ended without `task_hub_task_action(...)`" rather than as a dashboard projection bug
 
 ### 6.2 Action → API Mapping
 
@@ -244,6 +246,24 @@ Visual indicators showing where a task originated:
 | `manual` | Gray outline | User-created via dashboard quick-add |
 | `brainstorm` | Purple outline | Born from brainstorm refinement pipeline |
 | `webhook` | Orange outline | Ingested via webhook handler |
+| `chat_panel` | Neutral/default pill unless customized | Materialized from the live chat websocket into the canonical Task Hub execution lane |
+
+## 8.1 Tracked Chat Resolution Semantics
+
+Tracked chat requests are intentionally visible on `/dashboard/todolist` while they are executing. The expected behavior is:
+
+1. A live chat request is accepted.
+2. The gateway creates `chat:{session_id}:{turn_id}` and immediately claims it for the foreground session.
+3. The task appears in the board with `source_kind='chat_panel'`.
+4. The run must finish with a durable lifecycle mutation such as `complete`, `review`, `block`, `park`, or `delegate`.
+
+If step 4 does not happen, the board should not treat the work as resolved. Instead:
+
+- the assignment is finalized as failed
+- the task is reopened
+- the runtime emits `execution_missing_lifecycle_mutation`
+
+So when an operator sees a chat-created item appear in the board but fail to resolve, that usually means the canonical lifecycle contract was not satisfied during execution, not that the dashboard invented a phantom task.
 
 ---
 

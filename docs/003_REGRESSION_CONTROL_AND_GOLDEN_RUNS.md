@@ -64,10 +64,10 @@ The primary agent should produce tool calls containing this ordered subsequence:
 
 ```
 run_*/   (legacy session_* still readable during migration)
-  search_results/
-    crawl_*.md              (20+ crawled source files)
-    processed_json/         (optional, search result JSONs)
   tasks/{task_name}/
+    search_results/
+      crawl_*.md            (20+ crawled source files)
+      processed_json/       (archived search result JSONs)
     refined_corpus.md       (REQUIRED — synthesized research output)
     filtered_corpus/        (individual filtered crawl files)
     research_overview.md    (optional summary)
@@ -155,7 +155,8 @@ The regression tests encode all of these, but they are stated here for human ref
    `tools:` frontmatter.**
 
 5. **`research-specialist.md` must have a `SESSION WORKSPACE` section** instructing
-   the subagent to use the injected `CURRENT_SESSION_WORKSPACE` path.
+   the subagent to use the injected `CURRENT_RUN_WORKSPACE` path, with `CURRENT_SESSION_WORKSPACE`
+   treated only as a legacy alias during migration.
 
 6. **`research-specialist.md` must have a `GLOBAL CRAWL BAN`** that applies across
    ALL modes, not just `composio_pipeline`.
@@ -175,11 +176,12 @@ The regression tests encode all of these, but they are stated here for human ref
 
 ### 4.5 Workspace Level
 
-10. **`CURRENT_SESSION_WORKSPACE` must be injected** into every subagent's
-    `systemMessage` via the `on_pre_task_skill_awareness` hook.
+10. **`CURRENT_RUN_WORKSPACE` must be injected** into every subagent's
+    `systemMessage` via the `on_pre_task_skill_awareness` hook. `CURRENT_SESSION_WORKSPACE`
+    may remain as a compatibility alias, but it is no longer the primary documented scratch root.
 
 11. **`capabilities.md` must be dynamically generated** at the start of the session
-    and persisted to `CURRENT_SESSION_WORKSPACE/capabilities.md`. This file is injected
+    and persisted to `CURRENT_RUN_WORKSPACE/capabilities.md`. This file is injected
     into the primary agent's system prompt and serves as the single source of truth for
     routing and delegation. It must contain the dynamically discovered list of agents
     (from `.claude/agents/*.md`) and skills (from `.claude/skills/*/SKILL.md`).
@@ -249,7 +251,7 @@ When adding new subagent types to the pipeline:
 2. **Add a `TestXxxDefinition` class** in the drift test file
 3. **If the subagent is a sequential prerequisite**, add its type to
    `_FOREGROUND_ONLY_SUBAGENTS` in `guardrails/tool_schema.py`
-4. **Inject `CURRENT_SESSION_WORKSPACE`** via `on_pre_task_skill_awareness`
+4. **Inject `CURRENT_RUN_WORKSPACE`** via `on_pre_task_skill_awareness`
 5. **Run the full drift test suite**
 
 ## 8. Cross-References

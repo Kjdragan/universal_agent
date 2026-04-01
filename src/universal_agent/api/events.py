@@ -84,6 +84,8 @@ class SessionInfo:
     user_id: str
     session_url: Optional[str] = None
     logfire_enabled: bool = False
+    run_id: Optional[str] = None
+    is_live_session: bool = True
 
 
 @dataclass
@@ -138,17 +140,24 @@ class ApprovalResponse:
 
 def create_connected_event(session_info: SessionInfo) -> WebSocketEvent:
     """Create a connection established event."""
+    session_payload = {
+        "session_id": session_info.session_id,
+        "workspace": session_info.workspace,
+        "workspace_dir": session_info.workspace,
+        "user_id": session_info.user_id,
+        "session_url": session_info.session_url,
+        "logfire_enabled": session_info.logfire_enabled,
+        "run_id": session_info.run_id,
+        "is_live_session": session_info.is_live_session,
+    }
     return WebSocketEvent(
         type=EventType.CONNECTED,
         data={
             "message": "Connected to Universal Agent",
-            "session": {
-                "session_id": session_info.session_id,
-                "workspace": session_info.workspace,
-                "user_id": session_info.user_id,
-                "session_url": session_info.session_url,
-                "logfire_enabled": session_info.logfire_enabled,
-            },
+            "session": session_payload,
+            # Legacy flat aliases kept for older clients that still read from
+            # the top-level payload instead of `data.session`.
+            **session_payload,
         },
     )
 

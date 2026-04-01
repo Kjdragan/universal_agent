@@ -172,9 +172,39 @@ Key implementation points:
 - Tracked chat tasks get Task Hub IDs in the form `chat:{session_id}:{turn_id}`.
 - The current interactive session immediately claims that task instead of waiting for the background ToDo sweep.
 - The execution prompt is built from the same canonical Task Hub prompt builder used by the dedicated ToDo dispatcher.
-- Because tracked chat work runs as `todo_execution`, the gateway also applies the same stricter tool policy used by the dedicated ToDo daemon and blocks Claude meta task controls such as `Task`, `TaskStop`, and `Agent`.
+- Because tracked chat work runs as `todo_execution`, the gateway applies the same Task Hub lifecycle policy used by the dedicated ToDo daemon.
+- `TaskStop` is blocked in this lane because it collides with durable Task Hub ownership.
+- Sanctioned internal delegation via `Task(...)` / `Agent(...)` is still allowed when the execution manifest requires the golden research/report specialist path.
 - Chat-originated tasks default to `delivery_mode="interactive_chat"` so final delivery stays in the chat session unless the user explicitly asks for email.
 - The original user request is preserved separately for mission-guardrail evaluation so the Task Hub wrapper prompt does not accidentally force email delivery semantics.
+- If execution ends without a durable `task_hub_task_action(...)` mutation, the lifecycle guard marks the active assignment failed, reopens the task, and emits an `execution_missing_lifecycle_mutation` failure instead of silently leaving the task in a misleading completed-looking state.
+
+### 2.8 Chat Session File Browsing
+
+The chat panel and Session Explorer now have to deal with two IDs:
+
+- `session_id` — the live websocket session identity
+- `run_id` — the durable run/workspace identity
+
+The canonical storage tree lives under the run workspace, not under a separate browser-only session root. Once a live session has a resolved `run_id`, file browsing should prefer the run-backed APIs:
+
+- `GET /api/v1/runs/{run_id}/files`
+- `GET /api/v1/runs/{run_id}/files/{file_path}`
+
+The older session-scoped file routes remain as compatibility fallbacks:
+
+- `GET /api/files?session_id=...`
+- `GET /api/files/{session_id}/{file_path}`
+
+This matters for tracked chat research/report work because the right-panel explorer must expose the real durable tree:
+
+```text
+<run workspace>/
+  tasks/<task_name>/search_results/
+  tasks/<task_name>/filtered_corpus/
+  tasks/<task_name>/refined_corpus.md
+  work_products/
+```
 
 ---
 

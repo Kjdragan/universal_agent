@@ -583,7 +583,7 @@ function buildDurableFileListUrl(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
   path: string,
 ): string {
-  if (isRunOnlySelection(session) && session?.run_id) {
+  if (session?.run_id) {
     const base = `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files`;
     return path ? `${base}?path=${encodeURIComponent(path)}` : base;
   }
@@ -596,7 +596,7 @@ function buildDurableFileUrl(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
   path: string,
 ): string {
-  if (isRunOnlySelection(session) && session?.run_id) {
+  if (session?.run_id) {
     return `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files/${encodeWorkspacePath(path)}`;
   }
   const sessionId = String(session?.session_id || "").trim();
@@ -712,7 +712,7 @@ function FileExplorer() {
         : mode === "vps_artifacts"
           ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
           : buildDurableFileListUrl(currentSession, path);
-    fetch(url)
+    fetch(url, { cache: "no-store" })
       .then(res => res.json())
       .then(data => {
         const sortedFiles = (data.files || []).sort((a: any, b: any) => {
@@ -1548,6 +1548,71 @@ function ChatInterface() {
   }, [isVpObserverSession, isRunWorkspaceOnly]);
 
   useEffect(() => {
+    if (!currentSession?.session_id || isRunWorkspaceOnly) return;
+    let cancelled = false;
+
+    const hydrateLiveSession = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/sessions/${encodeURIComponent(currentSession.session_id)}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const payload = await res.json();
+        const snapshot = useAgentStore.getState().currentSession;
+        if (!snapshot || snapshot.session_id !== currentSession.session_id || cancelled) return;
+
+        const nextWorkspace = String(payload.workspace_dir || snapshot.workspace || "").trim();
+        const nextRunId =
+          String(payload.run_id || payload?.metadata?.run_id || snapshot.run_id || "").trim() || null;
+        const nextIsLive =
+          typeof payload.is_live_session === "boolean"
+            ? payload.is_live_session
+            : snapshot.is_live_session ?? true;
+
+        if (
+          nextWorkspace === (snapshot.workspace || "") &&
+          nextRunId === (snapshot.run_id || null) &&
+          nextIsLive === (snapshot.is_live_session ?? true)
+        ) {
+          return;
+        }
+
+        setCurrentSession({
+          ...snapshot,
+          workspace: nextWorkspace,
+          user_id: String(payload.user_id || snapshot.user_id || "user_ui").trim(),
+          run_id: nextRunId,
+          is_live_session: nextIsLive,
+        });
+      } catch (error) {
+        console.debug("live session metadata hydration skipped:", error);
+      }
+    };
+
+    void hydrateLiveSession();
+    if (currentSession.run_id && currentSession.workspace) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const interval = window.setInterval(() => {
+      void hydrateLiveSession();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    currentSession?.session_id,
+    currentSession?.run_id,
+    currentSession?.workspace,
+    isRunWorkspaceOnly,
+    setCurrentSession,
+  ]);
+
+  useEffect(() => {
     if (!currentSession?.run_id || currentSession.workspace) return;
     let cancelled = false;
     (async () => {
@@ -2206,12 +2271,12 @@ function WorkProductViewer() {
     const fetchKeyFiles = async () => {
       try {
         // Fetch valid files from ROOT
-        const resRoot = await fetch(buildDurableFileListUrl(currentSession, "."));
+        const resRoot = await fetch(buildDurableFileListUrl(currentSession, "."), { cache: "no-store" });
         const dataRoot = await resRoot.json();
         const filesRoot = dataRoot.files || [];
 
         // Fetch valid files from WORK_PRODUCTS
-        const resWp = await fetch(buildDurableFileListUrl(currentSession, "work_products"));
+        const resWp = await fetch(buildDurableFileListUrl(currentSession, "work_products"), { cache: "no-store" });
         const dataWp = await resWp.json();
         const filesWp = dataWp.files || [];
 
