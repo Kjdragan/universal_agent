@@ -3967,7 +3967,8 @@ def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
 
 def _session_run_summary(session: GatewaySession) -> Optional[dict[str, Any]]:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
-    run_id = str(metadata.get("run_id") or "").strip()
+    # Prefer active_run_id (set by ExecutionRunService) over legacy run_id
+    run_id = str(metadata.get("active_run_id") or metadata.get("run_id") or "").strip()
     if run_id:
         summary = RunCatalogService().get_run(run_id)
         if summary:
@@ -3994,12 +3995,15 @@ def _session_run_id(session: GatewaySession) -> Optional[str]:
 def _live_session_payload(session: GatewaySession) -> dict[str, Any]:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     run_id = _session_run_id(session)
+    # Prefer run-scoped workspace for file browsing
+    active_run_workspace = str(metadata.get("active_run_workspace") or "").strip()
     return {
         "session_id": session.session_id,
         "user_id": session.user_id,
-        "workspace_dir": session.workspace_dir,
+        "workspace_dir": active_run_workspace or session.workspace_dir,
         "metadata": metadata,
         "run_id": run_id,
+        "active_run_workspace": active_run_workspace or None,
         "is_live_session": True,
     }
 
@@ -6370,6 +6374,7 @@ def _prepare_tracked_chat_execution(
     client_turn_id: str = "",
 ) -> dict[str, Any]:
     from universal_agent.services.capacity_governor import capacity_snapshot
+    from universal_agent.services.execution_run_service import allocate_execution_run
     from universal_agent.services.todo_dispatch_service import (
         build_execution_manifest,
         build_todo_execution_prompt,
@@ -6408,6 +6413,15 @@ def _prepare_tracked_chat_execution(
         "metadata": task_metadata,
     }
 
+    # ── Run-per-task: allocate a fresh execution run workspace ──
+    run_ctx = allocate_execution_run(
+        task_id=task_id,
+        origin="chat_panel",
+        provider_session_id=session.session_id,
+        run_kind="todo_execution",
+        trigger_source="chat_panel",
+    )
+
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -6417,7 +6431,8 @@ def _prepare_tracked_chat_execution(
                 task_id=task_id,
                 agent_id=f"todo:{session.session_id}",
                 provider_session_id=session.session_id,
-                workspace_dir=str(session.workspace_dir or "").strip() or None,
+                workflow_run_id=run_ctx.run_id,
+                workspace_dir=run_ctx.workspace_dir,
                 claim_reason="interactive_chat_intake",
             )
             claimed["_routing"] = {
@@ -6429,6 +6444,11 @@ def _prepare_tracked_chat_execution(
             activity = task_hub.get_agent_activity(conn)
         finally:
             conn.close()
+
+    # Stamp session metadata for UI visibility (not as artifact root)
+    if isinstance(session.metadata, dict):
+        session.metadata["active_run_id"] = run_ctx.run_id
+        session.metadata["active_run_workspace"] = run_ctx.workspace_dir
 
     active_assignments = activity.get("active_assignments") if isinstance(activity, dict) else []
     prompt = build_todo_execution_prompt(
@@ -6442,6 +6462,8 @@ def _prepare_tracked_chat_execution(
         "assignment_id": str(claimed.get("assignment_id") or "").strip(),
         "prompt": prompt,
         "delivery_mode": delivery_mode,
+        "run_id": run_ctx.run_id,
+        "workspace_dir": run_ctx.workspace_dir,
     }
 
 
@@ -26718,6 +26740,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             "original_user_input": str(
                                 metadata.get("original_user_input") or original_user_input
                             ),
+                            # ── Run-per-task lineage ──
+                            "workflow_run_id": tracked_chat.get("run_id", ""),
+                            "workspace_dir": tracked_chat.get("workspace_dir", ""),
                         }
                         request_source = _normalize_run_source(request_metadata.get("source"))
 

@@ -353,15 +353,50 @@ class ToDoDispatchService:
                 )
                 return
 
-            # Task Hub state lives in the dedicated activity DB, not runtime_state.db.
+            # ── Run-per-task: claim up to 5 tasks, each with its own workspace ──
+            from universal_agent.services.execution_run_service import (
+                allocate_execution_run,
+            )
+            all_claimed: list[dict] = []
+            max_per_sweep = 5
             with connect_runtime_db(activity_db_path) as conn:
-                task_hub_claimed = dispatch_sweep(
-                    conn,
-                    agent_id=f"todo:{session.session_id}",
-                    limit=5,
-                    provider_session_id=session.session_id,
-                    workspace_dir=session.workspace_dir,
-                )
+                for _ in range(max_per_sweep):
+                    # Claim one task at a time with deferred workspace
+                    batch = dispatch_sweep(
+                        conn,
+                        agent_id=f"todo:{session.session_id}",
+                        limit=1,
+                        provider_session_id=session.session_id,
+                        workspace_dir=None,
+                    )
+                    if not batch:
+                        break
+                    item = batch[0]
+                    task_id_val = str(item.get("task_id") or "").strip()
+
+                    # Allocate a fresh run workspace for this specific task
+                    run_ctx = allocate_execution_run(
+                        task_id=task_id_val,
+                        origin="todo_dispatch",
+                        provider_session_id=session.session_id,
+                        run_kind="todo_execution",
+                        trigger_source="todo_dispatch",
+                    )
+
+                    # Stamp the assignment with run-scoped lineage
+                    assignment_id = str(item.get("assignment_id") or "").strip()
+                    if assignment_id:
+                        task_hub.update_assignment_lineage(
+                            conn,
+                            assignment_id=assignment_id,
+                            workflow_run_id=run_ctx.run_id,
+                            workspace_dir=run_ctx.workspace_dir,
+                        )
+                    item["workspace_dir"] = run_ctx.workspace_dir
+                    item["workflow_run_id"] = run_ctx.run_id
+                    all_claimed.append(item)
+
+            task_hub_claimed = all_claimed
             
             if not task_hub_claimed:
                 if self.event_callback:
@@ -422,6 +457,9 @@ class ToDoDispatchService:
                     "dispatch_kind": "todo",
                     "claimed_task_ids": task_ids,
                     "claimed_assignment_ids": claimed_assignment_ids,
+                    # ── Run-per-task lineage (first task's run) ──
+                    "workflow_run_id": str(task_hub_claimed[0].get("workflow_run_id") or "").strip() if task_hub_claimed else "",
+                    "workspace_dir": str(task_hub_claimed[0].get("workspace_dir") or "").strip() if task_hub_claimed else "",
                 },
             )
             

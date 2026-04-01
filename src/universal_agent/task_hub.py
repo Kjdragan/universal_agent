@@ -1296,6 +1296,41 @@ def _assignment_lineage(
     }
 
 
+def update_assignment_lineage(
+    conn: sqlite3.Connection,
+    *,
+    assignment_id: str,
+    workflow_run_id: Optional[str] = None,
+    workflow_attempt_id: Optional[str] = None,
+    workspace_dir: Optional[str] = None,
+) -> None:
+    """Stamp an existing assignment with run-scoped lineage.
+
+    Called by the dispatcher after allocating a fresh ExecutionRunContext
+    so the assignment record carries the correct artifact root.
+    """
+    ensure_schema(conn)
+    sets: list[str] = []
+    params: list[Any] = []
+    if workflow_run_id is not None:
+        sets.append("workflow_run_id = ?")
+        params.append(workflow_run_id)
+    if workflow_attempt_id is not None:
+        sets.append("workflow_attempt_id = ?")
+        params.append(workflow_attempt_id)
+    if workspace_dir is not None:
+        sets.append("workspace_dir = ?")
+        params.append(workspace_dir)
+    if not sets:
+        return
+    params.append(assignment_id)
+    conn.execute(
+        f"UPDATE task_hub_assignments SET {', '.join(sets)} WHERE assignment_id = ?",
+        params,
+    )
+    conn.commit()
+
+
 def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[dict[str, Any]]:
     ensure_schema(conn)
     rows = conn.execute(

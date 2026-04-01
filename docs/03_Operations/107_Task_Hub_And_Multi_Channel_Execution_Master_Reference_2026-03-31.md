@@ -22,9 +22,9 @@ This document is intentionally a master map. It does not replace the more specia
 Important reading note:
 
 - this document describes the current codebase as it exists today
-- some sections describe the durable run model that the system is aiming toward
-- the run-per-task workspace refactor is not yet fully complete across all ingestion paths
-- the implementation handoff for that remaining work is tracked in [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md)
+- the run-per-task workspace isolation model is fully implemented across all canonical ingestion paths (tracked chat, ToDo dispatcher, email-to-task bridge)
+- the canonical allocation layer is `ExecutionRunService` in `src/universal_agent/services/execution_run_service.py`
+- for historical context on the migration, see [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md)
 
 ---
 
@@ -61,11 +61,12 @@ The current system is built around five durable ideas:
 4. Task-specific artifacts live under `tasks/<task_name>/...` inside that run workspace.
 5. A run is not considered properly resolved unless it records a durable Task Hub lifecycle mutation such as `complete`, `review`, `block`, `park`, or `delegate`.
 
-Current gap:
+Implementation status (completed 2026-04-01):
 
-- the codebase already models durable runs, run workspaces, and task-scoped artifacts
-- but tracked chat and dispatcher execution still have places where they bind claimed work to an existing session workspace rather than allocating a fresh dedicated run workspace per accepted task
-- that remaining gap is why operators can still see unrelated sibling task directories inside one visible workspace
+- all canonical execution paths (tracked chat, ToDo dispatch, email-to-task) allocate a fresh dedicated run workspace per accepted task via `ExecutionRunService.allocate_execution_run()`
+- each allocated workspace is registered in the durable `runs` table with full lineage (task_id, origin, workspace_dir)
+- the `update_assignment_lineage()` helper in `task_hub.py` stamps assignment records with run-scoped workspace_dir and workflow_run_id after allocation
+- UI/API helpers (`_session_run_summary`, `_live_session_payload`) prefer `active_run_id` and `active_run_workspace` from session metadata for file browsing
 
 The execution contract itself is normalized by `build_execution_manifest(...)` in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L73). For each work item, the runtime records:
 
