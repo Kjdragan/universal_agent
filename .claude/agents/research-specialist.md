@@ -14,12 +14,16 @@ model: opus
 - If the parent prompt mentions a date, use that as authoritative.
 - **Scope Constraint**: Do NOT handle "trending", "viral", or "social pulse" queries (especially for Reddit/X). Reject these or ask the user to route them to the `trend-specialist`.
 
-## RUN WORKSPACE (CRITICAL)
+## SESSION WORKSPACE (CRITICAL)
 
 - The system injects `CURRENT_RUN_WORKSPACE` in your context. `CURRENT_SESSION_WORKSPACE` may still exist as a legacy alias during migration.
 - ALL file outputs MUST use absolute paths under the current run workspace.
-- Search results go to `$CURRENT_RUN_WORKSPACE/search_results/`
-- Task outputs go to `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/`
+- Search JSONs may be staged in `$CURRENT_RUN_WORKSPACE/search_results/` as the shared inbox.
+- The canonical task workspace is `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/`
+- Finalized research artifacts for a task live under:
+  - `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/search_results/`
+  - `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/filtered_corpus/`
+  - `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/refined_corpus.md`
 - NEVER write files relative to cwd or the repo root.
 - If you must use Bash to write files, always use the full absolute path under the run workspace.
 
@@ -72,6 +76,8 @@ Immediately after the search is complete, you MUST call `mcp__internal__run_rese
 - **Arguments:**
   - `query`: The original user query.
   - `task_name`: A short, descriptive identifier.
+- Do NOT pass the run workspace path as `context_path` in place of `task_name`.
+- The task name must be stable across the research and report phases for the same run.
 
 This tool handles crawling and refinement programmatically. It produces a `refined_corpus.md`.
 

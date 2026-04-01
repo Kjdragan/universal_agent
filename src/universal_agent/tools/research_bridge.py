@@ -28,7 +28,7 @@ except ImportError:
     from src.mcp_server import _run_report_generation_legacy as report_gen_core
 
 # Import Task Guardrails
-from universal_agent.utils.task_guardrails import resolve_best_task_match
+from universal_agent.utils.task_guardrails import normalize_task_name, resolve_best_task_match
 from universal_agent.hooks import StdoutToEventStream
 
 
@@ -111,12 +111,72 @@ def _resolve_workspace_hint(args: dict[str, Any]) -> str | None:
     return inferred
 
 
+def _extract_task_name_from_path(path_value: str) -> str | None:
+    raw_value = str(path_value or "").strip()
+    if not raw_value:
+        return None
+    try:
+        candidate = Path(raw_value).expanduser()
+    except Exception:
+        return None
+
+    parts = candidate.parts
+    if "tasks" not in parts:
+        return None
+    task_index = parts.index("tasks") + 1
+    if task_index >= len(parts):
+        return None
+    task_name = parts[task_index]
+    return task_name or None
+
+
+def _resolve_task_name(args: dict[str, Any], workspace_hint: str | None = None) -> str:
+    workspace_root = Path(workspace_hint).resolve() if workspace_hint else None
+
+    explicit_task = str(args.get("task_name", "") or "").strip()
+    if explicit_task:
+        return resolve_best_task_match(explicit_task, workspace_root=workspace_root)
+
+    for candidate_value in (args.get("corpus_data"), args.get("context_path")):
+        if not isinstance(candidate_value, str):
+            continue
+        extracted = _extract_task_name_from_path(candidate_value)
+        if extracted:
+            return resolve_best_task_match(extracted, workspace_root=workspace_root)
+
+    raw_context = str(args.get("context_path", "") or "").strip()
+    if raw_context:
+        context_path = Path(raw_context).expanduser()
+        if context_path.exists():
+            if _is_session_workspace(str(context_path)):
+                if workspace_root:
+                    tasks_dir = workspace_root / "tasks"
+                    if tasks_dir.is_dir():
+                        task_dirs = sorted(p for p in tasks_dir.iterdir() if p.is_dir())
+                        if len(task_dirs) == 1:
+                            return resolve_best_task_match(
+                                task_dirs[0].name, workspace_root=workspace_root
+                            )
+                return "default"
+            if context_path.is_dir() and context_path.parent.name == "tasks":
+                return resolve_best_task_match(
+                    context_path.name, workspace_root=workspace_root
+                )
+
+        if "/" not in raw_context and "\\" not in raw_context:
+            normalized = normalize_task_name(raw_context)
+            return resolve_best_task_match(normalized, workspace_root=workspace_root)
+
+    return "default"
+
+
 @tool(
     name="run_research_pipeline", 
     description="Execute the UNIFIED Research & Reporting Pipeline. Handles Search -> Crawl -> Refine -> Outline -> Draft -> Compile in one Turn. EFFICIENCY: Use this to avoid fragmented tool calls. TRUST the JSON success receipt; DO NOT call Bash/ls after this.",
     input_schema={
         "query": str, 
         "context_path": str,
+        "task_name": str,
         "workspace_dir": str,
     }
 )
@@ -125,11 +185,8 @@ async def run_research_pipeline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for the research pipeline to run in-process.
     """
     query = args.get("query")
-    raw_task_name = args.get("context_path", "default")
     workspace_hint = _resolve_workspace_hint(args)
-    
-    # Apply Guardrail
-    task_name = resolve_best_task_match(raw_task_name)
+    task_name = _resolve_task_name(args, workspace_hint)
     
     # Execute the original function directly
     # Since it runs in this process, its print/stderr writes will go to our console
@@ -183,6 +240,8 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     input_schema={
         "query": str, 
         "context_path": str,
+        "task_name": str,
+        "workspace_dir": str,
     }
 )
 async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -190,11 +249,8 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for research phase (Crawl -> Refine) to run in-process.
     """
     query = args.get("query")
-    raw_task_name = args.get("context_path", "default")
     workspace_hint = _resolve_workspace_hint(args)
-    
-    # Apply Guardrail
-    task_name = resolve_best_task_match(raw_task_name)
+    task_name = _resolve_task_name(args, workspace_hint)
     
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = await research_phase_core(query, task_name, workspace_dir=workspace_hint)
@@ -206,7 +262,9 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     input_schema={
         "query": str, 
         "context_path": str,
+        "task_name": str,
         "corpus_data": str,  # Option to provide corpus directly (for non-search tasks)
+        "workspace_dir": str,
     }
 )
 async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -214,27 +272,18 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for report generation (Outline -> Compile) to run in-process.
     """
     query = args.get("query")
-    raw_task_name = args.get("context_path", "default")
     corpus_data = args.get("corpus_data")
     workspace_hint = _resolve_workspace_hint(args)
+    task_name = _resolve_task_name(args, workspace_hint)
 
-    # If corpus_data is an existing refined_corpus.md path, align task_name to it
     if isinstance(corpus_data, str) and corpus_data.strip():
         candidate = Path(corpus_data.strip())
         if not candidate.is_absolute():
             workspace = _ctx_get_workspace()
             if workspace:
                 candidate = Path(workspace) / candidate
-        if candidate.exists():
-            parts = candidate.parts
-            if "tasks" in parts and candidate.name == "refined_corpus.md":
-                task_index = parts.index("tasks") + 1
-                if task_index < len(parts):
-                    raw_task_name = parts[task_index]
-                    corpus_data = None
-    
-    # Apply Guardrail
-    task_name = resolve_best_task_match(raw_task_name)
+        if candidate.exists() and candidate.name == "refined_corpus.md":
+            corpus_data = None
     
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = await report_gen_core(
@@ -250,13 +299,16 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description="Generate a report outline from the refined corpus.",
     input_schema={
         "topic": str,
-        "context_path": str
+        "context_path": str,
+        "task_name": str,
+        "workspace_dir": str,
     }
 )
 async def generate_outline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     from mcp_server import generate_outline
     topic = args.get("topic")
-    task_name = resolve_best_task_match(args.get("context_path", "default"))
+    workspace_hint = _resolve_workspace_hint(args)
+    task_name = _resolve_task_name(args, workspace_hint)
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result = await generate_outline(topic, task_name)
     return {"content": [{"type": "text", "text": result}]}
@@ -265,12 +317,15 @@ async def generate_outline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     name="draft_report_parallel",
     description="Execute the parallel drafting system to generate report sections.",
     input_schema={
-        "context_path": str
+        "context_path": str,
+        "task_name": str,
+        "workspace_dir": str,
     }
 )
 async def draft_report_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     from mcp_server import draft_report_parallel
-    task_name = resolve_best_task_match(args.get("context_path", "default"))
+    workspace_hint = _resolve_workspace_hint(args)
+    task_name = _resolve_task_name(args, workspace_hint)
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result = await draft_report_parallel(task_name=task_name)
     return {"content": [{"type": "text", "text": result}]}

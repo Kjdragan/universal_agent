@@ -1980,7 +1980,7 @@ class SearchResultFile(BaseModel):
 # =============================================================================
 
 
-async def _crawl_core(urls: list[str], session_dir: str) -> str:
+async def _crawl_core(urls: list[str], session_dir: str, output_dir: str | None = None) -> str:
     """
     Core implementation of parallel crawling.
     Shared by crawl_parallel (manual tool) and finalize_research_corpus (automated).
@@ -1988,7 +1988,7 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
     import hashlib
     import aiohttp
 
-    search_results_dir = os.path.join(session_dir, "search_results")
+    search_results_dir = output_dir or os.path.join(session_dir, "search_results")
     os.makedirs(search_results_dir, exist_ok=True)
 
     results_summary = {
@@ -2530,23 +2530,32 @@ async def finalize_research(
                     }
                 )
 
-        search_results_dir = str((session_path / "search_results").resolve())
-        if not os.path.isdir(search_results_dir):
+        legacy_search_results_dir = (session_path / "search_results").resolve()
+        task_dir_path = (session_path / "tasks" / task_name).resolve()
+        task_search_results_dir = (task_dir_path / "search_results").resolve()
+        processed_dir_path = (task_search_results_dir / "processed_json").resolve()
+
+        task_search_results_dir.mkdir(parents=True, exist_ok=True)
+        processed_dir_path.mkdir(parents=True, exist_ok=True)
+
+        search_inbox_dirs = [task_search_results_dir]
+        if legacy_search_results_dir != task_search_results_dir:
+            search_inbox_dirs.append(legacy_search_results_dir)
+
+        if not any(path.is_dir() for path in search_inbox_dirs):
             return json.dumps(
                 {
                     "error": (
                         "Search results directory not found in run workspace. "
-                        f"Expected: {search_results_dir}"
+                        f"Expected one of: {', '.join(str(path) for path in search_inbox_dirs)}"
                     )
                 }
             )
 
         session_dir = str(session_path)
 
-        processed_dir = os.path.join(search_results_dir, "processed_json")
-        
         # Task-specific context directory (using potentially adjusted session_dir)
-        task_dir = os.path.join(session_dir, "tasks", task_name)
+        task_dir = str(task_dir_path)
         os.makedirs(task_dir, exist_ok=True)
         task_config = _load_task_config(task_dir)
         config_enable_topic = task_config.get("enable_topic_filter")
@@ -2558,24 +2567,29 @@ async def finalize_research(
         if not isinstance(topic_keywords, list):
             topic_keywords = []
 
-        # Ensure archive dir exists
-        os.makedirs(processed_dir, exist_ok=True)
-
         all_urls = set()
         scanned_files = 0
-        processed_files_list = []
+        processed_files_list: list[Path] = []
 
-        # 1. Scan Inbox (Root only) and Extract
-        # Strict filter: ONLY .json files in the root (ignore directories)
-        candidates = sorted([
-            f
-            for f in os.listdir(search_results_dir)
-            if f.endswith(".json")
-            and os.path.isfile(os.path.join(search_results_dir, f))
-        ])
+        # 1. Scan inboxes and extract.
+        # Legacy run-root search_results/ remains a staging inbox, but archived and
+        # crawled artifacts live under tasks/{task_name}/search_results/.
+        candidate_paths: list[Path] = []
+        seen_candidate_paths: set[Path] = set()
+        for inbox_dir in search_inbox_dirs:
+            if not inbox_dir.is_dir():
+                continue
+            for candidate_path in sorted(
+                path for path in inbox_dir.iterdir() if path.is_file() and path.suffix == ".json"
+            ):
+                resolved_candidate = candidate_path.resolve()
+                if resolved_candidate in seen_candidate_paths:
+                    continue
+                seen_candidate_paths.add(resolved_candidate)
+                candidate_paths.append(resolved_candidate)
 
-        for filename in candidates:
-            path = os.path.join(search_results_dir, filename)
+        for path in candidate_paths:
+            filename = path.name
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -2644,7 +2658,7 @@ async def finalize_research(
                             f"[{tool_name}] Config-parsed {extracted_count} URLs from {filename}"
                         )
                         scanned_files += 1
-                        processed_files_list.append(filename)
+                        processed_files_list.append(path)
                         # We will move file later
 
                     # Config matched but no URLs extracted; fall back to legacy parser
@@ -2655,7 +2669,7 @@ async def finalize_research(
                             if urls:
                                 all_urls.update(urls)
                                 scanned_files += 1
-                                processed_files_list.append(filename)
+                                processed_files_list.append(path)
                                 logger.info(
                                     "[%s] Fallback-parsed %d URLs from %s",
                                     tool_name,
@@ -2679,7 +2693,7 @@ async def finalize_research(
                         if urls:
                             all_urls.update(urls)
                             scanned_files += 1
-                            processed_files_list.append(filename)
+                            processed_files_list.append(path)
                             logger.info(
                                 f"[Legacy] Pydantic-parsed {len(urls)} URLs from {filename}"
                             )
@@ -2712,31 +2726,33 @@ async def finalize_research(
         # 2. Archive Processed Files (Move to processed_json)
         import shutil
 
-        for filename in processed_files_list:
-            src = os.path.join(search_results_dir, filename)
-            dst = os.path.join(processed_dir, filename)
+        archived_files: list[Path] = []
+        for src_path in processed_files_list:
+            src = src_path.resolve()
+            dst = processed_dir_path / src.name
             # Handle potential collision in archive
-            if os.path.exists(dst):
-                base, ext = os.path.splitext(filename)
+            if dst.exists():
+                base, ext = os.path.splitext(src.name)
                 timestamp = datetime.now().strftime("%H%M%S")
-                dst = os.path.join(processed_dir, f"{base}_{timestamp}{ext}")
+                dst = processed_dir_path / f"{base}_{timestamp}{ext}"
 
-            shutil.move(src, dst)
-            logger.info(f"Archived verified search input: {filename}")
+            if src != dst:
+                shutil.move(str(src), str(dst))
+            archived_files.append(dst)
+            logger.info(f"Archived verified search input: {src.name} -> {dst}")
 
         search_texts: list[str] = []
-        for filename in processed_files_list:
-            path = os.path.join(processed_dir, filename)
-            if not os.path.exists(path):
+        for archived_path in archived_files:
+            if not archived_path.exists():
                 continue
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(archived_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 tool_name = data.get("tool", "")
                 config = SEARCH_TOOL_CONFIG.get(tool_name)
                 search_texts.extend(_collect_search_texts(data, config))
             except Exception as e:
-                logger.warning(f"Error reading archived {filename}: {e}")
+                logger.warning(f"Error reading archived {archived_path.name}: {e}")
 
         topic_terms_raw = _build_topic_terms(search_texts, topic_keywords)
         compiled_topic_terms = _compile_topic_terms(topic_terms_raw)
@@ -2752,8 +2768,7 @@ async def finalize_research(
         elif enable_topic_filter:
             logger.info("Topic filter enabled but no topic terms found.")
 
-        # 3. Execute Crawl (Saves to Global Cache in search_results/)
-        # 3. Execute Crawl (Saves to Global Cache in search_results/)
+        # 3. Execute Crawl (saves to task-scoped search_results/)
         sys.stderr.write(
             f"[finalize] ⏳ Found {len(url_list)} unique URLs from {scanned_files} files "
             f"({len(filtered_urls)} after blacklist). Starting crawl (this may take 30-60s)...\n"
@@ -2761,7 +2776,11 @@ async def finalize_research(
 
         try:
             # Call Core Logic
-            crawl_result_json = await _crawl_core(filtered_urls, session_dir)
+            crawl_result_json = await _crawl_core(
+                filtered_urls,
+                session_dir,
+                output_dir=str(task_search_results_dir),
+            )
             crawl_result = json.loads(crawl_result_json)
         except Exception as e:
             error_msg = f"CRAWL CORE FATAL ERROR: {str(e)}"
@@ -2824,44 +2843,14 @@ async def finalize_research(
                 }
             )
 
-        # 5. Build Scoped Overview
-        # We need to read the JSONs again to build the index snippets.
-        # But they are now in the ARCHIVE directory (processed_dir).
+        # 5. Build Scoped Overview from task-scoped archived JSONs.
         search_items = []
-        for filename in processed_files_list:
-            # Look in processed_dir now
-            path = os.path.join(
-                processed_dir, os.path.basename(filename)
-            )  # Naive name match, assumes move didn't rename
-            # Logic: If we renamed during move, we can't easily find it.
-            # Better approach: Read from 'src' BEFORE move, or just re-read listing of destination?
-            # Ideally we extract metadata during the first pass.
-            # For simplicity in this hotfix: We'll assume no rename for now, or just scan processed_dir for RECENTLY moved files?
-            # Actually, let's just re-read the ARCHIVED file.
-
-            # Find the file in processed_dir. It might be renamed if collision occurred.
-            # But processed_files_list contains original filenames.
-            # Let's try to find it.
-            candidates = [
-                f
-                for f in os.listdir(processed_dir)
-                if f.startswith(os.path.splitext(filename)[0])
-            ]
-            # Pick the most recent one if multiple?
-            # This is complex. Use the 'src' path logic: we just moved them.
-            # Let's iterate processed_files_list and assume valid path construction for now.
-            # If collision rename happened, we might miss it.
-            # Safe fallback: Don't error out.
-
-            # Simple fix: We know we moved 'filename' to 'processed_dir/filename' usually.
-            path = os.path.join(processed_dir, filename)
-            if not os.path.exists(path):
-                # Try finding with timestamp suffix? Too hard.
-                # We skip snippets if file lost.
+        for archived_path in archived_files:
+            if not archived_path.exists():
                 continue
 
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(archived_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 tool_name = data.get("tool", "")
                 config = SEARCH_TOOL_CONFIG.get(tool_name)
@@ -2885,7 +2874,7 @@ async def finalize_research(
                         }
                     )
             except Exception as e:
-                logger.warning(f"Error reading archived {filename}: {e}")
+                logger.warning(f"Error reading archived {archived_path.name}: {e}")
 
         filtered_lookup = {f["url"]: f for f in filtered_files if f.get("url")}
         overview_lines = []
@@ -3023,8 +3012,12 @@ async def finalize_research(
             {
                 "status": "Research Corpus Finalized (Inbox Processed)",
                 "task_scope": task_name,
-                "processed_input_files": len(processed_files_list),
-                "archive_location": "search_results/processed_json/",
+                "processed_input_files": len(archived_files),
+                "archive_location": os.path.relpath(str(processed_dir_path), session_dir),
+                "task_workspace": os.path.relpath(task_dir, session_dir),
+                "task_search_results": os.path.relpath(
+                    str(task_search_results_dir), session_dir
+                ),
                 "extracted_urls": len(url_list),
                 "urls_after_blacklist": len(filtered_urls),
                 "crawl_summary": {
@@ -4339,15 +4332,23 @@ async def _run_research_phase_legacy(
 
     mcp_log(f"🚀 [Research Phase] Starting crawling & refinement for: '{query}'", level="INFO", prefix="")
     
-    # Verify search results exist
-    search_dir = os.path.join(workspace, "search_results")
-    if not os.path.isdir(search_dir):
+    # Verify staged or task-scoped search results exist.
+    search_dirs = [
+        os.path.join(workspace, "tasks", task_name, "search_results"),
+        os.path.join(workspace, "search_results"),
+    ]
+    available_search_dirs = [path for path in search_dirs if os.path.isdir(path)]
+    if not available_search_dirs:
         return (
             "❌ Research Phase Failed: No search_results/ directory found.\n"
             "The agent must call COMPOSIO_MULTI_EXECUTE_TOOL with search queries BEFORE calling this tool."
         )
-    
-    json_files = [f for f in os.listdir(search_dir) if f.endswith(".json")]
+
+    json_files = []
+    for search_dir in available_search_dirs:
+        json_files.extend(
+            f for f in os.listdir(search_dir) if f.endswith(".json")
+        )
     if not json_files:
         return (
             "❌ Research Phase Failed: search_results/ directory is empty.\n"

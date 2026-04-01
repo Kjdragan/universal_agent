@@ -151,6 +151,74 @@ def test_run_research_phase_wrapper_accepts_explicit_run_workspace(monkeypatch, 
     assert result["content"][0]["text"] == "ok-run"
 
 
+def test_run_research_phase_wrapper_does_not_scramble_workspace_path_into_task_name(
+    monkeypatch, tmp_path
+):
+    workspace = _make_workspace(tmp_path, "session_workspace_path")
+    captured: dict[str, str] = {}
+
+    async def _fake_phase(query: str, task_name: str, workspace_dir: str | None = None) -> str:
+        captured["task_name"] = task_name
+        captured["workspace_dir"] = str(workspace_dir or "")
+        return "ok-workspace-path"
+
+    monkeypatch.setattr(rb, "research_phase_core", _fake_phase)
+
+    result = _run(
+        rb.run_research_phase_wrapper.handler(
+            {
+                "query": "q",
+                "context_path": str(workspace),
+                "workspace_dir": str(workspace),
+            }
+        )
+    )
+
+    assert captured["task_name"] == "default"
+    assert captured["workspace_dir"] == str(workspace.resolve())
+    assert result["content"][0]["text"] == "ok-workspace-path"
+
+
+def test_run_report_generation_wrapper_extracts_task_name_from_corpus_path(
+    monkeypatch, tmp_path
+):
+    workspace = _make_workspace(tmp_path, "session_report_ws")
+    corpus_path = (
+        workspace / "tasks" / "iran_war_latest" / "refined_corpus.md"
+    )
+    corpus_path.parent.mkdir(parents=True, exist_ok=True)
+    corpus_path.write_text("# refined corpus", encoding="utf-8")
+    captured: dict[str, str | None] = {}
+
+    async def _fake_report(
+        query: str,
+        task_name: str,
+        corpus_data: str | None = None,
+        workspace_dir: str | None = None,
+    ) -> str:
+        captured["task_name"] = task_name
+        captured["corpus_data"] = corpus_data
+        captured["workspace_dir"] = str(workspace_dir or "")
+        return "ok-report"
+
+    monkeypatch.setattr(rb, "report_gen_core", _fake_report)
+
+    result = _run(
+        rb.run_report_generation_wrapper.handler(
+            {
+                "query": "q",
+                "corpus_data": str(corpus_path),
+                "workspace_dir": str(workspace),
+            }
+        )
+    )
+
+    assert captured["task_name"] == "iran_war_latest"
+    assert captured["corpus_data"] is None
+    assert captured["workspace_dir"] == str(workspace.resolve())
+    assert result["content"][0]["text"] == "ok-report"
+
+
 def test_is_session_workspace_accepts_run_workspace(tmp_path):
     workspace = _make_workspace(tmp_path, "run_workspace_ws", run_manifest=True)
 

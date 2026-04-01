@@ -358,15 +358,7 @@ def validate_session_workspace(session_dir: Path) -> list[str]:
     """
     issues = []
 
-    # Must have search_results with at least one crawl or JSON file
-    search_dir = session_dir / "search_results"
-    if not search_dir.exists():
-        issues.append("Missing search_results/ directory")
-    else:
-        crawl_files = list(search_dir.glob("crawl_*.md"))
-        json_files = list((search_dir / "processed_json").glob("*.json")) if (search_dir / "processed_json").exists() else []
-        if not crawl_files and not json_files:
-            issues.append("search_results/ has no crawl_*.md or processed_json/*.json files")
+    task_has_search_artifacts = False
 
     # Must have tasks/{task_name}/refined_corpus.md
     tasks_dir = session_dir / "tasks"
@@ -381,6 +373,30 @@ def validate_session_workspace(session_dir: Path) -> list[str]:
                 corpus = td / "refined_corpus.md"
                 if not corpus.exists():
                     issues.append(f"tasks/{td.name}/ missing refined_corpus.md")
+                task_search_dir = td / "search_results"
+                if task_search_dir.exists():
+                    crawl_files = list(task_search_dir.glob("crawl_*.md"))
+                    json_files = (
+                        list((task_search_dir / "processed_json").glob("*.json"))
+                        if (task_search_dir / "processed_json").exists()
+                        else []
+                    )
+                    if crawl_files or json_files:
+                        task_has_search_artifacts = True
+
+
+    run_search_dir = session_dir / "search_results"
+    run_crawl_files = list(run_search_dir.glob("crawl_*.md")) if run_search_dir.exists() else []
+    run_json_files = (
+        list((run_search_dir / "processed_json").glob("*.json"))
+        if (run_search_dir / "processed_json").exists()
+        else []
+    )
+    if not task_has_search_artifacts and not run_crawl_files and not run_json_files:
+        issues.append(
+            "Missing search artifacts: expected crawl_*.md or processed_json/*.json "
+            "under tasks/<task>/search_results/ or the legacy run-root search_results/"
+        )
 
     # Must have work_products/ with report.html
     wp_dir = session_dir / "work_products"
@@ -443,15 +459,14 @@ def validate_session_workspace(session_dir: Path) -> list[str]:
 class TestSessionWorkspaceStructure:
     """Validate workspace structure using a synthetic session."""
 
-    def test_valid_workspace_passes(self, tmp_path):
+    def test_valid_workspace_passes(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         session = tmp_path / "session_test"
-        # search_results
-        sr = session / "search_results"
+        # task-scoped search_results
+        sr = session / "tasks" / "test_task" / "search_results"
         sr.mkdir(parents=True)
         (sr / "crawl_abc123.md").write_text("# crawled content")
-        # tasks
         td = session / "tasks" / "test_task"
-        td.mkdir(parents=True)
         (td / "refined_corpus.md").write_text("# refined")
         # work_products
         wp = session / "work_products"
@@ -461,17 +476,19 @@ class TestSessionWorkspaceStructure:
         issues = validate_session_workspace(session)
         assert issues == [], f"Unexpected issues: {issues}"
 
-    def test_missing_search_results_detected(self, tmp_path):
+    def test_missing_search_results_detected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         session = tmp_path / "session_test"
         session.mkdir()
         issues = validate_session_workspace(session)
-        assert any("search_results" in i for i in issues)
+        assert any("search artifacts" in i for i in issues)
 
-    def test_missing_refined_corpus_detected(self, tmp_path):
+    def test_missing_refined_corpus_detected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         session = tmp_path / "session_test"
-        (session / "search_results").mkdir(parents=True)
-        (session / "search_results" / "crawl_abc.md").write_text("data")
-        (session / "tasks" / "my_task").mkdir(parents=True)
+        (session / "tasks" / "my_task" / "search_results").mkdir(parents=True)
+        (session / "tasks" / "my_task" / "search_results" / "crawl_abc.md").write_text("data")
+        (session / "tasks" / "my_task").mkdir(parents=True, exist_ok=True)
         # No refined_corpus.md
         (session / "work_products").mkdir(parents=True)
         (session / "work_products" / "report.html").write_text("<html>")
@@ -479,12 +496,13 @@ class TestSessionWorkspaceStructure:
         issues = validate_session_workspace(session)
         assert any("refined_corpus.md" in i for i in issues)
 
-    def test_missing_html_report_detected(self, tmp_path):
+    def test_missing_html_report_detected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         session = tmp_path / "session_test"
-        (session / "search_results").mkdir(parents=True)
-        (session / "search_results" / "crawl_abc.md").write_text("data")
+        (session / "tasks" / "my_task" / "search_results").mkdir(parents=True)
+        (session / "tasks" / "my_task" / "search_results" / "crawl_abc.md").write_text("data")
         td = session / "tasks" / "my_task"
-        td.mkdir(parents=True)
+        td.mkdir(parents=True, exist_ok=True)
         (td / "refined_corpus.md").write_text("# refined")
         (session / "work_products").mkdir(parents=True)
         # No HTML report
@@ -498,10 +516,10 @@ class TestSessionWorkspaceStructure:
         (tmp_path / "tasks" / "docs_archive" / "notes.md").write_text("reference")
 
         session = tmp_path / "session_test"
-        (session / "search_results").mkdir(parents=True)
-        (session / "search_results" / "crawl_abc.md").write_text("data")
+        (session / "tasks" / "my_task" / "search_results").mkdir(parents=True)
+        (session / "tasks" / "my_task" / "search_results" / "crawl_abc.md").write_text("data")
         td = session / "tasks" / "my_task"
-        td.mkdir(parents=True)
+        td.mkdir(parents=True, exist_ok=True)
         (td / "refined_corpus.md").write_text("# refined")
         (session / "work_products").mkdir(parents=True)
         (session / "work_products" / "report.html").write_text("<html>")
@@ -516,10 +534,10 @@ class TestSessionWorkspaceStructure:
         (leaked / "refined_corpus.md").write_text("# leaked")
 
         session = tmp_path / "session_test"
-        (session / "search_results").mkdir(parents=True)
-        (session / "search_results" / "crawl_abc.md").write_text("data")
+        (session / "tasks" / "my_task" / "search_results").mkdir(parents=True)
+        (session / "tasks" / "my_task" / "search_results" / "crawl_abc.md").write_text("data")
         td = session / "tasks" / "my_task"
-        td.mkdir(parents=True)
+        td.mkdir(parents=True, exist_ok=True)
         (td / "refined_corpus.md").write_text("# refined")
         (session / "work_products").mkdir(parents=True)
         (session / "work_products" / "report.html").write_text("<html>")

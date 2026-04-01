@@ -470,8 +470,12 @@ def _is_subagent_context(input_data: dict) -> bool:
 def _has_search_results_inputs(workspace: str) -> bool:
     if not workspace:
         return False
-    search_dir = Path(workspace) / "search_results"
-    return search_dir.exists() and any(search_dir.glob("*.json"))
+    workspace_path = Path(workspace)
+    search_dirs = [workspace_path / "search_results"]
+    tasks_dir = workspace_path / "tasks"
+    if tasks_dir.is_dir():
+        search_dirs.extend(tasks_dir.glob("*/search_results"))
+    return any(search_dir.exists() and any(search_dir.glob("*.json")) for search_dir in search_dirs)
 
 
 def _has_refined_corpus_outputs(workspace: str) -> bool:
@@ -588,9 +592,19 @@ def _should_block_list_directory_research(path_value: str, workspace: str) -> bo
         return False
 
     workspace_path = Path(workspace).resolve()
-    search_results_path = (workspace_path / "search_results").resolve()
+    search_results_paths = [(workspace_path / "search_results").resolve()]
+    tasks_dir = workspace_path / "tasks"
+    if tasks_dir.is_dir():
+        search_results_paths.extend(
+            (task_dir / "search_results").resolve()
+            for task_dir in tasks_dir.iterdir()
+            if task_dir.is_dir()
+        )
 
-    if resolved_path == search_results_path or search_results_path in resolved_path.parents:
+    if any(
+        resolved_path == search_results_path or search_results_path in resolved_path.parents
+        for search_results_path in search_results_paths
+    ):
         return False
 
     # Allow external read-only listings (skills/config/docs outside the session

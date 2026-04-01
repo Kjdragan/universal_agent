@@ -45,7 +45,7 @@ async def test_finalize_research_creates_refined_corpus(tmp_path, monkeypatch):
     crawl_path = search_dir / "crawl_example.md"
     crawl_path.write_text(crawl_text)
 
-    async def fake_crawl(urls, session_dir):
+    async def fake_crawl(urls, session_dir, output_dir=None):
         assert urls, "Expected URLs extracted from search results."
         return json.dumps(
             {
@@ -80,10 +80,12 @@ async def test_finalize_research_creates_refined_corpus(tmp_path, monkeypatch):
     payload = json.loads(result)
 
     refined_path = workspace / "tasks" / "test_task" / "refined_corpus.md"
-    processed_dir = search_dir / "processed_json"
+    task_search_dir = workspace / "tasks" / "test_task" / "search_results"
+    processed_dir = task_search_dir / "processed_json"
 
     assert payload.get("status", "").startswith("Research Corpus Finalized")
     assert refined_path.exists()
+    assert task_search_dir.exists()
     assert processed_dir.exists()
     assert any(processed_dir.glob("*.json"))
 
@@ -106,7 +108,7 @@ async def test_finalize_research_blocks_session_scope_violation(tmp_path, monkey
         enable_topic_filter=False,
     )
     payload = json.loads(result)
-    assert "Session scope violation" in payload.get("error", "")
+    assert "workspace scope violation" in payload.get("error", "").lower()
 
 @pytest.mark.asyncio
 async def test_finalize_research_fails_loudly_on_crawl_error(tmp_path, monkeypatch):
@@ -131,7 +133,7 @@ async def test_finalize_research_fails_loudly_on_crawl_error(tmp_path, monkeypat
         json.dumps(search_payload)
     )
 
-    async def fake_crawl_crash(urls, session_dir):
+    async def fake_crawl_crash(urls, session_dir, output_dir=None):
         raise RuntimeError("Simulated crawl core crash")
 
     monkeypatch.setattr(mcp_server, "_crawl_core", fake_crawl_crash)
@@ -149,4 +151,3 @@ async def test_finalize_research_fails_loudly_on_crawl_error(tmp_path, monkeypat
     failed_urls = payload.get("failed_urls", [])
     assert len(failed_urls) > 0
     assert "CRAWL CORE FATAL ERROR: Simulated crawl core crash" in failed_urls[0]
-
