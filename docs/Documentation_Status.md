@@ -175,6 +175,12 @@ These are the authoritative references for each subsystem. When any other docume
 |-----|---------|
 | todolist-task-pipeline-audit-2026-03-11.md | Historical audit of the early `/dashboard/todolist` pipeline before the dedicated ToDo dispatcher refactor |
 
+## Handoffs
+
+| Doc | Subject |
+|-----|---------|
+| coding_handoff.md | Code-verified implementation handoff for the run-per-task workspace refactor across tracked chat, trusted email, dispatcher claims, run/attempt lineage, Session Explorer resolution, acceptance criteria, and validation steps |
+
 ## Remaining Operational References (03_Operations/)
 
 | Doc | Subject |

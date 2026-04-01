@@ -172,6 +172,10 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 - **[To Do List Task Pipeline Audit (2026-03-11)](reports/todolist-task-pipeline-audit-2026-03-11.md)**: Historical audit of the early `/dashboard/todolist` task pipeline before the dedicated ToDo dispatcher refactor.
 
+### 12. [Handoffs](.)
+
+- **[coding_handoff.md](coding_handoff.md)**: Code-verified implementation handoff for the run-per-task workspace refactor, covering tracked chat, trusted email, To Do dispatch, run/attempt lineage, UI file resolution, acceptance criteria, and test plan.
+
 ---
 
 ## 🚀 Recommended Path for New Developers

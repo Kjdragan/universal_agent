@@ -19,6 +19,13 @@ This document is the central organized reference for the current To Do List tab 
 
 This document is intentionally a master map. It does not replace the more specialized canonical docs it links to.
 
+Important reading note:
+
+- this document describes the current codebase as it exists today
+- some sections describe the durable run model that the system is aiming toward
+- the run-per-task workspace refactor is not yet fully complete across all ingestion paths
+- the implementation handoff for that remaining work is tracked in [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md)
+
 ---
 
 ## 2. Scope and Canonical Relationship
@@ -53,6 +60,12 @@ The current system is built around five durable ideas:
 3. Every meaningful run gets a durable run workspace under `AGENT_RUN_WORKSPACES/...`.
 4. Task-specific artifacts live under `tasks/<task_name>/...` inside that run workspace.
 5. A run is not considered properly resolved unless it records a durable Task Hub lifecycle mutation such as `complete`, `review`, `block`, `park`, or `delegate`.
+
+Current gap:
+
+- the codebase already models durable runs, run workspaces, and task-scoped artifacts
+- but tracked chat and dispatcher execution still have places where they bind claimed work to an existing session workspace rather than allocating a fresh dedicated run workspace per accepted task
+- that remaining gap is why operators can still see unrelated sibling task directories inside one visible workspace
 
 The execution contract itself is normalized by `build_execution_manifest(...)` in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L73). For each work item, the runtime records:
 
@@ -106,6 +119,12 @@ Current code behavior:
 
 The bridge writes task metadata that already contains the workflow manifest and delivery contract before dispatch.
 
+Important nuance:
+
+- email task identity is intentionally stable at the thread level
+- execution lineage is separate from task identity
+- the remaining refactor is to make each accepted email execution allocate its own dedicated run workspace while preserving the stable thread-backed task id
+
 ### 5.2 Direct Chat Panel
 
 The chat panel is also a Task Hub ingress for normal user work.
@@ -121,9 +140,20 @@ Then, when websocket execution starts, the request is rewritten into:
 
 That mutation happens in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L26694).
 
+Important current limitation:
+
+- tracked chat already enters the canonical `todo_execution` lane
+- but the claim path still uses `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L6415)
+- so the transport session can still act as the artifact root for multiple tracked chat tasks
+
 ### 5.3 Manual Dashboard / Other Task Hub Sources
 
 The dashboard and other internal paths can create tasks directly in Task Hub. Once a task exists and is claimed for canonical execution, it follows the same `todo_execution` lifecycle rules as email and tracked chat.
+
+Implementation note:
+
+- any ingestion path that eventually reaches `todo_execution` should be treated as part of the same workspace-isolation problem
+- the target contract is one accepted execution => one run workspace, regardless of whether the task originated from chat, email, or another trusted internal path
 
 ---
 
@@ -240,6 +270,11 @@ Claim + prompt build + submission happen in [todo_dispatch_service.py](/home/kjd
 - records assignment IDs
 - builds the canonical execution prompt with `build_todo_execution_prompt(...)`
 - sends a `GatewayRequest` with `run_kind="todo_execution"`
+
+Important current limitation:
+
+- the dispatcher claim path still passes `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L356)
+- so dedicated To Do execution is lifecycle-canonical but not yet fully workspace-isolated on a one-task-per-run basis
 
 The prompt itself explicitly states:
 
@@ -467,6 +502,13 @@ flowchart LR
 
 This is what makes task-scoped trees like `tasks/<task_name>/search_results/` visible in the right panel during live execution.
 
+Important nuance:
+
+- preferring `run_id` improves correctness of file browsing
+- but it does not by itself guarantee one-task-per-run isolation
+- if multiple tasks still share one underlying execution workspace, the explorer will faithfully show all of them
+- fixing that requires the upstream run-allocation refactor described in [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md)
+
 ---
 
 ## 16. Current End-to-End Flows
@@ -512,6 +554,8 @@ These are not speculative. They reflect the current checkout.
 - `todo_execution` does not ban specialist delegation. It bans lifecycle-breaking controls like `TaskStop`.
 - A task appearing in the To Do List and then remaining unresolved usually means the execution missed `task_hub_task_action(...)`, not that Task Hub failed to ingest it.
 - The right-panel file browser is only authoritative when it has the run-backed metadata needed to browse by `run_id`.
+- The current code still has incomplete workspace isolation for some canonical execution paths. In particular, tracked chat claims and dispatcher claims can still reuse an existing session workspace instead of allocating a fresh run workspace per accepted task.
+- The required remediation for chat, email, dispatcher, and any other canonical ingestion path is documented in [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md).
 
 ---
 
@@ -563,4 +607,3 @@ This document exists so future debugging does not have to reconstruct the pipeli
 - research/report specialist contracts
 - final delivery policy
 - Session Explorer file resolution
-
