@@ -24,39 +24,31 @@ When answering questions about how this system works — architecture, data flow
 
 **Why this matters:** A confident but incorrect architectural explanation is worse than saying "let me check." The user relies on accurate descriptions of their own system to make decisions. Wrong answers about agent pipelines, email flows, or session lifecycle can lead to flawed design decisions downstream.
 
-## Deployment
+## Deployment Contract
 
-This repository has exactly one supported application deployment path:
+This repository has exactly one supported application deployment path. Production is branch-driven and automated; **do not recommend or use ad hoc `ssh`, `rsync`, `git pull`, or manual VPS deployment flows**.
 
-1. Merge reviewed feature work into `develop` to deploy to staging automatically via GitHub Actions.
-2. Promote the validated `develop` SHA to `main` via the manual GitHub Actions promotion workflow to deploy to production.
+1. **Staging:** Merge reviewed feature work into `develop`. This deploys automatically to staging on the VPS checkout at `/opt/universal-agent-staging` via GitHub Actions. (Pull requests into `develop` constitute the single Codex review gate).
+2. **Production:** Promote the validated `develop` SHA to `main` via the manual GitHub Actions promotion workflow. This is a direct, exact-SHA fast-forward; there is no second PR review on `main`. This deploys to production on the VPS checkout at `/opt/universal_agent` (or `/opt/universal_agent_repo` as a fallback).
 
-Canonical deployment docs:
+**Canonical deployment docs:**
 
 - `docs/deployment/architecture_overview.md`
 - `docs/deployment/ci_cd_pipeline.md`
 - `docs/deployment/infisical_factories.md`
 
-Do not treat any older manual VPS deployment flow as canonical.
+**Canonical CI/CD workflow files:**
 
-Canonical CI/CD workflow files:
+- `.github/workflows/deploy-staging.yml`
+- `.github/workflows/deploy-prod.yml`
 
-- `.github/workflows/deploy-staging.yml` — triggered on push to `develop`.
-- `.github/workflows/deploy-prod.yml` — triggered on push to `main` (or manual `workflow_dispatch`).
+**CI/CD Access:**
 
-Legacy artifacts (do not use as primary deployment path):
+- Tailscale CI access: GitHub Actions -> `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_SECRET` -> tag identity `tag:ci-gha`.
+
+**Legacy artifacts:**
 
 - `scripts/vpsctl.sh` is a break-glass diagnostics helper, not the normal deployment path.
-- `docs/03_Operations/27_Deployment_Runbook_2026-02-12.md` is deprecated.
-
-## Current Deployment Contract
-
-- `develop` deploys to staging on the VPS checkout at `/opt/universal-agent-staging`.
-- `main` deploys to production on the VPS checkout at `/opt/universal_agent`, with `/opt/universal_agent_repo` as the safe fallback checkout path if the legacy directory is occupied.
-- Pull requests into `develop` are the single Codex review gate.
-- Production promotion is a direct, exact-SHA fast-forward from validated `develop` to `main`; there is no second PR review on `main`.
-- Tailscale CI access is GitHub Actions -> `TAILSCALE_OAUTH_CLIENT_ID` + `TAILSCALE_OAUTH_SECRET` -> tag identity `tag:ci-gha`.
-- Production is branch-driven and automated; do not recommend ad hoc `ssh`, `rsync`, or `git pull` as the default deployment method.
 
 ## Documentation
 
@@ -68,10 +60,6 @@ When asked to update or create documentation:
 2. **Update Over Create**: If a document already exists for your topic, update the existing file rather than creating a new one.
 3. **Log New Documents**: If you must create a new file, you are required to add a link and description of that new file to both `docs/README.md` and `docs/Documentation_Status.md`.
 4. **No Unindexed Files**: No document should exist in `docs/` without being linked from one of the two index files.
-
-## If You Change Deployment Behavior
-
-When editing `.github/workflows/deploy-staging.yml` or `.github/workflows/deploy-prod.yml`, update the canonical docs in `docs/deployment/` in the same change.
 
 ## Review guidelines
 

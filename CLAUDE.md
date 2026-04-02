@@ -24,4 +24,4 @@ It includes:
 
 ## Caveats
 - _(Living section — add caveats as we discover them.)_
-- VPS deploys should follow the runbook and use file-sync deployment (`scripts/deploy_vps.sh`) rather than assuming `git pull` on the server.
+- Deployment is automated via GitHub Actions: merge to `develop` for staging, and promote from `develop` to `main` for production. Do not use ad hoc scripts, `ssh`, `rsync`, or `git pull`.
