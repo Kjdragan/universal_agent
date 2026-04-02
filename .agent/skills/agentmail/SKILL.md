@@ -1,325 +1,54 @@
 ---
 name: agentmail
-description: Give AI agents their own email inboxes using the AgentMail API. Use when building email agents, sending/receiving emails programmatically, managing inboxes, handling attachments, organizing with labels, creating drafts for human approval, or setting up real-time notifications via webhooks/websockets. Supports multi-tenant isolation with pods.
+description: Send emails from Simone's own inbox using the native `mcp__internal__send_agentmail` MCP tool. Use when you need to send an email, reply, deliver a report, or communicate with anyone via email. Do NOT use bash, curl, SDK scripts, or CLI commands — just call the MCP tool directly.
 ---
 
-# AgentMail SDK
+# AgentMail — Simone's Email
 
-AgentMail is an API-first email platform for AI agents. Install the SDK and initialize the client.
+Simone sends email via `mcp__internal__send_agentmail`. One tool call — no scripts, no CLI, no SDK.
 
-## Installation
+## Sending Email
 
-```bash
-# TypeScript/Node
-npm install agentmail
-
-# Python
-pip install agentmail
+```json
+mcp__internal__send_agentmail({
+  "to": "recipient@example.com",
+  "subject": "Subject line",
+  "body": "Email body content — plain text or HTML"
+})
 ```
 
-## Setup
+Required: `to`, `subject`, `body`. Optional: `cc`, `bcc`, `dry_run`.
 
-```typescript
-import { AgentMailClient } from "agentmail";
-const client = new AgentMailClient({ apiKey: "YOUR_API_KEY" });
-```
+## Before Sending, Ask Yourself
 
-```python
-from agentmail import AgentMail
-client = AgentMail(api_key="YOUR_API_KEY")
-```
+- **Who is the sender?** If Simone → this tool. If Kevin's Gmail → `gmail` skill instead.
+- **Is the body formatted?** For reports/structured content, wrap in basic HTML (`<h2>`, `<p>`, `<ul>`) for readable email. Raw markdown renders poorly in email clients.
+- **Is this a duplicate?** The tool has built-in dedup guards. If it returns a "duplicate delivery blocked" error, your email was already sent — do NOT retry.
+- **Is the recipient correct?** Kevin's email: `kevinjdragan@gmail.com`.
 
-## ⚠️ CRITICAL: SDK Response Objects (MUST READ)
+## Anti-Patterns — NEVER Do These
 
-AgentMail SDK methods return **Pydantic model objects**, NOT Python dicts. You MUST access properties via **dot notation**:
+1. **NEVER use bash, curl, or Python scripts** to send email. The MCP tool handles auth, formatting, and Task Hub lifecycle tracking automatically. Scripts bypass all of this.
+2. **NEVER use `mcp__AgentMail__send_message`** — that's the raw AgentMail MCP endpoint. It bypasses delivery tracking and dedup guards, causing phantom sends and orphaned tasks.
+3. **NEVER send receipt acknowledgements** like "Got it, working on it" — the system blocks these. Only send the final, substantive response.
+4. **NEVER construct AgentMail SDK code** (`from agentmail import AgentMail`, `client.inboxes.messages.send(...)`) — that's for external app development, not for Simone.
+5. **NEVER install `agentmail-cli` via npm** — the CLI is not needed; the native MCP tool is the correct path.
 
-```python
-# ✅ CORRECT — use dot notation for response properties
-msg = client.inboxes.messages.send(inbox_id=..., to=..., subject=..., text=...)
-print(msg.message_id)  # str — the sent message ID
-print(msg.thread_id)   # str — the thread ID
+## Error Handling
 
-inbox = client.inboxes.create(username="test")
-print(inbox.inbox_id)  # str — the inbox email address
+| Error Message | Meaning | Action |
+|--------------|---------|--------|
+| `'to' is required` | Missing recipient | Add the `to` field |
+| `AgentMail service is not available` | Service not configured | Report error to user — cannot send |
+| `duplicate final delivery blocked` | Email already sent for this task | **Stop** — delivery succeeded earlier. Do NOT retry. |
+| `Receipt acknowledgement blocked` | Tried to send a "got it" message | Skip the ack — only send final substantive content |
+| Connection/timeout error | Transient failure | Retry once, then report failure |
 
-draft = client.inboxes.drafts.create(inbox_id=..., to=..., subject=..., text=...)
-print(draft.draft_id)  # str — the draft ID
+## Quick Routing
 
-# ❌ WRONG — these WILL CRASH with AttributeError
-msg.get("message_id")    # AttributeError: 'SendMessageResponse' has no attribute 'get'
-msg["message_id"]        # TypeError: not subscriptable
-result.get("status")     # AttributeError — response objects are NOT dicts
-```
-
-**Common response properties:**
-- `SendMessageResponse`: `.message_id`, `.thread_id`
-- `Inbox`: `.inbox_id`
-- `Draft`: `.draft_id`
-- `Message`: `.message_id`, `.thread_id`, `.from_`, `.to`, `.subject`, `.text`, `.html`, `.labels`, `.created_at`, `.attachments`
-- `Thread`: `.thread_id`, `.messages`, `.subject`, `.updated_at`
-
-## Inboxes
-
-Create scalable inboxes on-demand. Each inbox has a unique email address.
-
-```typescript
-// Create inbox (auto-generated address)
-const autoInbox = await client.inboxes.create();
-
-// Create with custom username and domain
-const customInbox = await client.inboxes.create({
-  username: "support",
-  domain: "yourdomain.com",
-});
-
-// List, get, delete
-const inboxes = await client.inboxes.list();
-const fetchedInbox = await client.inboxes.get({
-  inboxId: "inbox@agentmail.to",
-});
-await client.inboxes.delete({ inboxId: "inbox@agentmail.to" });
-```
-
-```python
-# Create inbox (auto-generated address)
-inbox = client.inboxes.create()
-
-# Create with custom username and domain
-inbox = client.inboxes.create(username="support", domain="yourdomain.com")
-
-# List, get, delete
-inboxes = client.inboxes.list()
-inbox = client.inboxes.get(inbox_id="inbox@agentmail.to")
-client.inboxes.delete(inbox_id="inbox@agentmail.to")
-```
-
-## Messages
-
-Always send both `text` and `html` for best deliverability.
-
-```typescript
-// Send message
-await client.inboxes.messages.send({
-  inboxId: "agent@agentmail.to",
-  to: "recipient@example.com",
-  subject: "Hello",
-  text: "Plain text version",
-  html: "<p>HTML version</p>",
-  labels: ["outreach"],
-});
-
-// Reply to message
-await client.inboxes.messages.reply({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-  text: "Thanks for your email!",
-});
-
-// List and get messages
-const messages = await client.inboxes.messages.list({
-  inboxId: "agent@agentmail.to",
-});
-const message = await client.inboxes.messages.get({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-});
-
-// Update labels
-await client.inboxes.messages.update({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-  addLabels: ["replied"],
-  removeLabels: ["unreplied"],
-});
-```
-
-```python
-# Send message
-client.inboxes.messages.send(
-    inbox_id="agent@agentmail.to",
-    to="recipient@example.com",
-    subject="Hello",
-    text="Plain text version",
-    html="<p>HTML version</p>",
-    labels=["outreach"]
-)
-
-# Reply to message
-client.inboxes.messages.reply(
-    inbox_id="agent@agentmail.to",
-    message_id="msg_123",
-    text="Thanks for your email!"
-)
-
-# List and get messages
-messages = client.inboxes.messages.list(inbox_id="agent@agentmail.to")
-message = client.inboxes.messages.get(inbox_id="agent@agentmail.to", message_id="msg_123")
-
-# Update labels
-client.inboxes.messages.update(
-    inbox_id="agent@agentmail.to",
-    message_id="msg_123",
-    add_labels=["replied"],
-    remove_labels=["unreplied"]
-)
-```
-
-## Threads
-
-Threads group related messages in a conversation.
-
-```typescript
-// List threads (with optional label filter)
-const threads = await client.inboxes.threads.list({
-  inboxId: "agent@agentmail.to",
-  labels: ["unreplied"],
-});
-
-// Get thread details
-const thread = await client.inboxes.threads.get({
-  inboxId: "agent@agentmail.to",
-  threadId: "thd_123",
-});
-
-// Org-wide thread listing
-const allThreads = await client.threads.list();
-```
-
-```python
-# List threads (with optional label filter)
-threads = client.inboxes.threads.list(inbox_id="agent@agentmail.to", labels=["unreplied"])
-
-# Get thread details
-thread = client.inboxes.threads.get(inbox_id="agent@agentmail.to", thread_id="thd_123")
-
-# Org-wide thread listing
-all_threads = client.threads.list()
-```
-
-## Attachments
-
-Send attachments with Base64 encoding. Retrieve from messages or threads.
-
-```typescript
-// Send with attachment
-const content = Buffer.from(fileBytes).toString("base64");
-await client.inboxes.messages.send({
-  inboxId: "agent@agentmail.to",
-  to: "recipient@example.com",
-  subject: "Report",
-  text: "See attached.",
-  attachments: [
-    { content, filename: "report.pdf", contentType: "application/pdf" },
-  ],
-});
-
-// Get attachment
-const fileData = await client.inboxes.messages.getAttachment({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-  attachmentId: "att_456",
-});
-```
-
-```python
-import base64
-
-# Send with attachment
-content = base64.b64encode(file_bytes).decode()
-client.inboxes.messages.send(
-    inbox_id="agent@agentmail.to",
-    to="recipient@example.com",
-    subject="Report",
-    text="See attached.",
-    attachments=[{"content": content, "filename": "report.pdf", "content_type": "application/pdf"}]
-)
-
-# Get attachment
-file_data = client.inboxes.messages.get_attachment(
-    inbox_id="agent@agentmail.to",
-    message_id="msg_123",
-    attachment_id="att_456"
-)
-```
-
-## Drafts
-
-Create drafts for human-in-the-loop approval before sending.
-
-```typescript
-// Create draft
-const draft = await client.inboxes.drafts.create({
-  inboxId: "agent@agentmail.to",
-  to: "recipient@example.com",
-  subject: "Pending approval",
-  text: "Draft content",
-});
-
-// Send draft (converts to message)
-await client.inboxes.drafts.send({
-  inboxId: "agent@agentmail.to",
-  draftId: draft.draftId,
-});
-```
-
-```python
-# Create draft
-draft = client.inboxes.drafts.create(
-    inbox_id="agent@agentmail.to",
-    to="recipient@example.com",
-    subject="Pending approval",
-    text="Draft content"
-)
-
-# Send draft (converts to message)
-client.inboxes.drafts.send(inbox_id="agent@agentmail.to", draft_id=draft.draft_id)
-```
-
-## Pods
-
-Multi-tenant isolation for SaaS platforms. Each customer gets isolated inboxes.
-
-```typescript
-// Create pod for a customer
-const pod = await client.pods.create({ clientId: "customer_123" });
-
-// Create inbox within pod
-const inbox = await client.inboxes.create({ podId: pod.podId });
-
-// List resources scoped to pod
-const inboxes = await client.inboxes.list({ podId: pod.podId });
-```
-
-```python
-# Create pod for a customer
-pod = client.pods.create(client_id="customer_123")
-
-# Create inbox within pod
-inbox = client.inboxes.create(pod_id=pod.pod_id)
-
-# List resources scoped to pod
-inboxes = client.inboxes.list(pod_id=pod.pod_id)
-```
-
-## Idempotency
-
-Use `clientId` for safe retries on create operations.
-
-```typescript
-const inbox = await client.inboxes.create({
-  clientId: "unique-idempotency-key",
-});
-// Retrying with same clientId returns the original inbox, not a duplicate
-```
-
-```python
-inbox = client.inboxes.create(client_id="unique-idempotency-key")
-# Retrying with same client_id returns the original inbox, not a duplicate
-```
-
-## Real-Time Events
-
-For real-time notifications, see the reference files:
-
-- [webhooks.md](references/webhooks.md) - HTTP-based notifications (requires public URL)
-- [websockets.md](references/websockets.md) - Persistent connection (no public URL needed)
+| Request | Action |
+|---------|--------|
+| "Email this to Kevin" | `mcp__internal__send_agentmail` → `kevinjdragan@gmail.com` |
+| "Send this report" | `mcp__internal__send_agentmail` → specified recipient |
+| "Reply to this email" | `mcp__internal__send_agentmail` → original sender |
+| "Send from Kevin's Gmail" | Use `gmail` skill (gws CLI) — completely different channel |

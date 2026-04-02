@@ -1667,7 +1667,7 @@ class UniversalAgent:
             "- **Filesystem**: `CURRENT_RUN_WORKSPACE` is your scratchpad (`CURRENT_SESSION_WORKSPACE` remains as a legacy alias). `UA_ARTIFACTS_DIR` is for permanent output.\n"
             "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
             "## 📧 EMAIL & COMMUNICATION\n"
-            "- **Simone's own email**: Use the `agentmail` Skill (Skill invocation, NOT curl/ops-API). This is Simone's default for sending reports, descriptions, replies.\n"
+            "- **Simone's own email**: Use `mcp__internal__send_agentmail` tool directly (NOT bash, curl, SDK scripts, or CLI commands). This is Simone's default for sending reports, notifications, replies.\n"
             "- **Kevin's Gmail**: Use the `gmail` Skill (gws CLI) ONLY when explicitly acting as Kevin.\n"
             "- **Deprecated**: Composio Gmail tools. Do NOT use.\n"
             "- Keep email bodies concise.\n\n"
