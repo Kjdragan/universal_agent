@@ -10194,12 +10194,14 @@ def _purge_activity_notifications(
         conn = _activity_connect()
         try:
             _ensure_activity_schema(conn)
-            rows = conn.execute("SELECT id FROM activity_events WHERE event_class = 'notification'").fetchall()
+            # Remove "WHERE event_class = 'notification'" if clear_all is used, to delete ALL events 
+            rows = conn.execute("SELECT id FROM activity_events").fetchall()
             deleted_ids = [str(row["id"] or "") for row in rows if str(row["id"] or "").strip()]
         finally:
             conn.close()
         if deleted_ids:
             _delete_activity_events(deleted_ids)
+        _notifications.clear()
     else:
         rows = _query_notification_activity_rows(
             kind=kind,
@@ -18940,6 +18942,24 @@ async def dashboard_todolist_delete_completed(task_id: str):
     return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_PARKED}
 
 
+@app.delete("/api/v1/dashboard/todolist/completed")
+async def dashboard_todolist_delete_all_completed():
+    """Hide all completed tasks from the dashboard by parking them."""
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            conn.execute(
+                "UPDATE task_hub_items SET status=?, stale_state=?, updated_at=? WHERE status=?",
+                (task_hub.TASK_STATUS_PARKED, "dashboard_hidden", _utc_now_iso(), task_hub.TASK_STATUS_COMPLETED),
+            )
+            row = conn.execute("SELECT changes() AS c").fetchone()
+            count = row["c"] if row else 0
+            conn.commit()
+        finally:
+            conn.close()
+    return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_PARKED}
+
+
 @app.get("/api/v1/dashboard/todolist/email-tasks")
 async def dashboard_todolist_email_tasks(limit: int = 50):
     """Return all email-originated tasks with their thread context."""
@@ -19158,6 +19178,7 @@ async def dashboard_notifications(
     kind: Optional[str] = None,
     source_domain: Optional[str] = None,
     pinned: Optional[bool] = None,
+    all_noise: bool = False,
 ):
     _apply_notification_snooze_expiry()
     _apply_activity_snooze_expiry()
@@ -19206,6 +19227,11 @@ async def dashboard_notifications(
                 item for item in notifications
                 if not _notification_hidden_by_default(item.get("status"))
             ]
+        if not all_noise:
+            notifications = [
+                item for item in notifications
+                if str(item.get("severity") or "info") != "info" or bool(item.get("requires_action", False))
+            ]
         if notifications:
             return {"notifications": notifications}
     except Exception as exc:
@@ -19218,6 +19244,11 @@ async def dashboard_notifications(
         items = [item for item in items if str(item.get("status", "")).lower() == status_norm]
     else:
         items = [item for item in items if not _notification_hidden_by_default(item.get("status"))]
+    if not all_noise:
+        items = [
+            item for item in items
+            if str(item.get("severity") or "info") != "info" or bool(item.get("requires_action", False))
+        ]
     if safe_session_id:
         items = [item for item in items if item.get("session_id") == safe_session_id]
     if kind:

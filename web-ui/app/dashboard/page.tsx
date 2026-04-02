@@ -324,6 +324,7 @@ export default function DashboardPage() {
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const [sessionDirectory, setSessionDirectory] = useState<SessionDirectoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showFocusMode, setShowFocusMode] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [sessionFilter, setSessionFilter] = useState<"all" | "active">("active");
@@ -368,7 +369,7 @@ export default function DashboardPage() {
     try {
       const [summaryRes, notificationsRes, approvalsHighlightRes, vpSessionsRes, vpMissionsRes, vpMetricResponses] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/summary`),
-        fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100`),
+        fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100&all_noise=${!showFocusMode}`),
         fetch(`${API_BASE}/api/v1/dashboard/approvals/highlight`),
         fetch(`${API_BASE}/api/v1/ops/vp/sessions?status=all&limit=50`),
         fetch(`${API_BASE}/api/v1/ops/vp/missions?status=all&limit=100`),
@@ -441,7 +442,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showFocusMode]);
 
   const updateNotificationStatus = useCallback(
     async (
@@ -1611,6 +1612,17 @@ export default function DashboardPage() {
             >
               Unread only
             </button>
+            <div className="flex items-center gap-1.5 ml-2 border-l border-border pl-4">
+              <label className="text-[11px] text-muted-foreground font-medium flex items-center cursor-pointer gap-1.5">
+                <input 
+                  type="checkbox" 
+                  checked={showFocusMode}
+                  onChange={(e) => setShowFocusMode(e.target.checked)}
+                  className="accent-amber-600 cursor-pointer h-3 w-3"
+                />
+                Focus Mode (Hide Info Logs)
+              </label>
+            </div>
             {/* Severity dropdown */}
             <select
               value={notifSeverityFilter}

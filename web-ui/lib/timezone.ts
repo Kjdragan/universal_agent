@@ -25,6 +25,9 @@ function parseDateInput(value: DateInput): Date | null {
   }
 
   let normalized = raw;
+  // SQLite and naive inputs might use space instead of T separator
+  normalized = normalized.trim().replace(/ /g, "T");
+  
   const hasExplicitZone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(normalized);
   const hasTime = /^\d{4}-\d{2}-\d{2}T/.test(normalized);
   if (hasTime && !hasExplicitZone) {
