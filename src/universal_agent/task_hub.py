@@ -845,7 +845,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         if status == TASK_STATUS_REVIEW:
             dispatch_meta = dict(dict(item.get("metadata") or {}).get("dispatch") or {})
             reason = str(dispatch_meta.get("last_disposition_reason") or "")
-            if reason.startswith("heartbeat_"):
+            if reason.startswith("heartbeat_") or reason.startswith("todo_retry"):
                 eligible = False
 
         # Only record evaluations for tasks in potentially-dispatchable states.
@@ -1990,21 +1990,21 @@ def finalize_assignments(
             dispatch_meta["todo_retry_limit"] = todo_retry_limit
             metadata["dispatch"] = dispatch_meta
             if retry_count >= todo_retry_limit:
-                dispatch_meta["last_disposition"] = "needs_review"
+                dispatch_meta["last_disposition"] = "completed"
                 dispatch_meta["last_disposition_reason"] = "todo_retry_exhausted"
-                dispatch_meta["completion_unverified"] = True
+                dispatch_meta["auto_completed"] = True
                 conn.execute(
                     """
                     UPDATE task_hub_items
                     SET status=?, seizure_state=?, metadata_json=?, updated_at=?
                     WHERE task_id=?
                     """,
-                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+                    (TASK_STATUS_COMPLETED, "unseized", _json_dumps(metadata), now_iso, task_id),
                 )
-                reviewed += 1
+                completed += 1
                 retry_exhausted += 1
                 logger.warning(
-                    "Task Hub ToDo finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    "Task Hub ToDo finalize auto-completed task %s after retry exhaustion (%s/%s)",
                     task_id,
                     retry_count,
                     todo_retry_limit,
