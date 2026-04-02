@@ -313,11 +313,12 @@ export default function DashboardEventsPage() {
       if (kindFilter) params.set("kind", kindFilter);
       if (includeActionable && actionableOnly) params.set("requires_action", "true");
       if (pinnedOnly) params.set("pinned", "true");
+      params.set("all_noise", (!hideSystemNoise).toString());
       const bounds = buildTimeBounds();
       if (bounds.since) params.set("since", bounds.since);
       return params;
     },
-    [actionableOnly, buildTimeBounds, kindFilter, pinnedOnly, severityFilter, sourceFilter, statusFilter],
+    [actionableOnly, buildTimeBounds, kindFilter, pinnedOnly, severityFilter, sourceFilter, statusFilter, hideSystemNoise],
   );
 
   const loadAudit = useCallback(async (eventId: string) => {

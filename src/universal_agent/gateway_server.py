@@ -9270,6 +9270,7 @@ def _query_activity_events(
     since: Optional[str] = None,
     until: Optional[str] = None,
     apply_default_window: bool = True,
+    hide_noise: bool = False,
 ) -> list[dict[str, Any]]:
     conn = _activity_connect()
     try:
@@ -9291,6 +9292,8 @@ def _query_activity_events(
         if requires_action is not None:
             where.append("requires_action = ?")
             params.append(1 if requires_action else 0)
+        if hide_noise and severity is None and requires_action is None:
+            where.append("(LOWER(severity) != 'info' OR requires_action = 1)")
         cursor_parts = _activity_cursor_decode(cursor)
         if cursor_parts is not None:
             cursor_created, cursor_id = cursor_parts
@@ -19279,6 +19282,7 @@ async def dashboard_events(
     cursor: Optional[str] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
+    all_noise: bool = False,
 ):
     limit = max(1, min(int(limit), 1000))
     events = _query_activity_events(
@@ -19292,6 +19296,7 @@ async def dashboard_events(
         cursor=cursor,
         since=since,
         until=until,
+        hide_noise=not all_noise,
     )
     has_more = len(events) > limit
     if has_more:

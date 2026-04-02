@@ -456,6 +456,7 @@ function RecentEventsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [clearedBefore, setClearedBefore] = useState<string | null>(null);
+  const [showFocusMode, setShowFocusMode] = useState(true);
 
   useEffect(() => {
     try {
@@ -468,7 +469,7 @@ function RecentEventsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/events?limit=20`, {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/events?limit=20&all_noise=${!showFocusMode}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
@@ -480,11 +481,11 @@ function RecentEventsPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showFocusMode]);
 
   useEffect(() => {
     load();
-  }, [load, refreshKey]);
+  }, [load, refreshKey, showFocusMode]);
 
   const handleClearAll = () => {
     const now = new Date().toISOString();
@@ -555,6 +556,15 @@ function RecentEventsPanel() {
           <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
         </Link>
         <div className="flex items-center gap-2">
+          <label className="text-[11px] text-muted-foreground font-medium flex items-center cursor-pointer gap-1.5 mr-2">
+            <input 
+              type="checkbox" 
+              checked={showFocusMode}
+              onChange={(e) => setShowFocusMode(e.target.checked)}
+              className="accent-amber-600 cursor-pointer h-3 w-3"
+            />
+            Focus Mode
+          </label>
           <span className="text-xs text-muted-foreground">{items.length} shown</span>
           {items.length > 0 && (
             <button
