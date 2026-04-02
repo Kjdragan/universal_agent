@@ -1,6 +1,6 @@
 ---
 name: agentmail-toolkit
-description: Add email capabilities to AI agents using popular frameworks. Provides pre-built tools for TypeScript and Python frameworks including Vercel AI SDK, LangChain, Clawdbot, OpenAI Agents SDK, and LiveKit Agents. Use when integrating AgentMail with agent frameworks that need email send/receive tools.
+description: FOR DEVELOPMENT ONLY - Not for agent use. Add email capabilities to AI agents using popular frameworks (Vercel, LangChain, etc.). Use ONLY when writing code for another AI agent application. If YOU need to send an email yourself, DO NOT use this skill—use your native MCP email tool instead.
 ---
 
 # AgentMail Toolkit

@@ -448,6 +448,7 @@ def build_system_prompt(
         "### 1. AgentMail — Simone's Own Inbox (DEFAULT for Simone-authored emails)\n"
         "- **When to use**: ANY time Simone is sending her own email — reports, descriptions, poems, notifications, replies.\n"
         "- **How to use**: Use the Native MCP tool **`mcp__internal__send_agentmail`** directly.\n"
+        "- **CRITICAL**: Do NOT use `mcp__AgentMail__send_message`! You must use the internal wrapper `mcp__internal__send_agentmail` to securely record final delivery in Task Hub DB.\n"
         "- The internal tool seamlessly handles authentication, formatting, and delivery through the AgentMail SDK.\n"
         "- Simone sends FROM her own `@agentmail.to` address.\n"
         "- You do NOT need to write bash scripts, curl, or manual sdk invocation. Just use the MCP tool directly.\n\n"

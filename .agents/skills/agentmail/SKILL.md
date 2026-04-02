@@ -1,6 +1,6 @@
 ---
 name: agentmail
-description: Give AI agents their own email inboxes using the AgentMail API. Use when building email agents, sending/receiving emails programmatically, managing inboxes, handling attachments, organizing with labels, creating drafts for human approval, or setting up real-time notifications via webhooks/websockets. Supports multi-tenant isolation with pods.
+description: FOR DEVELOPMENT ONLY - Not for agent use. Guide for the AgentMail Python/Node SDK. Use ONLY when writing code for an external application that integrates AgentMail. If YOU need to send an email as an agent, DO NOT use this skill—use your native MCP email tool instead.
 ---
 
 # AgentMail SDK

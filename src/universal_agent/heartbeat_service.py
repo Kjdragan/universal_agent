@@ -45,9 +45,10 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
-    "If you need to send an email, use the native `mcp__internal__send_agentmail` tool. "
+    "If you need to send an email, strictly use the native `mcp__internal__send_agentmail` tool. "
+    "Do NOT use `mcp__AgentMail__send_message` or Python/Bash scripts for emails, as they bypass critical lifecycle tracking. "
     "If you need to create tasks, use the native `mcp__internal__task_hub_task_action` tool. "
-    "Do NOT write or run Python/Bash scripts to interact with AgentMail or Task Hub. "
+    "Do NOT write or run Python/Bash scripts to interact with Task Hub. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
 
