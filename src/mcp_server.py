@@ -2325,7 +2325,9 @@ word_count: {len(content.split())}
                     results_summary["errors"].append({"url": url, "error": error_msg})
 
         except Exception as e:
-            return json.dumps({"error": f"Crawl4AI Cloud API error: {str(e)}"})
+            error_msg = f"Crawl4AI Cloud API error: {str(e)}"
+            mcp_log(f"❌ {error_msg}", level="ERROR")
+            return json.dumps({"error": error_msg})
 
         # Generate research_overview.md - combined context-efficient file with size tiers
         if results_summary["saved_files"]:
@@ -2782,11 +2784,13 @@ async def finalize_research(
                 output_dir=str(task_search_results_dir),
             )
             crawl_result = json.loads(crawl_result_json)
+            if "error" in crawl_result:
+                raise Exception(crawl_result["error"])
         except Exception as e:
             error_msg = f"CRAWL CORE FATAL ERROR: {str(e)}"
             logger.error(error_msg, exc_info=True)
             sys.stderr.write(f"[finalize] ❌ {error_msg}\n")
-            crawl_result = {"successful": 0, "failed": len(filtered_urls), "errors": [error_msg], "saved_files": []}
+            return json.dumps({"error": error_msg})
         
         sys.stderr.write(
             f"[finalize] ✅ Crawl complete. Successful: {crawl_result.get('successful', 0)}, Failed: {crawl_result.get('failed', 0)}. Processing filtering...\n"
