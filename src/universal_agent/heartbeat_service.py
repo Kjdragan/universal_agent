@@ -423,6 +423,7 @@ def _compose_heartbeat_prompt(
         lines.append("   - DEFER: Too nuanced, needs your context, or should wait")
         lines.append("4. For each DELEGATE decision:")
         lines.append("   a) Extract ONLY the core task objective and dispatch via `vp_dispatch_mission` FIRST.")
+        lines.append("      IMPORTANT: You MUST set `idempotency_key` to `vp-task-<task_id>` to prevent duplicate dispatches if interrupted.")
         lines.append("      NOTE: Do NOT copy/paste these orchestration instructions into the VP objective.")
         lines.append("   b) Then call `mcp__internal__task_hub_task_action` with action=`delegate`, reason=<vp_id>,")
         lines.append("      and include `note` with the mission_id so the task tracks the VP work.")

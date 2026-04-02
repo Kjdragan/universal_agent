@@ -175,7 +175,7 @@ def _safe_read_excerpt(path: Path, max_bytes: int) -> Optional[str]:
 
 @tool(
     name="vp_dispatch_mission",
-    description="Dispatch an external VP mission through the internal VP ledger.",
+    description="Dispatch an external VP mission through the internal VP ledger. ALWAYS provide `idempotency_key` (e.g. `task-<task_id>`) to prevent duplicate dispatches if execution is interrupted.",
     input_schema={
         "vp_id": str,
         "objective": str,

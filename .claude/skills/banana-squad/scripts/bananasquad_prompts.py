@@ -62,6 +62,24 @@ STYLE_GUIDE = {
         "palette": "blues with gold/white accents",
         "tone": "trustworthy, established, boardroom-ready",
     },
+    "isometric_technical": {
+        "background": "pure white background, clean and uncluttered",
+        "layout": (
+            "centered isometric 3D object at 45-degree tilt revealing depth and internal architecture; "
+            "hand-drawn technical title box top-left; color-coded callout labels around the object; "
+            "cross-sectional diagrams and scale markers in margins"
+        ),
+        "typography": (
+            "technical pen / architectural linework for annotations; clean sans-serif for labels; "
+            "bold mono or condensed for measurements and dimensions"
+        ),
+        "palette": (
+            "~10-15% accent density on white; color-coded flow arrows: "
+            "RED (power/battery), BLUE (data/connectivity), ORANGE (thermal/processor), GREEN (sensors/haptics); "
+            "black ink linework for all structural annotations"
+        ),
+        "tone": "precise, educational, museum-exhibit engineering teardown",
+    },
 }
 
 
@@ -101,34 +119,73 @@ def _build_prompt(req: Request, variation_idx: int, style_name: str) -> str:
     dp = req.data_points[:8]
     constraints = req.constraints[:8]
 
-    # Variation knobs: change chart framing + supporting elements while keeping style/legibility stable.
-    primary_chart_options = [
-        "a central bar chart comparing 4-6 categories",
-        "a ranked list with horizontal bars and numeric labels",
-        "a timeline with 4-8 milestones and short annotations",
-        "a 2x2 quadrant chart with crisp labels and legend",
-        "a single hero statistic with 3 supporting mini-charts",
-    ]
-    supporting_options = [
-        "3 concise callout boxes summarizing key takeaways",
-        "a small legend and a sources/notes footer area",
-        "icon-supported bullet points with consistent stroke weight",
-        "a side column of 'What it means' commentary in short sentences",
-        "a bottom strip of related metrics with micro-charts",
-    ]
-
-    chart = primary_chart_options[(variation_idx - 1) % len(primary_chart_options)]
-    supporting = supporting_options[(variation_idx - 1) % len(supporting_options)]
-
     parts: list[str] = []
     tone = style["tone"]
-    article = "an" if tone[:1].lower() in ("a", "e", "i", "o", "u") else "a"
-    parts.append(
-        f"Create {article} {tone} infographic titled \"{title}\" about {req.subject}. "
-        f"Use {style['layout']} on a {style['background']}. "
-        f"Typography: {style['typography']}. Color palette: {style['palette']}."
-    )
-    parts.append(f"The main visualization should be {chart}. Include {supporting}.")
+
+    # ── Isometric technical teardown uses purpose-built variation knobs ──
+    if style_name == "isometric_technical":
+        perspective_options = [
+            "full isometric 3D view at 45 degrees, tilted to reveal top and right side",
+            "partially exploded isometric view with key internal components separated and floating",
+            "cutaway isometric view with one quadrant removed to reveal internal architecture",
+            "cross-sectional isometric slice from center, showing layered internal structure",
+            "transparent/ghosted isometric view with internal components visible through semi-opaque shell",
+        ]
+        annotation_options = [
+            "color-coded callout boxes with leader lines pointing to each major component; do not repeat any label",
+            "numbered reference markers with a corresponding legend panel; precise dimension lines between key components",
+            "material callout tags showing composition and quantity; scale rulers along two edges",
+            "flow-path annotations with color-coded arrows (RED=power, BLUE=data, ORANGE=thermal, GREEN=sensors/haptics)",
+            "schematic inset diagrams in the margins with magnified detail of 2-3 critical subsystems",
+        ]
+
+        perspective = perspective_options[(variation_idx - 1) % len(perspective_options)]
+        annotations = annotation_options[(variation_idx - 1) % len(annotation_options)]
+
+        parts.append(
+            f"Create a technical infographic of {req.subject} with a {perspective}. "
+            f"Combine a realistic photoreal render with black ink technical annotations on {style['background']}. "
+            f"Place \"{title}\" title in a hand-drawn technical box (top-left corner). "
+            f"Style: black linework (technical pen / architectural), sketched but precise. "
+            f"Object remains clearly visible."
+        )
+        parts.append(
+            f"Include: {annotations}. "
+            f"Typography: {style['typography']}. "
+            f"Color accents: {style['palette']}."
+        )
+        parts.append(
+            "Educational museum-exhibit vibe. Clean composition, balanced negative space. "
+            "Like a professional product teardown or engineering manual. "
+            "Output: 1080×1080, ultra-crisp, social-feed optimized."
+        )
+    else:
+        # ── Standard data-infographic variation knobs ──
+        primary_chart_options = [
+            "a central bar chart comparing 4-6 categories",
+            "a ranked list with horizontal bars and numeric labels",
+            "a timeline with 4-8 milestones and short annotations",
+            "a 2x2 quadrant chart with crisp labels and legend",
+            "a single hero statistic with 3 supporting mini-charts",
+        ]
+        supporting_options = [
+            "3 concise callout boxes summarizing key takeaways",
+            "a small legend and a sources/notes footer area",
+            "icon-supported bullet points with consistent stroke weight",
+            "a side column of 'What it means' commentary in short sentences",
+            "a bottom strip of related metrics with micro-charts",
+        ]
+
+        chart = primary_chart_options[(variation_idx - 1) % len(primary_chart_options)]
+        supporting = supporting_options[(variation_idx - 1) % len(supporting_options)]
+
+        article = "an" if tone[:1].lower() in ("a", "e", "i", "o", "u") else "a"
+        parts.append(
+            f"Create {article} {tone} infographic titled \"{title}\" about {req.subject}. "
+            f"Use {style['layout']} on a {style['background']}. "
+            f"Typography: {style['typography']}. Color palette: {style['palette']}."
+        )
+        parts.append(f"The main visualization should be {chart}. Include {supporting}.")
 
     if dp:
         parts.append(
