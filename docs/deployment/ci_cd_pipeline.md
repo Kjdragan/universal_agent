@@ -167,6 +167,9 @@ deploy rather than editing keys in place.
 - The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
 - Staging deploy must execute `uv` tool installation under the real `ua` home directory (`sudo -H -u ua` / `HOME=$ua_home`) so NotebookLM tools land in the service user's tool path.
 - In the staging SSH deploy script, PATH must be quoted for remote expansion, not shipped as a literal `$PATH`, or basic commands like `getent`/`cut` can disappear from the remote shell.
+- Staging and production deploys install the `goplaces` CLI tool (v0.3.0) for the `ua` service user by downloading the release binary from GitHub to `/home/ua/.local/bin/goplaces`.
+- This tool provides fast local place search via the Google Places API (New) and is used by the `goplaces` and `local-places` skills.
+- Installation is idempotent — if `goplaces` is already present and executable, the download step is skipped.
 
 ## Expected Deploy Times
 
