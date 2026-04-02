@@ -1296,6 +1296,8 @@ class AgentHookSet:
                 "mcp__internal__memory_search", "mcp__internal__memory_get",
                 # SDK-native progress tracker; safe before first research delegation.
                 "todowrite",
+                # Allow Skill runner before delegation as it often fetches context or executes SOPs
+                "skill",
             }
             if allows_notebooklm_step:
                 if normalized_tool_name in ("task", "agent"):
