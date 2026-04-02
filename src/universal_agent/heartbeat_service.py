@@ -151,6 +151,7 @@ class HeartbeatState:
     retry_reason: Optional[str] = None
     retry_kind: Optional[str] = None
     last_retry_delay_seconds: float = 0.0
+    recent_topics: Optional[list[dict]] = None
     
     def to_dict(self):
         return {
@@ -163,21 +164,23 @@ class HeartbeatState:
             "retry_reason": self.retry_reason,
             "retry_kind": self.retry_kind,
             "last_retry_delay_seconds": self.last_retry_delay_seconds,
+            "recent_topics": self.recent_topics or [],
         }
 
     @classmethod
     def from_dict(cls, data: dict):
-        return cls(
-            last_run=data.get("last_run", 0.0),
-            last_message_hash=data.get("last_message_hash"),
-            last_message_ts=data.get("last_message_ts", 0.0),
-            last_summary=data.get("last_summary"),
-            retry_attempt=int(data.get("retry_attempt", 0) or 0),
-            next_retry_at=float(data.get("next_retry_at", 0.0) or 0.0),
-            retry_reason=data.get("retry_reason"),
-            retry_kind=data.get("retry_kind"),
-            last_retry_delay_seconds=float(data.get("last_retry_delay_seconds", 0.0) or 0.0),
-        )
+        obj = cls()
+        obj.last_run = data.get("last_run", 0.0)
+        obj.last_message_hash = data.get("last_message_hash")
+        obj.last_message_ts = data.get("last_message_ts", 0.0)
+        obj.last_summary = data.get("last_summary")
+        obj.retry_attempt = int(data.get("retry_attempt", 0) or 0)
+        obj.next_retry_at = float(data.get("next_retry_at", 0.0) or 0.0)
+        obj.retry_reason = data.get("retry_reason")
+        obj.retry_kind = data.get("retry_kind")
+        obj.last_retry_delay_seconds = float(data.get("last_retry_delay_seconds", 0.0) or 0.0)
+        obj.recent_topics = data.get("recent_topics", [])
+        return obj
 
 
 def _parse_duration_seconds(raw: str | None, default: int) -> int:
@@ -355,6 +358,7 @@ def _compose_heartbeat_prompt(
     workspace_dir: str = "",
     brainstorm_context_text: str = "",
     morning_report_text: str = "",
+    recent_topics_text: str = "",
     runtime_conn: Any = None,
     task_focused: bool = False,
 ) -> str:
@@ -552,8 +556,10 @@ def _compose_heartbeat_prompt(
     # Inject morning report if this is the first tick of the day
     if morning_report_text and not task_focused:
         prompt = f"{prompt}\n\n{morning_report_text}"
+    # Inject recent topics history to prevent loops
+    if recent_topics_text and not task_focused:
+        prompt = f"{prompt}\n\n{recent_topics_text}"
     return prompt
-
 
 def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
     if not raw:
@@ -2136,6 +2142,14 @@ class HeartbeatService:
                 _hb_runtime_conn = getattr(self.gateway, 'get_db_conn', lambda: None)()
             except Exception:
                 pass
+                
+            _recent_topics_text = ""
+            try:
+                from universal_agent.services.proactive_topic_tracker import format_recent_topics_prompt
+                _recent_topics_text = format_recent_topics_prompt(state) if not task_hub_claimed else ""
+            except Exception as _trk_exc:
+                logger.debug("Failed to format proactive topic history: %s", _trk_exc)
+
             prompt = _compose_heartbeat_prompt(
                 base_prompt,
                 investigation_only=heartbeat_investigation_only,
@@ -2143,6 +2157,7 @@ class HeartbeatService:
                 workspace_dir=str(session.workspace_dir),
                 brainstorm_context_text=_brainstorm_ctx_text,
                 morning_report_text=_morning_text,
+                recent_topics_text=_recent_topics_text,
                 runtime_conn=_hb_runtime_conn,
                 task_focused=_is_task_focused,
             )
@@ -2311,6 +2326,16 @@ class HeartbeatService:
             ok_only = strip_result["ok_only"]
             response_text = strip_result["text"] or ""
             ok_token = strip_result["token"] or (schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0])
+            
+            # Record proactive topics (only when proactive and non-OK)
+            if not ok_only and response_text and not task_hub_claimed:
+                try:
+                    from universal_agent.services.proactive_topic_tracker import record_topic, extract_topic_fingerprint
+                    _fp = extract_topic_fingerprint(response_text)
+                    record_topic(state, topic_summary=response_text[:300], fingerprint=_fp)
+                except Exception as _trk_exc:
+                    logger.debug("Failed to record proactive topic history: %s", _trk_exc)
+                    
             is_duplicate = False
             msg_hash = hashlib.sha256((response_text or full_response).encode()).hexdigest()
             now = time.time()

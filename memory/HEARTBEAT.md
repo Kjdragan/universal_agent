@@ -80,6 +80,11 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
   - Surface quick-win side-hustle opportunities with short path to cash.
 - [ ] Operational hygiene
   - review pending Task Hub/calendar/email execution blockers and propose the next 1-3 actions.
+## Novelty Policy
+- Do NOT repeat an investigation topic that appears in the RECENT INVESTIGATIONS list provided in the prompt.
+- Each heartbeat cycle should advance a DIFFERENT item from the Active Monitors list or explore a genuinely new angle.
+- If all checklist items have been investigated recently, focus on operational hygiene, brainstorm advancement, or simply skip proactively.
+- Vary your approach: if the last cycle did research, this cycle do execution/delivery.
 ## Response Policy
 - If a task was completed or moved forward materially, emit a concise summary.
 - If nothing actionable exists, record heartbeat as skipped/no-op.
