@@ -24,7 +24,7 @@ Important reading note:
 - this document describes the current codebase as it exists today
 - the run-per-task workspace isolation model is fully implemented across all canonical ingestion paths (tracked chat, ToDo dispatcher, email-to-task bridge)
 - the canonical allocation layer is `ExecutionRunService` in `src/universal_agent/services/execution_run_service.py`
-- for historical context on the migration, see [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md)
+- for historical context on the migration, see [coding_handoff.md](../../docs/coding_handoff.md)
 
 ---
 
@@ -41,13 +41,13 @@ This master reference is written from direct source review. It consolidates beha
 
 When a deeper subsystem needs more detail, consult:
 
-- [Proactive Pipeline](/home/kjdragan/lrepos/universal_agent/docs/02_Subsystems/Proactive_Pipeline.md)
-- [Task Hub Dashboard](/home/kjdragan/lrepos/universal_agent/docs/02_Subsystems/Task_Hub_Dashboard.md)
-- [Chat Panel Communication Layer](/home/kjdragan/lrepos/universal_agent/docs/02_Flows/04_Chat_Panel_Communication_Layer.md)
-- [Artifacts, Workspaces, and Remote Sync Source of Truth](/home/kjdragan/lrepos/universal_agent/docs/03_Operations/90_Artifacts_Workspaces_And_Remote_Sync_Source_Of_Truth_2026-03-06.md)
-- [Email Architecture and AgentMail Source of Truth](/home/kjdragan/lrepos/universal_agent/docs/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md)
-- [TaskStop Guardrails and Task Hub Execution Hardening](/home/kjdragan/lrepos/universal_agent/docs/03_Operations/106_TaskStop_Guardrails_And_Task_Hub_Execution_Hardening_2026-03-31.md)
-- [Run/Attempt Lifecycle and Nomenclature Migration Plan](/home/kjdragan/lrepos/universal_agent/docs/03_Operations/104_Run_Attempt_Lifecycle_And_Nomenclature_Migration_Plan_2026-03-24.md)
+- [Proactive Pipeline](../../docs/02_Subsystems/Proactive_Pipeline.md)
+- [Task Hub Dashboard](../../docs/02_Subsystems/Task_Hub_Dashboard.md)
+- [Chat Panel Communication Layer](../../docs/02_Flows/04_Chat_Panel_Communication_Layer.md)
+- [Artifacts, Workspaces, and Remote Sync Source of Truth](../../docs/03_Operations/90_Artifacts_Workspaces_And_Remote_Sync_Source_Of_Truth_2026-03-06.md)
+- [Email Architecture and AgentMail Source of Truth](../../docs/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md)
+- [TaskStop Guardrails and Task Hub Execution Hardening](../../docs/03_Operations/106_TaskStop_Guardrails_And_Task_Hub_Execution_Hardening_2026-03-31.md)
+- [Run/Attempt Lifecycle and Nomenclature Migration Plan](../../docs/03_Operations/104_Run_Attempt_Lifecycle_And_Nomenclature_Migration_Plan_2026-03-24.md)
 
 ---
 
@@ -68,7 +68,7 @@ Implementation status (completed 2026-04-01):
 - the `update_assignment_lineage()` helper in `task_hub.py` stamps assignment records with run-scoped workspace_dir and workflow_run_id after allocation
 - UI/API helpers (`_session_run_summary`, `_live_session_payload`) prefer `active_run_id` and `active_run_workspace` from session metadata for file browsing
 
-The execution contract itself is normalized by `build_execution_manifest(...)` in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L73). For each work item, the runtime records:
+The execution contract itself is normalized by `build_execution_manifest(...)` in [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py#L73). For each work item, the runtime records:
 
 - `workflow_kind`
 - `delivery_mode`
@@ -109,14 +109,14 @@ flowchart LR
 
 ### 5.1 Trusted Email
 
-Trusted inbound email is materialized into Task Hub by `EmailTaskBridge`. The bridge is explicitly described as the email-to-task entry point in [email_task_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/email_task_bridge.py#L1).
+Trusted inbound email is materialized into Task Hub by `EmailTaskBridge`. The bridge is explicitly described as the email-to-task entry point in [email_task_bridge.py](../../src/universal_agent/services/email_task_bridge.py#L1).
 
 Current code behavior:
 
-- one deterministic task per email thread via `_deterministic_task_id(...)` in [email_task_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/email_task_bridge.py#L44)
+- one deterministic task per email thread via `_deterministic_task_id(...)` in [email_task_bridge.py](../../src/universal_agent/services/email_task_bridge.py#L44)
 - source kind is `email`
-- delivery mode is inferred at materialization time by `infer_delivery_mode(...)` in [email_task_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/email_task_bridge.py#L50)
-- canonical execution owner is stamped as `todo_dispatcher` in [email_task_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/email_task_bridge.py#L798)
+- delivery mode is inferred at materialization time by `infer_delivery_mode(...)` in [email_task_bridge.py](../../src/universal_agent/services/email_task_bridge.py#L50)
+- canonical execution owner is stamped as `todo_dispatcher` in [email_task_bridge.py](../../src/universal_agent/services/email_task_bridge.py#L798)
 
 The bridge writes task metadata that already contains the workflow manifest and delivery contract before dispatch.
 
@@ -130,7 +130,7 @@ Important nuance:
 
 The chat panel is also a Task Hub ingress for normal user work.
 
-The gateway decides whether to track a chat request in `_should_track_chat_panel_request(...)` in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L6347). If accepted, `_prepare_tracked_chat_execution(...)` creates a Task Hub item keyed as `chat:{session_id}:{turn_id}` and stamps delivery metadata in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L6365).
+The gateway decides whether to track a chat request in `_should_track_chat_panel_request(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py#L6347). If accepted, `_prepare_tracked_chat_execution(...)` creates a Task Hub item keyed as `chat:{session_id}:{turn_id}` and stamps delivery metadata in [gateway_server.py](../../src/universal_agent/gateway_server.py#L6365).
 
 Then, when websocket execution starts, the request is rewritten into:
 
@@ -139,12 +139,12 @@ Then, when websocket execution starts, the request is rewritten into:
 - `claimed_task_ids = [...]`
 - `claimed_assignment_ids = [...]`
 
-That mutation happens in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L26694).
+That mutation happens in [gateway_server.py](../../src/universal_agent/gateway_server.py#L26694).
 
 Important current limitation:
 
 - tracked chat already enters the canonical `todo_execution` lane
-- but the claim path still uses `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L6415)
+- but the claim path still uses `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [gateway_server.py](../../src/universal_agent/gateway_server.py#L6415)
 - so the transport session can still act as the artifact root for multiple tracked chat tasks
 
 ### 5.3 Manual Dashboard / Other Task Hub Sources
@@ -160,7 +160,7 @@ Implementation note:
 
 ## 6. Durable Run and Attempt Model
 
-Run workspace scaffolding is created by `ensure_run_workspace_scaffold(...)` in [run_workspace.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/run_workspace.py#L66).
+Run workspace scaffolding is created by `ensure_run_workspace_scaffold(...)` in [run_workspace.py](../../src/universal_agent/run_workspace.py#L66).
 
 What it creates and maintains:
 
@@ -214,9 +214,9 @@ The current canonical layout for research/report work is:
 
 Source of this layout:
 
-- task-scoped search/corpus handling in `finalize_research(...)` at [mcp_server.py](/home/kjdragan/lrepos/universal_agent/src/mcp_server.py#L2533)
-- report input path in `_run_report_generation_legacy(...)` at [mcp_server.py](/home/kjdragan/lrepos/universal_agent/src/mcp_server.py#L4440)
-- task-scoped workspace instructions in [research-specialist.md](/home/kjdragan/lrepos/universal_agent/.claude/agents/research-specialist.md#L17)
+- task-scoped search/corpus handling in `finalize_research(...)` at [mcp_server.py](../../src/mcp_server.py#L2533)
+- report input path in `_run_report_generation_legacy(...)` at [mcp_server.py](../../src/mcp_server.py#L4440)
+- task-scoped workspace instructions in [research-specialist.md](../../.claude/agents/research-specialist.md#L17)
 
 Current nuance:
 
@@ -236,20 +236,20 @@ The runtime sets both:
 - `CURRENT_RUN_WORKSPACE`
 - `CURRENT_SESSION_WORKSPACE` as a legacy alias
 
-This is visible in [main.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/main.py#L8678) and [agent_setup.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/agent_setup.py#L440).
+This is visible in [main.py](../../src/universal_agent/main.py#L8678) and [agent_setup.py](../../src/universal_agent/agent_setup.py#L440).
 
 ### 8.2 Subagent Prompt Context
 
 The primary agent and specialist prompt builders include the run workspace explicitly:
 
-- top-level context in [agent_core.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/agent_core.py#L1667)
-- research specialist prompt in [agent_core.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/agent_core.py#L1703)
-- report writer prompt in [agent_core.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/agent_core.py#L1775)
-- task hook workspace awareness in [main.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/main.py#L3354)
+- top-level context in [agent_core.py](../../src/universal_agent/agent_core.py#L1667)
+- research specialist prompt in [agent_core.py](../../src/universal_agent/agent_core.py#L1703)
+- report writer prompt in [agent_core.py](../../src/universal_agent/agent_core.py#L1775)
+- task hook workspace awareness in [main.py](../../src/universal_agent/main.py#L3354)
 
 ### 8.3 Research Bridge Fallback Resolution
 
-The research/report bridge resolves the actual run workspace using this precedence in `_resolve_workspace_hint(...)` in [research_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/research_bridge.py#L75):
+The research/report bridge resolves the actual run workspace using this precedence in `_resolve_workspace_hint(...)` in [research_bridge.py](../../src/universal_agent/tools/research_bridge.py#L75):
 
 1. explicit `workspace_dir` if it points to a real run/session workspace
 2. execution context variable
@@ -257,7 +257,7 @@ The research/report bridge resolves the actual run workspace using this preceden
 4. observer workspace
 5. latest run-workspace inference
 
-Task identity is resolved separately by `_resolve_task_name(...)` in [research_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/research_bridge.py#L133). This is the key fix that prevents path strings from being normalized into bogus task names.
+Task identity is resolved separately by `_resolve_task_name(...)` in [research_bridge.py](../../src/universal_agent/tools/research_bridge.py#L133). This is the key fix that prevents path strings from being normalized into bogus task names.
 
 ---
 
@@ -265,7 +265,7 @@ Task identity is resolved separately by `_resolve_task_name(...)` in [research_b
 
 The dedicated To Do dispatcher claims work and hands it to Simone in the `todo_execution` lane.
 
-Claim + prompt build + submission happen in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L360). The dispatcher:
+Claim + prompt build + submission happen in [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py#L360). The dispatcher:
 
 - claims up to a bounded set of tasks
 - records assignment IDs
@@ -274,7 +274,7 @@ Claim + prompt build + submission happen in [todo_dispatch_service.py](/home/kjd
 
 Important current limitation:
 
-- the dispatcher claim path still passes `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L356)
+- the dispatcher claim path still passes `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py#L356)
 - so dedicated To Do execution is lifecycle-canonical but not yet fully workspace-isolated on a one-task-per-run basis
 
 The prompt itself explicitly states:
@@ -284,13 +284,13 @@ The prompt itself explicitly states:
 - email must use `mcp__internal__send_agentmail`
 - `TaskStop` is not valid in this lane
 
-That policy is defined in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L123).
+That policy is defined in [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py#L123).
 
 ### 9.1 Allowed and Disallowed Controls
 
 In current code, `todo_execution` blocks only `TaskStop` at the constant layer:
 
-- [constants.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/constants.py#L43)
+- [constants.py](../../src/universal_agent/constants.py#L43)
 
 This means sanctioned delegation to specialists is still allowed. The system is not trying to ban delegation; it is trying to ban lifecycle-breaking controls.
 
@@ -319,7 +319,7 @@ sequenceDiagram
 
 ### 10.1 Research Specialist
 
-The research specialist contract is documented directly in [research-specialist.md](/home/kjdragan/lrepos/universal_agent/.claude/agents/research-specialist.md#L17).
+The research specialist contract is documented directly in [research-specialist.md](../../.claude/agents/research-specialist.md#L17).
 
 Current mandatory expectations:
 
@@ -331,7 +331,7 @@ Current mandatory expectations:
 
 ### 10.2 Report Writer
 
-The report writer contract is defined in [report-writer.md](/home/kjdragan/lrepos/universal_agent/.claude/agents/report-writer.md#L16).
+The report writer contract is defined in [report-writer.md](../../.claude/agents/report-writer.md#L16).
 
 Current expected path:
 
@@ -349,9 +349,9 @@ The codebase treats `research-specialist` and `report-writer` as sequential prer
 
 ### 11.1 Research Phase
 
-`_run_research_phase_legacy(...)` in [mcp_server.py](/home/kjdragan/lrepos/universal_agent/src/mcp_server.py#L4417) validates that staged search JSON exists and then calls `finalize_research(...)`.
+`_run_research_phase_legacy(...)` in [mcp_server.py](../../src/mcp_server.py#L4417) validates that staged search JSON exists and then calls `finalize_research(...)`.
 
-`finalize_research(...)` currently does all of the following in [mcp_server.py](/home/kjdragan/lrepos/universal_agent/src/mcp_server.py#L2533):
+`finalize_research(...)` currently does all of the following in [mcp_server.py](../../src/mcp_server.py#L2533):
 
 - resolves task-scoped directories
 - scans search inbox JSON files
@@ -365,7 +365,7 @@ The codebase treats `research-specialist` and `report-writer` as sequential prer
 
 ### 11.2 Report Generation
 
-`_run_report_generation_legacy(...)` in [mcp_server.py](/home/kjdragan/lrepos/universal_agent/src/mcp_server.py#L4417) expects the corpus at:
+`_run_report_generation_legacy(...)` in [mcp_server.py](../../src/mcp_server.py#L4417) expects the corpus at:
 
 - `tasks/<task_name>/refined_corpus.md`
 
@@ -380,7 +380,7 @@ and returns `work_products/report.html`.
 
 ### 11.3 PDF Generation
 
-`html_to_pdf` resolves paths relative to the current workspace in [pdf_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/pdf_bridge.py#L13), prefers Playwright Chromium in [pdf_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/pdf_bridge.py#L74), and falls back to WeasyPrint if needed in [pdf_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/pdf_bridge.py#L84).
+`html_to_pdf` resolves paths relative to the current workspace in [pdf_bridge.py](../../src/universal_agent/tools/pdf_bridge.py#L13), prefers Playwright Chromium in [pdf_bridge.py](../../src/universal_agent/tools/pdf_bridge.py#L74), and falls back to WeasyPrint if needed in [pdf_bridge.py](../../src/universal_agent/tools/pdf_bridge.py#L84).
 
 ---
 
@@ -388,7 +388,7 @@ and returns `work_products/report.html`.
 
 Final delivery is governed by the execution manifest.
 
-Current top-level modes come from `build_execution_manifest(...)` and `infer_workflow_kind(...)` in [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L52).
+Current top-level modes come from `build_execution_manifest(...)` and `infer_workflow_kind(...)` in [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py#L52).
 
 Examples:
 
@@ -397,7 +397,7 @@ Examples:
 - `interactive_answer`
 - `code_change`
 
-For final email delivery, the native bridge is `mcp__internal__send_agentmail` in [agentmail_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/agentmail_bridge.py#L87).
+For final email delivery, the native bridge is `mcp__internal__send_agentmail` in [agentmail_bridge.py](../../src/universal_agent/tools/agentmail_bridge.py#L87).
 
 Current protections:
 
@@ -405,7 +405,7 @@ Current protections:
 - duplicate final delivery protection for Task Hub tasks in `todo_execution`
 - receipt-style acknowledgements blocked during canonical ToDo execution
 
-Those checks live in [agentmail_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/agentmail_bridge.py#L139).
+Those checks live in [agentmail_bridge.py](../../src/universal_agent/tools/agentmail_bridge.py#L139).
 
 ---
 
@@ -413,7 +413,7 @@ Those checks live in [agentmail_bridge.py](/home/kjdragan/lrepos/universal_agent
 
 Task Hub resolution is not inferred from “the run seemed successful.” It requires an explicit durable action.
 
-Lifecycle actions are implemented in `perform_task_action(...)` in [task_hub.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/task_hub.py#L2709). Important actions include:
+Lifecycle actions are implemented in `perform_task_action(...)` in [task_hub.py](../../src/universal_agent/task_hub.py#L2709). Important actions include:
 
 - `complete`
 - `review`
@@ -423,11 +423,11 @@ Lifecycle actions are implemented in `perform_task_action(...)` in [task_hub.py]
 - `approve`
 - `seize`
 
-The bridge exposed to the model is `task_hub_task_action` in [task_hub_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/task_hub_bridge.py#L26).
+The bridge exposed to the model is `task_hub_task_action` in [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py#L26).
 
 ### 13.1 Enforcement
 
-If a `todo_execution` run ends without a durable lifecycle mutation, `_enforce_todo_execution_lifecycle(...)` in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L6191):
+If a `todo_execution` run ends without a durable lifecycle mutation, `_enforce_todo_execution_lifecycle(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py#L6191):
 
 - finalizes the assignment as failed
 - records `result_summary="todo_execution_missing_lifecycle_mutation"`
@@ -451,7 +451,7 @@ stateDiagram-v2
 
 ## 14. Event Lifecycle and Operator Signals
 
-The gateway records To Do dispatcher runtime events in `_todo_dispatch_runtime_record(...)` in [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L2803).
+The gateway records To Do dispatcher runtime events in `_todo_dispatch_runtime_record(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py#L2803).
 
 Observed event families include:
 
@@ -480,16 +480,16 @@ The authoritative durable file APIs are:
 - `GET /api/v1/runs/{run_id}/files`
 - `GET /api/v1/runs/{run_id}/files/{file_path}`
 
-implemented in [api/server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/api/server.py#L1502).
+implemented in [api/server.py](../../src/universal_agent/api/server.py#L1502).
 
 ### 15.2 Frontend
 
 The Web UI now prefers run-backed URLs in:
 
-- `buildDurableFileListUrl(...)` at [page.tsx](/home/kjdragan/lrepos/universal_agent/web-ui/app/page.tsx#L582)
-- `buildDurableFileUrl(...)` at [page.tsx](/home/kjdragan/lrepos/universal_agent/web-ui/app/page.tsx#L595)
+- `buildDurableFileListUrl(...)` at [page.tsx](../../web-ui/app/page.tsx#L582)
+- `buildDurableFileUrl(...)` at [page.tsx](../../web-ui/app/page.tsx#L595)
 
-It also hydrates `run_id` and `workspace` metadata for live sessions in [page.tsx](/home/kjdragan/lrepos/universal_agent/web-ui/app/page.tsx#L1556) and [page.tsx](/home/kjdragan/lrepos/universal_agent/web-ui/app/page.tsx#L1615).
+It also hydrates `run_id` and `workspace` metadata for live sessions in [page.tsx](../../web-ui/app/page.tsx#L1556) and [page.tsx](../../web-ui/app/page.tsx#L1615).
 
 ```mermaid
 flowchart LR
@@ -508,7 +508,7 @@ Important nuance:
 - preferring `run_id` improves correctness of file browsing
 - but it does not by itself guarantee one-task-per-run isolation
 - if multiple tasks still share one underlying execution workspace, the explorer will faithfully show all of them
-- fixing that requires the upstream run-allocation refactor described in [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md)
+- fixing that requires the upstream run-allocation refactor described in [coding_handoff.md](../../docs/coding_handoff.md)
 
 ---
 
@@ -556,7 +556,7 @@ These are not speculative. They reflect the current checkout.
 - A task appearing in the To Do List and then remaining unresolved usually means the execution missed `task_hub_task_action(...)`, not that Task Hub failed to ingest it.
 - The right-panel file browser is only authoritative when it has the run-backed metadata needed to browse by `run_id`.
 - The current code still has incomplete workspace isolation for some canonical execution paths. In particular, tracked chat claims and dispatcher claims can still reuse an existing session workspace instead of allocating a fresh run workspace per accepted task.
-- The required remediation for chat, email, dispatcher, and any other canonical ingestion path is documented in [coding_handoff.md](/home/kjdragan/lrepos/universal_agent/docs/coding_handoff.md).
+- The required remediation for chat, email, dispatcher, and any other canonical ingestion path is documented in [coding_handoff.md](../../docs/coding_handoff.md).
 
 ---
 
@@ -581,20 +581,20 @@ When this pipeline misbehaves, verify in this order:
 
 Primary code files behind this document:
 
-- [gateway_server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py)
-- [todo_dispatch_service.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py)
-- [task_hub.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/task_hub.py)
-- [task_hub_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/task_hub_bridge.py)
-- [email_task_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/services/email_task_bridge.py)
-- [research_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/research_bridge.py)
-- [mcp_server.py](/home/kjdragan/lrepos/universal_agent/src/mcp_server.py)
-- [run_workspace.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/run_workspace.py)
-- [pdf_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/pdf_bridge.py)
-- [agentmail_bridge.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/agentmail_bridge.py)
-- [page.tsx](/home/kjdragan/lrepos/universal_agent/web-ui/app/page.tsx)
-- [api/server.py](/home/kjdragan/lrepos/universal_agent/src/universal_agent/api/server.py)
-- [research-specialist.md](/home/kjdragan/lrepos/universal_agent/.claude/agents/research-specialist.md)
-- [report-writer.md](/home/kjdragan/lrepos/universal_agent/.claude/agents/report-writer.md)
+- [gateway_server.py](../../src/universal_agent/gateway_server.py)
+- [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py)
+- [task_hub.py](../../src/universal_agent/task_hub.py)
+- [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py)
+- [email_task_bridge.py](../../src/universal_agent/services/email_task_bridge.py)
+- [research_bridge.py](../../src/universal_agent/tools/research_bridge.py)
+- [mcp_server.py](../../src/mcp_server.py)
+- [run_workspace.py](../../src/universal_agent/run_workspace.py)
+- [pdf_bridge.py](../../src/universal_agent/tools/pdf_bridge.py)
+- [agentmail_bridge.py](../../src/universal_agent/tools/agentmail_bridge.py)
+- [page.tsx](../../web-ui/app/page.tsx)
+- [api/server.py](../../src/universal_agent/api/server.py)
+- [research-specialist.md](../../.claude/agents/research-specialist.md)
+- [report-writer.md](../../.claude/agents/report-writer.md)
 
 ---
 
