@@ -89,6 +89,7 @@ When `task_hub_claimed` is non-empty (i.e., a Task Hub task has been claimed for
 | (none — mode is automatic) | — | Activated when `task_hub_claimed` is non-empty. |
 
 **Behavioral changes in task-focused mode:**
+
 - **Skipped components**: Brainstorm context injection, morning report generation, system health checks
 - **Lean environment prompt**: Uses `_build_task_focused_environment_context()` instead of full context builder
 - **No manual findings JSON**: Agent does not write heartbeat_findings_latest.json (synthetic findings used)
@@ -181,6 +182,7 @@ When the gateway reads the findings artifact in `_heartbeat_findings_from_artifa
 If the agent doesn't write findings at all (common for Task Hub dispatch, exec completions, etc.), the service generates synthetic findings using `json.dumps()` — always valid JSON.
 
 The repair pipeline uses:
+
 - `json_repair` library: fixes missing commas, trailing commas, unquoted keys, Python `True`/`False`/`None` literals
 - `HeartbeatFindings` Pydantic model: validates schema and fills missing fields with permissive defaults
 - `json.dumps()`: deterministic re-serialization guarantees valid JSON
@@ -221,12 +223,23 @@ Heartbeats with no meaningful activity (no writes, no work products, no elevated
 The `memory/HEARTBEAT.md` file is the **agent-facing operating contract** — it tells the LLM what checks to run, what thresholds to use, what artifacts to write, and what schema to follow. It is NOT documentation; it is a prompt.
 
 Key contents:
+
 - Active monitors (VPS system health, local desktop health)
 - Mission-focus items and execution windows
 - The JSON findings schema (authoritative for the agent)
 - Checkbox semantics: `[ ]` = active/pending, `[x]` = completed/disabled
 - Kevin's working style preferences
 - Response policy (concise summaries, no-op skipping)
+- Novelty policy (instructs the agent to explicitly avoid repeating recently investigated topics)
+
+### 8.1 Proactive Deduplication
+
+To prevent the agent from endlessly investigating the same initial standing instructions (e.g. "AI Model Releases") during empty Task Hub queues, heartbeat uses a **proactive topic tracker**:
+
+1. **Fingerprinting**: `proactive_topic_tracker.py` extracts a deterministic fingerprint of the topic summary from non-OK heartbeat responses.
+2. **State Storage**: The topic and its timestamp are recorded into a `recent_topics` list inside `heartbeat_state.json`, subject to a 24-hour expiration window.
+3. **Prompt Injection**: The tracker formats these recent topics into a text block, which is then dynamically injected by `_compose_heartbeat_prompt` into the `== RECENT INVESTIGATIONS ==` section of the agent's prompt.
+4. **Novelty Enforcement**: The Novelty Policy inside `HEARTBEAT.md` explicitly commands the LLM to skip any topics appearing in the Recent Investigations list, forcing it to rotate through different uninvestigated items.
 
 ## 8A. Role-Isolated Runtime Model
 
