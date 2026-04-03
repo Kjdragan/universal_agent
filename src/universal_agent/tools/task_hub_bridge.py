@@ -24,7 +24,7 @@ def _err(message: str) -> Dict[str, Any]:
 
 
 @tool(
-    name="mcp__internal__task_hub_task_action",
+    name="task_hub_task_action",
     description=(
         "Perform Task Hub lifecycle actions for an existing task. "
         "Allowed actions: claim, seize, review, complete, block, park, unblock, delegate, approve. "
@@ -105,7 +105,7 @@ async def _task_hub_task_action_impl(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @tool(
-    name="mcp__internal__task_hub_decompose",
+    name="task_hub_decompose",
     description=(
         "Decompose a multi-part task into linked sub-tasks. "
         "The parent task is marked as 'decomposed' and each sub-task "

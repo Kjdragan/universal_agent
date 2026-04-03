@@ -85,7 +85,7 @@ def _resolve_email_mapping_from_runtime() -> tuple[Any, Any, dict[str, Any] | No
     return runtime, bridge, mapping, str(runtime.run_kind or "").strip().lower()
 
 @tool(
-    name="mcp__internal__send_agentmail",
+    name="send_agentmail",
     description="Send an email or create a draft via AgentMail. Usage: Use this to send outbound emails or draft messages strictly avoiding bash script execution.",
     input_schema={
         "to": str,

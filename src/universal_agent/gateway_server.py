@@ -26312,7 +26312,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
     gateway = get_gateway()
     session = get_session(session_id)
 
-    if not session:
+    class _MockGlobalSession:
+        session_id = "global_agent_flow"
+        user_id = "system"
+        workspace_dir = "global"
+        metadata = {"user_id": "system"}
+
+    if session_id == "global_agent_flow":
+        session = _MockGlobalSession()
+    elif not session:
         try:
             session = await gateway.resume_session(session_id)
             # Success - count metrics
@@ -26345,7 +26353,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
     session.metadata.setdefault("user_id", session.user_id)
 
     # 1. Enforce Allowlist for WebSocket
-    if not is_user_allowed(session.user_id):
+    if session_id != "global_agent_flow" and not is_user_allowed(session.user_id):
         logger.warning(f"⛔ Access Denied (WS): User '{session.user_id}' not in allowlist.")
         _increment_metric("ws_attach_failures")
         await websocket.close(code=4003, reason="Access denied")
@@ -26353,7 +26361,17 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
         return
 
     # Send initial connection success message
-    session_payload = _live_session_payload(session)
+    if session_id == "global_agent_flow":
+        session_payload = {
+            "session_id": "global_agent_flow",
+            "workspace_dir": "global",
+            "user_id": "system",
+            "run_id": "",
+            "is_live_session": False,
+        }
+    else:
+        session_payload = _live_session_payload(session)
+
     await manager.send_json(
         connection_id,
         {

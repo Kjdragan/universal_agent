@@ -26,7 +26,7 @@ def _err(message: str) -> Dict[str, Any]:
     return {"content": [{"type": "text", "text": f"error: {message}"}]}
 
 @tool(
-    name="mcp__internal__publish_artifact",
+    name="publish_artifact",
     description=(
         "Promotes a file or directory from the temporary session workspace into long-term persistent storage. "
         "Use this only when a final deliverable is ready to be archived perpetually. "

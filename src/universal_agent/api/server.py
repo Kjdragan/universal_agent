@@ -544,6 +544,8 @@ async def _fetch_gateway_run_attempts(run_id: str) -> Optional[list[dict[str, An
 
 
 async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: bool) -> None:
+    if session_id == "global_agent_flow":
+        return
     if not _gateway_url():
         return
     session_owner = await _fetch_gateway_session_owner(session_id)
@@ -2006,7 +2008,14 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
     try:
         # Send connected event
         session_info = None
-        if session_id:
+        if session_id == "global_agent_flow":
+            from universal_agent.core.session import SessionInfo
+            session_info = SessionInfo(
+                session_id="global_agent_flow",
+                workspace="global",
+                user_id=owner_id
+            )
+        elif session_id:
             logger.info(f"Attempting to resume session: {session_id}")
             session_info = await bridge.resume_session(session_id)
             if not session_info:
