@@ -21,6 +21,18 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        source: '/api/vps/:path*',
+        destination: 'http://localhost:8001/api/vps/:path*',
+      },
+      {
+        source: '/api/artifacts/:path*',
+        destination: 'http://localhost:8001/api/artifacts/:path*',
+      },
+      {
+        source: '/api/files/:path*',
+        destination: 'http://localhost:8001/api/files/:path*',
+      },
+      {
         source: '/api/:path((?!dashboard/gateway).*)',
         destination: 'http://localhost:8002/api/:path',
       },

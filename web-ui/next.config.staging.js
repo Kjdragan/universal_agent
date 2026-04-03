@@ -27,6 +27,18 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        source: '/api/vps/:path*',
+        destination: 'http://localhost:9001/api/vps/:path*',
+      },
+      {
+        source: '/api/artifacts/:path*',
+        destination: 'http://localhost:9001/api/artifacts/:path*',
+      },
+      {
+        source: '/api/files/:path*',
+        destination: 'http://localhost:9001/api/files/:path*',
+      },
+      {
         // Proxy all /api/* calls to the STAGING gateway (port 9002)
         source: '/api/:path((?!dashboard/gateway).*)',
         destination: 'http://localhost:9002/api/:path',

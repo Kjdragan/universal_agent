@@ -14,7 +14,7 @@ from universal_agent.durable.state import list_run_attempts
 from universal_agent.gateway import InProcessGateway
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
-from universal_agent.security_paths import validate_session_id
+from universal_agent.security_paths import validate_session_id, is_valid_session_id
 from universal_agent.feature_flags import sdk_session_history_enabled
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.sdk import session_history_adapter
@@ -268,7 +268,7 @@ class OpsService:
     ) -> List[Dict[str, Any]]:
         """List all sessions via the gateway/disk."""
         # We start with workspaces directory as source of truth for Ops
-        session_dirs = [p for p in self.workspaces_dir.iterdir() if p.is_dir()]
+        session_dirs = [p for p in self.workspaces_dir.iterdir() if p.is_dir() and is_valid_session_id(p.name)]
         session_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         
         summaries = [self._build_session_summary(p) for p in session_dirs]
