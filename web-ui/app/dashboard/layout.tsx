@@ -29,6 +29,7 @@ import {
   ChevronDown,
   Mail,
   Kanban,
+  Orbit,
   type LucideIcon,
 } from "lucide-react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
@@ -64,6 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/kanban", label: "Kanban Board", icon: Kanban },
       { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },
       { href: "/dashboard/heartbeats", label: "Heartbeats", icon: HeartPulse },
+      { href: "/dashboard/agent-flow", label: "Agent Flow", icon: Orbit },
     ],
   },
   {
@@ -461,7 +463,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </>
           )}
 
-          <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">
+          <div className={`flex-1 overflow-y-auto overflow-x-hidden ${
+            pathname === "/dashboard/agent-flow" ? "p-0" : "p-4 md:p-6"
+          }`}>
             {children}
           </div>
         </main>
