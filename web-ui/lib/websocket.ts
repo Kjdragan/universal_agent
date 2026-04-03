@@ -39,6 +39,8 @@ export class AgentWebSocket {
   private statusDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isManualClose = false;
   private lastPongAt = Date.now();
+  private connectedAt: number | null = null;
+  private readonly STABLE_CONNECTION_MS = 3000;
 
   // Event handlers
   private eventCallbacks: Map<EventType, Set<EventCallback>> = new Map();
@@ -184,7 +186,9 @@ export class AgentWebSocket {
 
       this.ws.onopen = () => {
         console.log("WebSocket connected");
-        this.reconnectAttempts = 0;
+        this.connectedAt = Date.now();
+        // Delay resetting reconnect attempts so rapid flashing correctly triggers exponential backoff
+        // this.reconnectAttempts = 0;
         this.lastPongAt = Date.now();
         this.updateStatus("connected");
         this.startPing();
@@ -215,6 +219,13 @@ export class AgentWebSocket {
           wasClean: event.wasClean,
           reconnect_attempts_total: this.reconnectAttemptsTotal,
         });
+
+        // Treat connection as stable only if it survived past STABLE_CONNECTION_MS.
+        if (this.connectedAt && (Date.now() - this.connectedAt > this.STABLE_CONNECTION_MS)) {
+          this.reconnectAttempts = 0;
+        }
+        this.connectedAt = null;
+
         this.stopPing();
         this.updateStatus("disconnected");
 
