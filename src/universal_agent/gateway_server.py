@@ -18567,6 +18567,7 @@ async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
         "source_kind": "dashboard_quick_add",
         "status": "open",
         "agent_ready": True,
+        "must_complete": True,
         "labels": ["quick-add"],
     }
     with _activity_store_lock:
