@@ -12867,12 +12867,17 @@ class ConnectionManager:
     async def broadcast(self, session_id: str, data: dict, exclude_connection_id: Optional[str] = None):
         """Send a message to all connections associated with a session_id."""
         _record_session_event(session_id, str(data.get("type", "")))
-        if session_id not in self.session_connections:
+        if session_id not in self.session_connections and "global_agent_flow" not in self.session_connections:
             return
 
         payload = json.dumps(data)
         # Snapshot the list to avoid runtime errors if connections drop during iteration
-        targets = list(self.session_connections[session_id])
+        targets = []
+        if session_id in self.session_connections:
+            targets.extend(self.session_connections[session_id])
+        if session_id != "global_agent_flow" and "global_agent_flow" in self.session_connections:
+            targets.extend(self.session_connections["global_agent_flow"])
+            
         stale_connections: list[str] = []
         
         for connection_id in targets:

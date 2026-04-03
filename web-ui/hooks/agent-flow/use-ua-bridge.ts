@@ -52,7 +52,7 @@ export function useUABridge(): BridgeHookResult {
       const wsProtocol = isSecure ? 'wss:' : 'ws:';
       // In standalone dashboard, this targets the nextjs rewrites /ws/:path*
       // which forwards to gateway or local server natively supporting WebSockets.
-      const wsUrl = `${wsProtocol}//${window.location.host}/ws/agent`
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws/agent?session_id=global_agent_flow`
       
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
