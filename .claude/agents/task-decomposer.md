@@ -179,6 +179,7 @@ Notes:
 | Sub-Agent | Use For | Key Tools Used |
 |-----------|---------|----------------|
 | `research-specialist` | Web search → crawl → refine corpus | Composio search + local crawl/refine |
+| `arxiv-specialist` | Academic paper research via arXiv → search, download & analyze | arxiv-mcp-server tools |
 | `trend-specialist` | Reddit/X/Web pulse checks, "what's new" | x/reddit internal tools (+ CSI work-product tools) |
 | `csi-trend-analyst` | CSI report/bundle review and bounded follow-up synthesis | CSI work-product tools + x/reddit validation |
 | `report-writer` | HTML/PDF report generation from corpus | Local compile + PDF tools |

@@ -17,6 +17,12 @@
       "env": {
         "AGENTMAIL_API_KEY": "${AGENTMAIL_API_KEY}"
       }
+    },
+    "arxiv-mcp-server": {
+      "command": "uvx",
+      "args": [
+        "arxiv-mcp-server"
+      ]
     }
   }
 }
