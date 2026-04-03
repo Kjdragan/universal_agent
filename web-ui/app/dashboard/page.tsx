@@ -1910,10 +1910,11 @@ export default function DashboardPage() {
             Open Full View →
           </Link>
         </div>
-        <div className="h-[280px]">
+        <div className="h-[480px]">
           <AgentFlowWidget mode="mini" />
         </div>
       </section>
+      <div className="h-8" /> {/* scroll breathing room */}
     </div >
   );
 }
