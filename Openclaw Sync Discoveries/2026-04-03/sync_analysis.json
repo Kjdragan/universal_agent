@@ -1,0 +1,810 @@
+{
+  "report_date": "2026-04-03",
+  "openclaw_releases_analyzed": ["v2026.4.2", "v2026.4.1"],
+  "total_features_analyzed": 45,
+  "analyst": "VP Analysis Agent (Automated)",
+  "summary": {
+    "high_priority_adoptions": 6,
+    "medium_priority_watches": 12,
+    "investigation_needed": 3,
+    "not_applicable": 24
+  },
+  "features_analyzed": [
+    {
+      "feature_name": "Task Flow Substrate with Durable State Tracking",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Tasks/Task Flow",
+      "openclaw_component": "Tasks/Task Flow core substrate",
+      "openclaw_references": [
+        "src/taskflow/",
+        "openclaw flows command",
+        "Managed vs mirrored sync mode logic"
+      ],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/durable/",
+      "gap_analysis": {
+        "what_we_have": "Basic task tracking in cron_service.py and heartbeat_service.py",
+        "what_this_adds": "Durable flow state with revision tracking, managed child task spawning, cancel intent propagation, and inspection/recovery primitives"
+      },
+      "implementation_notes": [
+        "Create TaskFlowManager in src/universal_agent/durable/task_flow.py",
+        "Implement two sync modes: Managed (persisted in SQLite/Postgres with revision tracking) and Mirrored (ephemeral, mirrors parent state)",
+        "Add sticky cancel intent: cancel_intent flag stops new child spawning but allows active children to complete",
+        "Create inspection API endpoint: GET /api/v1/flows with filtering by status/owner",
+        "Add recovery primitive: POST /api/v1/flows/{flow_id}/recover",
+        "Store flow state in database with schema: id, parent_id, owner_type, owner_id, state (JSONB), revision, sync_mode, cancel_intent, timestamps"
+      ],
+      "effort": "L",
+      "priority": 1,
+      "rationale": "Critical for VP orchestration reliability. Current cron-based orchestration lacks state tracking and recovery."
+    },
+    {
+      "feature_name": "Plugin-Owned Configuration Boundaries",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Breaking",
+      "category": "Plugin SDK",
+      "openclaw_component": "Plugin SDK configuration system",
+      "openclaw_references": [
+        "plugins.entries.xai.config.xSearch.*",
+        "plugins.entries.firecrawl.config.webFetch.*",
+        "openclaw doctor --fix migration logic"
+      ],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/tools/ and .env configuration",
+      "gap_analysis": {
+        "what_we_have": "Flat .env configuration and hardcoded tool paths",
+        "what_this_adds": "Namespaced plugin config with ownership boundaries, automatic migration support"
+      },
+      "implementation_notes": [
+        "Define PluginConfig class in src/universal_agent/tools/plugin_config.py with namespace-based config loading",
+        "Create config migration tool: python -m src.universal_agent.tools.migrate_config",
+        "Update existing tools to use PluginConfig (x_search, web_fetch)",
+        "Add validation in gateway.py startup to warn on legacy config keys"
+      ],
+      "effort": "M",
+      "priority": 2,
+      "rationale": "Foundation for plugin ecosystem. Avoid technical debt by adopting namespacing early."
+    },
+    {
+      "feature_name": "Agent Compaction Model Override",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Agent Runtime",
+      "openclaw_component": "Agent Runtime compaction engine",
+      "openclaw_references": [
+        "Compaction model resolution logic",
+        "Context engine integration",
+        "/compact command handler"
+      ],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/agent_core.py",
+      "gap_analysis": {
+        "what_we_have": "Basic context management, unclear if we have compaction",
+        "what_this_adds": "Configurable model for compaction (cheaper/faster model), opt-in user notification"
+      },
+      "implementation_notes": [
+        "Add config key: AGENT_DEFAULTS_COMPACTION_MODEL=claude-3-haiku",
+        "Add config key: AGENT_DEFAULTS_COMPACTION_NOTIFY_USER=true",
+        "Implement compact_context() method in agent_core.py with model selection",
+        "Wire into context length monitoring"
+      ],
+      "effort": "S",
+      "priority": 3,
+      "rationale": "Cost optimization - use cheaper model for summarization during context compaction."
+    },
+    {
+      "feature_name": "Subagent Gateway Security Scoping",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Agent Runtime",
+      "openclaw_component": "Agent Runtime subagent spawning",
+      "openclaw_references": [
+        "Subagent gateway call authentication",
+        "Scope upgrade pairing logic",
+        "Loopback authentication"
+      ],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/delegation/ and src/universal_agent/vp/",
+      "gap_analysis": {
+        "what_we_have": "VP agent system with delegation",
+        "what_this_adds": "Role-based scoping for subagent operations, preventing privilege escalation"
+      },
+      "implementation_notes": [
+        "Define scopes in src/universal_agent/auth/scopes.py (AGENT, OPERATOR_ADMIN)",
+        "Add scope checks in delegation/delegator.py spawn_subagent()",
+        "Audit VP tools in src/universal_agent/vp/ for admin-only operations"
+      ],
+      "effort": "M",
+      "priority": 2,
+      "rationale": "Security critical - prevent privilege escalation in subagent operations."
+    },
+    {
+      "feature_name": "Cron Tools Allowlist",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "Cron & Scheduling",
+      "openclaw_component": "Cron job execution",
+      "openclaw_references": [
+        "openclaw cron --tools implementation",
+        "Job execution sandbox"
+      ],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/cron_service.py",
+      "gap_analysis": {
+        "what_we_have": "Basic cron execution with all tools available",
+        "what_this_adds": "Restrictive tool allowlist per cron job for security"
+      },
+      "implementation_notes": [
+        "Extend CronJob schema with tools_allowlist: Optional[List[str]]",
+        "Add get_tools_for_execution() method to filter tools based on allowlist",
+        "Update API endpoint: POST /api/v1/cron accepts tools_allowlist field",
+        "Update Web UI cron job editor to support tool selection"
+      ],
+      "effort": "S",
+      "priority": 3,
+      "rationale": "Security best practice - limit tool access for scheduled jobs."
+    },
+    {
+      "feature_name": "Gateway Session Kill Authorization",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Gateway",
+      "openclaw_component": "Gateway HTTP endpoints",
+      "openclaw_references": [
+        "Session kill endpoint",
+        "Authorization gating before session lookup"
+      ],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/gateway.py",
+      "gap_analysis": {
+        "what_we_have": "Session management but unclear auth requirements",
+        "what_this_adds": "Explicit scope check before session existence probe"
+      },
+      "implementation_notes": [
+        "Add @require_scope decorator in gateway.py",
+        "Enforce OPERATOR_ADMIN scope on DELETE /api/v1/sessions/{session_id}",
+        "Prevent unauthenticated callers from probing session existence"
+      ],
+      "effort": "S",
+      "priority": 2,
+      "rationale": "Security critical - prevent unauthorized session probing and termination."
+    },
+    {
+      "feature_name": "Before Agent Reply Hook",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Plugin SDK/hooks",
+      "openclaw_component": "Plugin SDK hooks",
+      "openclaw_references": [
+        "Hook plugin boundary",
+        "Synthetic reply injection"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/hooks.py and hooks_service.py",
+      "gap_analysis": {
+        "what_we_have": "Hook system for tool execution",
+        "what_this_adds": "Pre-reply hook to intercept/synthesize agent responses"
+      },
+      "implementation_notes": [
+        "Add BEFORE_AGENT_REPLY to HookType enum in hooks.py",
+        "Allow hook to return synthetic reply to skip LLM call",
+        "Use cases: caching, rate limiting, quick responses for simple queries"
+      ],
+      "effort": "M",
+      "priority": 4,
+      "rationale": "Performance optimization - enables response caching and synthetic replies."
+    },
+    {
+      "feature_name": "Provider-Owned Replay Hook Surfaces",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Providers/runtime",
+      "openclaw_component": "Provider runtime integration",
+      "openclaw_references": [
+        "Provider replay hooks",
+        "Transcript policy hooks"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/agent_core.py",
+      "gap_analysis": {
+        "what_we_have": "Basic provider integration",
+        "what_this_adds": "Provider-specific hooks for transcript handling and replay customization"
+      },
+      "implementation_notes": [
+        "Define provider hook interface in agent_core.py",
+        "Allow providers to customize transcript compaction policy, replay cleanup logic, reasoning mode dispatch"
+      ],
+      "effort": "M",
+      "priority": 4,
+      "rationale": "Provider flexibility - enables provider-specific optimizations."
+    },
+    {
+      "feature_name": "Matrix Mentions Metadata",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Matrix/plugin",
+      "openclaw_component": "Matrix plugin integration",
+      "openclaw_references": [
+        "Matrix message sends",
+        "Mention metadata emission"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/bot/ (Telegram integration)",
+      "gap_analysis": {
+        "what_we_have": "Telegram mentions but unclear Matrix support",
+        "what_this_adds": "Standardized mention metadata for Matrix clients"
+      },
+      "implementation_notes": [
+        "If adding Matrix support, ensure m.mentions is included in message events",
+        "Apply similar pattern to Telegram mentions"
+      ],
+      "effort": "S",
+      "priority": 5,
+      "rationale": "Channel-specific - only relevant if we add Matrix support."
+    },
+    {
+      "feature_name": "Telegram Error Suppression Policies",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "Messaging Channels",
+      "openclaw_component": "Telegram integration",
+      "openclaw_references": [
+        "errorPolicy configuration",
+        "errorCooldownMs control"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/bot/telegram_bot.py",
+      "gap_analysis": {
+        "what_we_have": "Basic Telegram error handling",
+        "what_this_adds": "Cooldown-based suppression to prevent spam"
+      },
+      "implementation_notes": [
+        "Add ErrorSuppressor class in telegram_bot.py with cooldown tracking",
+        "Make cooldown configurable per account/chat",
+        "Implement should_suppress() method with time-based deduplication"
+      ],
+      "effort": "S",
+      "priority": 4,
+      "rationale": "Reliability improvement - prevents error spam in Telegram channels."
+    },
+    {
+      "feature_name": "Agent Output Sanitization",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Agent Runtime",
+      "openclaw_component": "Agent Runtime output processing",
+      "openclaw_references": [
+        "Output sanitization logic",
+        "Anthropic thinking block handling"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/agent_core.py",
+      "gap_analysis": {
+        "what_we_have": "Basic response handling",
+        "what_this_adds": "Strip internal monologue tags before user delivery"
+      },
+      "implementation_notes": [
+        "Add sanitize_output() function in response processing",
+        "Strip <antml:thinking> blocks with regex",
+        "Apply before returning response to user"
+      ],
+      "effort": "S",
+      "priority": 4,
+      "rationale": "Polish - prevents internal thinking blocks from leaking to users."
+    },
+    {
+      "feature_name": "Exec Approval Auto-Enable for Channels",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Messaging Channels",
+      "openclaw_component": "Exec approvals integration with channels",
+      "openclaw_references": [
+        "Approval channel routing",
+        "Approver inference logic"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/tools/",
+      "gap_analysis": {
+        "what_we_have": "Basic exec approval (if implemented)",
+        "what_this_adds": "Automatic approval channel inference from owner config"
+      },
+      "implementation_notes": [
+        "In exec tool approval flow, check channel config for approver hints",
+        "Auto-route approval requests to DM if single approver inferred",
+        "Keep fanout explicit for multi-approver scenarios"
+      ],
+      "effort": "M",
+      "priority": 4,
+      "rationale": "UX improvement - reduces friction in approval workflows."
+    },
+    {
+      "feature_name": "ACP/Gateway Reconnect Resilience",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Gateway",
+      "openclaw_component": "Gateway ACP handling",
+      "openclaw_references": [
+        "Websocket reconnection logic",
+        "Prompt lifecycle management"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/gateway.py",
+      "gap_analysis": {
+        "what_we_have": "Basic websocket handling",
+        "what_this_adds": "Graceful handling of transient disconnections"
+      },
+      "implementation_notes": [
+        "Implement reconnect grace period for ACP prompts",
+        "Reject stale prompts after grace expiry",
+        "Add bounded failure handling"
+      ],
+      "effort": "M",
+      "priority": 4,
+      "rationale": "Reliability - improves resilience under network issues."
+    },
+    {
+      "feature_name": "Exec Runtime Host Policy Routing",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Exec & Sandboxing",
+      "openclaw_component": "Exec & Sandboxing",
+      "openclaw_references": [
+        "Host routing logic",
+        "Override rejection"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/tools/exec.py",
+      "gap_analysis": {
+        "what_we_have": "Unclear exec host routing",
+        "what_this_adds": "Prevent bypass of configured sandbox/host target"
+      },
+      "implementation_notes": [
+        "If we implement exec tool, ensure host routing is configuration-driven",
+        "Reject runtime overrides that bypass security policy"
+      ],
+      "effort": "M",
+      "priority": 3,
+      "rationale": "Security - prevents configuration bypass in exec tool."
+    },
+    {
+      "feature_name": "Cron Exec Timeout Surfacing",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Cron & Scheduling",
+      "openclaw_component": "Cron execution",
+      "openclaw_references": [
+        "Timeout error handling",
+        "Verbose mode behavior"
+      ],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/cron_service.py",
+      "gap_analysis": {
+        "what_we_have": "Basic cron execution",
+        "what_this_adds": "Surface timeout failures even in non-verbose mode"
+      },
+      "implementation_notes": [
+        "Ensure timeout failures are logged/surfaced regardless of verbose setting",
+        "Include in cron job status reporting"
+      ],
+      "effort": "S",
+      "priority": 4,
+      "rationale": "Reliability - prevents silent cron failures."
+    },
+    {
+      "feature_name": "Gateway Webchat History Truncation",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "Gateway",
+      "openclaw_component": "Gateway webchat",
+      "openclaw_references": [
+        "gateway.webchat.chatHistoryMaxChars",
+        "Per-request maxChars"
+      ],
+      "relevance": "LOW",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/gateway.py",
+      "gap_analysis": {
+        "what_we_have": "Unclear if we have webchat",
+        "what_this_adds": "Configurable chat history truncation"
+      },
+      "implementation_notes": [
+        "Assess need for webchat feature",
+        "Implement history truncation if webchat is prioritized"
+      ],
+      "effort": "S",
+      "priority": 5,
+      "rationale": "Only relevant if we implement webchat interface."
+    },
+    {
+      "feature_name": "Exec Defaults YOLO Mode",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Native Clients",
+      "openclaw_component": "Exec defaults",
+      "openclaw_references": [
+        "Gateway/node exec defaults",
+        "security=full with ask=off"
+      ],
+      "relevance": "LOW",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/tools/exec.py",
+      "gap_analysis": {
+        "what_we_have": "Unclear exec defaults",
+        "what_this_adds": "Permissive defaults for trusted automation"
+      },
+      "implementation_notes": [
+        "Evaluate security tradeoffs",
+        "Consider for trusted automation contexts"
+      ],
+      "effort": "S",
+      "priority": 5,
+      "rationale": "Evaluate if our use case benefits from permissive defaults vs explicit approval flows."
+    },
+    {
+      "feature_name": "SearXNG Provider Plugin",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "General",
+      "openclaw_component": "Web search",
+      "openclaw_references": [
+        "SearXNG provider plugin",
+        "Configurable host support"
+      ],
+      "relevance": "LOW",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/tools/",
+      "gap_analysis": {
+        "what_we_have": "Existing web search tools",
+        "what_this_adds": "Alternative search backend with self-hosting option"
+      },
+      "implementation_notes": [
+        "Evaluate SearXNG as search backend alternative",
+        "Test performance and reliability"
+      ],
+      "effort": "M",
+      "priority": 5,
+      "rationale": "Consider as alternative if current search provider has issues."
+    },
+    {
+      "feature_name": "Android Assistant Integration",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Changes",
+      "category": "Android Client",
+      "openclaw_component": "Android native client",
+      "openclaw_references": [
+        "Android/assistant entrypoints",
+        "Google Assistant App Actions"
+      ],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "gap_analysis": {
+        "what_we_have": "No Android native client",
+        "what_this_adds": "Android Assistant trigger integration"
+      },
+      "implementation_notes": [],
+      "effort": "N/A",
+      "priority": "N/A",
+      "rationale": "Platform-specific to Android, not applicable to our Python backend."
+    },
+    {
+      "feature_name": "Amazon Bedrock Guardrails",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "General",
+      "openclaw_component": "Amazon Bedrock integration",
+      "openclaw_references": [
+        "Bedrock Guardrails support",
+        "Bundled provider"
+      ],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "gap_analysis": {
+        "what_we_have": "No Bedrock integration",
+        "what_this_adds": "Guardrails support for Bedrock provider"
+      },
+      "implementation_notes": [],
+      "effort": "N/A",
+      "priority": "N/A",
+      "rationale": "Only relevant if we use Amazon Bedrock."
+    },
+    {
+      "feature_name": "WhatsApp Reaction Level Guidance",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "General",
+      "openclaw_component": "WhatsApp integration",
+      "openclaw_references": [
+        "reactionLevel guidance",
+        "Agent reactions"
+      ],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "gap_analysis": {
+        "what_we_have": "No WhatsApp integration",
+        "what_this_adds": "Reaction level guidance for WhatsApp"
+      },
+      "implementation_notes": [],
+      "effort": "N/A",
+      "priority": "N/A",
+      "rationale": "Platform-specific, we use Telegram."
+    },
+    {
+      "feature_name": "macOS Voice Wake",
+      "openclaw_version": "v2026.4.1",
+      "change_type": "Changes",
+      "category": "macOS Client",
+      "openclaw_component": "macOS native client",
+      "openclaw_references": [
+        "Voice Wake option",
+        "Talk Mode trigger"
+      ],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "gap_analysis": {
+        "what_we_have": "No macOS native client",
+        "what_this_adds": "Voice wake trigger for Talk Mode"
+      },
+      "implementation_notes": [],
+      "effort": "N/A",
+      "priority": "N/A",
+      "rationale": "Platform-specific to macOS."
+    },
+    {
+      "feature_name": "Kimi Coding Tool Normalization",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Tools System",
+      "openclaw_component": "Kimi Coding integration",
+      "openclaw_references": [
+        "Anthropic tool payload normalization",
+        "OpenAI-compatible function shape"
+      ],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "gap_analysis": {
+        "what_we_have": "No Kimi Coding integration",
+        "what_this_adds": "Tool payload normalization for Kimi Coding"
+      },
+      "implementation_notes": [],
+      "effort": "N/A",
+      "priority": "N/A",
+      "rationale": "Specific to Kimi Coding provider, unlikely we'll use it."
+    },
+    {
+      "feature_name": "Browser Host Inspection Isolation",
+      "openclaw_version": "v2026.4.2",
+      "change_type": "Fixes",
+      "category": "Browser Integration",
+      "openclaw_component": "Browser plugin",
+      "openclaw_references": [
+        "Chrome inspection helpers",
+        "Browser runtime isolation"
+      ],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "gap_analysis": {
+        "what_we_have": "No browser plugin",
+        "what_this_adds": "Isolation of inspection helpers from runtime"
+      },
+      "implementation_notes": [],
+      "effort": "N/A",
+      "priority": "N/A",
+      "rationale": "Optimization specific to OpenClaw's browser plugin architecture."
+    }
+  ],
+  "implementation_roadmap": {
+    "phase_1": {
+      "title": "Security & Foundation",
+      "duration": "Week 1-2",
+      "items": [
+        {
+          "feature": "Subagent Gateway Security Scoping",
+          "priority": 2,
+          "tasks": [
+            "Add scope definitions to src/universal_agent/auth/scopes.py",
+            "Implement scope checks in delegation layer",
+            "Audit VP tools for admin operations"
+          ]
+        },
+        {
+          "feature": "Gateway Session Kill Authorization",
+          "priority": 2,
+          "tasks": [
+            "Add @require_scope decorator to gateway.py",
+            "Enforce OPERATOR_ADMIN scope on session kill endpoint",
+            "Prevent unauthenticated session probing"
+          ]
+        },
+        {
+          "feature": "Cron Tools Allowlist",
+          "priority": 3,
+          "tasks": [
+            "Extend CronJob schema with tools_allowlist",
+            "Filter tools during cron execution",
+            "Update Web UI for tool selection"
+          ]
+        }
+      ]
+    },
+    "phase_2": {
+      "title": "Orchestration & Reliability",
+      "duration": "Week 3-4",
+      "items": [
+        {
+          "feature": "Task Flow Substrate",
+          "priority": 1,
+          "tasks": [
+            "Create TaskFlowManager in src/universal_agent/durable/",
+            "Implement managed/mirrored sync modes",
+            "Add inspection and recovery API endpoints",
+            "Create database schema for flow state"
+          ]
+        },
+        {
+          "feature": "Plugin-Owned Configuration",
+          "priority": 2,
+          "tasks": [
+            "Implement PluginConfig class in src/universal_agent/tools/",
+            "Create migration tool for legacy config",
+            "Update existing tools to use namespaced config"
+          ]
+        },
+        {
+          "feature": "Agent Compaction Model Override",
+          "priority": 3,
+          "tasks": [
+            "Add compaction model config keys",
+            "Implement context compaction with model selection",
+            "Add opt-in user notification"
+          ]
+        }
+      ]
+    },
+    "phase_3": {
+      "title": "Performance & Polish",
+      "duration": "Week 5-6",
+      "items": [
+        {
+          "feature": "Before Agent Reply Hook",
+          "priority": 4,
+          "tasks": [
+            "Extend hook system with BEFORE_AGENT_REPLY",
+            "Enable synthetic reply injection",
+            "Implement caching use case"
+          ]
+        },
+        {
+          "feature": "Telegram Error Suppression",
+          "priority": 4,
+          "tasks": [
+            "Add ErrorSuppressor to telegram_bot.py",
+            "Make cooldown configurable",
+            "Implement per-chat suppression"
+          ]
+        },
+        {
+          "feature": "Agent Output Sanitization",
+          "priority": 4,
+          "tasks": [
+            "Add sanitize_output() to response processing",
+            "Strip internal thinking blocks"
+          ]
+        }
+      ]
+    },
+    "phase_4": {
+      "title": "Investigation Items",
+      "duration": "Ongoing",
+      "items": [
+        {
+          "feature": "Exec Defaults YOLO Mode",
+          "tasks": [
+            "Evaluate security tradeoffs",
+            "Consider for trusted automation contexts"
+          ]
+        },
+        {
+          "feature": "Gateway Webchat History Truncation",
+          "tasks": [
+            "Assess need for webchat feature",
+            "Implement if webchat is prioritized"
+          ]
+        },
+        {
+          "feature": "SearXNG Provider",
+          "tasks": [
+            "Evaluate as search backend alternative",
+            "Test performance and reliability"
+          ]
+        }
+      ]
+    }
+  },
+  "architectural_insights": [
+    {
+      "theme": "Plugin Architecture Evolution",
+      "observation": "OpenClaw is moving toward strict plugin ownership boundaries with plugins owning their configuration namespaces and legacy paths being migrated automatically.",
+      "implication": "We should adopt similar namespacing early to avoid technical debt. The PluginConfig pattern is lightweight and extensible."
+    },
+    {
+      "theme": "Task Flow Orchestration Maturity",
+      "observation": "The Task Flow substrate introduces durable orchestration with managed state, revision tracking for recovery, sticky cancel intent, and inspection primitives.",
+      "implication": "Critical for VP orchestration reliability. Current cron-based orchestration lacks state tracking and recovery."
+    },
+    {
+      "theme": "Security Scoping Consistency",
+      "observation": "OpenClaw is enforcing consistent scope checks across all runtime boundaries including subagent operations, session management, and exec routing.",
+      "implication": "We should audit all delegation and session management endpoints for scope enforcement gaps."
+    },
+    {
+      "theme": "Channel Resilience Patterns",
+      "observation": "Messaging channels are getting sophisticated error handling with cooldown-based suppression, timeout handling for media, and callback length workarounds.",
+      "implication": "Apply similar patterns to our Telegram integration to improve reliability under error conditions."
+    }
+  ],
+  "openclaw_files_to_study": [
+    {
+      "category": "Task Flow Management",
+      "files": [
+        "src/taskflow/ - Core flow management",
+        "src/commands/flows.ts - Inspection/recovery commands",
+        "src/taskflow/state.ts - State tracking logic"
+      ]
+    },
+    {
+      "category": "Plugin Configuration",
+      "files": [
+        "src/plugins/config.ts - Plugin config namespace",
+        "src/commands/doctor.ts - Migration logic",
+        "src/plugins/registry.ts - Plugin boundary enforcement"
+      ]
+    },
+    {
+      "category": "Agent Compaction",
+      "files": [
+        "src/agent/context.ts - Context management",
+        "src/agent/compaction.ts - Compaction logic",
+        "src/commands/compact.ts - Command handler"
+      ]
+    },
+    {
+      "category": "Scope Enforcement",
+      "files": [
+        "src/auth/scopes.ts - Scope definitions",
+        "src/delegation/gateway.ts - Subagent auth",
+        "src/gateway/sessions.ts - Session auth"
+      ]
+    },
+    {
+      "category": "Exec Approvals",
+      "files": [
+        "src/tools/exec/approvals.ts - Approval flow",
+        "src/tools/exec/policy.ts - Policy enforcement",
+        "src/cron/tools.ts - Cron tools allowlist"
+      ]
+    }
+  ],
+  "next_sync_review": "2026-04-10"
+}
