@@ -32,7 +32,8 @@ Required: `to`, `subject`, `body`. Optional: `cc`, `bcc`, `dry_run`.
 2. **NEVER use `mcp__AgentMail__send_message`** — that's the raw AgentMail MCP endpoint. It bypasses delivery tracking and dedup guards, causing phantom sends and orphaned tasks.
 3. **NEVER send receipt acknowledgements** like "Got it, working on it" — the system blocks these. Only send the final, substantive response.
 4. **NEVER construct AgentMail SDK code** (`from agentmail import AgentMail`, `client.inboxes.messages.send(...)`) — that's for external app development, not for Simone.
-5. **NEVER install `agentmail-cli` via npm** — the CLI is not needed; the native MCP tool is the correct path.
+5. **NEVER try to `curl` to `/api/v1/ops/agentmail/send` or similar endpoints.** This is a frequent hallucination and will fail.
+6. **NEVER install `agentmail-cli` via npm** — the CLI is not needed; the native MCP tool is the correct path.
 
 ## Error Handling
 

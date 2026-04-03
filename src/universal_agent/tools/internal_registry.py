@@ -75,6 +75,9 @@ from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
 # AgentMail Tool
 from universal_agent.tools.agentmail_bridge import mcp__internal__send_agentmail
 
+# Artifact Publisher Tool
+from universal_agent.tools.artifact_publisher import mcp__internal__publish_artifact
+
 
 def get_core_internal_tools() -> List[Callable]:
     """
@@ -118,6 +121,7 @@ def get_core_internal_tools() -> List[Callable]:
         vp_wait_mission_wrapper,
         vp_cancel_mission_wrapper,
         vp_read_result_artifacts_wrapper,
+        mcp__internal__publish_artifact,
     ]
 
 def get_memory_tools() -> List[Callable]:
