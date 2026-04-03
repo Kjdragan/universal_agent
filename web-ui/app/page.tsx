@@ -25,6 +25,7 @@ import remarkGfm from "remark-gfm";
 import { LinkifiedText, PathLink, linkify } from "@/components/LinkifiedText";
 import { formatTimeTz } from "@/lib/timezone";
 import { SecurityDashboardTab } from "@/components/dashboard/SecurityDashboardTab";
+import { AgentFlowWidget } from "@/components/agent-flow/AgentFlowWidget";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -2393,6 +2394,7 @@ export default function HomePage() {
   const [activityCollapsed, setActivityCollapsed] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [filesCollapsed, setFilesCollapsed] = useState(false);
+  const [activityPanelView, setActivityPanelView] = useState<'log' | 'flow'>('log');
 
   // Responsive State
   const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
@@ -2747,7 +2749,48 @@ export default function HomePage() {
               </button>
             ) : (
               <div className="h-full flex flex-col overflow-hidden">
-                <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
+                {/* Tab bar: Activity Log | Agent Flow */}
+                <div className="h-10 border-b border-border flex items-center justify-between px-1 bg-background/60 shrink-0">
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setActivityPanelView('log')}
+                      className={`px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest rounded transition-colors ${
+                        activityPanelView === 'log'
+                          ? 'text-primary bg-primary/10'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-card/30'
+                      }`}
+                    >
+                      ⚡ Activity
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActivityPanelView('flow')}
+                      className={`px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest rounded transition-colors ${
+                        activityPanelView === 'flow'
+                          ? 'text-cyan-400 bg-cyan-400/10'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-card/30'
+                      }`}
+                    >
+                      🔮 Flow
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActivityCollapsed(true)}
+                    className="text-muted-foreground hover:text-foreground text-xs px-1.5 py-0.5 rounded hover:bg-card/30 transition-colors"
+                    title="Collapse Panel"
+                  >
+                    ◀
+                  </button>
+                </div>
+                {activityPanelView === 'log' ? (
+                  <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
+                ) : (
+                  <div className="flex-1 min-h-0">
+                    <AgentFlowWidget mode="compact" className="h-full w-full" />
+                  </div>
+                )}
               </div>
             )}
           </div>

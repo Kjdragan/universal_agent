@@ -7,6 +7,7 @@ import { openOrFocusChatWindow } from "@/lib/chatWindow";
 import { fetchSessionDirectory, deleteSessionDirectoryEntry, SessionDirectoryItem } from "@/lib/sessionDirectory";
 import { LinkifiedText } from "@/components/LinkifiedText";
 import { formatDateTimeTz } from "@/lib/timezone";
+import { AgentFlowWidget } from "@/components/agent-flow/AgentFlowWidget";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -1892,6 +1893,25 @@ export default function DashboardPage() {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      {/* ── Agent Flow Live Preview ─────────────────────── */}
+      <section className="mt-6 rounded-xl border border-border/60 bg-background/50 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border/40">
+          <div className="flex items-center gap-2">
+            <span className="text-sm">🔮</span>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Agent Activity Flow</p>
+          </div>
+          <Link
+            href="/dashboard/agent-flow"
+            className="text-[10px] text-primary/70 hover:text-primary transition-colors"
+          >
+            Open Full View →
+          </Link>
+        </div>
+        <div className="h-[280px]">
+          <AgentFlowWidget mode="mini" />
         </div>
       </section>
     </div >
