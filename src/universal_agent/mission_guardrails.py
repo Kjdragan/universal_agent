@@ -268,6 +268,12 @@ def _is_gmail_send_tool(tool_name_lower: str) -> bool:
 
 
 def _extract_nested_tool_names(tool_input: Any) -> list[str]:
+    if isinstance(tool_input, str):
+        try:
+            tool_input = json.loads(tool_input)
+        except Exception:
+            pass
+
     if not isinstance(tool_input, dict):
         return []
     nested = tool_input.get("tools")
@@ -286,6 +292,13 @@ def _extract_nested_tool_names(tool_input: Any) -> list[str]:
 def _extract_task_hub_actions(tool_name_lower: str, tool_input: Any) -> list[str]:
     if "task_hub_task_action" not in tool_name_lower:
         return []
+    
+    if isinstance(tool_input, str):
+        try:
+            tool_input = json.loads(tool_input)
+        except Exception:
+            pass
+
     if not isinstance(tool_input, dict):
         return []
     action = str(tool_input.get("action") or "").strip().lower()

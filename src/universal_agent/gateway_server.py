@@ -6305,6 +6305,20 @@ def _enforce_todo_execution_lifecycle(
             observed["invalid_task_ids"] = [str(snapshot.get("task_id") or "") for snapshot in unresolved]
             goal_satisfaction["observed"] = observed
 
+        if not unresolved:
+            original_missing = goal_satisfaction.get("missing") or []
+            filtered_missing = [
+                m for m in original_missing
+                if str(m.get("requirement") or "") != "lifecycle_mutation"
+            ]
+            if len(filtered_missing) < len(original_missing):
+                goal_satisfaction = dict(goal_satisfaction)
+                goal_satisfaction["missing"] = filtered_missing
+                if not filtered_missing:
+                    goal_satisfaction["passed"] = True
+                    goal_satisfaction["terminal"] = True
+                    goal_satisfaction["stage_status"] = "completed"
+
     return goal_satisfaction
 
 
