@@ -17,6 +17,7 @@
 | **OK Token** | A special string (e.g., `HEARTBEAT_OK`) used by the agent to indicate it has completed its background work. |
 | **Run** | The durable logical unit of work. A run may have one or more attempts and one durable run workspace. |
 | **Run Workspace** | The durable filesystem evidence bundle for a run. It stores checkpoints, transcripts, traces, artifacts, and attempt-local diagnostics. |
+| **Skill** | A reusable capability pack that extends agent abilities. Skills are defined in `.agents/skills/` (portable skills) or `.claude/skills/` (Claude Code-specific skills). Each skill contains a `SKILL.md` file with YAML frontmatter describing when and how to use it. Examples: `clean-code`, `agentmail`, `gmail`, `vp-orchestration`. |
 | **Sub-agent** | A specialized agent instance created by the Primary Agent to handle a specific task (e.g., a "Research Specialist"). |
 | **URW (Universal Reasoning Workflow)** | The orchestrator for long-running, multi-phase goals that uses planning and evaluation. |
 | **Vector Memory** | A tiered storage system using embeddings to find semantically relevant historical context. |
