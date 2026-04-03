@@ -1910,7 +1910,7 @@ export default function DashboardPage() {
             Open Full View →
           </Link>
         </div>
-        <div className="h-[480px]">
+        <div className="h-[800px]">
           <AgentFlowWidget mode="mini" />
         </div>
       </section>
