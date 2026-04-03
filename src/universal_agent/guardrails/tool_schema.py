@@ -659,7 +659,7 @@ def _normalize_tool_input(tool_name: str, tool_input: dict) -> Optional[dict]:
         # Strip run_in_background for sequential-pipeline subagents.
         # Research and report tasks are prerequisites for downstream steps;
         # running them async wastes turns polling for completion.
-        _FOREGROUND_ONLY_SUBAGENTS = {"research-specialist", "report-writer"}
+        _FOREGROUND_ONLY_SUBAGENTS = {"research-specialist", "arxiv-specialist", "report-writer"}
         if subagent_type in _FOREGROUND_ONLY_SUBAGENTS and tool_input.get("run_in_background"):
             updated = dict(tool_input)
             updated.pop("run_in_background", None)
@@ -940,7 +940,7 @@ async def pre_tool_use_schema_guardrail(
                         "⚠️ `run_research_phase` was called without collected search inputs.\n\n"
                         f"Resolved workspace: {workspace or '<unset>'}\n\n"
                         "Happy path:\n"
-                        "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
+                        "1) Delegate via `Task(subagent_type='research-specialist', ...)` or `Task(subagent_type='arxiv-specialist', ...)` for web/academic research, OR\n"
                         "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
                         "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
                         "Then continue with downstream analysis/delivery."

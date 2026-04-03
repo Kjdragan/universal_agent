@@ -1308,7 +1308,7 @@ class AgentHookSet:
                 return {}
 
             if normalized_tool_name in ("task", "agent"):
-                if delegated_subagent == "research-specialist":
+                if delegated_subagent in ("research-specialist", "arxiv-specialist"):
                     self._research_delegate_seen_this_turn = True
                 else:
                     ordering_hint = (
@@ -1326,6 +1326,7 @@ class AgentHookSet:
                             "Consult your Capability Routing Doctrine. You must decompose this research request "
                             "and delegate to the correct specialist.\n\n"
                             "- For general web scraping/news/reports: use `Task(subagent_type='research-specialist', ...)`\n"
+                            "- For academic papers/research from arXiv: use `Task(subagent_type='arxiv-specialist', ...)`\n"
                             "- For podcasts, audio synthesis, or document-based chat: use `Task(subagent_type='notebooklm-operator', ...)`\n"
                             "- For YouTube video transcripts: use `Task(subagent_type='youtube-expert', ...)`\n\n"
                             "Do not formulate unrecognized subagent names."
@@ -1336,7 +1337,7 @@ class AgentHookSet:
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
                             "permissionDecisionReason": (
-                                "Research turns must delegate to a recognized research specialist (research-specialist, notebooklm-operator, etc.)."
+                                "Research turns must delegate to a recognized research specialist (research-specialist, arxiv-specialist, notebooklm-operator, etc.)."
                             ),
                         },
                     }
@@ -1354,8 +1355,8 @@ class AgentHookSet:
                     "systemMessage": (
                         "⚠️ Report-style research workflow detected.\n\n"
                         "First tool call in this turn must be "
-                        "`Task(subagent_type='research-specialist', ...)` or "
-                        "`Agent(subagent_type='research-specialist', ...)`.\n"
+                        "`Task(subagent_type='research-specialist', ...)` / `Task(subagent_type='arxiv-specialist', ...)` or "
+                        "`Agent(subagent_type='research-specialist', ...)` / `Agent(subagent_type='arxiv-specialist', ...)`.\n"
                         "Direct search/tool execution is blocked until that delegation occurs."
                         + ordering_hint
                     ),
@@ -1364,7 +1365,7 @@ class AgentHookSet:
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
                         "permissionDecisionReason": (
-                            "Report-style research turns must delegate to research-specialist first."
+                            "Report-style research turns must delegate to research-specialist or arxiv-specialist first."
                         ),
                     },
                 }
