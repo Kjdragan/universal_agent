@@ -1284,15 +1284,29 @@ class ConnectionManager:
                 raise
 
     async def broadcast(self, event: WebSocketEvent):
-        stale_ids: list[str] = []
-        for connection_id, connection in list(self.active_connections.items()):
+        if not self.active_connections:
+            return
+            
+        event_json = event.to_json()
+        
+        async def send_to_client(connection_id: str, connection: WebSocket):
             try:
                 await asyncio.wait_for(
-                    connection.send_text(event.to_json()),
+                    connection.send_text(event_json),
                     timeout=self._send_timeout_seconds,
                 )
             except Exception:
-                stale_ids.append(connection_id)
+                return connection_id
+            return None
+
+        tasks = [
+            send_to_client(cid, conn) 
+            for cid, conn in self.active_connections.items()
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        stale_ids = [res for res in results if isinstance(res, str)]
         for connection_id in stale_ids:
             self.disconnect(connection_id)
 
@@ -1969,14 +1983,15 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
     bridge = get_agent_bridge()
     in_flight = False
     last_query_text: Optional[str] = None
-    last_query_ts: Optional[float] = None
+    last_query_ts = 0.0
+    active_stream_task: Optional[asyncio.Task] = None
     gateway_forward_task: Optional[asyncio.Task] = None
     query_stream_event_types = {
-        "text",
-        "tool_call",
-        "tool_result",
-        "thinking",
         "status",
+        "system",
+        "agent_response",
+        "plan_update",
+        "iteration_start",
         "iteration_end",
         "query_complete",
         "cancelled",
@@ -2087,14 +2102,18 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                             try:
                                 async for agent_event in bridge.execute_query(query):
                                     await manager.send_event(connection_id, agent_event)
+                            except asyncio.CancelledError:
+                                logger.info(f"Query stream cancelled for connection {connection_id}")
+                                raise
                             except Exception as e:
                                 logger.error(f"Error streaming query: {e}")
                                 await manager.send_event(connection_id, create_error_event(str(e)))
                             finally:
-                                nonlocal in_flight
+                                nonlocal in_flight, active_stream_task
                                 in_flight = False
+                                active_stream_task = None
                         
-                        asyncio.create_task(stream_query())
+                        active_stream_task = asyncio.create_task(stream_query())
 
                 elif client_event.type == WSEventType.INPUT_RESPONSE:
                     # Handle interactive input response from Web UI
@@ -2148,6 +2167,8 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
 
     except WebSocketDisconnect as exc:
         manager.disconnect(connection_id)
+        if active_stream_task and not active_stream_task.done():
+            active_stream_task.cancel()
         logger.info(
             "WebSocket disconnected normally: %s code=%s reason=%s",
             connection_id,
@@ -2157,6 +2178,8 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
 
     except Exception as e:
         manager.disconnect(connection_id)
+        if active_stream_task and not active_stream_task.done():
+            active_stream_task.cancel()
         logger.error(f"WebSocket error: {e}")
     finally:
         if gateway_forward_task:

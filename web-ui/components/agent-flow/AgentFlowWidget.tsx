@@ -16,7 +16,7 @@
 import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useAgentSimulation } from "@/hooks/agent-flow/use-agent-simulation"
-import { useVSCodeBridge } from "@/hooks/agent-flow/use-mock-bridge"
+import { useUABridge } from "@/hooks/agent-flow/use-ua-bridge"
 import { useSelectionState } from "@/hooks/agent-flow/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/agent-flow/use-keyboard-shortcuts"
 import { AgentCanvas } from "./canvas"
@@ -54,7 +54,7 @@ export function AgentFlowWidget({
   onExpand,
 }: AgentFlowWidgetProps) {
   const router = useRouter()
-  const bridge = useVSCodeBridge()
+  const bridge = useUABridge()
 
   const {
     frameRef,
