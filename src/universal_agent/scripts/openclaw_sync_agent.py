@@ -255,6 +255,16 @@ Create the output directory if it doesn't exist: `mkdir -p "{discoveries_path}"`
 IMPORTANT: Your report should be detailed enough that a coding agent could take any
 ADOPT recommendation and understand WHAT to build, WHERE to build it, and HOW to
 approach the implementation without needing to re-analyze the OpenClaw source.
+
+## Version Control
+
+You are operating inside the Universal Agent Git repository. After saving the files, you MUST ensure they are tracked. Run the following commands to commit and push your work:
+
+1. `git add "Openclaw Sync Discoveries/"`
+2. `git commit -m "docs(openclaw-sync): openclaw sync analysis for {date} [vp-agent]"`
+3. `git push origin HEAD`
+
+**(Since you are an automated process, you may need to configure `git config user.name "VP Analysis Agent"` and `git config user.email "vp-agent@clearspringcg.com"` if it complains about identity.)**
 """
 
     return objective
