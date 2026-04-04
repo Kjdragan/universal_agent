@@ -123,3 +123,10 @@ export interface UseAgentSimulationOptions {
   /** Ref updated synchronously when session changes (avoids stale closure in rAF) */
   sessionFilterRef?: React.RefObject<string | null>
 }
+
+export interface LoadedPlaybackOptions {
+  isPlaying?: boolean
+  currentTime?: number
+  eventIndex?: number
+  maxTimeReached?: number
+}

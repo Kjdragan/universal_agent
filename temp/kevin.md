@@ -55,3 +55,13 @@ Okay, everything is now committed all the way through to production, so you shou
 
 Okay, I want you to now move on to phase two as you describe it here. """Phase 2 (live data) is the next session — that's where we swap the mock bridge for a real use-ua-bridge.ts WebSocket adapter that streams Simone chat, VP missions, heartbeats, and email triage into the visualization. That requires gateway-side event emission work too."""
 Make sure that you build out an implementation plan, a brand new separate one, with significant details even at the code level, so then you will have a much better plan to follow in building out phase two with more specificity so that you can have more details worked out when you move forward. to actually implement the code based on your investigation of our code base in advance.
+
+Services for agens dirtectory ()angent native/first)
+
+google notebooklm knopwledge/process base plus gems = agentic analysis system for any process.
+
+omc  install
+
+start using gemini deep research in notebooklm daily: automate?
+
+build a nemoclaw as an extra agent to use in our system if infrence is free

@@ -1,6 +1,7 @@
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUABridge } from './use-ua-bridge'
+import { useAgentFlowSpotlightStore } from '@/lib/agent-flow/spotlight-store'
 
 const fetchSessionDirectoryMock = vi.fn()
 
@@ -24,6 +25,27 @@ describe('useUABridge', () => {
   beforeEach(() => {
     sockets = []
     fetchSessionDirectoryMock.mockReset()
+    localStorage.clear()
+    useAgentFlowSpotlightStore.setState({
+      mode: 'recent',
+      selectedSessionId: null,
+      selectionSource: 'auto',
+      archivesBySessionId: {},
+      recentSessionIds: [],
+      greatestHitSessionIds: [],
+      currentReplayLoopIndex: 0,
+      currentReplayGeneration: 0,
+      currentSpotlightTitle: '',
+      currentSpotlightIsLive: false,
+      connectionStatus: 'disconnected',
+    })
+
+    class MockBroadcastChannel {
+      constructor(_name: string) {}
+      addEventListener() {}
+      postMessage() {}
+      close() {}
+    }
 
     class MockWebSocket {
       url: string
@@ -44,6 +66,7 @@ describe('useUABridge', () => {
       }
     }
 
+    global.BroadcastChannel = MockBroadcastChannel as unknown as typeof BroadcastChannel
     global.WebSocket = MockWebSocket as unknown as typeof WebSocket
 
     Object.defineProperty(window, 'location', {
@@ -56,66 +79,116 @@ describe('useUABridge', () => {
     vi.restoreAllMocks()
   })
 
-  it('seeds real sessions and ignores global_agent_flow as a selectable session', async () => {
-    fetchSessionDirectoryMock.mockResolvedValue([
-      {
-        session_id: 'session_seeded',
-        status: 'running',
-        workspace_dir: '/tmp/session_seeded',
-        last_activity: '2026-04-04T12:00:00Z',
-      },
-    ])
-
-    const { result } = renderHook(() => useUABridge())
-
-    await waitFor(() => {
-      expect(result.current.selectedSessionId).toBe('session_seeded')
-    })
-
-    expect(sockets).toHaveLength(1)
-    expect(sockets[0].url).toContain('/ws/agent?session_id=global_agent_flow')
-    expect(result.current.sessions.map((session) => session.id)).toEqual(['session_seeded'])
-
-    act(() => {
-      sockets[0].onmessage?.({
-        data: JSON.stringify({
-          type: 'connected',
-          data: {
-            session: {
-              session_id: 'global_agent_flow',
-            },
-          },
-        }),
-      } as MessageEvent)
-    })
-
-    expect(result.current.sessions.map((session) => session.id)).toEqual(['session_seeded'])
-  })
-
-  it('buffers per-session events, tracks background activity, and replays on session switch', async () => {
+  it('auto-selects the newest active recent session and builds replay playlists', async () => {
     fetchSessionDirectoryMock.mockResolvedValue([
       {
         session_id: 'session_a',
         status: 'running',
+        source: 'chat',
+        description: 'Chat session',
         workspace_dir: '/tmp/session_a',
         last_activity: '2026-04-04T12:00:00Z',
       },
       {
         session_id: 'session_b',
         status: 'running',
+        source: 'chat',
+        description: 'Second chat session',
         workspace_dir: '/tmp/session_b',
-        last_activity: '2026-04-04T11:59:00Z',
+        last_activity: '2026-04-04T12:01:00Z',
       },
     ])
 
     const { result } = renderHook(() => useUABridge())
 
+    act(() => {
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'text',
+          data: {
+            session_id: 'session_a',
+            author: 'assistant',
+            text: 'alpha',
+          },
+        }),
+      } as MessageEvent)
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'text',
+          data: {
+            session_id: 'session_b',
+            author: 'assistant',
+            text: 'beta',
+          },
+        }),
+      } as MessageEvent)
+    })
+
     await waitFor(() => {
-      expect(result.current.selectedSessionId).toBe('session_a')
+      expect(result.current.selectedSessionId).toBe('session_b')
+    })
+
+    expect(result.current.recentSessionIds).toEqual(['session_b', 'session_a'])
+    expect(result.current.selectedPlaybackMode).toBe('live')
+  })
+
+  it('keeps manual selection pinned and switches completed sessions into replay mode', async () => {
+    fetchSessionDirectoryMock.mockResolvedValue([
+      {
+        session_id: 'session_alpha',
+        status: 'running',
+        source: 'chat',
+        description: 'Alpha session',
+        workspace_dir: '/tmp/session_alpha',
+        last_activity: '2026-04-04T12:00:00Z',
+      },
+      {
+        session_id: 'session_beta',
+        status: 'running',
+        source: 'chat',
+        description: 'Beta session',
+        workspace_dir: '/tmp/session_beta',
+        last_activity: '2026-04-04T12:01:00Z',
+      },
+    ])
+
+    const { result } = renderHook(() => useUABridge())
+
+    act(() => {
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: {
+            session_id: 'session_alpha',
+            status: 'processing',
+            query: 'Alpha query',
+          },
+        }),
+      } as MessageEvent)
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'text',
+          data: {
+            session_id: 'session_alpha',
+            author: 'assistant',
+            text: 'Alpha text',
+          },
+        }),
+      } as MessageEvent)
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: {
+            session_id: 'session_beta',
+            status: 'processing',
+            query: 'Beta query',
+          },
+        }),
+      } as MessageEvent)
     })
 
     act(() => {
-      result.current.flushSessionEvents('session_a')
+      result.current.selectSession('session_alpha', 'manual')
     })
 
     act(() => {
@@ -123,32 +196,53 @@ describe('useUABridge', () => {
         data: JSON.stringify({
           type: 'text',
           data: {
-            session_id: 'session_b',
+            session_id: 'session_beta',
             author: 'assistant',
-            text: 'Background cron update',
+            text: 'Beta keeps running',
           },
         }),
       } as MessageEvent)
     })
 
-    expect(result.current.getSessionEventCount('session_b')).toBe(2)
-    expect(result.current.sessionsWithActivity.has('session_b')).toBe(true)
-    expect(result.current.pendingEvents).toHaveLength(0)
+    expect(result.current.selectedSessionId).toBe('session_alpha')
 
     act(() => {
-      result.current.selectSession('session_b')
-      result.current.flushSessionEvents('session_b')
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'tool_call',
+          data: {
+            session_id: 'session_alpha',
+            id: 'tool-1',
+            name: 'Read',
+            input: { file_path: '/tmp/a.md' },
+          },
+        }),
+      } as MessageEvent)
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'tool_result',
+          data: {
+            session_id: 'session_alpha',
+            tool_use_id: 'tool-1',
+            content_preview: 'done',
+          },
+        }),
+      } as MessageEvent)
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'iteration_end',
+          data: {
+            session_id: 'session_alpha',
+          },
+        }),
+      } as MessageEvent)
     })
 
-    expect(result.current.selectedSessionId).toBe('session_b')
-    expect(result.current.sessionsWithActivity.has('session_b')).toBe(false)
-    expect(result.current.pendingEvents).toHaveLength(2)
-    expect(result.current.pendingEvents.map((event) => event.type)).toEqual(['agent_spawn', 'message'])
-
-    act(() => {
-      result.current.consumeEvents()
+    await waitFor(() => {
+      expect(result.current.selectedPlaybackMode).toBe('replay')
+      expect(result.current.greatestHitSessionIds).toEqual(['session_alpha'])
     })
 
-    expect(result.current.pendingEvents).toHaveLength(0)
+    expect(result.current.selectedPlaybackEvents.length).toBeGreaterThanOrEqual(4)
   })
 })

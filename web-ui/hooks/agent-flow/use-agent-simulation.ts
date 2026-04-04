@@ -12,7 +12,13 @@ import { MOCK_SCENARIO } from '@/lib/agent-flow/mock-scenario'
 import { TOOL_CARD_W, TOOL_CARD_H, FORCE, TOOL_SLOT, BUBBLE_VISIBLE_S, MODEL_CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE, ANIM_SPEED } from '@/lib/agent-flow/canvas-constants'
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, type Simulation } from 'd3-force'
 
-import type { SimulationState, ForceNode, ForceLink, UseAgentSimulationOptions } from './simulation/types'
+import type {
+  SimulationState,
+  ForceNode,
+  ForceLink,
+  UseAgentSimulationOptions,
+  LoadedPlaybackOptions,
+} from './simulation/types'
 import { createEmptyState, resetMsgIdCounter, MAX_EVENT_LOG } from './simulation/types'
 import { processEvent, type ProcessEventContext } from './simulation/process-event'
 import { computeNextFrame } from './simulation/animate'
@@ -409,6 +415,53 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     setTimeout(() => syncForceSimulation(snapshot.simState.agents, snapshot.simState.edges), 0)
   }, [syncForceSimulation, commitState])
 
+  const loadEventPlayback = useCallback((events: SimulationEvent[], options: LoadedPlaybackOptions = {}) => {
+    blockIdCounter.current = 0
+    resetMsgIdCounter()
+
+    const eventLog = [...events]
+    const currentTime = options.currentTime ?? 0
+    const eventIndex = options.eventIndex ?? 0
+    const maxTimeReached = options.maxTimeReached ?? (eventLog[eventLog.length - 1]?.time ?? 0)
+
+    const next = createEmptyState({
+      isPlaying: options.isPlaying ?? true,
+      speed: frameRef.current.speed,
+      currentTime,
+      eventIndex,
+      eventLog,
+      maxTimeReached,
+    })
+
+    commitState(next)
+    setTimeout(() => syncForceSimulation(next.agents, next.edges), 0)
+  }, [commitState, syncForceSimulation])
+
+  const hydrateToLatest = useCallback((events: SimulationEvent[]) => {
+    blockIdCounter.current = 0
+    resetMsgIdCounter()
+
+    let replayState = createEmptyState({
+      isPlaying: true,
+      speed: frameRef.current.speed,
+      eventLog: [...events],
+    })
+
+    skipForceSyncRef.current = true
+    for (const event of events) {
+      replayState.currentTime = event.time
+      replayState = { ...processEventWithContext(event, replayState), currentTime: event.time }
+    }
+    skipForceSyncRef.current = false
+
+    replayState.eventLog = [...events]
+    replayState.eventIndex = replayState.eventLog.length
+    replayState.maxTimeReached = replayState.currentTime
+
+    commitState(replayState)
+    setTimeout(() => syncForceSimulation(replayState.agents, replayState.edges), 0)
+  }, [commitState, processEventWithContext, syncForceSimulation])
+
   return {
     // Canvas reads frameRef directly for 60fps rendering
     frameRef,
@@ -424,5 +477,7 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     play, pause, restart, setSpeed, seekToTime,
     updateAgentPosition,
     saveSnapshot, restoreSnapshot,
+    loadEventPlayback,
+    hydrateToLatest,
   }
 }

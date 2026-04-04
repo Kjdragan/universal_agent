@@ -13,7 +13,7 @@
  *   <AgentFlowWidget mode="full" />
  */
 
-import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react"
+import { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useAgentSimulation } from "@/hooks/agent-flow/use-agent-simulation"
 import { useUABridge } from "@/hooks/agent-flow/use-ua-bridge"
@@ -35,7 +35,7 @@ import { TimelineEvent, TIMING } from "@/lib/agent-flow/agent-types"
 import { COLORS } from "@/lib/agent-flow/colors"
 import { MOCK_DURATION } from "@/lib/agent-flow/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
-import { TopBar } from "./top-bar"
+import { SpotlightBar } from "./spotlight-bar"
 import { useAudioEffects } from "@/hooks/agent-flow/use-audio-effects"
 
 export type AgentFlowMode = "full" | "compact" | "mini"
@@ -76,14 +76,12 @@ export function AgentFlowWidget({
     setSpeed,
     seekToTime,
     updateAgentPosition,
-    saveSnapshot,
-    restoreSnapshot,
+    loadEventPlayback,
+    hydrateToLatest,
   } = useAgentSimulation({
     useMockData: bridge.useMockData,
     externalEvents: bridge.pendingEvents,
     onExternalEventsConsumed: bridge.consumeEvents,
-    sessionFilter: bridge.selectedSessionId,
-    sessionFilterRef: bridge.selectedSessionIdRef,
   })
 
   const selection = useSelectionState({ agents, toolCalls, discoveries })
@@ -111,28 +109,77 @@ export function AgentFlowWidget({
     return () => clearTimeout(timer)
   }, [play])
 
-  // Per-session state cache
-  const sessionCacheRef = useRef<Map<string, { snapshot: ReturnType<typeof saveSnapshot>; eventCount: number }>>(new Map())
-  const prevSelectedRef = useRef<string | null>(null)
-  useLayoutEffect(() => {
-    if (bridge.selectedSessionId && bridge.selectedSessionId !== prevSelectedRef.current) {
-      if (prevSelectedRef.current !== null) {
-        sessionCacheRef.current.set(prevSelectedRef.current, {
-          snapshot: saveSnapshot(),
-          eventCount: bridge.getSessionEventCount(prevSelectedRef.current),
-        })
-      }
-      const cached = sessionCacheRef.current.get(bridge.selectedSessionId)
-      if (cached) {
-        restoreSnapshot(cached.snapshot)
-        bridge.flushSessionEvents(bridge.selectedSessionId, cached.eventCount)
-      } else {
-        restart()
-        bridge.flushSessionEvents(bridge.selectedSessionId)
-      }
-      prevSelectedRef.current = bridge.selectedSessionId
+  const previousSelectionRef = useRef<{ sessionId: string | null; mode: typeof bridge.selectedPlaybackMode }>({
+    sessionId: null,
+    mode: 'live',
+  })
+  const replayTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const replayLoopGuardRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (replayTransitionTimeoutRef.current) {
+      clearTimeout(replayTransitionTimeoutRef.current)
+      replayTransitionTimeoutRef.current = null
     }
-  }, [bridge.selectedSessionId, restart, bridge.flushSessionEvents, saveSnapshot, restoreSnapshot, bridge.getSessionEventCount])
+
+    if (!bridge.selectedArchive) {
+      restart()
+      previousSelectionRef.current = { sessionId: null, mode: bridge.selectedPlaybackMode }
+      return
+    }
+
+    const previous = previousSelectionRef.current
+    const sameSession = previous.sessionId === bridge.selectedArchive.sessionId
+    const switchedFromLiveToReplay = sameSession && previous.mode === 'live' && bridge.selectedPlaybackMode === 'replay'
+    const changedSession = previous.sessionId !== bridge.selectedArchive.sessionId
+    const changedMode = previous.mode !== bridge.selectedPlaybackMode
+
+    if (bridge.selectedPlaybackMode === 'live') {
+      if (changedSession || changedMode) {
+        hydrateToLatest(bridge.selectedArchive.normalizedEvents)
+        replayLoopGuardRef.current = null
+      }
+      previousSelectionRef.current = { sessionId: bridge.selectedArchive.sessionId, mode: bridge.selectedPlaybackMode }
+      return
+    }
+
+    if (switchedFromLiveToReplay) {
+      replayTransitionTimeoutRef.current = setTimeout(() => {
+        loadEventPlayback(bridge.selectedPlaybackEvents, {
+          currentTime: 0,
+          eventIndex: 0,
+          maxTimeReached: bridge.selectedPlaybackEvents[bridge.selectedPlaybackEvents.length - 1]?.time ?? 0,
+          isPlaying: true,
+        })
+        previousSelectionRef.current = { sessionId: bridge.selectedArchive?.sessionId ?? null, mode: 'replay' }
+        replayLoopGuardRef.current = null
+      }, 2000)
+      return
+    }
+
+    if (changedSession || changedMode || bridge.currentReplayGeneration > 0) {
+      loadEventPlayback(bridge.selectedPlaybackEvents, {
+        currentTime: 0,
+        eventIndex: 0,
+        maxTimeReached: bridge.selectedPlaybackEvents[bridge.selectedPlaybackEvents.length - 1]?.time ?? 0,
+        isPlaying: true,
+      })
+    }
+    previousSelectionRef.current = { sessionId: bridge.selectedArchive.sessionId, mode: bridge.selectedPlaybackMode }
+    replayLoopGuardRef.current = null
+  }, [
+    bridge.currentReplayGeneration,
+    bridge.selectedArchive,
+    bridge.selectedPlaybackEvents,
+    bridge.selectedPlaybackMode,
+    hydrateToLatest,
+    loadEventPlayback,
+    restart,
+  ])
+
+  useEffect(() => () => {
+    if (replayTransitionTimeoutRef.current) clearTimeout(replayTransitionTimeoutRef.current)
+  }, [])
 
   // Timeline events
   const timelineCacheRef = useRef<{
@@ -243,22 +290,63 @@ export function AgentFlowWidget({
     ]
   ) : []
 
-  const handleCloseSession = useCallback((id: string) => {
-    bridge.removeSession(id)
-    sessionCacheRef.current.delete(id)
-    if (bridge.selectedSessionId === id) {
-      const remaining = bridge.sessions.filter(s => s.id !== id)
-      if (remaining.length > 0) {
-        bridge.selectSession(remaining[remaining.length - 1].id)
-      }
-    }
-  }, [bridge])
-
   const openFile = useCallback((_filePath: string, _line?: number) => {
     // No-op in UA context (no VS Code editor to open files in)
   }, [])
 
-  const isEmpty = agents.size === 0 && bridge.useMockData === false
+  const isEmpty = !bridge.selectedArchive && bridge.useMockData === false
+  const recentArchives = useMemo(
+    () => bridge.recentSessionIds.map((id) => bridge.archivesBySessionId[id]).filter(Boolean),
+    [bridge.archivesBySessionId, bridge.recentSessionIds],
+  )
+  const greatestHitArchives = useMemo(
+    () => bridge.greatestHitSessionIds.map((id) => bridge.archivesBySessionId[id]).filter(Boolean),
+    [bridge.archivesBySessionId, bridge.greatestHitSessionIds],
+  )
+  const totalDuration = bridge.useMockData
+    ? (isReviewing ? Math.max(maxTimeReached, currentTime) : MOCK_DURATION)
+    : Math.max(maxTimeReached, currentTime)
+
+  useEffect(() => {
+    if (bridge.selectedPlaybackMode !== 'replay' || !bridge.selectedArchive) return
+    if (maxTimeReached <= 0) return
+
+    const replayKey = `${bridge.mode}:${bridge.selectedArchive.sessionId}:${bridge.currentReplayGeneration}`
+    if (currentTime < maxTimeReached + 2) return
+    if (replayLoopGuardRef.current === replayKey) return
+    replayLoopGuardRef.current = replayKey
+
+    if (bridge.mode === 'greatest_hits' && bridge.selectionSource === 'auto' && bridge.greatestHitSessionIds.length > 1) {
+      bridge.advanceGreatestHitsLoop()
+      return
+    }
+
+    bridge.restartReplay()
+  }, [
+    bridge.advanceGreatestHitsLoop,
+    bridge.currentReplayGeneration,
+    bridge.greatestHitSessionIds.length,
+    bridge.mode,
+    bridge.restartReplay,
+    bridge.selectedArchive,
+    bridge.selectedPlaybackMode,
+    bridge.selectionSource,
+    currentTime,
+    maxTimeReached,
+  ])
+
+  const spotlightBadge = (
+    <span
+      className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em]"
+      style={{
+        background: bridge.currentSpotlightIsLive ? 'rgba(102, 255, 170, 0.16)' : 'rgba(255, 187, 68, 0.14)',
+        border: `1px solid ${bridge.currentSpotlightIsLive ? 'rgba(102, 255, 170, 0.35)' : 'rgba(255, 187, 68, 0.28)'}`,
+        color: bridge.currentSpotlightIsLive ? COLORS.complete : COLORS.tool,
+      }}
+    >
+      {bridge.currentSpotlightIsLive ? 'LIVE' : 'REPLAY'}
+    </span>
+  )
 
   /* ─── Mini mode: compact card with click-to-expand ─── */
   if (mode === "mini") {
@@ -270,7 +358,13 @@ export function AgentFlowWidget({
           if (onExpand) onExpand()
           else router.push("/dashboard/agent-flow")
         }}
-      >
+        >
+        <div className="absolute top-3 left-3 right-3 z-10 pointer-events-none flex items-center justify-between gap-3">
+          <div className="min-w-0 truncate text-[10px] font-mono" style={{ color: COLORS.holoBright }}>
+            {bridge.currentSpotlightTitle || 'Agent Flow'}
+          </div>
+          {spotlightBadge}
+        </div>
         <AgentCanvas
           simulationRef={frameRef}
           selectedAgentId={null}
@@ -293,7 +387,7 @@ export function AgentFlowWidget({
         <div className="absolute inset-0 pointer-events-none flex items-end justify-between p-3">
           <div className="flex items-center gap-2 text-xs text-cyan-400/80 font-mono">
             <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            {agents.size} agent{agents.size !== 1 ? 's' : ''} active
+            {bridge.currentSpotlightTitle || 'No spotlight'}
           </div>
           <div className="text-[10px] text-white/30 opacity-0 group-hover:opacity-100 transition-opacity">
             Click to expand →
@@ -308,6 +402,12 @@ export function AgentFlowWidget({
     return (
       <OpenFileProvider value={null}>
         <div className={`relative overflow-hidden ${className}`} style={{ background: COLORS.void }}>
+          <div className="absolute top-3 left-3 right-3 z-10 pointer-events-none flex items-center justify-between gap-3">
+            <div className="min-w-0 truncate text-[10px] font-mono" style={{ color: COLORS.holoBright }}>
+              {bridge.currentSpotlightTitle || 'Agent Flow'}
+            </div>
+            {spotlightBadge}
+          </div>
           {isEmpty && (
             <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
               <div className="text-center" style={{ fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
@@ -359,10 +459,7 @@ export function AgentFlowWidget({
             isPlaying={isPlaying}
             speed={speed}
             currentTime={currentTime}
-            totalDuration={bridge.useMockData
-              ? (isReviewing ? Math.max(maxTimeReached, currentTime) : MOCK_DURATION)
-              : Math.max(maxTimeReached, currentTime)
-            }
+            totalDuration={totalDuration}
             onPlayPause={handlePlayPause}
             onRestart={handleRestart}
             onSpeedChange={setSpeed}
@@ -487,10 +584,7 @@ export function AgentFlowWidget({
           isPlaying={isPlaying}
           speed={speed}
           currentTime={currentTime}
-          totalDuration={bridge.useMockData
-            ? (isReviewing ? Math.max(maxTimeReached, currentTime) : MOCK_DURATION)
-            : Math.max(maxTimeReached, currentTime)
-          }
+          totalDuration={totalDuration}
           onPlayPause={handlePlayPause}
           onRestart={handleRestart}
           onSpeedChange={setSpeed}
@@ -531,26 +625,44 @@ export function AgentFlowWidget({
           onClose={() => setShowTimeline(false)}
         />
 
-        {/* Top bar: session tabs + info/controls */}
-        <TopBar
-          sessions={bridge.sessions}
+        <SpotlightBar
+          mode={bridge.mode}
+          recentArchives={recentArchives}
+          greatestHitArchives={greatestHitArchives}
           selectedSessionId={bridge.selectedSessionId}
-          sessionsWithActivity={bridge.sessionsWithActivity}
-          onSelectSession={bridge.selectSession}
-          onCloseSession={handleCloseSession}
-          isVSCode={false}
-          connectionStatus={bridge.connectionStatus}
-          agentCount={agents.size}
-          totalTokens={totalTokens}
-          showFileAttention={showFileAttention}
-          showTranscript={showTranscript}
-          showCostOverlay={showCostOverlay}
-          showTimeline={showTimeline}
-          isMuted={isMuted}
-          onTogglePanel={toggleExclusivePanel}
-          onToggleTimeline={() => setShowTimeline(prev => !prev)}
-          onToggleMute={handleToggleMute}
+          currentTitle={bridge.currentSpotlightTitle}
+          isLive={bridge.currentSpotlightIsLive}
+          onModeChange={bridge.setMode}
+          onSelectRecent={(sessionId) => {
+            bridge.setMode('recent')
+            bridge.selectSession(sessionId, 'manual')
+          }}
+          onSelectGreatestHit={(sessionId) => {
+            bridge.setMode('greatest_hits')
+            bridge.selectSession(sessionId, 'manual')
+          }}
         />
+
+        <div
+          className="absolute top-[108px] right-3 flex items-center gap-4 rounded px-3 py-1.5 font-mono text-[10px]"
+          style={{
+            zIndex: 11,
+            background: COLORS.holoBg03,
+            border: `1px solid ${COLORS.holoBorder08}`,
+            color: COLORS.textMuted,
+          }}
+        >
+          <span>{bridge.connectionStatus === 'watching' ? 'LIVE' : 'OFFLINE'}</span>
+          <span>{agents.size} agents</span>
+          <span>{Math.round(totalTokens / 1000)}k tokens</span>
+          <button type="button" onClick={() => toggleExclusivePanel('files')} style={{ color: showFileAttention ? COLORS.holoBright : COLORS.textMuted }}>Files</button>
+          <button type="button" onClick={() => toggleExclusivePanel('transcript')} style={{ color: showTranscript ? COLORS.holoBright : COLORS.textMuted }}>Chat</button>
+          <button type="button" onClick={() => toggleExclusivePanel('cost')} style={{ color: showCostOverlay ? COLORS.complete : COLORS.textMuted }}>$Cost</button>
+          <button type="button" onClick={() => setShowTimeline(prev => !prev)} style={{ color: showTimeline ? COLORS.holoBright : COLORS.textMuted }}>Timeline</button>
+          <button type="button" onClick={handleToggleMute} style={{ color: isMuted ? COLORS.textMuted : COLORS.holoBright }}>
+            {isMuted ? 'Mute' : 'Sound'}
+          </button>
+        </div>
       </div>
     </OpenFileProvider>
   )

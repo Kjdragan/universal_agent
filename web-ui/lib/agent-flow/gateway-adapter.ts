@@ -288,7 +288,7 @@ function vpLifecycleEvents(
   return events
 }
 
-export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => Date.now()): GatewayAgentFlowAdapter {
+export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => Date.now() / 1000): GatewayAgentFlowAdapter {
   const sessionState = new Map<string, SessionState>()
 
   function getSessionState(sessionId: string): SessionState {
