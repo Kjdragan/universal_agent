@@ -174,7 +174,7 @@ def _lane_guidance(run_kind: str) -> str:
             "This run is already inside the canonical Task Hub execution lane.\n"
             "Do not use `TaskStop` here.\n"
             "Instead: continue execution or disposition the assigned Task Hub item via "
-            "`mcp__internal__task_hub_task_action` with `complete`, `review`, `block`, or `park`."
+            "`task_hub_task_action` with `complete`, `review`, `block`, or `park`."
         )
     if run_kind == "email_triage":
         return (

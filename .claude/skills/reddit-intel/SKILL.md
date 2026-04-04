@@ -22,7 +22,7 @@ a compact result JSON to the session workspace for downstream agent use.
 ## Quick Start
 
 ```
-mcp__internal__reddit_top_posts {
+reddit_top_posts {
   "subreddit": "artificial",
   "t": "week",
   "limit": 10
@@ -33,7 +33,7 @@ The tool auto-saves to the session workspace (`save_to_workspace=true` by defaul
 
 ---
 
-## Tool Reference: `mcp__internal__reddit_top_posts`
+## Tool Reference: `reddit_top_posts`
 
 This is an internal MCP tool backed by Composio's `REDDIT_GET_R_TOP` action.
 
@@ -139,25 +139,25 @@ If you see a Composio execution failure mentioning OAuth or authorization:
 ### Trending topics in a community (default)
 
 ```
-mcp__internal__reddit_top_posts { "subreddit": "MachineLearning", "t": "week", "limit": 15 }
+reddit_top_posts { "subreddit": "MachineLearning", "t": "week", "limit": 15 }
 ```
 
 ### Fast pulse check (last 24 hours)
 
 ```
-mcp__internal__reddit_top_posts { "subreddit": "artificial", "t": "day", "limit": 5 }
+reddit_top_posts { "subreddit": "artificial", "t": "day", "limit": 5 }
 ```
 
 ### Broader signal (past month)
 
 ```
-mcp__internal__reddit_top_posts { "subreddit": "LocalLLaMA", "t": "month", "limit": 20 }
+reddit_top_posts { "subreddit": "LocalLLaMA", "t": "month", "limit": 20 }
 ```
 
 ### Skip session workspace save (inline-only, no file I/O)
 
 ```
-mcp__internal__reddit_top_posts { "subreddit": "programming", "t": "week", "save_to_workspace": false }
+reddit_top_posts { "subreddit": "programming", "t": "week", "save_to_workspace": false }
 ```
 
 ---

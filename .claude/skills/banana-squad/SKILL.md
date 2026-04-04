@@ -56,5 +56,5 @@ Outputs:
 ## Future (Not In MVP)
 
 Once prompt quality is stable, add a second step that feeds the best prompt(s) into UA image generation:
-- `Task(subagent_type='image-expert', ...)` using `mcp__internal__generate_image_with_review`
+- `Task(subagent_type='image-expert', ...)` using `generate_image_with_review`
 - Or the `nano-banana-pro` skill for Gemini 3 Pro Image generation

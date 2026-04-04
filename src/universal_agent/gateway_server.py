@@ -12885,19 +12885,24 @@ class ConnectionManager:
             return
 
         payload = json.dumps(data)
+        global_payload = payload
+        if session_id != "global_agent_flow":
+            global_payload = json.dumps(
+                _annotate_global_flow_payload(data, origin_session_id=session_id)
+            )
+
         # Snapshot the list to avoid runtime errors if connections drop during iteration
-        targets = []
-        if session_id in self.session_connections:
-            targets.extend(self.session_connections[session_id])
-        if session_id != "global_agent_flow" and "global_agent_flow" in self.session_connections:
-            targets.extend(self.session_connections["global_agent_flow"])
-            
+        direct_targets = list(self.session_connections.get(session_id, set()))
+        global_targets: list[str] = []
+        if session_id != "global_agent_flow":
+            global_targets = list(self.session_connections.get("global_agent_flow", set()))
+
         stale_connections: list[str] = []
-        
-        for connection_id in targets:
+
+        for connection_id in direct_targets:
             if connection_id == exclude_connection_id:
                 continue
-                
+
             if connection_id in self.active_connections:
                 try:
                     await self._send_text_with_timeout(
@@ -12918,8 +12923,33 @@ class ConnectionManager:
                     stale_connections.append(connection_id)
                     logger.error(f"Failed to broadcast to {connection_id}: {e}")
 
+        for connection_id in global_targets:
+            if connection_id == exclude_connection_id:
+                continue
+
+            if connection_id in self.active_connections:
+                try:
+                    await self._send_text_with_timeout(
+                        self.active_connections[connection_id],
+                        global_payload,
+                    )
+                except asyncio.TimeoutError:
+                    _increment_metric("ws_send_timeouts")
+                    _increment_metric("ws_send_failures")
+                    stale_connections.append(connection_id)
+                    logger.warning(
+                        "Timed out broadcasting websocket payload to %s (session=%s observer=global_agent_flow)",
+                        connection_id,
+                        session_id,
+                    )
+                except Exception as e:
+                    _increment_metric("ws_send_failures")
+                    stale_connections.append(connection_id)
+                    logger.error(f"Failed to broadcast annotated payload to {connection_id}: {e}")
+
         for stale_connection in stale_connections:
-            self.disconnect(stale_connection, session_id)
+            stale_session = self._session_id_for_connection(stale_connection) or session_id
+            self.disconnect(stale_connection, stale_session)
             _increment_metric("ws_stale_evictions")
 
 
@@ -26261,6 +26291,22 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "time_offset": event.data.get("time_offset") if isinstance(event.data, dict) else None,
     }
+
+
+def _annotate_global_flow_payload(data: dict, origin_session_id: str) -> dict:
+    """Attach origin session metadata for observer clients on global_agent_flow."""
+    annotated = dict(data)
+    annotated["session_id"] = origin_session_id
+    annotated["source_session_id"] = origin_session_id
+
+    nested = annotated.get("data")
+    if isinstance(nested, dict):
+        nested_payload = dict(nested)
+        nested_payload.setdefault("session_id", origin_session_id)
+        nested_payload.setdefault("source_session_id", origin_session_id)
+        annotated["data"] = nested_payload
+
+    return annotated
 
 
 def _should_inject_system_events_for_request(metadata: dict[str, Any]) -> bool:

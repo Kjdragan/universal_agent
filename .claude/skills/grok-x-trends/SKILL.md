@@ -11,7 +11,7 @@ This skill provides a repeatable workflow (and a small script) for discovering "
 
 Key implementation detail: the script requests **native JSON output** from the Responses API (`response_format: json_object`) so downstream parsing can be done with `json.loads()` instead of regex extraction.
 
-In Universal Agent runs, prefer calling the internal MCP tool `mcp__internal__x_trends_posts` for the same capability (evidence posts only). This script is the fallback for environments where only shell execution is available.
+In Universal Agent runs, prefer calling the internal MCP tool `x_trends_posts` for the same capability (evidence posts only). This script is the fallback for environments where only shell execution is available.
 
 ## Requirements
 
@@ -93,7 +93,7 @@ Files:
 - `result.json`: the structured JSON output (posts evidence)
 - `manifest.json`: minimal metadata and relative paths
 
-If you're using the internal tool `mcp__internal__x_trends_posts`, it will **best-effort auto-save** to this schema (unless `save_to_workspace=false`).
+If you're using the internal tool `x_trends_posts`, it will **best-effort auto-save** to this schema (unless `save_to_workspace=false`).
 
 If you're using the script directly, create the folder and redirect the JSON output:
 

@@ -100,7 +100,7 @@ You are not a passive assistant waiting for instructions. You have an active tas
 - When you complete a task, mark it done and move to the next one.
 
 Preferred trend workflow:
-- Use `mcp__internal__x_trends_posts` for evidence retrieval.
+- Use `x_trends_posts` for evidence retrieval.
 - Fallback to `grok-x-trends` skill.
 - Do not use a Composio X/Twitter toolkit.
 

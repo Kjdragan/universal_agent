@@ -36,7 +36,7 @@
 ## Tooling Guidance
 
 1. CSI artifacts/reports are first-class inputs.
-2. For X-only checks, prefer `mcp__internal__x_trends_posts`.
+2. For X-only checks, prefer `x_trends_posts`.
 3. Use Reddit evidence tools for validation when CSI Reddit evidence is thin.
 4. Avoid heavyweight report pipelines unless explicitly requested.
 

@@ -1392,9 +1392,9 @@ async def on_pre_tool_use_ledger(
         "run_research_phase",
         "run_research_pipeline",
         "run_report_generation",
-        "mcp__internal__run_research_phase",
-        "mcp__internal__run_research_pipeline",
-        "mcp__internal__run_report_generation",
+        "run_research_phase",
+        "run_research_pipeline",
+        "run_report_generation",
     } and isinstance(guard_tool_input, dict):
         from universal_agent.execution_context import get_current_workspace as _get_ws
         from pathlib import Path
@@ -3061,8 +3061,8 @@ async def on_pre_bash_block_composio_sdk(
         return {
             "systemMessage": (
                 "🚫 BLOCKED: Do not execute internal MCP tool wrappers from Bash/Python.\n\n"
-                "Call the MCP tools directly instead (for example `mcp__internal__x_trends_posts`, "
-                "`mcp__internal__reddit_top_posts`, `mcp__internal__run_research_pipeline`).\n"
+                "Call the MCP tools directly instead (for example `x_trends_posts`, "
+                "`reddit_top_posts`, `run_research_pipeline`).\n"
                 "Wrapper symbols like `x_trends_posts_wrapper` are SDK tool objects and are not callable."
             ),
             "hookSpecificOutput": {
@@ -3083,13 +3083,13 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
-                "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
+                "- For file upload (non-Gmail): `upload_to_composio`\n"
                 "- For web/news search: Use `COMPOSIO_SEARCH_WEB` / `COMPOSIO_SEARCH_NEWS`.\n"
                 "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"
-                "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
+                "  For X/Twitter evidence, use `x_trends_posts` (or `grok-x-trends` fallback).\n\n"
                 "The Composio SDK is not available in the Bash environment. "
                 "All actions must go through specific MCP tools which handle auth automatically.\n\n"
-                "For Reddit trends, use `mcp__internal__reddit_top_posts` or direct `REDDIT_*` tools."
+                "For Reddit trends, use `reddit_top_posts` or direct `REDDIT_*` tools."
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -3127,7 +3127,7 @@ async def on_pre_bash_block_playwright_non_html(
         "systemMessage": (
             "🚫 BLOCKED: Playwright should be used for HTML → PDF only.\n\n"
             "For Markdown/other → PDF, use WeasyPrint (Python-native) or the "
-            "`mcp__internal__html_to_pdf` tool after converting to HTML.\n"
+            "`html_to_pdf` tool after converting to HTML.\n"
         ),
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -7959,8 +7959,8 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
             [
                 "memory_search",
                 "memory_get",
-                "mcp__internal__memory_search",
-                "mcp__internal__memory_get",
+                "memory_search",
+                "memory_get",
             ]
         )
 
@@ -8532,8 +8532,8 @@ async def setup_session(
             [
                 "memory_search",
                 "memory_get",
-                "mcp__internal__memory_search",
-                "mcp__internal__memory_get",
+                "memory_search",
+                "memory_get",
             ]
         )
 

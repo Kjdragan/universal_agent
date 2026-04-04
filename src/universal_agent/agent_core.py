@@ -84,8 +84,8 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
-    "mcp__internal__run_research_pipeline",
-    "mcp__internal__run_research_phase",
+    "run_research_pipeline",
+    "run_research_phase",
 ]
 
 
@@ -563,9 +563,9 @@ async def malformed_tool_guardrail_hook(
                 "systemMessage": (
                     "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                     "**USE MCP TOOLS INSTEAD:**\n"
-                    "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
+                    "- For file upload (non-Gmail): `upload_to_composio`\n"
                     "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool (EXCEPT X/Twitter).\n"
-                    "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
+                    "  For X/Twitter evidence, use `x_trends_posts` (or `grok-x-trends` fallback).\n\n"
                     "The Composio SDK is not available in the Bash environment. "
                     "All actions must go through specific MCP tools which handle auth automatically.\n\n"
                     "If you cannot find a tool, use `COMPOSIO_SEARCH_TOOLS` to look for it."
@@ -1636,7 +1636,7 @@ class UniversalAgent:
             "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
             "**Tool Namespaces:**\n"
             "- `mcp__composio__*` - Remote tools (Slack, Search, etc.) -> Call directly\n"
-            "- `mcp__internal__*` - Local tools (File I/O, Memory) -> Call directly\n"
+            "- `*` - Local tools (File I/O, Memory) -> Call directly\n"
             "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
             "## 🚀 EXECUTION STRATEGY (THE COORDINATOR LOOP)\n"
             "1. **Analyze Request**: What DOMAIN does this fall into? (Research? Coding? Creative? Ops?)\n"
@@ -1664,10 +1664,10 @@ class UniversalAgent:
             "**Your Value**: You obtain the user's intent, route it to the right expert, and synthesize the result.\n\n"
             "## ⚡ AUTONOMOUS BEHAVIOR\n"
             "- **Proactive**: If a task requires multiple steps (search -> summarize -> email), plan and execute the chain.\n"
-            "- **Filesystem**: `CURRENT_RUN_WORKSPACE/work_products/` is your target for all files. Use `mcp__internal__publish_artifact` to save permanent output to long-term storage.\n"
+            "- **Filesystem**: `CURRENT_RUN_WORKSPACE/work_products/` is your target for all files. Use `publish_artifact` to save permanent output to long-term storage.\n"
             "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
             "## 📧 EMAIL & COMMUNICATION\n"
-            "- **Simone's own email**: Use `mcp__internal__send_agentmail` tool directly (NOT bash, curl, SDK scripts, or CLI commands). This is Simone's default for sending reports, notifications, replies.\n"
+            "- **Simone's own email**: Use `send_agentmail` tool directly (NOT bash, curl, SDK scripts, or CLI commands). This is Simone's default for sending reports, notifications, replies.\n"
             "- **Kevin's Gmail**: Use the `gmail` Skill (gws CLI) ONLY when explicitly acting as Kevin.\n"
             "- **Deprecated**: Composio Gmail tools. Do NOT use.\n"
             "- Keep email bodies concise.\n\n"
@@ -1735,7 +1735,7 @@ class UniversalAgent:
             "   - If you split into 2 batches, wait for BOTH to return before calling finalize_research.\n"
             "   - The finalize_research tool reads all JSON files at once - missing files = missing results.\n\n"
             "### Step 2: Run Research Phase (ONE TOOL CALL - AFTER ALL SEARCHES COMPLETE)\n"
-            "**IMMEDIATELY** call `mcp__internal__run_research_phase`:\n"
+            "**IMMEDIATELY** call `run_research_phase`:\n"
             "   - `query`: The original user query.\n"
             "   - `context_path`: (derive from research topic, e.g., 'russia_ukraine_war')\n\n"
             "**What this tool does AUTOMATICALLY (you do NOT need to do these manually):**\n"
@@ -1830,7 +1830,7 @@ class UniversalAgent:
             "### Phase 2: DRAFTING\n"
             "After outline.json exists, call:\n"
             "```\n"
-            "mcp__internal__draft_report_parallel()\n"
+            "draft_report_parallel()\n"
             "```\n"
             "- Tool reads outline.json and generates all sections in parallel\n"
             "- Sections saved to `work_products/_working/sections/` with correct ordering prefixes\n"
@@ -1839,7 +1839,7 @@ class UniversalAgent:
             "### Phase 3: CLEANUP\n"
             "After sections are generated, call:\n"
             "```\n"
-            "mcp__internal__cleanup_report()\n"
+            "cleanup_report()\n"
             "```\n"
             "- Tool reads all drafted sections and applies a light, selective pass\n"
             "- Reduces duplicate info between sections while preserving each section's focus\n"
@@ -1849,7 +1849,7 @@ class UniversalAgent:
             "### Phase 4: ASSEMBLY\n"
             "After cleanup completes, call:\n"
             "```\n"
-            'mcp__internal__compile_report(theme="modern")\n'
+            'compile_report(theme="modern")\n'
             "```\n"
             "- Tool compiles all sections into final HTML\n"
             "- Output: `work_products/report.html`\n"
@@ -1857,7 +1857,7 @@ class UniversalAgent:
             "### Phase 5: PDF CONVERSION\n"
             "After HTML is compiled, convert to PDF:\n"
             "```\n"
-            'mcp__internal__html_to_pdf(html_path="work_products/report.html", output_path="work_products/report.pdf")\n'
+            'html_to_pdf(html_path="work_products/report.html", output_path="work_products/report.pdf")\n'
             "```\n"
             "- Tool converts the HTML report to a styled PDF\n"
             "- Output: `work_products/report.pdf`\n\n"

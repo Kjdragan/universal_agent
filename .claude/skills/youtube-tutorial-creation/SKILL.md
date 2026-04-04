@@ -73,7 +73,7 @@ Then:
 - Create the run directory under the resolved artifacts root.
 - Start `manifest.json` immediately — fill fields as you go.
 
-> **Tool preference:** Use `mcp__internal__write_text_file` for all writes into `UA_ARTIFACTS_DIR`.
+> **Tool preference:** Use `write_text_file` for all writes into `UA_ARTIFACTS_DIR`.
 > Native `Write` may be restricted to the session workspace depending on runtime.
 
 ### Step 3 — Transcript + metadata ingestion (MANDATORY)

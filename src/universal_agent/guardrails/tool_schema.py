@@ -941,8 +941,8 @@ async def pre_tool_use_schema_guardrail(
                         f"Resolved workspace: {workspace or '<unset>'}\n\n"
                         "Happy path:\n"
                         "1) Delegate via `Task(subagent_type='research-specialist', ...)` or `Task(subagent_type='arxiv-specialist', ...)` for web/academic research, OR\n"
-                        "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
-                        "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
+                        "2) Use domain tools directly for trend tasks (`x_trends_posts`, "
+                        "`reddit_top_posts`, `REDDIT_*`).\n\n"
                         "Then continue with downstream analysis/delivery."
                     ),
                     "decision": "block",
@@ -969,7 +969,7 @@ async def pre_tool_use_schema_guardrail(
                         block_response={
                             "systemMessage": (
                                 "⚠️ Research pipeline guardrail: search inputs are ready in `search_results/` and "
-                                "the next required step is `mcp__internal__run_research_phase` before tool discovery/scouting. "
+                                "the next required step is `run_research_phase` before tool discovery/scouting. "
                                 "One explicit attempt is required before any fallback path."
                             ),
                             "decision": "block",
@@ -987,7 +987,7 @@ async def pre_tool_use_schema_guardrail(
                         block_response={
                             "systemMessage": (
                                 "⚠️ Research pipeline guardrail: avoid workspace scouting after search collection. "
-                                "Call `mcp__internal__run_research_phase` next."
+                                "Call `run_research_phase` next."
                             ),
                             "decision": "block",
                             "hookSpecificOutput": {
@@ -1105,7 +1105,7 @@ async def pre_tool_use_schema_guardrail(
                                 "⚠️ Composio crawl tools are DISABLED by policy.\n\n"
                                 "Use the internal deterministic research path instead:\n"
                                 "- Search via COMPOSIO_SEARCH_WEB/NEWS\n"
-                                "- Then call `mcp__internal__run_research_phase` (Crawl4AI-backed crawl/refine)\n\n"
+                                "- Then call `run_research_phase` (Crawl4AI-backed crawl/refine)\n\n"
                                 f"Blocked tool_slug(s): {', '.join(unique_crawl_slugs)}"
                             ),
                             "decision": "block",
@@ -1204,7 +1204,7 @@ async def pre_tool_use_schema_guardrail(
                                 "systemMessage": (
                                     "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
                                     "Use X evidence via Grok/xAI instead:\n"
-                                    "- Preferred: `mcp__internal__x_trends_posts` (structured JSON)\n"
+                                    "- Preferred: `x_trends_posts` (structured JSON)\n"
                                     "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n\n"
                                     f"Blocked Composio tool_slug: {inner_slug}"
                                 ),
@@ -1280,7 +1280,7 @@ async def pre_tool_use_schema_guardrail(
                                         "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
                                         "Do not call `COMPOSIO_SEARCH_TOOLS` for X/Twitter. "
                                         "Use Grok/xAI evidence fetch instead:\n"
-                                        "- Preferred: `mcp__internal__x_trends_posts`\n"
+                                        "- Preferred: `x_trends_posts`\n"
                                         "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n"
                                     ),
                                     "decision": "block",
@@ -1297,7 +1297,7 @@ async def pre_tool_use_schema_guardrail(
                                     "systemMessage": (
                                         "⚠️ `COMPOSIO_SEARCH_TOOLS` is unnecessary for Reddit in this project.\n\n"
                                         "Use direct tools instead:\n"
-                                        "- Preferred compact path: `mcp__internal__reddit_top_posts`\n"
+                                        "- Preferred compact path: `reddit_top_posts`\n"
                                         "- Or direct Composio Reddit tools (`REDDIT_GET_R_TOP`, `REDDIT_SEARCH_ACROSS_SUBREDDITS`, etc.)."
                                     ),
                                     "decision": "block",
@@ -1333,7 +1333,7 @@ async def pre_tool_use_schema_guardrail(
                             "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
                             "Do not initiate a Composio Twitter/X connection. "
                             "Use Grok/xAI evidence fetch instead:\n"
-                            "- Preferred: `mcp__internal__x_trends_posts`\n"
+                            "- Preferred: `x_trends_posts`\n"
                             "- Fallback: `grok-x-trends` skill\n"
                         ),
                         "decision": "block",

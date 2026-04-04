@@ -414,8 +414,8 @@ class AgentSetup:
             disallowed_tools.extend([
                 "memory_get",
                 "memory_search",
-                "mcp__internal__memory_get",
-                "mcp__internal__memory_search",
+                "memory_get",
+                "memory_search",
             ])
 
         from universal_agent.utils.model_resolution import (
@@ -712,7 +712,7 @@ class AgentSetup:
             lines.append("")
             lines.append("**Progressive Disclosure**:")
             lines.append("1. **Scan**: Read the high-level index below to identify relevant skills.")
-            lines.append("2. **Read**: If a skill seems useful, use `mcp__internal__read_file` to read the full SKILL.md content.")
+            lines.append("2. **Read**: If a skill seems useful, use `read_file` to read the full SKILL.md content.")
             lines.append("3. **Execute**: Follow the procedure step-by-step.")
             lines.append("")
             

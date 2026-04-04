@@ -15,7 +15,7 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
-    # Deprecated local_toolkit aliases (replaced by in-process mcp__internal__ tools)
+    # Deprecated local_toolkit aliases (replaced by in-process  tools)
     "mcp__local_toolkit__run_research_pipeline",
     "mcp__local_toolkit__crawl_parallel",
     "mcp__local_toolkit__finalize_research",
@@ -32,7 +32,7 @@ DISALLOWED_TOOLS = [
     # PRIMARY AGENT FORBIDDEN: NEVER use remote workbench directly.
     "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
     # Composio crawl/fetch tools are globally banned — ALL crawling goes through
-    # Crawl4AI Cloud API via mcp__internal__run_research_phase / crawl_parallel.
+    # Crawl4AI Cloud API via run_research_phase / crawl_parallel.
     "mcp__composio__COMPOSIO_CRAWL_WEBPAGE",
     "mcp__composio__COMPOSIO_CRAWL_URL",
     "mcp__composio__COMPOSIO_CRAWL_WEBSITE",

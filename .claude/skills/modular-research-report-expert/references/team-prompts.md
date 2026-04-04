@@ -467,11 +467,11 @@ You generate AI images that serve the report's narrative — not decorations, bu
 visuals that convey information, set tone, or make data tangible.
 
 **Tools available:**
-- `mcp__internal__generate_image` — fast generation (hero images, accent images)
-- `mcp__internal__generate_image_with_review` — for text-heavy infographics
+- `generate_image` — fast generation (hero images, accent images)
+- `generate_image_with_review` — for text-heavy infographics
   (uses gemini-3-pro-image-preview with internal review loop, max_attempts=3)
-- `mcp__internal__describe_image` — generate alt text after creation
-- `mcp__internal__preview_image` — preview before committing
+- `describe_image` — generate alt text after creation
+- `preview_image` — preview before committing
 
 **Phase 2 — Visual Planning:**
 
@@ -508,11 +508,11 @@ For each planned visual:
    {brief}. Photographic quality, professional composition."
 
 2. **Generate** using the appropriate tool:
-   - Hero/accent: `mcp__internal__generate_image` with `gemini-2.5-flash-image`
-   - Infographic/chart: `mcp__internal__generate_image_with_review` with
+   - Hero/accent: `generate_image` with `gemini-2.5-flash-image`
+   - Infographic/chart: `generate_image_with_review` with
      `gemini-3-pro-image-preview` and `max_attempts=3`
 
-3. **Get alt text**: Call `mcp__internal__describe_image` on every generated image
+3. **Get alt text**: Call `describe_image` on every generated image
 
 4. Save to `{REPORT_DIR}/images/` with descriptive filenames
    (e.g., `hero_banner.png`, `infographic_funding_rounds.png`, `accent_market_trends.png`)
@@ -745,7 +745,7 @@ For each image, evaluate:
 - **Relevance**: Does it match the visual_brief from the outline?
 - **Quality**: Is it professional, well-composed, appropriate resolution?
 - **Text legibility**: For infographics — can you read all text/numbers?
-  (Use `mcp__internal__describe_image` or `mcp__zai_vision__analyze_image` to assess)
+  (Use `describe_image` or `mcp__zai_vision__analyze_image` to assess)
 - **Brand consistency**: Do all images feel like they belong in the same report?
 - **Section fit**: Will this image enhance the reader's understanding at its placement?
 

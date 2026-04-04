@@ -1,16 +1,16 @@
 ---
 name: agentmail
-description: Send emails from Simone's own inbox using the native `mcp__internal__send_agentmail` MCP tool. Use when you need to send an email, reply, deliver a report, or communicate with anyone via email. Do NOT use bash, curl, SDK scripts, or CLI commands — just call the MCP tool directly.
+description: Send emails from Simone's own inbox using the native `send_agentmail` MCP tool. Use when you need to send an email, reply, deliver a report, or communicate with anyone via email. Do NOT use bash, curl, SDK scripts, or CLI commands — just call the MCP tool directly.
 ---
 
 # AgentMail — Simone's Email
 
-Simone sends email via `mcp__internal__send_agentmail`. One tool call — no scripts, no CLI, no SDK.
+Simone sends email via `send_agentmail`. One tool call — no scripts, no CLI, no SDK.
 
 ## Sending Email
 
 ```json
-mcp__internal__send_agentmail({
+send_agentmail({
   "to": "recipient@example.com",
   "subject": "Subject line",
   "body": "Email body content — plain text or HTML"
@@ -48,7 +48,7 @@ Required: `to`, `subject`, `body`. Optional: `cc`, `bcc`, `dry_run`.
 
 | Request | Action |
 |---------|--------|
-| "Email this to Kevin" | `mcp__internal__send_agentmail` → `kevinjdragan@gmail.com` |
-| "Send this report" | `mcp__internal__send_agentmail` → specified recipient |
-| "Reply to this email" | `mcp__internal__send_agentmail` → original sender |
+| "Email this to Kevin" | `send_agentmail` → `kevinjdragan@gmail.com` |
+| "Send this report" | `send_agentmail` → specified recipient |
+| "Reply to this email" | `send_agentmail` → original sender |
 | "Send from Kevin's Gmail" | Use `gmail` skill (gws CLI) — completely different channel |

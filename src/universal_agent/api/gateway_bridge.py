@@ -246,8 +246,15 @@ class GatewayBridge:
     def _convert_gateway_event(self, event_type: str, event_data: dict) -> Optional[WebSocketEvent]:
         """Convert gateway event format to Web UI WebSocketEvent."""
         try:
+            payload = event_data.get("data", {})
+            if isinstance(payload, dict):
+                payload = dict(payload)
+                origin_session_id = event_data.get("session_id")
+                if isinstance(origin_session_id, str) and origin_session_id.strip():
+                    payload.setdefault("session_id", origin_session_id)
+                    payload.setdefault("source_session_id", origin_session_id)
+
             if event_type in {"heartbeat_summary", "heartbeat_indicator"}:
-                payload = event_data.get("data", {}) if isinstance(event_data.get("data"), dict) else {}
                 return WebSocketEvent(
                     type=WSEventType.SYSTEM_EVENT,
                     data={
@@ -287,7 +294,7 @@ class GatewayBridge:
             
             return WebSocketEvent(
                 type=ws_type,
-                data=event_data.get("data", {}),
+                data=payload if isinstance(payload, dict) else {},
                 timestamp=event_data.get("timestamp", 0),
             )
             

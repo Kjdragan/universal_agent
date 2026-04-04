@@ -384,6 +384,39 @@ When querying Logfire for system telemetry:
 
 ---
 
+## 2026-04-03: Agent Tool Name Misdirection and Discovery Thrashing
+
+### Incident Summary
+
+The coding agent was tasked with investigating why a specific MCP tool (`mcp__internal__task_hub_task_action`) was "missing" from its accessible tool list. The agent spent significant time debugging the Python registration pipeline, resolving symlinks, and launching sprawling background `grep` commands across the codebase.
+
+The root cause was simple: The SDK stripped the `mcp__internal__` prefix when natively exposing the tools (so it appeared as `task_hub_task_action`), but the agent's system prompts explicitly instructed the agent to "strictly use `mcp__internal__task_hub_task_action`". The agent strictly followed the false prompt text, failed to find the exact string match, assumed the tool was missing, and fell back to executing raw database scripts.
+
+### Lesson 1: Inspect Available Tools First, Distrust Stale Prompts
+
+When an agent or developer operates under the assumption that a tool is missing, the very first step should be to inspect the *currently available* tools in the environment using native SDK endpoints or reflection (e.g., listing tools explicitly), rather than blindly trusting static prompt text or documentation.
+
+Reusable rule:
+- Assume prompt text about tool names might be stale or misaligned with the SDK integration layer. 
+- Always rely on the dynamic framework-provided tool list as the single source of truth for capabilities.
+
+### Lesson 2: Prefer Native Search Over Heavy Shell Commands
+
+During the discovery phase, the agent executed poorly-scoped `grep -R` commands natively in the shell, which led to timeouts and long-running background processes parsing untracked directories like `__pycache__`.
+
+Reusable rule:
+- Avoid broad, blocking shell searches when native semantic or indexed search tools (`grep_search` via MCP, ripgrep, etc.) are available.
+- If a shell search is absolutely necessary, scope it tightly to the subsystem in question, exclude `__pycache__` and object files, and use strict limits to prevent background freezing.
+
+### Lesson 3: Code Registration and Prompt Sync Are Distinct Layers
+
+The incident highlighted that Python internal function names (like `mcp__internal__send_agentmail`) are decoupled from the SDK's registered tool names (e.g., `@tool(name="send_agentmail")`), which are in turn decoupled from the markdown prompts used to guide the agent logic.
+
+Reusable rule:
+- When renaming or altering existing tool namespaces, update the Python function, the `@tool` decorator, AND the human-readable Markdown prompts simultaneously. Failure to sync the prompting layer breaks autonomous discovery.
+
+---
+
 ## Seed Questions For Future Entries
 
 When adding a new lesson, answer these:

@@ -4,10 +4,10 @@
         {
             "id": 1,
             "prompt": "What's trending this week on r/MachineLearning? Get the top 10 posts.",
-            "expected_output": "mcp__internal__reddit_top_posts called with subreddit='MachineLearning', t='week', limit=10. The result posts[] array is summarized to the user with title, score, and comment count.",
+            "expected_output": "reddit_top_posts called with subreddit='MachineLearning', t='week', limit=10. The result posts[] array is summarized to the user with title, score, and comment count.",
             "files": [],
             "expectations": [
-                "mcp__internal__reddit_top_posts is called (not a Bash curl to Reddit API directly)",
+                "reddit_top_posts is called (not a Bash curl to Reddit API directly)",
                 "The subreddit parameter is 'MachineLearning' without r/ prefix",
                 "The t parameter is 'week'",
                 "The result posts[] array is presented to the user with at least title and score",
@@ -20,7 +20,7 @@
             "expected_output": "Tool called with subreddit='LocalLLaMA', t='day', limit=5, save_to_workspace=true. Session workspace path is reported.",
             "files": [],
             "expectations": [
-                "mcp__internal__reddit_top_posts is called with subreddit='LocalLLaMA'",
+                "reddit_top_posts is called with subreddit='LocalLLaMA'",
                 "t parameter is 'day'",
                 "limit is 5",
                 "save_to_workspace is true (or omitted, using default)",
@@ -33,7 +33,7 @@
             "expected_output": "Tool called with subreddit='programming', t='month', save_to_workspace=false. Results presented directly without file I/O.",
             "files": [],
             "expectations": [
-                "mcp__internal__reddit_top_posts is called with subreddit='programming'",
+                "reddit_top_posts is called with subreddit='programming'",
                 "t parameter is 'month'",
                 "save_to_workspace is set to false",
                 "Results are summarized to the user from the posts[] array"

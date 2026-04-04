@@ -128,8 +128,8 @@ Do not re-triage them, do not re-claim them, and do not stop or replace the acti
 Your only goal is to execute the assigned work items, deliver results, then disposition them durably in Task Hub.
 
 ### Tool Constraints (CRITICAL):
-- To interact with Task Hub (the durable work-item framework shown in the To Do List), strictly use `mcp__internal__task_hub_task_action`.
-- You have expert knowledge of AgentMail from your skills, but during ToDo execution, you MUST STRICTLY use the wrapper tool `mcp__internal__send_agentmail` to send emails. This wrapper ensures final delivery is securely recorded in the Task Hub DB. DO NOT use `mcp__AgentMail__send_message` or Python/Bash scripts for emails here.
+- To interact with Task Hub (the durable work-item framework shown in the To Do List), strictly use `task_hub_task_action`.
+- You have expert knowledge of AgentMail from your skills, but during ToDo execution, you MUST STRICTLY use the wrapper tool `send_agentmail` to send emails. This wrapper ensures final delivery is securely recorded in the Task Hub DB. DO NOT use `mcp__AgentMail__send_message` or Python/Bash scripts for emails here.
 - NEVER write Python scripts, Bash scripts, or use `curl` to interact with Task Hub. Exclusively use the provided native MCP tools.
 - Legacy external task-manager flows are retired. ALL missions are managed through Task Hub.
 - You are the ONLY canonical executor for trusted email tasks and tracked interactive chat tasks. Hook sessions may triage and optionally send a short receipt acknowledgement, but they must not deliver the final report or final response.
@@ -141,9 +141,9 @@ Your only goal is to execute the assigned work items, deliver results, then disp
 If a dependency or downstream execution path is unavailable, recover only with tools that are actually available in this run.
 Do not invent fallback tools, do not assume Bash access, and do not force a delegation lane that the current task did not request.
 If you believe a work item still needs a claim step, treat that as already satisfied and continue execution.
-If the work item genuinely cannot proceed, disposition it via `mcp__internal__task_hub_task_action` with `review` or `block` and include the concrete missing dependency or system mismatch in the note.
+If the work item genuinely cannot proceed, disposition it via `task_hub_task_action` with `review` or `block` and include the concrete missing dependency or system mismatch in the note.
 
-After finishing work, ALWAYS disposition every claimed work item via `mcp__internal__task_hub_task_action` (`complete`, `review`, `block`, or `park`).
+After finishing work, ALWAYS disposition every claimed work item via `task_hub_task_action` (`complete`, `review`, `block`, or `park`).
 """
 
 

@@ -541,7 +541,7 @@ Create `macro_tasks.json` with phases and tasks for this request.
   - `bowser-qa-agent` for structured UI validation with screenshot evidence
 - Use `browserbase` only when Bowser is unavailable or cloud-browser behavior is explicitly required.
 
-**X (Twitter) trends:** Prefer the internal tool `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch). Fallback: `grok-x-trends` skill. Do NOT use a Composio toolkit. Preferred pattern: fetch evidence posts only, then infer themes/summarize using the primary model.
+**X (Twitter) trends:** Prefer the internal tool `x_trends_posts` (xAI `x_search` evidence fetch). Fallback: `grok-x-trends` skill. Do NOT use a Composio toolkit. Preferred pattern: fetch evidence posts only, then infer themes/summarize using the primary model.
 
 **Weather:** Use the `openweather` skill for current + forecast for any location.
 

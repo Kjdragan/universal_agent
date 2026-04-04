@@ -83,7 +83,7 @@ _PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
     "todo_dispatcher",
 }
 _TODO_DISPATCH_VP_FALLBACK_BLOCK = re.compile(
-    r"### VP Delegation Fallback \(CRITICAL\):.*?After finishing work, ALWAYS disposition every claimed task via `mcp__internal__task_hub_task_action` \(`complete`, `review`, `block`, or `park`\)\.",
+    r"### VP Delegation Fallback \(CRITICAL\):.*?After finishing work, ALWAYS disposition every claimed task via `task_hub_task_action` \(`complete`, `review`, `block`, or `park`\)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -896,7 +896,7 @@ class AgentHookSet:
         
         # Read-only tools are allowed to access paths outside workspace
         READ_ONLY_TOOLS = {
-            "mcp__internal__list_directory",
+            "list_directory",
             "Read",
             "View",
             "ListDir",
@@ -907,10 +907,10 @@ class AgentHookSet:
         # Tools that legitimately operate across run workspaces (e.g.,
         # reading HTML from one workspace, writing PDF to the current workspace).
         CROSS_WORKSPACE_TOOLS = {
-            "mcp__internal__html_to_pdf",
-            "mcp__internal__run_research_phase",
-            "mcp__internal__run_report_generation",
-            "mcp__internal__run_research_pipeline",
+            "html_to_pdf",
+            "run_research_phase",
+            "run_report_generation",
+            "run_research_pipeline",
         }
         if tool_name in CROSS_WORKSPACE_TOOLS:
             return {}  # Allow cross-workspace access for pipeline tools
@@ -945,7 +945,7 @@ class AgentHookSet:
             except ValueError:
                 pass  # Not in memory dir, continue with normal checks
 
-        # Special-case: `mcp__internal__write_text_file` is explicitly designed to write
+        # Special-case: `write_text_file` is explicitly designed to write
         # to either the run workspace *or* the durable artifacts root. It performs its
         # own allowlist enforcement in the tool implementation, so we must not rewrite its
         # paths to be workspace-scoped. However, we still block obvious escapes for safety.
@@ -1050,9 +1050,9 @@ class AgentHookSet:
             "run_research_phase",
             "run_research_pipeline",
             "run_report_generation",
-            "mcp__internal__run_research_phase",
-            "mcp__internal__run_research_pipeline",
-            "mcp__internal__run_report_generation",
+            "run_research_phase",
+            "run_research_pipeline",
+            "run_report_generation",
         } and isinstance(tool_input, dict):
             workspace_hint = (
                 _workspace_from_transcript_path(input_data)
@@ -1128,13 +1128,13 @@ class AgentHookSet:
 
         if current_run_kind == "todo_execution" and normalized_tool_name in {
             "ask_user_questions",
-            "mcp__internal__ask_user_questions",
+            "ask_user_questions",
         }:
             return {
                 "systemMessage": (
                     "⚠️ Task Hub work-item execution cannot ask the human to resolve internal policy or dependency conflicts.\n\n"
                     "If the work item cannot continue, record a durable disposition with "
-                    "`mcp__internal__task_hub_task_action(action='review'| 'block', ...)` and explain the concrete issue."
+                    "`task_hub_task_action(action='review'| 'block', ...)` and explain the concrete issue."
                 ),
                 "decision": "block",
                 "hookSpecificOutput": {
@@ -1288,12 +1288,12 @@ class AgentHookSet:
             # Allow read-only/context-gathering tools to run before the research delegation
             # so the agent does not deadlock when asked to "look at this image and research it".
             ALLOWED_PRE_DELEGATION_TOOLS = {
-                "describe_image", "mcp__internal__describe_image",
-                "preview_image", "mcp__internal__preview_image",
+                "describe_image", "describe_image",
+                "preview_image", "preview_image",
                 "read", "read_file", "read_document", "view",
                 "mcp__composio__read_file",
                 "memory_search", "memory_get",
-                "mcp__internal__memory_search", "mcp__internal__memory_get",
+                "memory_search", "memory_get",
                 # SDK-native progress tracker; safe before first research delegation.
                 "todowrite",
                 # Allow Skill runner before delegation as it often fetches context or executes SOPs
@@ -1606,7 +1606,7 @@ class AgentHookSet:
             "systemMessage": (
                 "🚫 BLOCKED: Playwright should be used for HTML → PDF only.\n\n"
                 "For Markdown/other → PDF, use WeasyPrint (Python-native) or the "
-                "`mcp__internal__html_to_pdf` tool after converting to HTML.\n"
+                "`html_to_pdf` tool after converting to HTML.\n"
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -1620,7 +1620,7 @@ class AgentHookSet:
     ) -> dict:
         """
         PreToolUse Hook: Redirect Bash-based HTML-to-PDF conversion attempts
-        to the dedicated `mcp__internal__html_to_pdf` MCP tool.
+        to the dedicated `html_to_pdf` MCP tool.
         Catches chrome --headless, wkhtmltopdf, and weasyprint invocations.
         """
         command, _, _ = _extract_bash_command(input_data)
@@ -1655,7 +1655,7 @@ class AgentHookSet:
                 "⚠️ REDIRECT: Use the dedicated MCP tool for HTML→PDF conversion instead of Bash.\n\n"
                 "✅ CORRECT approach:\n"
                 "```\n"
-                "mcp__internal__html_to_pdf(html_path=\"<path/to/report.html>\", output_path=\"<path/to/report.pdf>\")\n"
+                "html_to_pdf(html_path=\"<path/to/report.html>\", output_path=\"<path/to/report.pdf>\")\n"
                 "```\n"
                 "This tool handles browser/WeasyPrint fallback automatically and resolves workspace paths correctly.\n"
                 "You can call it once per HTML file. It is faster and more reliable than manual Bash conversion."
@@ -1808,8 +1808,8 @@ class AgentHookSet:
                         "   → Specialist calls COMPOSIO_SEARCH_NEWS, run_research_phase → refined_corpus.md\n"
                         "Step 2: Task(subagent_type='report-writer', description='Generate report from corpus', prompt='...')\n"
                         "   → Specialist calls run_report_generation → report.html\n"
-                        "Step 3: mcp__internal__html_to_pdf (convert report.html → report.pdf)\n"
-                        "Step 4: mcp__internal__upload_to_composio + COMPOSIO_GMAIL_SEND (email PDF)\n"
+                        "Step 3: html_to_pdf (convert report.html → report.pdf)\n"
+                        "Step 4: upload_to_composio + COMPOSIO_GMAIL_SEND (email PDF)\n"
                         "```\n"
                         "**Key: Start with Step 1 immediately.** Your first tool call must be "
                         "productive work — a `Task()` delegation, a direct MCP tool, or a search action."

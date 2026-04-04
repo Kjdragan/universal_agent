@@ -45,9 +45,9 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
-    "If you need to send an email, strictly use the native `mcp__internal__send_agentmail` tool. "
+    "If you need to send an email, strictly use the native `send_agentmail` tool. "
     "Do NOT use `mcp__AgentMail__send_message` or Python/Bash scripts for emails, as they bypass critical lifecycle tracking. "
-    "If you need to create tasks, use the native `mcp__internal__task_hub_task_action` tool. "
+    "If you need to create tasks, use the native `task_hub_task_action` tool. "
     "Do NOT write or run Python/Bash scripts to interact with Task Hub. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
@@ -297,7 +297,7 @@ def _build_heartbeat_environment_context(workspace_dir: str) -> str:
         "- You are running LOCALLY on this machine. Do NOT SSH to it — run shell commands directly.",
         "",
         "### File Write Rules (MANDATORY)",
-        f"- Write all output files to `{workspace_dir}/work_products/` using `mcp__internal__write_text_file`.",
+        f"- Write all output files to `{workspace_dir}/work_products/` using `write_text_file`.",
         "- Do NOT use the native `Write` tool for new files (it requires a prior Read and will fail).",
         "- Do NOT write to paths outside the run workspace (they will be blocked by workspace guards).",
         "- Issue file write calls SEQUENTIALLY, not in parallel — sibling failures cascade and waste tool budget.",
@@ -337,7 +337,7 @@ def _build_task_focused_environment_context(workspace_dir: str) -> str:
         "- You are running LOCALLY on this machine. Do NOT SSH to it — run shell commands directly.",
         "",
         "### File Write Rules (MANDATORY)",
-        f"- Write all output files to `{workspace_dir}/work_products/` using `mcp__internal__write_text_file`.",
+        f"- Write all output files to `{workspace_dir}/work_products/` using `write_text_file`.",
         "- Do NOT use the native `Write` tool for new files (it requires a prior Read and will fail).",
         "- Do NOT write to paths outside the run workspace (they will be blocked by workspace guards).",
         "- Issue file write calls SEQUENTIALLY, not in parallel — sibling failures cascade and waste tool budget.",
@@ -425,12 +425,12 @@ def _compose_heartbeat_prompt(
         lines.append("   a) Extract ONLY the core task objective and dispatch via `vp_dispatch_mission` FIRST.")
         lines.append("      IMPORTANT: You MUST set `idempotency_key` to `vp-task-<task_id>` to prevent duplicate dispatches if interrupted.")
         lines.append("      NOTE: Do NOT copy/paste these orchestration instructions into the VP objective.")
-        lines.append("   b) Then call `mcp__internal__task_hub_task_action` with action=`delegate`, reason=<vp_id>,")
+        lines.append("   b) Then call `task_hub_task_action` with action=`delegate`, reason=<vp_id>,")
         lines.append("      and include `note` with the mission_id so the task tracks the VP work.")
         lines.append("      Example note: 'mission_id=<returned_id>'")
-        lines.append("5. For DEFER items, use `mcp__internal__task_hub_task_action` with action=`review` to release them back.")
+        lines.append("5. For DEFER items, use `task_hub_task_action` with action=`review` to release them back.")
         lines.append("6. Then work your SELF task to completion.")
-        lines.append("7. Before finishing, disposition every claimed task using `mcp__internal__task_hub_task_action`:")
+        lines.append("7. Before finishing, disposition every claimed task using `task_hub_task_action`:")
         lines.append("   - `complete`: The task meaningfully fulfills the original request in spirit.")
         lines.append("     A complete result means the requested work product was produced AND delivered.")
         lines.append("     80% completion is acceptable when full completion isn't feasible.")
@@ -540,11 +540,11 @@ def _compose_heartbeat_prompt(
                     review_lines.append("     • Was the requested work product actually produced?")
                     review_lines.append("     • Was it delivered to the intended destination (email, Slack, file)?")
                     review_lines.append("     • Is quality sufficient — not perfect, but meeting the core intent?")
-                    review_lines.append("   - If yes → `mcp__internal__task_hub_task_action(action='approve', task_id=...)`")
-                    review_lines.append("   - If deliverables miss the mark → `mcp__internal__task_hub_task_action(action='review',")
+                    review_lines.append("   - If yes → `task_hub_task_action(action='approve', task_id=...)`")
+                    review_lines.append("   - If deliverables miss the mark → `task_hub_task_action(action='review',")
                     review_lines.append("     task_id=..., note='rework needed: <specific gap>')` to re-open")
                     review_lines.append("2. If the VP mission failed/cancelled:")
-                    review_lines.append("   - `mcp__internal__task_hub_task_action(action='review', task_id=..., note='VP failed, needs retry')`")
+                    review_lines.append("   - `task_hub_task_action(action='review', task_id=..., note='VP failed, needs retry')`")
                     review_lines.append("   This puts the task back into the open queue for re-triage.")
                     review_lines.append("3. Complete ALL reviews BEFORE starting new task work.")
                     prompt = f"{prompt}\n" + "\n".join(review_lines)

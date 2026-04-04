@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SimulationEvent } from '@/lib/agent-flow/agent-types'
 import type { SessionInfo, ConnectionStatus } from '@/lib/agent-flow/bridge-types'
+import { createGatewayAgentFlowAdapter } from '@/lib/agent-flow/gateway-adapter'
+import { fetchSessionDirectory, type SessionDirectoryItem } from '@/lib/sessionDirectory'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -21,99 +23,271 @@ interface BridgeHookResult {
   removeSession: (sessionId: string) => void
 }
 
+function parseTimestamp(value: string | number | undefined | null): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function sessionStatusFromDirectory(item: SessionDirectoryItem): SessionInfo['status'] {
+  const raw = String(item.run_status || item.status || '').trim().toLowerCase()
+  if (!raw) return 'active'
+  if (
+    raw === 'active'
+    || raw === 'running'
+    || raw === 'processing'
+    || raw === 'queued'
+    || raw === 'pending'
+    || raw === 'in_progress'
+  ) {
+    return 'active'
+  }
+  return 'completed'
+}
+
+function sessionLabelFromDirectory(item: SessionDirectoryItem): string {
+  const description = String(item.description || '').trim()
+  if (description) return description
+
+  const workspace = String(item.workspace_dir || '').trim()
+  if (workspace) {
+    const parts = workspace.replace(/\\/g, '/').split('/').filter(Boolean)
+    const tail = parts[parts.length - 1]
+    if (tail) return tail
+  }
+
+  return `Session ${item.session_id.slice(0, 6)}`
+}
+
+function toSessionInfo(item: SessionDirectoryItem, now: number): SessionInfo | null {
+  const sessionId = String(item.session_id || '').trim()
+  if (!sessionId || sessionId === 'global_agent_flow') return null
+  const lastActivity =
+    parseTimestamp(item.last_activity)
+    ?? (typeof item.heartbeat_last === 'number' && Number.isFinite(item.heartbeat_last) ? item.heartbeat_last * 1000 : null)
+    ?? now
+  return {
+    id: sessionId,
+    label: sessionLabelFromDirectory(item),
+    status: sessionStatusFromDirectory(item),
+    startTime: lastActivity,
+    lastActivityTime: lastActivity,
+  }
+}
+
+function sortSessions(sessionList: SessionInfo[]): SessionInfo[] {
+  return [...sessionList].sort((a, b) => {
+    const aActive = a.status === 'active' ? 1 : 0
+    const bActive = b.status === 'active' ? 1 : 0
+    if (aActive !== bActive) return bActive - aActive
+    return b.lastActivityTime - a.lastActivityTime
+  })
+}
+
+function mergeSessionLists(current: SessionInfo[], incoming: SessionInfo): SessionInfo[] {
+  const next = [...current]
+  const index = next.findIndex((session) => session.id === incoming.id)
+  if (index === -1) {
+    next.push(incoming)
+  } else {
+    next[index] = {
+      ...next[index],
+      ...incoming,
+      startTime: next[index].startTime ?? incoming.startTime,
+      lastActivityTime: Math.max(next[index].lastActivityTime, incoming.lastActivityTime),
+    }
+  }
+  return sortSessions(next)
+}
+
 export function useUABridge(): BridgeHookResult {
-  const selectedSessionIdRef = useRef<string | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
-  const [sessionsWithActivity] = useState<Set<string>>(new Set())
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
-  
-  // A ref queue for events pushed by websocket
-  const eventQueueRef = useRef<SimulationEvent[]>([])
-  const [pendingEvents, setPendingEvents] = useState<SimulationEvent[]>([])
+  const selectedSessionIdRef = useRef<string | null>(null)
+  const [sessionsWithActivity, setSessionsWithActivity] = useState<Set<string>>(new Set())
+
+  const pendingEventsRef = useRef<SimulationEvent[]>([])
+  const [, setEventVersion] = useState(0)
+
+  const sessionEventsRef = useRef<Map<string, SimulationEvent[]>>(new Map())
+  const sessionSwitchPendingRef = useRef(false)
+  const dismissedSessionsRef = useRef<Map<string, SessionInfo>>(new Map())
+  const adapterRef = useRef(createGatewayAgentFlowAdapter())
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const consumeEvents = useCallback(() => {
-    // Note: The UI layer currently manages event consumption by pulling from pendingEvents.
-    if (pendingEvents.length > 0) {
-      setPendingEvents([])
+    pendingEventsRef.current.length = 0
+  }, [])
+
+  const selectSession = useCallback((sessionId: string | null) => {
+    sessionSwitchPendingRef.current = true
+    pendingEventsRef.current.length = 0
+    selectedSessionIdRef.current = sessionId
+    setSelectedSessionId(sessionId)
+    if (sessionId) {
+      setSessionsWithActivity((prev) => {
+        if (!prev.has(sessionId)) return prev
+        const next = new Set(prev)
+        next.delete(sessionId)
+        return next
+      })
     }
-  }, [pendingEvents])
+  }, [])
+
+  const flushSessionEvents = useCallback((sessionId: string, fromIndex = 0) => {
+    sessionSwitchPendingRef.current = false
+    const buffered = sessionEventsRef.current.get(sessionId) || []
+    pendingEventsRef.current.length = 0
+    pendingEventsRef.current.push(...buffered.slice(fromIndex))
+    setEventVersion((version) => version + 1)
+  }, [])
+
+  const getSessionEventCount = useCallback((sessionId: string): number => {
+    return sessionEventsRef.current.get(sessionId)?.length ?? 0
+  }, [])
+
+  const removeSession = useCallback((sessionId: string) => {
+    setSessions((prev) => {
+      const existing = prev.find((session) => session.id === sessionId)
+      if (existing) dismissedSessionsRef.current.set(sessionId, existing)
+      return prev.filter((session) => session.id !== sessionId)
+    })
+    setSessionsWithActivity((prev) => {
+      if (!prev.has(sessionId)) return prev
+      const next = new Set(prev)
+      next.delete(sessionId)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function seedSessions(): Promise<void> {
+      try {
+        const rows = await fetchSessionDirectory(50)
+        if (cancelled) return
+        const now = Date.now()
+        const seeded = sortSessions(
+          rows
+            .map((row) => toSessionInfo(row, now))
+            .filter((row): row is SessionInfo => row !== null),
+        )
+        if (seeded.length === 0) return
+        setSessions((prev) => {
+          let next = prev
+          for (const session of seeded) {
+            next = mergeSessionLists(next, session)
+          }
+          return next
+        })
+        if (!selectedSessionIdRef.current) {
+          const autoSelected = seeded[0]?.id || null
+          if (autoSelected) {
+            sessionSwitchPendingRef.current = true
+            pendingEventsRef.current.length = 0
+            selectedSessionIdRef.current = autoSelected
+            setSelectedSessionId(autoSelected)
+          }
+        }
+      } catch {
+        // Best-effort discovery only.
+      }
+    }
+
+    void seedSessions()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const connect = useCallback(() => {
-    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+    if (
+      wsRef.current
+      && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
       return
     }
 
     try {
-      const isSecure = window.location.protocol === 'https:';
-      const wsProtocol = isSecure ? 'wss:' : 'ws:';
-      // In standalone dashboard, this targets the nextjs rewrites /ws/:path*
-      // which forwards to gateway or local server natively supporting WebSockets.
+      const isSecure = window.location.protocol === 'https:'
+      const wsProtocol = isSecure ? 'wss:' : 'ws:'
       const wsUrl = `${wsProtocol}//${window.location.host}/ws/agent?session_id=global_agent_flow`
-      
+
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.log('[UA Bridge] WebSocket Connected')
-        setConnectionStatus('connected')
+        setConnectionStatus('watching')
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current)
           reconnectTimeoutRef.current = null
         }
       }
 
-      ws.onmessage = (event) => {
+      ws.onmessage = (message) => {
         try {
-          const data = JSON.parse(event.data)
-          
-          if (data.type === 'connected') {
-            const sid = data.data?.session?.session_id
-            if (sid) {
-              setSessions([{
-                id: sid,
-                label: `Session ${sid.slice(0,6)}`,
-                status: 'active',
-                startTime: Date.now(),
-                lastActivityTime: Date.now()
-              }])
-              
-              if (!selectedSessionIdRef.current) {
-                selectedSessionIdRef.current = sid
-                setSelectedSessionId(sid)
-              }
-            }
+          const parsed = JSON.parse(message.data)
+          if (parsed?.type === 'connected') {
+            setConnectionStatus('watching')
           }
-          
-          // Map backend event formats into SimulationEvent formats
-          const mappedEvent = mapBackendEventToSimulation(data)
-          if (mappedEvent) {
-             eventQueueRef.current.push(mappedEvent)
-             // Force react flush queue
-             setPendingEvents([...eventQueueRef.current])
+
+          const result = adapterRef.current.ingest(parsed)
+          const { sessionId, session, events } = result
+          if (!sessionId || !session) return
+
+          if (dismissedSessionsRef.current.has(sessionId)) {
+            dismissedSessionsRef.current.delete(sessionId)
           }
-          
-        } catch (e) {
-          console.error('[UA Bridge] Invalid message received', event.data, e)
+
+          setSessions((prev) => mergeSessionLists(prev, session))
+
+          if (!selectedSessionIdRef.current) {
+            sessionSwitchPendingRef.current = true
+            pendingEventsRef.current.length = 0
+            selectedSessionIdRef.current = sessionId
+            setSelectedSessionId(sessionId)
+          }
+
+          if (events.length > 0) {
+            const buffered = sessionEventsRef.current.get(sessionId) || []
+            buffered.push(...events)
+            sessionEventsRef.current.set(sessionId, buffered)
+          }
+
+          const selected = selectedSessionIdRef.current
+          if (events.length > 0 && selected && sessionId === selected && !sessionSwitchPendingRef.current) {
+            pendingEventsRef.current.push(...events)
+            setEventVersion((version) => version + 1)
+          } else if (events.length > 0 && sessionId !== selected) {
+            setSessionsWithActivity((prev) => {
+              if (prev.has(sessionId)) return prev
+              const next = new Set(prev)
+              next.add(sessionId)
+              return next
+            })
+          }
+        } catch (error) {
+          console.error('[UA Bridge] Invalid message received', message.data, error)
         }
       }
 
       ws.onclose = () => {
-        console.log('[UA Bridge] WebSocket Disconnected')
         setConnectionStatus('disconnected')
         wsRef.current = null
-        // Reconnect with backoff
         reconnectTimeoutRef.current = setTimeout(connect, 3000)
       }
 
-      ws.onerror = (err) => {
-        console.error('[UA Bridge] WebSocket Error:', err)
+      ws.onerror = (error) => {
+        console.error('[UA Bridge] WebSocket error', error)
       }
-    } catch (err) {
-      console.error('[UA Bridge] Exception during connect:', err)
+    } catch (error) {
+      console.error('[UA Bridge] Exception during connect', error)
+      setConnectionStatus('disconnected')
     }
   }, [])
 
@@ -130,20 +304,13 @@ export function useUABridge(): BridgeHookResult {
   }, [connect])
 
   const bridgeOpenFile = useCallback((_filePath: string, _line?: number) => {
-      // Stubbed: Dashboard visualization doesn't have local VSCode to open files into
+    // Standalone dashboard cannot open local editor buffers.
   }, [])
-  const selectSession = useCallback((sessionId: string | null) => {
-      selectedSessionIdRef.current = sessionId
-      setSelectedSessionId(sessionId)
-  }, [])
-  const flushSessionEvents = useCallback((_sessionId: string, _fromIndex?: number) => {}, [])
-  const getSessionEventCount = useCallback((_sessionId: string) => 0, [])
-  const removeSession = useCallback((_sessionId: string) => {}, [])
 
   return {
-    isVSCode: false,
+    isVSCode: true,
     connectionStatus,
-    pendingEvents,
+    pendingEvents: pendingEventsRef.current,
     consumeEvents,
     useMockData: false,
     bridgeOpenFile,
@@ -156,30 +323,4 @@ export function useUABridge(): BridgeHookResult {
     sessionsWithActivity,
     removeSession,
   }
-}
-
-// Very basic mapping from the universal_agent event stream -> the Holographic Agent visualizer SimulationEvents
-function mapBackendEventToSimulation(backendData: any): SimulationEvent | null {
-   if (!backendData || !backendData.type) return null;
-   
-   const tType = backendData.type;
-   const payload = backendData.data || {};
-   const time = Date.now();
-   const sessionId = payload.session_id;
-
-   if (tType === 'iteration_start' || tType === 'system_event') {
-       return { time, type: 'agent_spawn', payload: { ...payload, agentName: payload.agent_id || 'UA Agent', content: typeof payload.text === 'string' ? payload.text : JSON.stringify(payload) }, sessionId }
-   }
-   
-   if (tType === 'plan_update' || tType === 'status') {
-       return { time, type: 'message', payload: { content: typeof payload.text === 'string' ? payload.text : JSON.stringify(payload), role: 'assistant', agentId: payload.agent_id || 'main' }, sessionId }
-   }
-   
-   // Agent finished
-   if (tType === 'iteration_end' || tType === 'query_complete') {
-       return { time, type: 'agent_complete', payload: { agentId: payload.agent_id || 'main' }, sessionId }
-   }
-
-   // Optional, fallback map
-   return null;
 }
