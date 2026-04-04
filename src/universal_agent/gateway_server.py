@@ -6125,25 +6125,82 @@ def _match_auto_delegate_targets(
     return []
 
 
+def _todo_task_expected_final_channel(item: dict[str, Any]) -> str:
+    from universal_agent.services.todo_dispatch_service import resolve_execution_manifest
+
+    metadata = item.get("metadata") if isinstance(item, dict) else {}
+    resolved_metadata = metadata if isinstance(metadata, dict) else {}
+    manifest = resolve_execution_manifest(
+        resolved_metadata,
+        fallback_description=str(item.get("description") or "") if isinstance(item, dict) else "",
+    )
+    return str(manifest.get("final_channel") or "chat").strip().lower() or "chat"
+
+
+def _todo_task_has_recorded_final_delivery(
+    conn: sqlite3.Connection,
+    *,
+    snapshot: dict[str, Any],
+) -> bool:
+    task_id = str(snapshot.get("task_id") or "").strip()
+    item = snapshot.get("item") if isinstance(snapshot.get("item"), dict) else {}
+    if not task_id or not item:
+        return False
+
+    expected_channel = _todo_task_expected_final_channel(item)
+    if expected_channel == "email":
+        return task_hub._email_side_effects_detected(conn, task_id)
+
+    metadata = item.get("metadata") if isinstance(item, dict) else {}
+    dispatch_meta = dict((metadata or {}).get("dispatch") or {})
+    outbound = dict(dispatch_meta.get("outbound_delivery") or {})
+    outbound_channel = str(outbound.get("channel") or "").strip().lower()
+    delivery_marker = str(outbound.get("sent_at") or outbound.get("message_id") or "").strip()
+    if not delivery_marker:
+        return False
+    if expected_channel == "chat":
+        return outbound_channel in {"chat", "interactive_chat"}
+    return outbound_channel == expected_channel
+
+
+def _record_todo_chat_final_delivery(
+    conn: sqlite3.Connection,
+    *,
+    claimed_task_ids: list[str],
+    turn_id: str,
+) -> list[str]:
+    recorded_task_ids: list[str] = []
+    for task_id in claimed_task_ids:
+        item = task_hub.get_item(conn, task_id)
+        if not item:
+            continue
+        if _todo_task_expected_final_channel(item) != "chat":
+            continue
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id=task_id,
+            channel="chat",
+            message_id=turn_id,
+        )
+        recorded_task_ids.append(task_id)
+    return recorded_task_ids
+
+
 def _todo_execution_auto_complete_after_final_delivery(
     *,
     conn: sqlite3.Connection,
     session: GatewaySession,
     goal_satisfaction: dict[str, Any],
     unresolved: list[dict[str, Any]],
+    chat_response_delivered: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     contract = goal_satisfaction.get("contract") if isinstance(goal_satisfaction, dict) else {}
     observed = goal_satisfaction.get("observed") if isinstance(goal_satisfaction, dict) else {}
     if not isinstance(contract, dict) or not isinstance(observed, dict):
         return goal_satisfaction, unresolved
 
-    if not bool(contract.get("email_required")):
-        return goal_satisfaction, unresolved
-
     required_email_sends = max(1, int(contract.get("min_email_sends") or 0))
     observed_email_sends = max(0, int(observed.get("email_send_count") or 0))
-    if observed_email_sends < required_email_sends:
-        return goal_satisfaction, unresolved
 
     lifecycle_actions = {
         str(action or "").strip().lower()
@@ -6153,8 +6210,24 @@ def _todo_execution_auto_complete_after_final_delivery(
     if lifecycle_actions:
         return goal_satisfaction, unresolved
 
-    unresolved_task_ids = [str(snapshot.get("task_id") or "").strip() for snapshot in unresolved]
-    if not unresolved_task_ids or not all(task_hub._email_side_effects_detected(conn, task_id) for task_id in unresolved_task_ids):
+    unresolved_task_ids: list[str] = []
+    for snapshot in unresolved:
+        task_id = str(snapshot.get("task_id") or "").strip()
+        if not task_id:
+            continue
+        item = snapshot.get("item") if isinstance(snapshot.get("item"), dict) else {}
+        expected_channel = _todo_task_expected_final_channel(item)
+        if expected_channel == "email":
+            if observed_email_sends < required_email_sends:
+                return goal_satisfaction, unresolved
+        elif expected_channel == "chat":
+            if not chat_response_delivered:
+                return goal_satisfaction, unresolved
+        if not _todo_task_has_recorded_final_delivery(conn, snapshot=snapshot):
+            return goal_satisfaction, unresolved
+        unresolved_task_ids.append(task_id)
+
+    if not unresolved_task_ids:
         return goal_satisfaction, unresolved
 
     auto_completed_task_ids: list[str] = []
@@ -6163,7 +6236,7 @@ def _todo_execution_auto_complete_after_final_delivery(
             conn,
             task_id=task_id,
             action="complete",
-            reason="auto_completed_after_final_outbound_delivery",
+            reason="auto_completed_after_final_delivery",
             agent_id=f"todo:{session.session_id}",
         )
         auto_completed_task_ids.append(task_id)
@@ -6184,7 +6257,7 @@ def _todo_execution_auto_complete_after_final_delivery(
     observed_payload["auto_completed_task_ids"] = auto_completed_task_ids
     goal_satisfaction["observed"] = observed_payload
     logger.info(
-        "Auto-completed %d Task Hub item(s) after final outbound delivery for todo_execution session %s: %s",
+        "Auto-completed %d Task Hub item(s) after final delivery for todo_execution session %s: %s",
         len(auto_completed_task_ids),
         session.session_id,
         auto_completed_task_ids,
@@ -6269,6 +6342,7 @@ def _enforce_todo_execution_lifecycle(
                 session=session,
                 goal_satisfaction=goal_satisfaction,
                 unresolved=unresolved,
+                chat_response_delivered=bool(request_metadata.get("todo_final_response_delivered")),
             )
             if not unresolved:
                 return goal_satisfaction
@@ -6498,6 +6572,7 @@ async def _run_gateway_session_request(
         session=session,
     )
     saw_streaming_text = False
+    assistant_response_delivered = False
     tool_call_count = 0
     tool_calls_by_id: dict[str, dict[str, Any]] = {}
     execution_duration_seconds = 0.0
@@ -6598,6 +6673,9 @@ async def _run_gateway_session_request(
                 and saw_streaming_text
             ):
                 continue
+            if event.type == EventType.TEXT and isinstance(event.data, dict):
+                if str(event.data.get("text") or "").strip():
+                    assistant_response_delivered = True
             if (
                 event.type == EventType.TEXT
                 and isinstance(event.data, dict)
@@ -6646,6 +6724,24 @@ async def _run_gateway_session_request(
 
         if execution_duration_seconds <= 0:
             execution_duration_seconds = round(time.time() - execution_start_ts, 3)
+        if request_run_kind == "todo_execution" and assistant_response_delivered and isinstance(request.metadata, dict):
+            claimed_task_ids = [
+                str(task_id).strip()
+                for task_id in (request.metadata.get("claimed_task_ids") or [])
+                if str(task_id).strip()
+            ]
+            if claimed_task_ids:
+                from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+                with connect_runtime_db(get_activity_db_path()) as conn:
+                    recorded_task_ids = _record_todo_chat_final_delivery(
+                        conn,
+                        claimed_task_ids=claimed_task_ids,
+                        turn_id=turn_id,
+                    )
+                if recorded_task_ids:
+                    request.metadata["todo_final_response_delivered"] = True
+                    request.metadata["todo_recorded_chat_delivery_task_ids"] = recorded_task_ids
         goal_satisfaction = mission_tracker.evaluate()
         if request_run_kind == "todo_execution":
             goal_satisfaction = _enforce_todo_execution_lifecycle(

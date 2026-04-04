@@ -43,14 +43,23 @@ def _seed_email_task(conn: sqlite3.Connection, *, task_id: str, title: str, scor
     )
 
 
-def _seed_tracked_chat_task(conn: sqlite3.Connection, *, task_id: str, title: str, source_ref: str) -> None:
+def _seed_tracked_chat_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    title: str,
+    source_ref: str,
+    description: str = "Create the requested report and email it to the user.",
+    delivery_mode: str = "standard_report",
+    final_channel: str = "email",
+) -> None:
     task_hub.ensure_schema(conn)
     task_hub.upsert_item(
         conn,
         {
             "task_id": task_id,
             "title": title,
-            "description": "Create the requested report and email it to the user.",
+            "description": description,
             "project_key": "immediate",
             "priority": 1,
             "source_kind": "chat_panel",
@@ -62,9 +71,16 @@ def _seed_tracked_chat_task(conn: sqlite3.Connection, *, task_id: str, title: st
             "trigger_type": "immediate",
             "labels": ["chat-panel", "interactive"],
             "metadata": {
-                "delivery_mode": "standard_report",
+                "delivery_mode": delivery_mode,
                 "canonical_execution_owner": "interactive_chat_session",
                 "intake_channel": "chat_panel",
+                "workflow_manifest": {
+                    "workflow_kind": "interactive_answer" if final_channel == "chat" else "research_report_email",
+                    "delivery_mode": delivery_mode,
+                    "requires_pdf": False,
+                    "final_channel": final_channel,
+                    "canonical_executor": "simone_first",
+                },
             },
         },
     )
@@ -508,5 +524,77 @@ def test_todo_execution_auto_completes_chat_task_after_final_delivery(monkeypatc
     assert item["status"] == task_hub.TASK_STATUS_COMPLETED
     assert item["seizure_state"] == "completed"
     assert item["completion_token"]
+    assert assignment["state"] == "completed"
+    assert assignment["ended_at"]
+
+
+def test_todo_execution_auto_completes_interactive_chat_task_after_final_chat_delivery(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path, session_id="session_chat_auto_complete")
+
+    with _db_connect(db_path) as conn:
+        _seed_tracked_chat_task(
+            conn,
+            task_id="chat:session_chat_auto_complete:turn_001",
+            title="Summarize the latest session activity",
+            source_ref=session.session_id,
+            description="Summarize the latest session activity directly in chat.",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id=f"todo:{session.session_id}",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_id = history[0]["assignment_id"]
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="chat:session_chat_auto_complete:turn_001",
+            channel="chat",
+            message_id="turn_001",
+            sent_at="2026-04-04T13:00:00Z",
+        )
+
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Summarize the latest session activity directly in chat."),
+        run_kind="todo_execution",
+    )
+
+    result = gateway_server._enforce_todo_execution_lifecycle(
+        session=session,
+        request=GatewayRequest(
+            user_input="Summarize the latest session activity directly in chat.",
+            metadata={
+                "source": "chat_panel",
+                "run_kind": "todo_execution",
+                "claimed_task_ids": ["chat:session_chat_auto_complete:turn_001"],
+                "claimed_assignment_ids": [assignment_id],
+                "todo_final_response_delivered": True,
+            },
+        ),
+        mission_tracker=tracker,
+        goal_satisfaction=tracker.evaluate(),
+    )
+
+    with _db_connect(db_path) as conn:
+        item = task_hub.get_item(conn, "chat:session_chat_auto_complete:turn_001")
+        assignment = conn.execute(
+            "SELECT state, ended_at, result_summary FROM task_hub_assignments WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+
+    assert result["passed"] is True
+    assert result["stage_status"] == "completed"
+    assert result["terminal"] is True
+    assert result["observed"]["auto_completed_after_delivery"] is True
+    assert result["observed"]["auto_completed_task_ids"] == ["chat:session_chat_auto_complete:turn_001"]
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+    assert item["seizure_state"] == "completed"
+    assert item["completion_token"]
+    assert item["metadata"]["dispatch"]["outbound_delivery"]["channel"] == "chat"
     assert assignment["state"] == "completed"
     assert assignment["ended_at"]
