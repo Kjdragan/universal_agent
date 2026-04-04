@@ -1497,6 +1497,51 @@ def _email_side_effects_detected(conn: sqlite3.Connection, task_id: str) -> bool
     )
 
 
+def _task_expected_final_channel(task: dict[str, Any]) -> str:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    manifest = metadata.get("workflow_manifest") if isinstance(metadata.get("workflow_manifest"), dict) else {}
+    final_channel = str(manifest.get("final_channel") or "").strip().lower()
+    if final_channel:
+        return final_channel
+    delivery_mode = str(metadata.get("delivery_mode") or "").strip().lower()
+    if delivery_mode == "interactive_chat":
+        return "chat"
+    return "email"
+
+
+def _task_canonical_executor(task: dict[str, Any]) -> str:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    manifest = metadata.get("workflow_manifest") if isinstance(metadata.get("workflow_manifest"), dict) else {}
+    return str(manifest.get("canonical_executor") or "").strip().lower()
+
+
+def _task_has_verified_final_delivery(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+    task_id = str(task.get("task_id") or "").strip()
+    if not task_id:
+        return False
+
+    expected_channel = _task_expected_final_channel(task)
+    if expected_channel == "email":
+        return _email_side_effects_detected(conn, task_id)
+
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    dispatch_meta = dict((metadata or {}).get("dispatch") or {})
+    outbound = dict(dispatch_meta.get("outbound_delivery") or {})
+    outbound_channel = str(outbound.get("channel") or "").strip().lower()
+    delivery_marker = str(outbound.get("sent_at") or outbound.get("message_id") or "").strip()
+    if not delivery_marker:
+        return False
+    if expected_channel == "chat":
+        return outbound_channel in {"chat", "interactive_chat"}
+    return outbound_channel == expected_channel
+
+
+def _task_can_self_verify_after_delivery(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
+    if _task_canonical_executor(task) != "simone_first":
+        return False
+    return _task_has_verified_final_delivery(conn, task)
+
+
 def record_task_outbound_delivery(
     conn: sqlite3.Connection,
     *,
@@ -1822,6 +1867,9 @@ def finalize_assignments(
         task_status = str(task_row["status"] or "").strip().lower()
         metadata = _json_loads_obj(task_row["metadata_json"], default={})
         dispatch_meta = dict(metadata.get("dispatch") or {})
+        task_item = get_item(conn, task_id)
+        if not task_item:
+            continue
         dispatch_meta.update(
             {
                 "last_assignment_state": state,
@@ -1838,6 +1886,7 @@ def finalize_assignments(
         dispatch_meta.pop("active_workspace_dir", None)
         dispatch_meta.pop("active_workflow_run_id", None)
         dispatch_meta.pop("active_workflow_attempt_id", None)
+        task_item["metadata"] = metadata
 
         if task_status == TASK_STATUS_COMPLETED:
             metadata["dispatch"] = dispatch_meta
@@ -1962,6 +2011,29 @@ def finalize_assignments(
             reviewed += 1
             logger.warning(
                 "Task Hub ToDo finalize moved task %s to needs_review after completed run without explicit disposition",
+                task_id,
+            )
+            continue
+
+        if policy_norm == "todo" and _task_can_self_verify_after_delivery(conn, task_item):
+            dispatch_meta["last_disposition"] = "completed"
+            dispatch_meta["last_disposition_reason"] = "todo_self_reviewed_after_delivery"
+            dispatch_meta["completion_unverified"] = False
+            dispatch_meta["auto_reviewed_by"] = "simone"
+            dispatch_meta["auto_reviewed_at"] = now_iso
+            metadata["dispatch"] = dispatch_meta
+            completion_token = f"auto_{uuid.uuid4().hex[:12]}_{now_iso}"
+            conn.execute(
+                """
+                UPDATE task_hub_items
+                SET status=?, seizure_state=?, completion_token=?, metadata_json=?, updated_at=?
+                WHERE task_id=?
+                """,
+                (TASK_STATUS_COMPLETED, "completed", completion_token, _json_dumps(metadata), now_iso, task_id),
+            )
+            completed += 1
+            logger.info(
+                "Task Hub ToDo finalize auto-completed task %s after verified final delivery",
                 task_id,
             )
             continue
@@ -2819,6 +2891,11 @@ def perform_task_action(
         )
     elif action_norm == "complete":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta["last_disposition"] = "completed"
+        dispatch_meta["last_disposition_reason"] = reason_text or "manual_complete"
+        dispatch_meta["completion_unverified"] = False
+        metadata["dispatch"] = dispatch_meta
         _completion_token = f"api_{uuid.uuid4().hex[:12]}_{now_iso}"
         _complete_active_assignments_for_task(conn, task_id=task_id, result_summary=reason_text or "completed", ended_at=now_iso)
         conn.execute(

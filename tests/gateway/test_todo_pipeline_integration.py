@@ -598,3 +598,54 @@ def test_todo_execution_auto_completes_interactive_chat_task_after_final_chat_de
     assert item["metadata"]["dispatch"]["outbound_delivery"]["channel"] == "chat"
     assert assignment["state"] == "completed"
     assert assignment["ended_at"]
+
+
+@pytest.mark.asyncio
+async def test_todo_queue_shows_self_reviewed_delivery_as_completed(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path, session_id="session_chat_self_review")
+
+    with _db_connect(db_path) as conn:
+        _seed_tracked_chat_task(
+            conn,
+            task_id="chat:session_chat_self_review:turn_001",
+            title="Houston weather poem",
+            source_ref=session.session_id,
+            description="Get the forecast for Houston, write a poem, then email it.",
+            delivery_mode="standard_report",
+            final_channel="email",
+        )
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id=f"todo:{session.session_id}",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_id = history[0]["assignment_id"]
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="chat:session_chat_self_review:turn_001",
+            channel="agentmail",
+            message_id="msg-self-review",
+            sent_at="2026-04-04T12:18:00Z",
+        )
+        result = task_hub.finalize_assignments(
+            conn,
+            assignment_ids=[assignment_id],
+            state="failed",
+            result_summary="todo_execution_missing_lifecycle_mutation",
+            reopen_in_progress=True,
+            policy="todo",
+        )
+        item = task_hub.get_item(conn, "chat:session_chat_self_review:turn_001")
+
+    assert result["completed"] == 1
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+    assert item["metadata"]["dispatch"]["last_disposition_reason"] == "todo_self_reviewed_after_delivery"
+
+    completed = await gateway_server.dashboard_todolist_agent_queue(offset=0, limit=20, status="completed")
+    completed_item = next(item for item in completed["items"] if item["task_id"] == "chat:session_chat_self_review:turn_001")
+    assert completed_item["board_lane"] == "completed"
+    assert completed_item["requires_simone_review"] is False

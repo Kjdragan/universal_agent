@@ -189,6 +189,50 @@ def test_finalize_assignments_todo_with_generic_outbound_delivery_moves_to_revie
     assert item["metadata"]["dispatch"]["completion_unverified"] is True
 
 
+def test_finalize_assignments_todo_self_reviews_after_verified_chat_panel_delivery():
+    conn = _conn()
+    _insert_task(
+        conn,
+        task_id="chat:houton-weather",
+        status=task_hub.TASK_STATUS_IN_PROGRESS,
+        metadata_json=(
+            '{"delivery_mode":"standard_report",'
+            '"workflow_manifest":{"workflow_kind":"research_report_email","delivery_mode":"standard_report",'
+            '"requires_pdf":false,"final_channel":"email","canonical_executor":"simone_first"},'
+            '"dispatch":{"active_assignment_id":"asg-chat","active_provider_session_id":"session_chat",'
+            '"outbound_delivery":{"channel":"agentmail","message_id":"msg-123","sent_at":"2026-03-31T15:00:00Z"}}}'
+        ),
+        seizure_state="seized",
+    )
+    conn.execute(
+        """
+        INSERT INTO task_hub_assignments (
+            assignment_id, task_id, agent_id, provider_session_id, state, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("asg-chat", "chat:houton-weather", "todo:session_chat", "session_chat", "running", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+    result = task_hub.finalize_assignments(
+        conn,
+        assignment_ids=["asg-chat"],
+        state="failed",
+        result_summary="todo_execution_missing_lifecycle_mutation",
+        reopen_in_progress=True,
+        policy="todo",
+    )
+
+    item = task_hub.get_item(conn, "chat:houton-weather")
+    assert result["completed"] == 1
+    assert result["reviewed"] == 0
+    assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+    assert item["seizure_state"] == "completed"
+    assert item["metadata"]["dispatch"]["last_disposition_reason"] == "todo_self_reviewed_after_delivery"
+    assert item["metadata"]["dispatch"]["completion_unverified"] is False
+    assert item["metadata"]["dispatch"]["auto_reviewed_by"] == "simone"
+
+
 def test_reconcile_task_lifecycle_repairs_orphaned_and_unverified_completed():
     conn = _conn()
     _insert_task(

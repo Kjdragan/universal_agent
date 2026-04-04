@@ -1731,11 +1731,13 @@ class AgentHookSet:
             and not self._is_vp_worker_lane
         )
         self._vp_dispatch_seen_this_turn = False
+        research_delegate_required = (
+            manifest_workflow_kind.startswith("research_report")
+            if current_run_kind == "todo_execution" and manifest_workflow_kind
+            else _looks_like_research_report_pipeline_intent(prompt_text)
+        )
         self._requires_research_delegate_first = (
-            (
-                _looks_like_research_report_pipeline_intent(prompt_text)
-                or manifest_workflow_kind.startswith("research_report")
-            )
+            research_delegate_required
             and not self._requires_vp_tool_path
             and not self._is_vp_worker_lane
             and not self._is_cron_lane

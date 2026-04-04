@@ -474,6 +474,8 @@ function FileViewer() {
         ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(viewingFile.path)}`
         : viewingFile.type === "vps_artifact"
           ? `${API_BASE}/api/vps/file?scope=artifacts&path=${encodeURIComponent(viewingFile.path)}`
+          : viewingFile.type === "session_file"
+            ? buildSessionFileUrl(currentSession, viewingFile.path)
           : buildDurableFileUrl(currentSession, viewingFile.path)
     : "";
 
@@ -593,6 +595,15 @@ function buildDurableFileListUrl(
   return `${API_BASE}/api/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
 }
 
+function buildSessionFileListUrl(
+  session: { session_id?: string } | null | undefined,
+  path: string,
+): string {
+  const sessionId = String(session?.session_id || "").trim();
+  if (!sessionId) return "";
+  return `${API_BASE}/api/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+}
+
 function buildDurableFileUrl(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
   path: string,
@@ -600,6 +611,15 @@ function buildDurableFileUrl(
   if (session?.run_id) {
     return `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files/${encodeWorkspacePath(path)}`;
   }
+  const sessionId = String(session?.session_id || "").trim();
+  if (!sessionId) return "";
+  return `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/${encodeWorkspacePath(path)}`;
+}
+
+function buildSessionFileUrl(
+  session: { session_id?: string } | null | undefined,
+  path: string,
+): string {
   const sessionId = String(session?.session_id || "").trim();
   if (!sessionId) return "";
   return `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/${encodeWorkspacePath(path)}`;
@@ -712,7 +732,7 @@ function FileExplorer() {
         ? `${API_BASE}/api/vps/files?scope=workspaces&path=${encodeURIComponent(path)}`
         : mode === "vps_artifacts"
           ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
-          : buildDurableFileListUrl(currentSession, path);
+          : buildSessionFileListUrl(currentSession, path);
     fetch(url, { cache: "no-store" })
       .then(res => res.json())
       .then(data => {
@@ -770,6 +790,8 @@ function FileExplorer() {
             ? "vps_workspace"
             : mode === "vps_artifacts"
               ? "vps_artifact"
+              : mode === "session"
+                ? "session_file"
               : "file";
       setViewingFile({ name: itemName, path: fullPath, type: fileType });
       return;

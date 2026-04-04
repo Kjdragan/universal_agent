@@ -538,6 +538,41 @@ def test_todo_execution_manifest_enforces_research_delegate_first_without_prompt
     assert "research-specialist" in str(result.get("systemMessage", ""))
 
 
+def test_todo_execution_interactive_manifest_does_not_infer_research_from_prompt_boilerplate():
+    hooks = AgentHookSet(run_id="unit-todo-manifest-interactive")
+    hooks._resolved_run_kind = "todo_execution"
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {
+                "prompt": (
+                    "You are Simone, the Pipeline Orchestrator.\n"
+                    "For standard_report and enhanced_report: send exactly one final email with an executive summary.\n"
+                    "== EXECUTION MANIFEST ==\n"
+                    "workflow_kind=interactive_answer\n"
+                    "delivery_mode=interactive_chat\n"
+                    "requires_pdf=false\n"
+                    "final_channel=chat\n"
+                    "canonical_executor=simone_first\n\n"
+                    "Work Item 1: [chat:1] Write a short weather poem for Houston."
+                )
+            }
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+                "tool_input": {"queries": [{"use_case": "find a weather source"}]},
+            },
+            "tool-search-after-interactive-manifest",
+            {},
+        )
+    )
+
+    assert result == {}
+
+
 def test_todo_execution_blocks_ask_user_questions_and_requires_durable_disposition():
     hooks = AgentHookSet(run_id="unit-todo-no-human-question")
     hooks._resolved_run_kind = "todo_execution"
