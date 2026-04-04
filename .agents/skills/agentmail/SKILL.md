@@ -17,7 +17,10 @@ send_agentmail({
 })
 ```
 
-Required: `to`, `subject`, `body`. Optional: `cc`, `bcc`, `dry_run`.
+Required: `to`, `subject`, `body`. Optional: `cc`, `bcc`, `dry_run`, `require_approval`.
+
+- Default behavior: send directly.
+- Use `require_approval: true` only when a human should explicitly review the draft before it is sent.
 
 ## Before Sending, Ask Yourself
 

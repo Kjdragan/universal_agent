@@ -647,13 +647,13 @@ export default function MailPage() {
             overflow: "hidden",
           }}
         >
-          {/* Draft Queue */}
+          {/* Approval Draft Queue */}
           <div style={{ padding: "16px 16px 8px" }}>
-            <SectionTitle icon="edit_note" label="PENDING DRAFTS" count={drafts.length} />
+            <SectionTitle icon="edit_note" label="PENDING APPROVAL DRAFTS" count={drafts.length} />
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 16px" }}>
             {drafts.length === 0 ? (
-              <EmptyState message="No pending manual-review drafts" />
+              <EmptyState message="No pending approval drafts" />
             ) : (
               drafts.map((d) => (
                 <DraftCard

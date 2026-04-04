@@ -172,11 +172,24 @@ class TestInboxResolution:
 
 class TestSendEmail:
     @pytest.mark.asyncio
-    async def test_creates_draft_by_default(self, service, mock_agentmail_client):
+    async def test_sends_direct_by_default_even_when_legacy_auto_send_is_disabled(self, service, mock_agentmail_client):
         result = await service.send_email(
             to="kevin@example.com",
             subject="Test Report",
             text="Here is your report.",
+        )
+        assert result["status"] == "sent"
+        assert "message_id" in result
+        mock_agentmail_client.inboxes.messages.send.assert_awaited_once()
+        mock_agentmail_client.inboxes.drafts.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_creates_draft_only_when_explicit_approval_is_required(self, service, mock_agentmail_client):
+        result = await service.send_email(
+            to="kevin@example.com",
+            subject="Needs review",
+            text="Please approve this draft.",
+            require_approval=True,
         )
         assert result["status"] == "draft"
         assert "draft_id" in result
@@ -216,7 +229,7 @@ class TestSendEmail:
     @pytest.mark.asyncio
     async def test_draft_increments_counter(self, service):
         assert service._drafts_created == 0
-        await service.send_email(to="x@y.com", subject="s", text="t")
+        await service.send_email(to="x@y.com", subject="s", text="t", require_approval=True)
         assert service._drafts_created == 1
 
 
@@ -418,7 +431,7 @@ class TestStatus:
 class TestNotifications:
     @pytest.mark.asyncio
     async def test_draft_emits_notification(self, service):
-        await service.send_email(to="x@y.com", subject="s", text="t")
+        await service.send_email(to="x@y.com", subject="s", text="t", require_approval=True)
         service._notification_sink.assert_called()
         call_args = service._notification_sink.call_args[0][0]
         assert call_args["kind"] == "agentmail_draft_created"

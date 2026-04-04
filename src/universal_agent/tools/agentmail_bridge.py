@@ -94,6 +94,7 @@ def _resolve_email_mapping_from_runtime() -> tuple[Any, Any, dict[str, Any] | No
         "cc": str,
         "bcc": str,
         "dry_run": bool,
+        "require_approval": bool,
     }
 )
 async def mcp__internal__send_agentmail(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -116,6 +117,7 @@ async def _send_agentmail_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     cc = str(args.get("cc") or "")
     bcc = str(args.get("bcc") or "")
     dry_run = bool(args.get("dry_run", False))
+    require_approval = bool(args.get("require_approval", False))
 
     agentmail = _get_agentmail_service()
     if not agentmail:
@@ -165,7 +167,8 @@ async def _send_agentmail_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             subject=subject,
             text=body,      # pass body as text for simplicity
             html=body,      # also pass body as html just in case
-            force_send=not dry_run
+            force_send=not dry_run and not require_approval,
+            require_approval=require_approval or dry_run,
         )
         result_payload = result if isinstance(result, dict) else {}
         message_id = str(result_payload.get("message_id") or "").strip()

@@ -21426,11 +21426,17 @@ async def ops_agentmail_send(request: Request):
     text = str(body.get("text", "")).strip()
     html = body.get("html")
     force_send = bool(body.get("force_send", False))
+    require_approval = bool(body.get("require_approval", False))
     if not to or not subject or not text:
         raise HTTPException(status_code=400, detail="to, subject, and text are required")
     try:
         result = await _agentmail_service.send_email(
-            to=to, subject=subject, text=text, html=html, force_send=force_send,
+            to=to,
+            subject=subject,
+            text=text,
+            html=html,
+            force_send=force_send,
+            require_approval=require_approval,
         )
         return {"ok": True, **result}
     except RuntimeError as exc:

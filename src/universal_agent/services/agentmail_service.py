@@ -11,7 +11,7 @@ Env vars:
     AGENTMAIL_API_KEY              — API key from agentmail.to
     UA_AGENTMAIL_INBOX_ADDRESS     — pre-existing inbox address (optional)
     UA_AGENTMAIL_INBOX_USERNAME    — username for new inbox (default: simone)
-    UA_AGENTMAIL_AUTO_SEND         — 1 = send directly, 0 = create drafts (default)
+    UA_AGENTMAIL_AUTO_SEND         — legacy toggle; explicit require_approval now controls draft creation
     UA_AGENTMAIL_WS_ENABLED        — 1 = start WebSocket listener for inbound email
     UA_AGENTMAIL_WS_RECONNECT_BASE_DELAY — base backoff seconds (default 2)
     UA_AGENTMAIL_WS_RECONNECT_MAX_DELAY  — max backoff seconds (default 120)
@@ -552,8 +552,9 @@ class AgentMailService:
         attachments: Optional[list[dict[str, Any]]] = None,
         labels: Optional[list[str]] = None,
         force_send: bool = False,
+        require_approval: bool = False,
     ) -> dict[str, Any]:
-        """Send an email or create a draft depending on policy.
+        """Send an email or create a draft when explicit approval is required.
 
         Args:
             to: Recipient email address.
@@ -562,23 +563,34 @@ class AgentMailService:
             html: Optional HTML body (recommended for deliverability).
             attachments: Optional list of attachment dicts with content/filename/content_type.
             labels: Optional labels to apply.
-            force_send: Override draft policy and send directly.
+            force_send: Legacy/direct-send override.
+            require_approval: When true, create a review draft instead of sending immediately.
 
         Returns:
             Dict with message_id/draft_id and status.
         """
         self._assert_ready()
 
-        if _auto_send() or force_send:
-            return await self._send_direct(
-                to=to, subject=subject, text=text, html=html,
-                attachments=attachments, labels=labels,
-            )
-        else:
+        if require_approval:
             return await self._create_draft(
                 to=to, subject=subject, text=text, html=html,
                 attachments=attachments,
             )
+
+        if not _auto_send() and not force_send:
+            logger.info(
+                "📧 AgentMail auto-send legacy toggle is disabled, but explicit approval was not requested; sending directly."
+            )
+
+        if _auto_send() or force_send or not require_approval:
+            return await self._send_direct(
+                to=to, subject=subject, text=text, html=html,
+                attachments=attachments, labels=labels,
+            )
+        return await self._send_direct(
+            to=to, subject=subject, text=text, html=html,
+            attachments=attachments, labels=labels,
+        )
 
     async def _send_direct(
         self, *, to: str, subject: str, text: str,
