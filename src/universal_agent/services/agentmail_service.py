@@ -648,16 +648,32 @@ class AgentMailService:
     ) -> dict[str, Any]:
         """Approve and send a previously created draft."""
         self._assert_ready()
-        target_inbox_id = str(inbox_id or self._inbox_id or "").strip()
-        if not target_inbox_id:
+        candidate_inboxes: list[str] = []
+        for candidate in [inbox_id, self._inbox_id, *(self._inbox_ids or [])]:
+            clean_candidate = str(candidate or "").strip()
+            if clean_candidate and clean_candidate not in candidate_inboxes:
+                candidate_inboxes.append(clean_candidate)
+        if not candidate_inboxes:
             raise RuntimeError("agentmail_draft_send_missing_inbox")
-        msg = await self._client.inboxes.drafts.send(
-            inbox_id=target_inbox_id,
-            draft_id=draft_id,
-        )
-        self._messages_sent += 1
-        logger.info("📧 Draft sent draft_id=%s inbox_id=%s", draft_id, target_inbox_id)
-        return {"status": "sent", "draft_id": draft_id, "inbox_id": target_inbox_id}
+        errors: list[str] = []
+        for target_inbox_id in candidate_inboxes:
+            try:
+                await self._client.inboxes.drafts.send(
+                    inbox_id=target_inbox_id,
+                    draft_id=draft_id,
+                )
+                self._messages_sent += 1
+                logger.info("📧 Draft sent draft_id=%s inbox_id=%s", draft_id, target_inbox_id)
+                return {"status": "sent", "draft_id": draft_id, "inbox_id": target_inbox_id}
+            except Exception as exc:
+                logger.warning(
+                    "📧 Draft send failed draft_id=%s inbox_id=%s: %s",
+                    draft_id,
+                    target_inbox_id,
+                    exc,
+                )
+                errors.append(f"{target_inbox_id}: {exc}")
+        raise RuntimeError(f"agentmail_draft_send_failed: {' | '.join(errors)}")
 
     async def delete_draft(
         self,
@@ -667,15 +683,31 @@ class AgentMailService:
     ) -> dict[str, Any]:
         """Discard a draft that no longer needs manual approval."""
         self._assert_ready()
-        target_inbox_id = str(inbox_id or self._inbox_id or "").strip()
-        if not target_inbox_id:
+        candidate_inboxes: list[str] = []
+        for candidate in [inbox_id, self._inbox_id, *(self._inbox_ids or [])]:
+            clean_candidate = str(candidate or "").strip()
+            if clean_candidate and clean_candidate not in candidate_inboxes:
+                candidate_inboxes.append(clean_candidate)
+        if not candidate_inboxes:
             raise RuntimeError("agentmail_draft_delete_missing_inbox")
-        await self._client.inboxes.drafts.delete(
-            inbox_id=target_inbox_id,
-            draft_id=draft_id,
-        )
-        logger.info("📧 Draft deleted draft_id=%s inbox_id=%s", draft_id, target_inbox_id)
-        return {"status": "deleted", "draft_id": draft_id, "inbox_id": target_inbox_id}
+        errors: list[str] = []
+        for target_inbox_id in candidate_inboxes:
+            try:
+                await self._client.inboxes.drafts.delete(
+                    inbox_id=target_inbox_id,
+                    draft_id=draft_id,
+                )
+                logger.info("📧 Draft deleted draft_id=%s inbox_id=%s", draft_id, target_inbox_id)
+                return {"status": "deleted", "draft_id": draft_id, "inbox_id": target_inbox_id}
+            except Exception as exc:
+                logger.warning(
+                    "📧 Draft delete failed draft_id=%s inbox_id=%s: %s",
+                    draft_id,
+                    target_inbox_id,
+                    exc,
+                )
+                errors.append(f"{target_inbox_id}: {exc}")
+        raise RuntimeError(f"agentmail_draft_delete_failed: {' | '.join(errors)}")
 
     async def _await_read(
         self,

@@ -18,6 +18,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_pending_gated_requests", {})
     monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
     monkeypatch.setattr(gateway_server, "SESSION_API_TOKEN", "")
+    monkeypatch.setattr(gateway_server, "_require_ops_auth", lambda request, token_override=None: None)
+    monkeypatch.setattr(gateway_server, "_session_api_auth_required", lambda: False)
     monkeypatch.setattr(gateway_server, "_DEPLOYMENT_PROFILE", "local_workstation")
     monkeypatch.setenv("UA_GATEWAY_PORT", "0")
     monkeypatch.setenv("UA_DISABLE_HEARTBEAT", "1")
@@ -91,6 +93,10 @@ def test_drop_in_to_active_session_streams_tail_events(client, tmp_path, monkeyp
 
         with client.websocket_connect(f"/api/v1/sessions/{session_id}/stream") as ws2:
             assert ws2.receive_json()["type"] == "connected"
+            processing = ws2.receive_json()
+            assert processing["type"] == "status"
+            assert processing["data"]["status"] == "processing"
+            assert processing["data"]["active_turn_id"]
             ws2_types = set()
             ws2_texts = set()
             for _ in range(5):
@@ -118,3 +124,43 @@ def test_switching_sessions_does_not_create_unsolicited_sessions(client, tmp_pat
     assert sessions_response.status_code == 200
     listed_ids = {item["session_id"] for item in sessions_response.json()["sessions"]}
     assert listed_ids == {"alpha", "beta"}
+
+
+def test_session_info_prefers_active_run_workspace(client, tmp_path):
+    session_id = _create_session(client, tmp_path / "rehydrate_contract")
+    session = gateway_server.get_session(session_id)
+    assert session is not None
+    session.metadata["active_run_workspace"] = str(tmp_path / "AGENT_RUN_WORKSPACES" / "run_test")
+    session.metadata["active_run_id"] = "run_test"
+
+    response = client.get(f"/api/v1/sessions/{session_id}")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace_dir"] == str(tmp_path / "AGENT_RUN_WORKSPACES" / "run_test")
+    assert payload["run_id"] == "run_test"
+
+
+def test_run_info_includes_top_level_workspace_dir(client, monkeypatch):
+    class _OpsStub:
+        def get_run_details(self, run_id: str):
+            return {
+                "run": {
+                    "run_id": run_id,
+                    "workspace_dir": "/tmp/run_workspace",
+                    "status": "running",
+                    "run_kind": "todo_execution",
+                    "trigger_source": "chat_panel",
+                    "attempt_count": 1,
+                },
+                "workspace": {"workspace_dir": "/tmp/run_workspace"},
+            }
+
+    monkeypatch.setattr(gateway_server, "_ops_service", _OpsStub())
+
+    response = client.get("/api/v1/runs/run_123")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == "run_123"
+    assert payload["workspace_dir"] == "/tmp/run_workspace"
+    assert payload["status"] == "running"
+    assert payload["run_kind"] == "todo_execution"

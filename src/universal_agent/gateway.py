@@ -572,6 +572,7 @@ class InProcessGateway(Gateway):
         """Resume a session on the unified engine path. Caller must hold _execution_lock."""
         # === NEW UNIFIED PATH ===
         from universal_agent.identity import resolve_user_id
+        from universal_agent.run_catalog import RunCatalogService
 
         session = self._sessions.get(session_id)
         if session is None:
@@ -608,6 +609,17 @@ class InProcessGateway(Gateway):
         metadata.setdefault("engine", "process_turn")
         metadata["resumed"] = True
         metadata["usage"] = self._read_token_usage_from_trace(workspace_path)
+        active_run_id = str(metadata.get("active_run_id") or metadata.get("run_id") or "").strip()
+        if not active_run_id:
+            latest_run = RunCatalogService().find_latest_run_for_provider_session(session_id)
+            if latest_run:
+                latest_run_id = str(latest_run.get("run_id") or "").strip()
+                latest_workspace_dir = str(latest_run.get("workspace_dir") or "").strip()
+                if latest_run_id:
+                    metadata["active_run_id"] = latest_run_id
+                    metadata.setdefault("run_id", latest_run_id)
+                if latest_workspace_dir:
+                    metadata["active_run_workspace"] = latest_workspace_dir
         session.user_id = config.user_id or session.user_id or "unknown"
         session.workspace_dir = str(workspace_path)
         session.metadata = metadata

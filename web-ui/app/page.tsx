@@ -1623,17 +1623,21 @@ function ChatInterface() {
         });
         if (!res.ok) return;
         const payload = await res.json();
-        const workspace = String(payload.workspace_dir || "").trim();
+        const runPayload = payload?.run && typeof payload.run === "object" ? payload.run : {};
+        const workspace = String(payload.workspace_dir || runPayload.workspace_dir || "").trim();
         if (!workspace || cancelled) return;
         const snapshot = useAgentStore.getState().currentSession;
         if (!snapshot || snapshot.run_id !== currentSession.run_id || snapshot.workspace) return;
         setCurrentSession({
           ...snapshot,
           workspace,
-          run_status: payload.status ?? snapshot.run_status,
-          run_kind: payload.run_kind ?? snapshot.run_kind,
-          trigger_source: payload.trigger_source ?? snapshot.trigger_source,
-          attempt_count: typeof payload.attempt_count === "number" ? payload.attempt_count : snapshot.attempt_count,
+          run_status: payload.status ?? runPayload.status ?? snapshot.run_status,
+          run_kind: payload.run_kind ?? runPayload.run_kind ?? snapshot.run_kind,
+          trigger_source: payload.trigger_source ?? runPayload.trigger_source ?? snapshot.trigger_source,
+          attempt_count:
+            typeof payload.attempt_count === "number"
+              ? payload.attempt_count
+              : (typeof runPayload.attempt_count === "number" ? runPayload.attempt_count : snapshot.attempt_count),
         });
       } catch (error) {
         console.debug("run workspace metadata hydration skipped:", error);
@@ -2552,6 +2556,7 @@ export default function HomePage() {
     // Cleanup on unmount
     return () => {
       unsubscribes.forEach((unsub) => unsub());
+      ws.disconnect();
     };
   }, [ws, loadingAuth, authSession?.auth_required, authSession?.authenticated]);
 

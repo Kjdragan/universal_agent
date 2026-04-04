@@ -307,11 +307,11 @@ export default function MailPage() {
     setDraftSending(draft.draft_id);
     try {
       const params = new URLSearchParams();
-      params.set("inbox_id", draft.inbox_id);
+      if (draft.inbox_id) params.set("inbox_id", draft.inbox_id);
       const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts/${draft.draft_id}/send?${params}`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error(`send draft ${res.status}`);
+      if (!res.ok) throw new Error(await readErrorDetail(res, "send draft"));
       const data = await fetchDrafts();
       setDrafts(data.drafts);
     } catch (e) {
@@ -327,11 +327,11 @@ export default function MailPage() {
     setDraftDeleting(draft.draft_id);
     try {
       const params = new URLSearchParams();
-      params.set("inbox_id", draft.inbox_id);
+      if (draft.inbox_id) params.set("inbox_id", draft.inbox_id);
       const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/drafts/${draft.draft_id}?${params}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error(`discard draft ${res.status}`);
+      if (!res.ok) throw new Error(await readErrorDetail(res, "discard draft"));
       setDrafts((prev) => prev.filter((item) => item.draft_id !== draft.draft_id));
     } catch (e) {
       console.error("Failed to discard draft", e);

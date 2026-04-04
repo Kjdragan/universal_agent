@@ -235,6 +235,24 @@ class TestSendDraft:
             draft_id="drf_test_001",
         )
 
+    @pytest.mark.asyncio
+    async def test_send_draft_falls_back_across_inboxes(self, service, mock_agentmail_client):
+        service._inbox_id = "simone@testdomain.com"
+        service._inbox_ids = ["simone@testdomain.com", "alerts@testdomain.com"]
+
+        async def _send(*, inbox_id: str, draft_id: str):
+            if inbox_id == "simone@testdomain.com":
+                raise RuntimeError("draft not found")
+            return MagicMock()
+
+        mock_agentmail_client.inboxes.drafts.send.side_effect = _send
+
+        result = await service.send_draft("drf_test_001", inbox_id="simone@testdomain.com")
+
+        assert result["status"] == "sent"
+        assert result["inbox_id"] == "alerts@testdomain.com"
+        assert mock_agentmail_client.inboxes.drafts.send.await_count == 2
+
 
 class TestDeleteDraft:
     @pytest.mark.asyncio
@@ -246,6 +264,24 @@ class TestDeleteDraft:
             inbox_id="alerts@testdomain.com",
             draft_id="drf_test_001",
         )
+
+    @pytest.mark.asyncio
+    async def test_delete_draft_falls_back_across_inboxes(self, service, mock_agentmail_client):
+        service._inbox_id = "simone@testdomain.com"
+        service._inbox_ids = ["simone@testdomain.com", "alerts@testdomain.com"]
+
+        async def _delete(*, inbox_id: str, draft_id: str):
+            if inbox_id == "simone@testdomain.com":
+                raise RuntimeError("draft not found")
+            return None
+
+        mock_agentmail_client.inboxes.drafts.delete.side_effect = _delete
+
+        result = await service.delete_draft("drf_test_001", inbox_id="simone@testdomain.com")
+
+        assert result["status"] == "deleted"
+        assert result["inbox_id"] == "alerts@testdomain.com"
+        assert mock_agentmail_client.inboxes.drafts.delete.await_count == 2
 
 
 class TestReply:

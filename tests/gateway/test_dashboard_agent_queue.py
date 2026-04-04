@@ -162,6 +162,44 @@ async def test_agent_queue_filter_by_single_status(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agent_queue_reconciles_orphaned_in_progress_tasks(monkeypatch, tmp_path):
+    """In-progress rows with no live execution should be repaired before projection."""
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setattr(gateway_server, "_session_execution_tasks", {})
+    monkeypatch.setattr(gateway_server, "_session_turn_state", {})
+    monkeypatch.setattr(gateway_server, "_session_runtime", {})
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_id = _seed_task(conn, task_id="tq-orphaned", title="Orphaned task", status="open")
+            task_hub.claim_task_for_agent(
+                conn,
+                task_id=task_id,
+                agent_id="todo:session_orphaned",
+                provider_session_id="session_orphaned",
+                workflow_run_id="run_orphaned",
+                workspace_dir=str(tmp_path / "AGENT_RUN_WORKSPACES" / "run_orphaned"),
+                claim_reason="test_orphaned",
+            )
+        finally:
+            conn.close()
+
+    response = await gateway_server.dashboard_todolist_agent_queue(
+        offset=0,
+        limit=10,
+        status="all",
+    )
+
+    assert response["status"] == "ok"
+    item = next(entry for entry in response["items"] if entry["task_id"] == "tq-orphaned")
+    assert item["status"] == task_hub.TASK_STATUS_OPEN
+    assert item["board_lane"] == "not_assigned"
+    assert item["reconciliation"]["orphaned_in_progress"] is False
+
+
+@pytest.mark.asyncio
 async def test_agent_queue_pagination(monkeypatch, tmp_path):
     """Pagination works correctly with offset and limit."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))

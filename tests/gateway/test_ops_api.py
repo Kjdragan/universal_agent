@@ -991,7 +991,7 @@ def test_ops_agentmail_send_draft_uses_requested_inbox(client, monkeypatch):
     }
 
 
-def test_ops_agentmail_delete_draft_requires_inbox_and_discards(client, monkeypatch):
+def test_ops_agentmail_delete_draft_uses_optional_inbox_and_discards(client, monkeypatch):
     class _AgentMailStub:
         async def delete_draft(self, draft_id: str, *, inbox_id: str | None = None):
             return {"status": "deleted", "draft_id": draft_id, "inbox_id": inbox_id}
@@ -999,8 +999,13 @@ def test_ops_agentmail_delete_draft_requires_inbox_and_discards(client, monkeypa
     monkeypatch.setattr(gateway_server, "_agentmail_service", _AgentMailStub())
 
     missing = client.delete("/api/v1/ops/agentmail/drafts/drf_123")
-    assert missing.status_code == 400
-    assert missing.json()["detail"] == "inbox_id query parameter is required"
+    assert missing.status_code == 200
+    assert missing.json() == {
+        "ok": True,
+        "status": "deleted",
+        "draft_id": "drf_123",
+        "inbox_id": None,
+    }
 
     resp = client.delete("/api/v1/ops/agentmail/drafts/drf_123?inbox_id=alerts@testdomain.com")
     assert resp.status_code == 200

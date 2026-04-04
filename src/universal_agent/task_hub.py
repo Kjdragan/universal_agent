@@ -2196,6 +2196,7 @@ def list_agent_queue(
     include_csi: bool = True,
     collapse_csi: bool = True,
     project_key: Optional[str] = None,
+    include_not_ready: bool = False,
 ) -> dict[str, Any]:
     ensure_schema(conn)
     rebuild_dispatch_queue(conn)
@@ -2206,7 +2207,6 @@ def list_agent_queue(
         SELECT *
         FROM task_hub_items
         WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review', 'delegated', 'pending_review')
-          AND agent_ready = 1
         ORDER BY
           CASE
             WHEN source_kind = 'system_command'
@@ -2221,6 +2221,8 @@ def list_agent_queue(
     ).fetchall()
 
     items = [hydrate_item(dict(row)) for row in rows]
+    if not include_not_ready:
+        items = [item for item in items if bool(item.get("agent_ready"))]
     items = [_decorate_csi_routing(item, threshold=policy.agent_threshold) for item in items]
     items = [
         item

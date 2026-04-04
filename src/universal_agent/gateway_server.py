@@ -3980,10 +3980,9 @@ def _session_run_summary(session: GatewaySession) -> Optional[dict[str, Any]]:
 
 
 def _session_run_id(session: GatewaySession) -> Optional[str]:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
     summary = _session_run_summary(session)
-    if not summary:
-        return None
-    run_id = str(summary.get("run_id") or "").strip()
+    run_id = str((summary or {}).get("run_id") or metadata.get("active_run_id") or metadata.get("run_id") or "").strip()
     if not run_id:
         return None
     if not isinstance(session.metadata, dict):
@@ -3992,11 +3991,29 @@ def _session_run_id(session: GatewaySession) -> Optional[str]:
     return run_id
 
 
+def _session_active_run_workspace(session: GatewaySession) -> Optional[str]:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    workspace_dir = str(metadata.get("active_run_workspace") or "").strip()
+    if workspace_dir:
+        return workspace_dir
+    summary = _session_run_summary(session)
+    if not summary:
+        return None
+    workspace_dir = str(summary.get("workspace_dir") or "").strip()
+    if not workspace_dir:
+        return None
+    if not isinstance(session.metadata, dict):
+        session.metadata = {}
+    session.metadata["active_run_workspace"] = workspace_dir
+    return workspace_dir
+
+
 def _live_session_payload(session: GatewaySession) -> dict[str, Any]:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     run_id = _session_run_id(session)
     # Prefer run-scoped workspace for file browsing
-    active_run_workspace = str(metadata.get("active_run_workspace") or "").strip()
+    active_run_workspace = _session_active_run_workspace(session) or ""
+    runtime = metadata.get("runtime") if isinstance(metadata.get("runtime"), dict) else {}
     return {
         "session_id": session.session_id,
         "user_id": session.user_id,
@@ -4004,6 +4021,7 @@ def _live_session_payload(session: GatewaySession) -> dict[str, Any]:
         "metadata": metadata,
         "run_id": run_id,
         "active_run_workspace": active_run_workspace or None,
+        "run_status": str(runtime.get("lifecycle_state") or "").strip() or None,
         "is_live_session": True,
     }
 
@@ -4130,6 +4148,39 @@ def _session_turn_snapshot(session_id: str) -> dict[str, Any]:
         }
         _session_turn_state[session_id] = snapshot
     return snapshot
+
+
+def _running_execution_session_ids() -> set[str]:
+    running_session_ids: set[str] = set()
+
+    for session_id, task in list(_session_execution_tasks.items()):
+        if task is not None and not task.done():
+            clean_session_id = str(session_id or "").strip()
+            if clean_session_id:
+                running_session_ids.add(clean_session_id)
+
+    for session_id, snapshot in list(_session_turn_state.items()):
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id or not isinstance(snapshot, dict):
+            continue
+        active_turn_id = str(snapshot.get("active_turn_id") or "").strip()
+        turns = snapshot.get("turns")
+        if not active_turn_id or not isinstance(turns, dict):
+            continue
+        active_record = turns.get(active_turn_id)
+        if isinstance(active_record, dict) and str(active_record.get("status") or "").strip() == TURN_STATUS_RUNNING:
+            running_session_ids.add(clean_session_id)
+
+    session_ids = set(_sessions.keys()) | set(_session_runtime.keys())
+    for session_id in session_ids:
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id:
+            continue
+        runtime = _session_runtime_snapshot(clean_session_id)
+        if int(runtime.get("active_runs", 0) or 0) > 0:
+            running_session_ids.add(clean_session_id)
+
+    return running_session_ids
 
 
 def _normalize_client_turn_id(value: Any) -> Optional[str]:
@@ -18169,9 +18220,10 @@ async def dashboard_todolist_agent_queue(
 
     Supports pagination and optional status filtering.
     When *status* is provided and not ``"all"``, a direct SQL query is used
-    so that the caller can filter by arbitrary status values.  Otherwise the
-    existing ``task_hub.list_agent_queue`` logic is preserved for backward
-    compatibility.
+    so that the caller can filter by arbitrary status values. Otherwise the
+    dashboard projection uses ``task_hub.list_agent_queue`` but includes
+    non-agent-ready rows so lifecycle reconciliation stays visible after an
+    orphaned in-progress task is reopened.
     """
     bounded_limit = max(1, min(int(limit), 100))
     bounded_offset = max(0, int(offset))
@@ -18180,6 +18232,10 @@ async def dashboard_todolist_agent_queue(
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
+            task_hub.reconcile_task_lifecycle(
+                conn,
+                running_session_ids=_running_execution_session_ids(),
+            )
             # When a specific status filter is requested, use raw SQL so the
             # caller can filter by any status (pending, in_progress, blocked,
             # completed, etc.) rather than only the active/agent-ready set.
@@ -18257,6 +18313,7 @@ async def dashboard_todolist_agent_queue(
                 include_csi=bool(include_csi),
                 collapse_csi=bool(collapse_csi),
                 project_key=project_key,
+                include_not_ready=True,
             )
             return {
                 "status": "ok",
@@ -21399,8 +21456,6 @@ async def ops_agentmail_delete_draft(request: Request, draft_id: str):
     if _agentmail_service is None:
         raise HTTPException(status_code=503, detail="AgentMail service not initialized")
     inbox_id = request.query_params.get("inbox_id")
-    if not inbox_id:
-        raise HTTPException(status_code=400, detail="inbox_id query parameter is required")
     try:
         result = await _agentmail_service.delete_draft(draft_id, inbox_id=inbox_id)
         return {"ok": True, **result}
@@ -24539,14 +24594,14 @@ async def get_session_info(session_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
 
     session.metadata.setdefault("user_id", session.user_id)
-
+    payload = _live_session_payload(session)
     return CreateSessionResponse(
-        session_id=session.session_id,
-        user_id=session.user_id,
-        workspace_dir=session.workspace_dir,
-        metadata=session.metadata,
-        run_id=_session_run_id(session),
-        is_live_session=True,
+        session_id=str(payload.get("session_id") or session.session_id),
+        user_id=str(payload.get("user_id") or session.user_id),
+        workspace_dir=str(payload.get("workspace_dir") or session.workspace_dir),
+        metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else session.metadata,
+        run_id=str(payload.get("run_id") or "").strip() or None,
+        is_live_session=bool(payload.get("is_live_session", True)),
     )
 
 
@@ -24561,7 +24616,18 @@ async def get_run_info(run_id: str, request: Request):
     details = _ops_service.get_run_details(safe_run_id)
     if not details:
         raise HTTPException(status_code=404, detail="Run not found")
-    return details
+    run_payload = details.get("run") if isinstance(details.get("run"), dict) else {}
+    workspace_payload = details.get("workspace") if isinstance(details.get("workspace"), dict) else {}
+    response = dict(details)
+    response.setdefault("run_id", str(run_payload.get("run_id") or safe_run_id))
+    response.setdefault("workspace_dir", str(run_payload.get("workspace_dir") or ""))
+    response.setdefault("status", run_payload.get("status"))
+    response.setdefault("run_kind", run_payload.get("run_kind"))
+    response.setdefault("trigger_source", run_payload.get("trigger_source"))
+    response.setdefault("attempt_count", run_payload.get("attempt_count"))
+    if workspace_payload:
+        response.setdefault("workspace_summary", workspace_payload)
+    return response
 
 
 @app.get("/api/v1/runs/{run_id}/attempts")
@@ -26541,6 +26607,37 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
         session_id=session_id,
     )
     _increment_metric("ws_attach_successes")
+
+    if session_id != "global_agent_flow":
+        turn_snapshot = _session_turn_snapshot(session_id)
+        active_turn_id = str(turn_snapshot.get("active_turn_id") or "").strip()
+        active_record = (
+            turn_snapshot.get("turns", {}).get(active_turn_id)
+            if active_turn_id and isinstance(turn_snapshot.get("turns"), dict)
+            else None
+        )
+        task = _session_execution_tasks.get(session_id)
+        if (
+            active_turn_id
+            and isinstance(active_record, dict)
+            and str(active_record.get("status") or "").strip() == TURN_STATUS_RUNNING
+            and task is not None
+            and not task.done()
+        ):
+            await manager.send_json(
+                connection_id,
+                {
+                    "type": "status",
+                    "data": {
+                        "status": "processing",
+                        "turn_id": active_turn_id,
+                        "active_turn_id": active_turn_id,
+                        "message": "Reattached to active turn in progress.",
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                session_id=session_id,
+            )
 
     try:
         while True:
