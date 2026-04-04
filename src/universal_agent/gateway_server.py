@@ -18232,10 +18232,11 @@ async def dashboard_todolist_agent_queue(
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
-            task_hub.reconcile_task_lifecycle(
-                conn,
-                running_session_ids=_running_execution_session_ids(),
-            )
+            if status_filter == "all":
+                task_hub.reconcile_task_lifecycle(
+                    conn,
+                    running_session_ids=_running_execution_session_ids(),
+                )
             # When a specific status filter is requested, use raw SQL so the
             # caller can filter by any status (pending, in_progress, blocked,
             # completed, etc.) rather than only the active/agent-ready set.
