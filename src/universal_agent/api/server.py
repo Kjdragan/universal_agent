@@ -543,6 +543,19 @@ async def _fetch_gateway_run_attempts(run_id: str) -> Optional[list[dict[str, An
     return attempts if isinstance(attempts, list) else []
 
 
+def _build_global_agent_flow_session_info(owner_id: str) -> SessionInfo:
+    """Construct the observer session payload used by the Agent Flow dashboard."""
+    return SessionInfo(
+        session_id="global_agent_flow",
+        workspace="global",
+        user_id=owner_id,
+        session_url=None,
+        logfire_enabled=bool(os.getenv("LOGFIRE_TOKEN")),
+        run_id=None,
+        is_live_session=False,
+    )
+
+
 async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: bool) -> None:
     if session_id == "global_agent_flow":
         return
@@ -2009,12 +2022,7 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
         # Send connected event
         session_info = None
         if session_id == "global_agent_flow":
-            from universal_agent.core.session import SessionInfo
-            session_info = SessionInfo(
-                session_id="global_agent_flow",
-                workspace="global",
-                user_id=owner_id
-            )
+            session_info = _build_global_agent_flow_session_info(owner_id)
         elif session_id:
             logger.info(f"Attempting to resume session: {session_id}")
             session_info = await bridge.resume_session(session_id)
