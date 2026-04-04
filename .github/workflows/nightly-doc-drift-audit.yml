@@ -113,6 +113,9 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Authenticate pushes with the token (fixes git exit 128 from token-less push)
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
           # Clean up any orphan drift-report branches from previous failed runs
           echo "🧹 Cleaning up orphan drift-report branches..."
           for orphan in $(git ls-remote --heads origin 'refs/heads/chore/drift-report-*' | awk '{print $2}' | sed 's|refs/heads/||'); do
@@ -193,6 +196,7 @@ jobs:
           oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
           tags: tag:ci-gha
           hostname: gha-doc-stage2-${{ github.run_id }}
+          ping: ${{ secrets.VPS_SSH_HOST }}
 
       - name: "Stage 2 — Copy report and dispatch VP missions"
         if: steps.audit.outputs.exit_code != '0'
