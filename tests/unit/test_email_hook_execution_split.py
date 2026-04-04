@@ -26,10 +26,12 @@ def test_email_handler_prompt_is_triage_only():
     prompt = service._build_email_handler_prompt(action, action.message or "")
 
     assert "TRIAGE-ONLY" in prompt
-    assert "receipt-only" in prompt
+    assert "Task Hub" in prompt
+    assert "routing_decision" in prompt
     assert "do not run research" in prompt.lower()
-    assert "vp_dispatch_mission" not in prompt
-    assert "task_hub_task_action(action='delegate'" not in prompt
+    assert "do not use task(...)" in prompt.lower()
+    assert "task(subagent_type='email-handler'" not in prompt.lower()
+    assert "persist triage context" not in prompt.lower()
 
 
 def test_email_hook_triage_records_metadata_without_completing_task(monkeypatch, tmp_path):

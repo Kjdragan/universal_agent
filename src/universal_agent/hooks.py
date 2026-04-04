@@ -425,6 +425,17 @@ def _strip_prompt_vp_boilerplate(text: Any) -> str:
     return _TODO_DISPATCH_VP_FALLBACK_BLOCK.sub("", candidate).strip()
 
 
+def _strip_email_triage_boilerplate(text: Any) -> str:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return ""
+
+    marker = "━━━ EMAIL PAYLOAD ━━━"
+    if marker in candidate:
+        return candidate.split(marker, 1)[-1].strip()
+    return candidate
+
+
 def _allow_prompt_inferred_vp_routing_for_hooks() -> bool:
     source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
     return source not in _PROMPT_INFERRED_VP_BLOCKED_SOURCES
@@ -1724,7 +1735,12 @@ class AgentHookSet:
             else {}
         )
         manifest_workflow_kind = str(self._todo_execution_manifest.get("workflow_kind") or "").strip().lower()
-        vp_inference_prompt = _strip_prompt_vp_boilerplate(prompt_text)
+        prompt_for_inference = (
+            _strip_email_triage_boilerplate(prompt_text)
+            if current_run_kind == "email_triage"
+            else prompt_text
+        )
+        vp_inference_prompt = _strip_prompt_vp_boilerplate(prompt_for_inference)
         self._requires_vp_tool_path = (
             _allow_prompt_inferred_vp_routing_for_hooks()
             and _looks_like_explicit_vp_intent(vp_inference_prompt)
@@ -1732,9 +1748,13 @@ class AgentHookSet:
         )
         self._vp_dispatch_seen_this_turn = False
         research_delegate_required = (
-            manifest_workflow_kind.startswith("research_report")
-            if current_run_kind == "todo_execution" and manifest_workflow_kind
-            else _looks_like_research_report_pipeline_intent(prompt_text)
+            False
+            if current_run_kind == "email_triage"
+            else (
+                manifest_workflow_kind.startswith("research_report")
+                if current_run_kind == "todo_execution" and manifest_workflow_kind
+                else _looks_like_research_report_pipeline_intent(prompt_for_inference)
+            )
         )
         self._requires_research_delegate_first = (
             research_delegate_required
@@ -1743,9 +1763,11 @@ class AgentHookSet:
             and not self._is_cron_lane
         )
         self._research_delegate_seen_this_turn = False
-        self._notebooklm_intent_this_turn = _looks_like_notebooklm_intent(prompt_text)
+        self._notebooklm_intent_this_turn = (
+            False if current_run_kind == "email_triage" else _looks_like_notebooklm_intent(prompt_for_inference)
+        )
         self._requires_youtube_skill_first = (
-            _looks_like_youtube_transcript_intent(prompt_text)
+            _looks_like_youtube_transcript_intent(prompt_for_inference)
             and not self._requires_vp_tool_path
             and not self._is_vp_worker_lane
             and not self._is_cron_lane
@@ -1779,7 +1801,11 @@ class AgentHookSet:
                 if ws:
                     self._skill_candidate_log_path = str(Path(ws) / "skill_candidates.log")
         
-        if not self._initial_decomposition_prompt_injected and len(prompt_text.split()) > 10:
+        if (
+            current_run_kind != "email_triage"
+            and not self._initial_decomposition_prompt_injected
+            and len(prompt_text.split()) > 10
+        ):
             self._initial_decomposition_prompt_injected = True
             nlm_hint = ""
             if self._notebooklm_intent_this_turn:

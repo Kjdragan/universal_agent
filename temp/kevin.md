@@ -52,7 +52,7 @@ Services for agens dirtectory ()angent native/first)
 
 google notebooklm knopwledge/process base plus gems = agentic analysis system for any process.
 
-omc  install
+DONE: omc  install
 
 start using gemini deep research in notebooklm daily: automate?
 

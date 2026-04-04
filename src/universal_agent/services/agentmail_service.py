@@ -162,6 +162,11 @@ _DEFAULT_TRUSTED_SENDERS = (
 _QUEUE_STATUS_QUEUED = "queued"
 _QUEUE_STATUS_DISPATCHING = "dispatching"
 _QUEUE_STATUS_BUSY_RETRY = "busy_retry"
+_QUEUE_STATUS_TRIAGED = "triaged"
+_QUEUE_STATUS_ACK_SENT = "ack_sent"
+_QUEUE_STATUS_DISPATCHED_TO_TODO = "dispatched_to_todo"
+_QUEUE_STATUS_REVIEW_REQUIRED = "review_required"
+_QUEUE_STATUS_QUARANTINED = "quarantined"
 _QUEUE_STATUS_COMPLETED = "completed"
 _QUEUE_STATUS_FAILED = "failed"
 _QUEUE_STATUS_CANCELLED = "cancelled"
@@ -1208,109 +1213,100 @@ class AgentMailService:
                             message_id, index, exc,
                         )
 
-                if sender_trusted and message_id and self._dispatch_with_admission_fn:
-                    self._last_trusted_inbound_at = _iso_now()
-                    queue_id, created = self._queue_insert_trusted_inbound(
-                        message_id=f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id,
-                        thread_id=thread_id,
+                classified_priority: int | None = None
+                try:
+                    from universal_agent.services.priority_classifier import (
+                        classify_email_priority,
+                        TaskPriority,
+                    )
+
+                    _priority_decision = classify_email_priority(
+                        sender_trusted=sender_trusted,
+                        is_reply=bool(task_content),
+                        thread_message_count=1,
+                        subject=subject,
+                        body_snippet=task_content[:200],
+                    )
+                    _PRIORITY_VALUE_MAP = {
+                        TaskPriority.P0_IMMEDIATE: 0,
+                        TaskPriority.P1_SOON: 1,
+                        TaskPriority.P2_SCHEDULED: 2,
+                        TaskPriority.P3_BACKGROUND: 3,
+                    }
+                    classified_priority = _PRIORITY_VALUE_MAP.get(
+                        _priority_decision.priority, 2,
+                    )
+                except Exception as _prio_exc:
+                    logger.debug("Priority pre-classification failed (non-fatal): %s", _prio_exc)
+
+                extracted_due_at: str | None = None
+                try:
+                    from universal_agent.services.llm_classifier import extract_due_at
+
+                    _temporal = await extract_due_at(
+                        subject=subject,
+                        body=task_content,
+                    )
+                    extracted_due_at = _temporal.get("due_at")
+                    if extracted_due_at:
+                        logger.info(
+                            "📧⏰ Extracted due_at=%s from email subject=%r (method=%s, confidence=%s)",
+                            extracted_due_at, subject,
+                            _temporal.get("method"), _temporal.get("confidence"),
+                        )
+                except Exception as _time_exc:
+                    logger.debug("Temporal extraction failed (non-fatal): %s", _time_exc)
+
+                virtual_thread_id = f"{thread_id}_{index}" if len(disjointed_tasks) > 1 else thread_id
+                virtual_message_id = f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id
+                bridge_result = self._materialize_email_task(
+                    thread_id=virtual_thread_id,
+                    message_id=virtual_message_id,
+                    real_thread_id=thread_id,
+                    real_message_id=message_id,
+                    sender_email=sender_email,
+                    subject=f"{subject} (Task {index+1}/{len(disjointed_tasks)})" if len(disjointed_tasks) > 1 else subject,
+                    reply_text=task_content,
+                    session_key=session_key,
+                    sender_trusted=sender_trusted,
+                    security_classification="pending_triage" if sender_trusted else "untriaged",
+                    triage_pending=sender_trusted,
+                    priority=classified_priority,
+                    due_at=extracted_due_at if sender_trusted else None,
+                )
+
+                _task_id = bridge_result.get("task_id", "") if bridge_result else ""
+                if sender_trusted and extracted_due_at and _task_id:
+                    try:
+                        await self._schedule_future_task(
+                            task_id=_task_id,
+                            due_at=extracted_due_at,
+                            subject=subject,
+                            reply_text=task_content,
+                            sender_email=sender_email,
+                            thread_id=thread_id,
+                        )
+                    except Exception as _sched_exc:
+                        logger.warning(
+                            "📧⏰ Failed to schedule future task %s: %s",
+                            _task_id, _sched_exc,
+                        )
+
+                if message_id and self._dispatch_with_admission_fn:
+                    if sender_trusted:
+                        self._last_trusted_inbound_at = _iso_now()
+                    self._queue_insert_inbound(
+                        message_id=virtual_message_id,
+                        thread_id=virtual_thread_id,
                         sender=sender,
                         sender_email=sender_email,
+                        sender_role=sender_role,
                         subject=subject,
                         reply_text=task_content,
                         text_body=text_body,
                         session_key=session_key,
                         action_payload=action_payload,
                     )
-
-                    classified_priority: int | None = None
-                    try:
-                        from universal_agent.services.priority_classifier import (
-                            classify_email_priority,
-                            TaskPriority,
-                        )
-
-                        _priority_decision = classify_email_priority(
-                            sender_trusted=True,
-                            is_reply=bool(task_content),
-                            thread_message_count=1,
-                            subject=subject,
-                            body_snippet=task_content[:200],
-                        )
-                        _PRIORITY_VALUE_MAP = {
-                            TaskPriority.P0_IMMEDIATE: 0,
-                            TaskPriority.P1_SOON: 1,
-                            TaskPriority.P2_SCHEDULED: 2,
-                            TaskPriority.P3_BACKGROUND: 3,
-                        }
-                        classified_priority = _PRIORITY_VALUE_MAP.get(
-                            _priority_decision.priority, 2,
-                        )
-                    except Exception as _prio_exc:
-                        logger.debug("Priority pre-classification failed (non-fatal): %s", _prio_exc)
-
-                    extracted_due_at: str | None = None
-                    try:
-                        from universal_agent.services.llm_classifier import extract_due_at
-                        _temporal = await extract_due_at(
-                            subject=subject,
-                            body=task_content,
-                        )
-                        extracted_due_at = _temporal.get("due_at")
-                        if extracted_due_at:
-                            logger.info(
-                                "📧⏰ Extracted due_at=%s from email subject=%r (method=%s, confidence=%s)",
-                                extracted_due_at, subject,
-                                _temporal.get("method"), _temporal.get("confidence"),
-                            )
-                    except Exception as _time_exc:
-                        logger.debug("Temporal extraction failed (non-fatal): %s", _time_exc)
-
-                    virtual_thread_id = f"{thread_id}_{index}" if len(disjointed_tasks) > 1 else thread_id
-                    virtual_message_id = f"{message_id}_{index}" if len(disjointed_tasks) > 1 else message_id
-
-                    bridge_result = self._materialize_email_task(
-                        thread_id=virtual_thread_id,
-                        message_id=virtual_message_id,
-                        real_thread_id=thread_id,
-                        real_message_id=message_id,
-                        sender_email=sender_email,
-                        subject=f"{subject} (Task {index+1}/{len(disjointed_tasks)})" if len(disjointed_tasks) > 1 else subject,
-                        reply_text=task_content,
-                        session_key=session_key,
-                        priority=classified_priority,
-                        due_at=extracted_due_at,
-                    )
-
-                    _task_id = bridge_result.get("task_id", "") if bridge_result else ""
-                    if extracted_due_at and _task_id:
-                        try:
-                            await self._schedule_future_task(
-                                task_id=_task_id,
-                                due_at=extracted_due_at,
-                                subject=subject,
-                                reply_text=task_content,
-                                sender_email=sender_email,
-                                thread_id=thread_id,
-                            )
-                        except Exception as _sched_exc:
-                            logger.warning(
-                                "📧⏰ Failed to schedule future task %s: %s",
-                                _task_id, _sched_exc,
-                            )
-
-                    self._try_priority_dispatch(
-                        sender_trusted=True,
-                        is_reply=bool(task_content),
-                        thread_message_count=int(
-                            bridge_result.get("message_count", 1) if bridge_result else 1
-                        ),
-                        subject=subject,
-                        body_snippet=task_content[:200],
-                        task_id=bridge_result.get("task_id", "") if bridge_result else "",
-                        thread_id=virtual_thread_id,
-                        sender_email=sender_email,
-                    )
-
                     self._queue_wakeup.set()
                     continue
 
@@ -1370,6 +1366,9 @@ class AgentMailService:
         subject: str,
         reply_text: str,
         session_key: str,
+        sender_trusted: bool = True,
+        security_classification: str = "",
+        triage_pending: bool = False,
         priority: int | None = None,
         due_at: str | None = None,
         workflow_run_id: str = "",
@@ -1378,11 +1377,11 @@ class AgentMailService:
         real_thread_id: str = "",
         real_message_id: str = "",
     ) -> Optional[dict[str, Any]]:
-        """Materialize an inbound trusted email as a tracked task.
+        """Materialize an inbound email as a tracked task.
 
-        This creates/updates a Task Hub entry and HEARTBEAT.md
-        entry so the email conversation becomes visible on the To-Do List
-        dashboard and gets picked up by the heartbeat scheduler.
+        This creates/updates a Task Hub entry so the email conversation
+        becomes visible on the To-Do List dashboard and can later be
+        promoted into the canonical execution lane after triage.
         Returns the bridge result dict, or None if the bridge is unavailable.
         """
         bridge = self._get_email_task_bridge()
@@ -1396,6 +1395,9 @@ class AgentMailService:
                 subject=subject,
                 reply_text=reply_text,
                 session_key=session_key,
+                sender_trusted=sender_trusted,
+                security_classification=security_classification,
+                triage_pending=triage_pending,
                 priority=priority,
                 due_at=due_at,
                 workflow_run_id=workflow_run_id,
@@ -1733,9 +1735,9 @@ class AgentMailService:
             except (IndexError, KeyError):
                 d[col] = ""
         try:
-            d["reply_sent"] = int(row["reply_sent"] or 0)
+            d["reply_sent"] = bool(int(row["reply_sent"] or 0))
         except (IndexError, KeyError):
-            d["reply_sent"] = 0
+            d["reply_sent"] = False
         return d
 
     def _trusted_queue_overview(self) -> dict[str, Any]:
@@ -1866,13 +1868,14 @@ class AgentMailService:
             )
         return self.get_inbox_queue_item(queue_id)
 
-    def _queue_insert_trusted_inbound(
+    def _queue_insert_inbound(
         self,
         *,
         message_id: str,
         thread_id: str,
         sender: str,
         sender_email: str,
+        sender_role: str,
         subject: str,
         reply_text: str,
         text_body: str,
@@ -1893,7 +1896,7 @@ class AgentMailService:
                     subject, session_key, action_payload_json, reply_text, full_body,
                     status, attempt_count, next_attempt_at, last_attempt_at, last_error,
                     ack_status, ack_message_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'trusted_operator', ?, ?, ?, ?, ?, ?, 0, ?, '', '', 'not_sent', '', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, '', '', 'not_sent', '', ?, ?)
                 """,
                 (
                     queue_id,
@@ -1901,6 +1904,7 @@ class AgentMailService:
                     thread_id,
                     sender,
                     sender_email,
+                    str(sender_role or "external").strip() or "external",
                     subject,
                     session_key,
                     _safe_json_dumps(action_payload),
@@ -1913,6 +1917,32 @@ class AgentMailService:
                 ),
             )
         return queue_id, True
+
+    def _queue_insert_trusted_inbound(
+        self,
+        *,
+        message_id: str,
+        thread_id: str,
+        sender: str,
+        sender_email: str,
+        subject: str,
+        reply_text: str,
+        text_body: str,
+        session_key: str,
+        action_payload: dict[str, Any],
+    ) -> tuple[str, bool]:
+        return self._queue_insert_inbound(
+            message_id=message_id,
+            thread_id=thread_id,
+            sender=sender,
+            sender_email=sender_email,
+            sender_role="trusted_operator",
+            subject=subject,
+            reply_text=reply_text,
+            text_body=text_body,
+            session_key=session_key,
+            action_payload=action_payload,
+        )
 
     def _find_queue_item_by_message_id(self, message_id: str) -> Optional[dict[str, Any]]:
         with self._queue_connect() as conn:
@@ -1939,6 +1969,46 @@ class AgentMailService:
                 WHERE queue_id = ?
                 """,
                 (ack_status, ack_message_id, last_error, now, queue_id),
+            )
+
+    def _set_queue_status(
+        self,
+        queue_id: str,
+        *,
+        status: str,
+        attempts: Optional[int] = None,
+        last_error: Optional[str] = None,
+        session_exit_status: str = "",
+        classification: str = "",
+        reply_sent: Optional[bool] = None,
+        completed: bool = False,
+    ) -> None:
+        now = _iso_now()
+        assignments = ["status = ?", "updated_at = ?"]
+        params: list[Any] = [status, now]
+        if attempts is not None:
+            assignments.append("attempt_count = ?")
+            params.append(int(attempts))
+        if last_error is not None:
+            assignments.append("last_error = ?")
+            params.append(str(last_error or ""))
+        if session_exit_status:
+            assignments.append("session_exit_status = ?")
+            params.append(str(session_exit_status))
+        if classification:
+            assignments.append("classification = ?")
+            params.append(str(classification))
+        if reply_sent is not None:
+            assignments.append("reply_sent = ?")
+            params.append(1 if reply_sent else 0)
+        if completed:
+            assignments.append("completed_at = ?")
+            params.append(now)
+        params.append(queue_id)
+        with self._queue_connect() as conn:
+            conn.execute(
+                f"UPDATE agentmail_inbox_queue SET {', '.join(assignments)} WHERE queue_id = ?",
+                params,
             )
 
     def _claim_queue_item(self, *, queue_id: str, expected_status: str) -> bool:
@@ -2000,6 +2070,228 @@ class AgentMailService:
                     queue_id,
                 ),
             )
+
+    def _request_requires_single_final_response(self, text: str) -> bool:
+        from universal_agent.tools.agentmail_bridge import _request_requires_single_final_response
+
+        return _request_requires_single_final_response(text)
+
+    def _parse_queue_triage_result(
+        self,
+        *,
+        payload: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        from universal_agent.services.email_task_bridge import parse_email_triage_brief
+
+        execution_summary = result.get("execution_summary") if isinstance(result, dict) else {}
+        preview = ""
+        if isinstance(execution_summary, dict):
+            preview = str(execution_summary.get("response_preview") or "").strip()
+        parsed = parse_email_triage_brief(
+            preview,
+            sender_trusted=str(payload.get("sender_role") or "") == "trusted_operator",
+        )
+        if not parsed.get("classification") and isinstance(execution_summary, dict):
+            parsed["classification"] = str(execution_summary.get("classification") or "").strip()
+        return parsed
+
+    def _get_recorded_hook_triage(self, *, session_key: str) -> dict[str, Any]:
+        session_key = str(session_key or "").strip()
+        if not session_key:
+            return {}
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return {}
+        mapping = bridge.get_mapping_for_session_key(session_key)
+        task_id = str((mapping or {}).get("task_id") or "").strip()
+        if not task_id:
+            return {}
+        try:
+            from universal_agent.durable.db import connect_runtime_db
+            from universal_agent import task_hub
+
+            with connect_runtime_db() as conn:
+                item = task_hub.get_item(conn, task_id)
+        except Exception as exc:
+            logger.debug("📧 Failed reading recorded triage for session_key=%s: %s", session_key, exc)
+            return {}
+        if not item:
+            return {}
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        hook_triage = metadata.get("hook_triage") if isinstance(metadata, dict) else None
+        return dict(hook_triage) if isinstance(hook_triage, dict) else {}
+
+    def _queue_receipt_ack_body(self, *, sender: str, subject: str) -> str:
+        _ = sender, subject
+        return (
+            "Received your email and queued the work. "
+            "I will follow up in this thread with the final response."
+        )
+
+    async def _maybe_send_trusted_receipt_ack(
+        self,
+        *,
+        payload: dict[str, Any],
+        triage: dict[str, Any],
+    ) -> tuple[str, str, bool]:
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return "failed", "bridge_unavailable", False
+
+        mapping = bridge.get_mapping_for_session_key(str(payload.get("session_key") or "").strip())
+        if not mapping:
+            return "failed", "email_task_mapping_missing", False
+
+        thread_id = str(mapping.get("thread_id") or "").strip()
+        if not thread_id:
+            return "failed", "email_task_thread_missing", False
+        if bridge.has_final_outbound(thread_id):
+            return "skipped_final_exists", "", False
+        if bridge.has_ack_outbound(thread_id):
+            return "already_sent", str(mapping.get("ack_message_id") or "").strip(), False
+
+        request_text = "\n".join(
+            part
+            for part in (
+                str(payload.get("reply_text") or "").strip(),
+                str((payload.get("action_payload") or {}).get("message") or "").strip(),
+            )
+            if part
+        )
+        if self._request_requires_single_final_response(request_text):
+            return "skipped_single_final_response", "", False
+
+        target_message_id = str(mapping.get("real_message_id") or payload.get("message_id") or "").strip()
+        if not target_message_id:
+            return "failed", "email_message_id_missing", False
+
+        ack_text = self._queue_receipt_ack_body(
+            sender=str(payload.get("sender") or "").strip(),
+            subject=str(payload.get("subject") or "").strip(),
+        )
+        try:
+            result = await self.reply(message_id=target_message_id, text=ack_text)
+        except Exception as exc:
+            return "failed", str(exc), False
+
+        ack_message_id = str(result.get("message_id") or "").strip()
+        bridge.record_ack_outbound(thread_id, message_id=ack_message_id)
+        return "sent", ack_message_id, True
+
+    def _promote_trusted_email_task(
+        self,
+        *,
+        payload: dict[str, Any],
+        bridge_result: Optional[dict[str, Any]],
+    ) -> None:
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return
+
+        session_key = str(payload.get("session_key") or "").strip()
+        mapping = bridge.get_mapping_for_session_key(session_key) if session_key else None
+        thread_id = str((mapping or {}).get("thread_id") or payload.get("thread_id") or "").strip()
+        if thread_id:
+            bridge.promote_to_agent_ready(thread_id)
+
+        self._try_priority_dispatch(
+            sender_trusted=True,
+            is_reply=bool(payload.get("reply_text")),
+            thread_message_count=int((bridge_result or {}).get("message_count", 1) or 1),
+            subject=str(payload.get("subject") or ""),
+            body_snippet=str(payload.get("reply_text") or "")[:200],
+            task_id=str((bridge_result or {}).get("task_id") or ""),
+            thread_id=thread_id,
+            sender_email=str(payload.get("sender_email") or ""),
+        )
+
+    def _route_trusted_quarantine(
+        self,
+        *,
+        payload: dict[str, Any],
+        triage: dict[str, Any],
+    ) -> None:
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return
+
+        session_key = str(payload.get("session_key") or "").strip()
+        mapping = bridge.get_mapping_for_session_key(session_key) if session_key else None
+        thread_id = str((mapping or {}).get("thread_id") or payload.get("thread_id") or "").strip()
+        if not thread_id:
+            return
+
+        note = str(triage.get("subject_summary") or triage.get("raw_text") or "").strip()
+        bridge.mark_quarantined(
+            thread_id,
+            note=note,
+            sender_trusted=True,
+        )
+        self._emit_notification(
+            kind="agentmail_quarantined",
+            title="Trusted Email Quarantined",
+            message=note or f"Trusted inbound email from {payload.get('sender_email') or 'unknown sender'} was quarantined.",
+            severity="warning",
+            metadata={
+                "thread_id": thread_id,
+                "sender_email": str(payload.get("sender_email") or ""),
+                "session_key": str(payload.get("session_key") or ""),
+            },
+        )
+
+    def _route_external_email_task(
+        self,
+        *,
+        payload: dict[str, Any],
+        triage: dict[str, Any],
+    ) -> None:
+        bridge = self._get_email_task_bridge()
+        if bridge is None:
+            return
+
+        session_key = str(payload.get("session_key") or "").strip()
+        mapping = bridge.get_mapping_for_session_key(session_key) if session_key else None
+        thread_id = str((mapping or {}).get("thread_id") or payload.get("thread_id") or "").strip()
+        if not thread_id:
+            return
+
+        note = str(triage.get("subject_summary") or triage.get("raw_text") or "").strip()
+        if str(triage.get("routing_decision") or "") == "quarantine":
+            bridge.mark_quarantined(
+                thread_id,
+                note=note,
+                sender_trusted=False,
+            )
+            self._emit_notification(
+                kind="agentmail_quarantined",
+                title="Inbound Email Quarantined",
+                message=note or f"Suspicious inbound email from {payload.get('sender_email') or 'unknown sender'}.",
+                severity="warning",
+                metadata={
+                    "thread_id": thread_id,
+                    "sender_email": str(payload.get("sender_email") or ""),
+                    "session_key": str(payload.get("session_key") or ""),
+                },
+            )
+            return
+
+        bridge.mark_review_required(
+            thread_id,
+            security_classification=str(triage.get("safety_status") or "clean"),
+            note=note,
+        )
+        self._emit_notification(
+            kind="agentmail_review_required",
+            title="Inbound Email Awaiting Review",
+            message=note or f"External inbound email from {payload.get('sender_email') or 'unknown sender'} is waiting for Simone review.",
+            severity="info",
+            metadata={
+                "thread_id": thread_id,
+                "sender_email": str(payload.get("sender_email") or ""),
+                "session_key": str(payload.get("session_key") or ""),
+            },
+        )
 
     async def recover_abandoned_sessions(self) -> dict[str, int]:
         """Recover email queue items orphaned by a gateway restart.
@@ -2252,26 +2544,23 @@ class AgentMailService:
 
             decision = str(result.get("decision") or "").strip().lower()
             if decision in {"accepted", "skipped"}:
+                queue_id = str(payload["queue_id"])
                 subject = str(payload.get("subject") or "").strip() or "(no subject)"
                 sender_email = str(payload.get("sender_email") or "").strip()
+                sender_trusted = str(payload.get("sender_role") or "").strip() == "trusted_operator"
                 session_id = str(result.get("session_id") or result.get("session_key") or "").strip()
                 workflow_run_id = str(result.get("run_id") or "").strip()
                 workflow_attempt_id = str(result.get("attempt_id") or "").strip()
                 thread_id = str(payload.get("thread_id") or "").strip()
-                metadata = {
-                    "queue_id": str(payload.get("queue_id") or ""),
-                    "message_id": str(payload.get("message_id") or ""),
-                    "subject": subject,
-                    "sender_email": sender_email,
-                    "session_id": session_id,
-                    "trigger": "trusted_email",
-                    "workflow_decision": decision,
-                    "workflow_reason": str(result.get("reason") or decision),
-                }
-                if workflow_run_id:
-                    metadata["run_id"] = workflow_run_id
-                if workflow_attempt_id:
-                    metadata["attempt_id"] = workflow_attempt_id
+                execution_summary = result.get("execution_summary") if isinstance(result, dict) else {}
+                has_triage_output = bool(execution_summary)
+                if not has_triage_output and session_id:
+                    recorded = self._get_recorded_hook_triage(
+                        session_key=str(payload.get("session_key") or "").strip()
+                    )
+                    has_triage_output = bool(recorded)
+                    if recorded:
+                        execution_summary = {"response_preview": str(recorded.get("summary") or "")}
                 if thread_id:
                     self._link_email_task_workflow(
                         thread_id=thread_id,
@@ -2279,15 +2568,130 @@ class AgentMailService:
                         workflow_attempt_id=workflow_attempt_id,
                         provider_session_id=session_id,
                     )
-                if decision == "accepted":
+
+                if decision == "skipped" and not has_triage_output:
+                    reason = str(result.get("reason") or decision or "triage_not_ready")
+                    self._retry_queue_item(
+                        queue_id,
+                        error=reason,
+                        attempts=attempts,
+                    )
+                    continue
+
+                triage = self._parse_queue_triage_result(payload=payload, result=result)
+                if not triage.get("raw_text") and isinstance(execution_summary, dict):
+                    triage["raw_text"] = str(execution_summary.get("response_preview") or "").strip()
+                classification = str(
+                    triage.get("classification")
+                    or triage.get("safety_status")
+                    or result.get("status")
+                    or decision
+                ).strip()
+                session_exit_status = str(
+                    triage.get("routing_decision")
+                    or result.get("status")
+                    or result.get("reason")
+                    or decision
+                ).strip()
+                self._set_queue_status(
+                    queue_id,
+                    status=_QUEUE_STATUS_TRIAGED,
+                    attempts=attempts,
+                    last_error="",
+                    session_exit_status=session_exit_status,
+                    classification=classification,
+                )
+
+                routing_decision = str(triage.get("routing_decision") or "").strip().lower()
+                if routing_decision == "quarantine":
+                    self._mark_queue_ack_status(
+                        queue_id=queue_id,
+                        ack_status="not_required",
+                        ack_message_id="",
+                        last_error="",
+                    )
+                    if sender_trusted:
+                        self._route_trusted_quarantine(payload=payload, triage=triage)
+                    else:
+                        self._route_external_email_task(payload=payload, triage=triage)
+                    self._set_queue_status(
+                        queue_id,
+                        status=_QUEUE_STATUS_QUARANTINED,
+                        attempts=attempts,
+                        last_error="",
+                        session_exit_status="quarantined",
+                        classification=classification,
+                        reply_sent=False,
+                        completed=True,
+                    )
+                    continue
+
+                if sender_trusted:
+                    ack_status, ack_message_id, reply_sent = await self._maybe_send_trusted_receipt_ack(
+                        payload=payload,
+                        triage=triage,
+                    )
+                    ack_error = "" if ack_status in {
+                        "sent",
+                        "already_sent",
+                        "skipped_single_final_response",
+                        "skipped_final_exists",
+                    } else ack_message_id
+                    self._mark_queue_ack_status(
+                        queue_id=queue_id,
+                        ack_status=ack_status,
+                        ack_message_id=ack_message_id if ack_status == "sent" else "",
+                        last_error=ack_error,
+                    )
+                    self._promote_trusted_email_task(payload=payload, bridge_result=None)
+                    self._set_queue_status(
+                        queue_id,
+                        status=_QUEUE_STATUS_DISPATCHED_TO_TODO,
+                        attempts=attempts,
+                        last_error="",
+                        session_exit_status="dispatched_to_todo",
+                        classification=classification,
+                        reply_sent=reply_sent,
+                        completed=True,
+                    )
                     self._emit_notification(
-                        kind="simone_session_started",
-                        title="Simone Started Work",
+                        kind="agentmail_dispatched_to_todo",
+                        title="Email Dispatched To ToDo",
                         message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
                         severity="info",
-                        metadata=metadata,
+                        metadata={
+                            "queue_id": queue_id,
+                            "message_id": str(payload.get("message_id") or ""),
+                            "subject": subject,
+                            "sender_email": sender_email,
+                            "session_id": session_id,
+                            "trigger": "trusted_email",
+                            "workflow_decision": decision,
+                            "workflow_reason": str(result.get("reason") or decision),
+                            "run_id": workflow_run_id,
+                            "attempt_id": workflow_attempt_id,
+                            "routing_decision": routing_decision or "trusted_execute",
+                        },
                     )
-                self._complete_queue_item(str(payload["queue_id"]), attempts=attempts)
+                    continue
+
+                self._mark_queue_ack_status(
+                    queue_id=queue_id,
+                    ack_status="not_required",
+                    ack_message_id="",
+                    last_error="",
+                )
+                self._route_external_email_task(payload=payload, triage=triage)
+                self._set_queue_status(
+                    queue_id,
+                    status=_QUEUE_STATUS_REVIEW_REQUIRED,
+                    attempts=attempts,
+                    last_error="",
+                    session_exit_status="review_required",
+                    classification=classification,
+                    reply_sent=False,
+                    completed=True,
+                )
                 continue
             if decision in {"busy", "duplicate_in_progress"}:
                 reason = str(result.get("reason") or decision)

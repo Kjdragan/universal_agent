@@ -573,6 +573,38 @@ def test_todo_execution_interactive_manifest_does_not_infer_research_from_prompt
     assert result == {}
 
 
+def test_email_triage_prompt_does_not_infer_research_from_triage_boilerplate():
+    hooks = AgentHookSet(run_id="unit-email-triage-no-research-inference")
+    hooks._resolved_run_kind = "email_triage"
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {
+                "prompt": (
+                    "== EMAIL TRIAGE SESSION ==\n"
+                    "This is a TRIAGE-ONLY email processing session.\n"
+                    "The inbound email has already been materialized into Task Hub.\n"
+                    "The dedicated ToDo executor is the canonical owner of execution and final delivery.\n"
+                    "Your ONLY job in this hook run is to return a structured triage brief as plain text.\n"
+                    "Do not delegate, do not create tasks, do not persist files, and do not send replies from this session.\n"
+                    "Hard constraints:\n"
+                    "- Do NOT use Task(...) or Agent(...) in this session.\n"
+                    "- Do NOT run research, do NOT dispatch VP missions, and do NOT send the final deliverable.\n"
+                    "━━━ EMAIL PAYLOAD ━━━\n"
+                    "Hi Simone,\n"
+                    "Get the weather forecast in Houston for the weekend.\n"
+                    "Search for any fun adult activities for tomorrow.\n"
+                    "Get me a special roasted carrots recipe for Easter dinner.\n"
+                    "Email all these to me.\n"
+                )
+            }
+        )
+    )
+
+    assert hooks._requires_research_delegate_first is False
+    assert hooks._requires_vp_tool_path is False
+    assert hooks._notebooklm_intent_this_turn is False
+
+
 def test_todo_execution_blocks_ask_user_questions_and_requires_durable_disposition():
     hooks = AgentHookSet(run_id="unit-todo-no-human-question")
     hooks._resolved_run_kind = "todo_execution"

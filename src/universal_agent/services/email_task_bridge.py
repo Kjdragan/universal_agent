@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 _EMAIL_TASK_SOURCE_KIND = "email"
 _EMAIL_TASK_PROJECT_KEY = "immediate"
 _EMAIL_TASK_DEFAULT_LABELS = ["email-task", "agent-ready"]
+_EMAIL_TASK_TRIAGE_PENDING_LABELS = ["email-task", "triage-pending"]
+_EMAIL_TASK_EXTERNAL_REVIEW_LABELS = ["email-task", "external-untriaged"]
+_EMAIL_TASK_QUARANTINED_LABEL = "quarantined"
+_EMAIL_TASK_REVIEW_REQUIRED_LABEL = "review-required"
 
 # Subject prefixes to strip when computing the master key
 _REPLY_PREFIX_RE = re.compile(r"^(Re|Fwd|Fw):\s*", re.IGNORECASE)
@@ -71,6 +75,62 @@ def _build_email_execution_manifest(*, subject: str, body: str) -> dict[str, Any
         final_channel="email",
         canonical_executor="simone_first",
     )
+
+
+_TRIAGE_FIELD_RE = {
+    "safety_status": re.compile(r"^\s*safety_status\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
+    "routing_decision": re.compile(r"^\s*routing_decision\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
+    "classification": re.compile(r"^\s*classification\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
+    "priority": re.compile(r"^\s*priority\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
+    "subject_summary": re.compile(r"^\s*subject_summary\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
+}
+
+
+def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    parsed: dict[str, Any] = {
+        "raw_text": text,
+        "safety_status": "",
+        "routing_decision": "",
+        "classification": "",
+        "priority": "",
+        "subject_summary": "",
+    }
+    if not text:
+        parsed["routing_decision"] = "trusted_execute" if sender_trusted else "review_required"
+        return parsed
+
+    for field, pattern in _TRIAGE_FIELD_RE.items():
+        match = pattern.search(text)
+        if not match:
+            continue
+        parsed[field] = str(match.group(1) or "").strip()
+
+    safety_status = str(parsed.get("safety_status") or "").strip().lower()
+    routing_decision = str(parsed.get("routing_decision") or "").strip().lower()
+    if not safety_status:
+        if "quarantine" in text.lower():
+            safety_status = "quarantine"
+        else:
+            safety_status = "clean"
+    if safety_status not in {"clean", "quarantine"}:
+        safety_status = "quarantine" if "quarantine" in safety_status else "clean"
+
+    if not routing_decision:
+        routing_decision = "quarantine" if safety_status == "quarantine" else (
+            "trusted_execute" if sender_trusted else "review_required"
+        )
+    if routing_decision not in {"trusted_execute", "review_required", "quarantine"}:
+        if "quarantine" in routing_decision:
+            routing_decision = "quarantine"
+        elif "review" in routing_decision:
+            routing_decision = "review_required"
+        else:
+            routing_decision = "trusted_execute" if sender_trusted else "review_required"
+
+    parsed["safety_status"] = safety_status
+    parsed["routing_decision"] = routing_decision
+    return parsed
 
 
 def _workflow_lineage_lines(
@@ -306,6 +366,7 @@ class EmailTaskBridge:
         session_key: str = "",
         sender_trusted: bool = True,
         security_classification: str = "",
+        triage_pending: bool = False,
         priority: int | None = None,
         due_at: str | None = None,
         workflow_run_id: str = "",
@@ -342,8 +403,10 @@ class EmailTaskBridge:
 
         # Determine labels based on trust level
         email_labels = list(_EMAIL_TASK_DEFAULT_LABELS)
-        if not sender_trusted:
-            email_labels = ["email-task", "external-untriaged"]
+        if triage_pending and sender_trusted:
+            email_labels = list(_EMAIL_TASK_TRIAGE_PENDING_LABELS)
+        elif not sender_trusted:
+            email_labels = list(_EMAIL_TASK_EXTERNAL_REVIEW_LABELS)
             if security_classification:
                 email_labels.append(f"security-{security_classification}")
 
@@ -684,16 +747,11 @@ class EmailTaskBridge:
         self._conn.commit()
 
         # Update Task Hub status
-        try:
-            from universal_agent.task_hub import update_item_status
-            task_id = _deterministic_task_id(thread_id)
-            update_item_status(
-                self._conn, task_id,
-                status="waiting-on-reply",
-                labels=["email-task", "waiting-on-reply"],
-            )
-        except Exception:
-            pass
+        self._upsert_thread_task_state(
+            thread_id=thread_id,
+            status="waiting-on-reply",
+            labels=["email-task", "waiting-on-reply"],
+        )
 
         return True
 
@@ -710,16 +768,138 @@ class EmailTaskBridge:
         self._conn.commit()
 
         # Update Task Hub
+        self._upsert_thread_task_state(
+            thread_id=thread_id,
+            status="open",
+            labels=list(_EMAIL_TASK_DEFAULT_LABELS),
+        )
+
+    def promote_to_agent_ready(self, thread_id: str) -> bool:
+        thread = str(thread_id or "").strip()
+        if not thread:
+            return False
+        now = _now_iso()
+        self._conn.execute(
+            """
+            UPDATE email_task_mappings
+            SET status = 'active', security_classification = CASE
+                WHEN security_classification = 'quarantine' THEN ''
+                ELSE security_classification
+            END, updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (now, thread),
+        )
+        self._conn.commit()
+        self._upsert_thread_task_state(
+            thread_id=thread,
+            status="open",
+            labels=list(_EMAIL_TASK_DEFAULT_LABELS),
+        )
+        return True
+
+    def mark_review_required(
+        self,
+        thread_id: str,
+        *,
+        security_classification: str = "clean",
+        note: str = "",
+    ) -> bool:
+        thread = str(thread_id or "").strip()
+        if not thread:
+            return False
+        now = _now_iso()
+        self._conn.execute(
+            """
+            UPDATE email_task_mappings
+            SET status = 'review_required',
+                security_classification = ?,
+                updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (str(security_classification or "clean").strip() or "clean", now, thread),
+        )
+        self._conn.commit()
+        labels = list(_EMAIL_TASK_EXTERNAL_REVIEW_LABELS)
+        labels.append(_EMAIL_TASK_REVIEW_REQUIRED_LABEL)
+        self._upsert_thread_task_state(
+            thread_id=thread,
+            status="needs_review",
+            labels=labels,
+            metadata_patch={
+                "email_triage_routing": "review_required",
+                "email_triage_note": str(note or "").strip(),
+            },
+        )
+        return True
+
+    def mark_quarantined(
+        self,
+        thread_id: str,
+        *,
+        note: str = "",
+        sender_trusted: bool = False,
+    ) -> bool:
+        thread = str(thread_id or "").strip()
+        if not thread:
+            return False
+        now = _now_iso()
+        self._conn.execute(
+            """
+            UPDATE email_task_mappings
+            SET status = 'quarantined',
+                security_classification = 'quarantine',
+                updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (now, thread),
+        )
+        self._conn.commit()
+        labels = list(_EMAIL_TASK_DEFAULT_LABELS if sender_trusted else _EMAIL_TASK_EXTERNAL_REVIEW_LABELS)
+        labels = [label for label in labels if label != "agent-ready" and label != "triage-pending"]
+        labels.append(_EMAIL_TASK_QUARANTINED_LABEL)
+        self._upsert_thread_task_state(
+            thread_id=thread,
+            status="blocked",
+            labels=labels,
+            metadata_patch={
+                "email_triage_routing": "quarantine",
+                "email_triage_note": str(note or "").strip(),
+            },
+        )
+        return True
+
+    def _upsert_thread_task_state(
+        self,
+        *,
+        thread_id: str,
+        status: str,
+        labels: list[str],
+        metadata_patch: Optional[dict[str, Any]] = None,
+    ) -> bool:
         try:
-            from universal_agent.task_hub import update_item_status
+            from universal_agent.task_hub import ensure_schema, get_item, upsert_item
+
+            ensure_schema(self._conn)
             task_id = _deterministic_task_id(thread_id)
-            update_item_status(
-                self._conn, task_id,
-                status="open",
-                labels=["email-task", "agent-ready"],
+            current = get_item(self._conn, task_id) or {}
+            metadata = dict(current.get("metadata") or {})
+            if metadata_patch:
+                metadata.update(metadata_patch)
+            upsert_item(
+                self._conn,
+                {
+                    "task_id": task_id,
+                    "status": status,
+                    "labels": labels,
+                    "agent_ready": "agent-ready" in labels,
+                    "metadata": metadata,
+                },
             )
-        except Exception:
-            pass
+            return True
+        except Exception as exc:
+            logger.warning("📧→📋 Thread task state update failed thread=%s: %s", thread_id, exc)
+            return False
 
     # ── Internal Methods ──────────────────────────────────────────────────
 
