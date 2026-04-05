@@ -21,6 +21,35 @@ This is a living operational reference, not a single-incident report.
 
 ---
 
+## 2026-04-05: Next.js Client-Side Exceptions from Hydration Mismatches
+
+### Incident Summary
+
+The production `/dashboard` crashed completely with "Application error: a client-side exception has occurred" specifically when accessed by standard web browsers.
+
+The root cause was React 18 hydration mistmatches triggered by Server-Side Rendering (SSR) vs. Client-Side Evaluation of dynamic values. Specifically:
+1. `Date.now()` used to calculate dynamic mission time intervals during render.
+2. `localStorage` access wrapped in naive `if (typeof window === "undefined") return "default"` checks resulting in fallback-to-actual values matching incorrectly.
+3. `formatDateTimeTz()` relying on browser local timezones instead of the expected UTC timezone output by the Node.js server. 
+
+When React detects that the server HTML and the first-render client DOM don't match structurally or textually (e.g. "5s elapsed" vs "10s elapsed", or different timezones), Next.js throws an unrecoverable client exception.
+
+### Lesson 1: Suppress SSR For Highly Dynamic Client Panels
+
+When an entire panel or route relies strictly on client-side state, API data, browser timestamps, or LocalStorage, attempting to SSR it provides almost no SEO benefit but introduces massive hydration hazards.
+
+Reusable rule:
+- Short-circuit SSR in components that rely heavily on dynamic time, local storage, or browser APIs by putting a `[mounted, setMounted] = useState(false)` guard at the component root, returning a loading skeleton or `null` until `mounted` is true.
+
+### Lesson 2: "Works On My Machine" For SSR Means Checking Timezones And Build Modes
+
+The hydration mismatch did not crash local `npm run dev` in the same way because Next.js development mode provides soft error overlays and attempts to recover, while a production `npm start` build strictly enforces hydration integrity and hides the UI with a generic error block. Also, testing API endpoints via Python scripts/Playwright without Javascript evaluation completely bypasses React hydration.
+
+Reusable rule:
+- If a user reports a "client-side exception" specifically on a production Next.js app, always suspect a timezone difference, a `Date.now()`, or a `window` evaluation mismatch between server and client.
+
+---
+
 ## 2026-03-31: Logfire Import Failure During Production Restart
 
 ### Incident Summary
