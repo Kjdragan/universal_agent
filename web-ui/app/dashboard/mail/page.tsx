@@ -42,8 +42,6 @@ type Draft = {
   created_at: string;
 };
 
-};
-
 type MailStatus = {
   inbox_address: string;
   messages_sent: number;
@@ -210,8 +208,6 @@ export default function MailPage() {
     return await res.json();
   }, []);
 
-  }, []);
-
   const fetchAll = useCallback(async (mode: "initial" | "manual" | "poll" = "manual") => {
     const fetchId = refreshSeqRef.current + 1;
     refreshSeqRef.current = fetchId;
@@ -256,8 +252,6 @@ export default function MailPage() {
     const statusResult = results[2];
     if (statusResult.status === "fulfilled") {
       setStatus(statusResult.value as MailStatus);
-    }
-
     }
 
     const failures = results
@@ -669,11 +663,7 @@ export default function MailPage() {
                   deleting={draftDeleting === d.draft_id}
                   onApprove={() => approveDraft(d)}
                   onDiscard={() => discardDraft(d)}
-                />
               ))
-            )}
-          </div>
-
             )}
           </div>
 
