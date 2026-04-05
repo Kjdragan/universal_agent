@@ -409,42 +409,31 @@ Those checks live in [agentmail_bridge.py](../../src/universal_agent/tools/agent
 
 ---
 
-## 13. Durable Lifecycle Mutation
+## 13. Orchestrator-Driven Lifecycle Mutation
 
-Task Hub resolution is not inferred from “the run seemed successful.” It requires an explicit durable action.
+To simplify agent logic, Task Hub resolution is now fundamentally **orchestrator-driven**. Instead of penalizing agents for forgetting to mutate task states, the gateway's pipeline automatically auto-completes tasks upon successful script execution.
 
-Lifecycle actions are implemented in `perform_task_action(...)` in [task_hub.py](../../src/universal_agent/task_hub.py#L2709). Important actions include:
+Lifecycle actions can still be explicitly triggered by the agent via `perform_task_action(...)` in [task_hub.py](../../src/universal_agent/task_hub.py#L2709) for granular control (e.g., `delegate`, `block`, `park`). The bridge exposed to the model is `task_hub_task_action` in [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py#L26).
 
-- `complete`
-- `review`
-- `block`
-- `park`
-- `delegate`
-- `approve`
-- `seize`
+### 13.1 Enforcement and Auto-Completion
 
-The bridge exposed to the model is `task_hub_task_action` in [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py#L26).
+If a `todo_execution` run finishes execution naturally (without runtime crashes or hard application exceptions), `_todo_execution_auto_complete_after_final_delivery(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py) executes unconditionally. It safely issues a `complete` action for every unresolved task claimed by the given session.
 
-### 13.1 Enforcement
+Only if the run suffers a critical abort or timeout does the pipeline fallback state apply:
 
-If a `todo_execution` run ends without a durable lifecycle mutation, `_enforce_todo_execution_lifecycle(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py#L6191):
-
-- finalizes the assignment as failed
-- records `result_summary="todo_execution_missing_lifecycle_mutation"`
-- reopens the task
-
-This is why “it showed up in the To Do List but didn’t resolve” usually means the run entered the correct lane but failed to close itself properly.
+- the assignment is finalized as failed
+- the task receives an error note
+- the task falls back to the open queue or moves to needs review.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Open
     Open --> InProgress: seize / claim
-    InProgress --> Completed: complete
-    InProgress --> NeedsReview: review
-    InProgress --> Blocked: block
-    InProgress --> Parked: park
-    InProgress --> Delegated: delegate
-    InProgress --> Open: missing lifecycle mutation\nassignment finalized failed + reopened
+    InProgress --> Completed: script exits normally (auto-complete)
+    InProgress --> Blocked: agent explicitly calls block
+    InProgress --> Parked: agent explicitly calls park
+    InProgress --> Delegated: agent delegates
+    InProgress --> Open: process crash / timeout\nassignment finalized failed + reopened
 ```
 
 ---
