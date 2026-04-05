@@ -6162,7 +6162,16 @@ def _match_auto_delegate_targets(
 
     for dispatch in successful_dispatches:
         objective = str(dispatch.get("objective") or "")
-        matched_task_ids = [task_id for task_id in unresolved_ids if task_id and task_id in objective]
+        idempotency_key = str(dispatch.get("idempotency_key") or "")
+        matched_task_ids = []
+        for task_id in unresolved_ids:
+            if not task_id:
+                continue
+            if idempotency_key and (task_id == idempotency_key or task_id in idempotency_key):
+                matched_task_ids.append(task_id)
+            elif task_id in objective:
+                matched_task_ids.append(task_id)
+        
         if len(matched_task_ids) == 1 and matched_task_ids[0] not in used_task_ids:
             used_task_ids.add(matched_task_ids[0])
             matches.append((matched_task_ids[0], dispatch))

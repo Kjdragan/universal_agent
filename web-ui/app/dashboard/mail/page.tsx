@@ -42,21 +42,6 @@ type Draft = {
   created_at: string;
 };
 
-type InboxQueueItem = {
-  queue_id: string;
-  message_id: string;
-  thread_id: string;
-  sender_email: string;
-  sender_role: string;
-  subject: string;
-  status: string;
-  ack_status: string;
-  reply_sent: boolean;
-  classification: string;
-  session_exit_status: string;
-  last_error: string;
-  updated_at: string;
-  completed_at?: string;
 };
 
 type MailStatus = {
@@ -154,7 +139,6 @@ export default function MailPage() {
   /* ── State ─── */
   const [threads, setThreads] = useState<Thread[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [queueItems, setQueueItems] = useState<InboxQueueItem[]>([]);
   const [status, setStatus] = useState<MailStatus | null>(null);
   const [inboxes, setInboxes] = useState<string[]>([]);
   const [selectedInbox, setSelectedInbox] = useState<string>("");
@@ -226,22 +210,6 @@ export default function MailPage() {
     return await res.json();
   }, []);
 
-  const fetchInboxQueue = useCallback(async (signal?: AbortSignal) => {
-    const params = new URLSearchParams();
-    params.set("limit", "8");
-    params.set("trusted_only", "1");
-    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/inbox-queue?${params}`, {
-      cache: "no-store",
-      signal,
-    });
-    if (!res.ok) {
-      throw new Error(await readErrorDetail(res, "inbox queue"));
-    }
-    const data = await res.json();
-    return {
-      items: data.items || [],
-      count: Number(data.count || 0),
-    };
   }, []);
 
   const fetchAll = useCallback(async (mode: "initial" | "manual" | "poll" = "manual") => {
@@ -268,7 +236,6 @@ export default function MailPage() {
       ),
       fetchDrafts(controller.signal),
       fetchStatus(controller.signal),
-      fetchInboxQueue(controller.signal),
     ]);
 
     if (controller.signal.aborted || refreshSeqRef.current !== fetchId) {
@@ -291,9 +258,6 @@ export default function MailPage() {
       setStatus(statusResult.value as MailStatus);
     }
 
-    const queueResult = results[3];
-    if (queueResult.status === "fulfilled") {
-      setQueueItems(queueResult.value.items);
     }
 
     const failures = results
@@ -322,7 +286,7 @@ export default function MailPage() {
     if (foreground && refreshSeqRef.current === fetchId) {
       setLoading(false);
     }
-  }, [fetchThreads, fetchDrafts, fetchStatus, fetchInboxQueue, selectedInbox, viewMode]);
+  }, [fetchThreads, fetchDrafts, fetchStatus, selectedInbox, viewMode]);
 
   const fetchThreadMessages = useCallback(async (thread: Thread) => {
     setSelectedThread(thread);
@@ -710,21 +674,6 @@ export default function MailPage() {
             )}
           </div>
 
-          <div
-            style={{
-              borderTop: `1px solid ${TOKENS.ghostBorder}`,
-              padding: "16px 16px 8px",
-            }}
-          >
-            <SectionTitle icon="schedule" label="INBOUND QUEUE" count={queueItems.length} />
-          </div>
-          <div style={{ maxHeight: 220, overflowY: "auto", padding: "0 16px 16px" }}>
-            {queueItems.length === 0 ? (
-              <EmptyState message="No recent inbound queue activity" />
-            ) : (
-              queueItems.map((item) => (
-                <InboxQueueCard key={item.queue_id} item={item} />
-              ))
             )}
           </div>
 

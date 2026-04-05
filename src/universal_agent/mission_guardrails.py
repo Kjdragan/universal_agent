@@ -95,8 +95,10 @@ class MissionGuardrailTracker:
 
         vp_id = str(payload.get("vp_id") or "").strip()
         objective = ""
+        idempotency_key = ""
         if isinstance(tool_input, dict):
             objective = str(tool_input.get("objective") or "").strip()
+            idempotency_key = str(tool_input.get("idempotency_key") or "").strip()
             if not vp_id:
                 vp_id = str(tool_input.get("vp_id") or "").strip()
 
@@ -105,6 +107,7 @@ class MissionGuardrailTracker:
                 "mission_id": mission_id,
                 "vp_id": vp_id,
                 "objective": objective,
+                "idempotency_key": idempotency_key,
             }
         )
 

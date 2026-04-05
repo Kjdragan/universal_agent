@@ -8,7 +8,7 @@ ZAI_MODEL_MAP = {
     "opus": "GLM-5.1",        # Recommended by Z.AI for complex tasks
 }
 
-def resolve_model(tier: str = "sonnet") -> str:
+def resolve_model(tier: str = "opus") -> str:
     """
     Resolve the Anthropic API model identifier, considering Z.AI proxy emulation mappings.
     Defaults to the recommended Z.AI Coding Plan models.
@@ -21,13 +21,14 @@ def resolve_model(tier: str = "sonnet") -> str:
         env_val = os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL")
         
     resolved = (env_val or "").strip()
-    return resolved if resolved else ZAI_MODEL_MAP.get(tier, ZAI_MODEL_MAP["sonnet"])
+    return resolved if resolved else ZAI_MODEL_MAP.get(tier, ZAI_MODEL_MAP["opus"])
 
 def resolve_haiku() -> str:
     return resolve_model("haiku")
 
 def resolve_sonnet() -> str:
-    return resolve_model("sonnet")
+    # Central configuration override: force Opus instead of Sonnet
+    return resolve_model("opus")
 
 def resolve_opus() -> str:
     return resolve_model("opus")
