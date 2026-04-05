@@ -668,6 +668,78 @@ def _rewrite_literal_artifacts_dir_paths(command: str, artifacts_root: str) -> t
     return updated, updated != command
 
 
+_WORKSPACE_REWRITE_PATH_KEYS = frozenset({
+    "path", "file_path", "filepath", "html_path", "pdf_path",
+    "destination", "output_path", "output", "target", "target_path",
+    "save_path", "input_image_path", "image_path", "attachment_path",
+})
+
+
+def _rewrite_mismatched_workspace_paths(
+    tool_input: dict,
+    workspace_dir: str,
+) -> Optional[dict]:
+    """Rewrite file-path fields that target a sibling AGENT_RUN_WORKSPACES
+    run directory to use the current (correct) workspace.
+
+    LLMs frequently hallucinate wrong hex suffixes in long run-workspace
+    paths (e.g. ``...a62199cf`` instead of ``...e62199cf``).  Since write
+    operations must always target the current run workspace, silently
+    rewriting the run-directory component is safe and prevents infinite
+    deny-retry loops.
+
+    Returns a new *tool_input* dict if any paths were rewritten, else ``None``.
+    """
+    if not isinstance(tool_input, dict) or not workspace_dir:
+        return None
+    try:
+        ws_resolved = str(Path(workspace_dir).resolve())
+    except Exception:
+        return None
+
+    marker = "/AGENT_RUN_WORKSPACES/"
+    if marker not in ws_resolved:
+        return None
+
+    ws_run_dir = ws_resolved.split(marker, 1)[1].split("/", 1)[0]
+
+    corrected: Optional[dict] = None
+    for key in _WORKSPACE_REWRITE_PATH_KEYS:
+        raw_value = tool_input.get(key)
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            continue
+        try:
+            raw_resolved = str(Path(raw_value.strip()).resolve())
+        except Exception:
+            continue
+        if marker not in raw_resolved:
+            continue
+
+        raw_after = raw_resolved.split(marker, 1)[1]
+        raw_run_dir = raw_after.split("/", 1)[0]
+        if raw_run_dir == ws_run_dir:
+            continue  # Already targeting correct workspace
+
+        # Extract relative path within the run workspace
+        parts = raw_after.split("/", 1)
+        if len(parts) < 2:
+            continue  # Path points to run dir itself, nothing to rewrite
+
+        relative_path = parts[1]
+        corrected_path = f"{ws_resolved.rstrip('/')}/{relative_path}"
+        if corrected is None:
+            corrected = dict(tool_input)
+        corrected[key] = corrected_path
+        logfire.info(
+            "workspace_path_auto_corrected",
+            key=key,
+            original_run_dir=raw_run_dir,
+            correct_run_dir=ws_run_dir,
+            relative_path=relative_path,
+        )
+    return corrected
+
+
 def _extract_bash_command(input_data: dict) -> tuple[str, str, dict]:
     """Return (command, source, tool_input_dict) from a Bash hook payload."""
     tool_input = input_data.get("tool_input", {}) if isinstance(input_data, dict) else {}
@@ -932,7 +1004,9 @@ class AgentHookSet:
             "run_report_generation",
             "run_research_pipeline",
         }
-        if tool_name in CROSS_WORKSPACE_TOOLS:
+        # Extract base tool name for matching (strip mcp__*__ prefix)
+        tool_base_name = tool_name.rsplit("__", 1)[-1] if "__" in tool_name else tool_name
+        if tool_name in CROSS_WORKSPACE_TOOLS or tool_base_name in CROSS_WORKSPACE_TOOLS:
             return {}  # Allow cross-workspace access for pipeline tools
         
         # Check if tool name contains read-only patterns
@@ -949,6 +1023,21 @@ class AgentHookSet:
         
         if is_read_only:
             return {}  # Allow reads from anywhere
+
+        # ── Workspace path auto-correction ──────────────────────────────────
+        # LLMs frequently hallucinate wrong hex suffixes in AGENT_RUN_WORKSPACES
+        # paths (e.g. ...a62199cf vs ...e62199cf).  Since write operations must
+        # target the current run workspace, transparently correct the run-dir
+        # component before validation to prevent infinite deny-retry loops.
+        _ws_dir = self.workspace_dir or current_workspace
+        _ws_corrected_input = _rewrite_mismatched_workspace_paths(tool_input, _ws_dir)
+        if _ws_corrected_input is not None:
+            logfire.info(
+                "workspace_guard_path_rewrite",
+                tool_name=tool_name,
+                tool_use_id=str(tool_use_id),
+            )
+            tool_input = _ws_corrected_input
 
         # Whitelist the /memory directory for heartbeat-related writes
         # This allows the heartbeat system to update HEARTBEAT.md and create briefing markers
@@ -998,9 +1087,20 @@ class AgentHookSet:
                         except Exception:
                             pass
                     if not allowed:
+                        # If auto-rewrite already ran and corrected tool_input,
+                        # re-read the corrected path and re-check.
+                        if _ws_corrected_input is not None:
+                            raw_path = _ws_corrected_input.get("path") or _ws_corrected_input.get("file_path") or raw_path
+                            resolved = Path(raw_path).resolve()
+                            try:
+                                resolved.relative_to(ws_root)
+                                return {"tool_input": _ws_corrected_input}
+                            except Exception:
+                                pass
                         msg = (
                             f"Tool input 'path' contains path '{raw_path}' which is outside the "
-                            "run workspace and UA_ARTIFACTS_DIR."
+                            f"run workspace and UA_ARTIFACTS_DIR. "
+                            f"Correct workspace root: {ws_root}"
                         )
                         logfire.warning(
                             "workspace_guard_blocked",
@@ -1018,7 +1118,9 @@ class AgentHookSet:
                             },
                         }
 
-                    # Allow absolute paths under workspace or artifacts as-is (no rewrite).
+                    # Allow absolute paths under workspace or artifacts as-is.
+                    if _ws_corrected_input is not None:
+                        return {"tool_input": _ws_corrected_input}
                     return {}
 
             # For relative paths (or missing), fall back to workspace scoping to avoid
@@ -1032,9 +1134,13 @@ class AgentHookSet:
             if validated_input != tool_input:
                 return {"tool_input": validated_input}
         except WorkspaceGuardError as e:
+            ws_hint = str(Path(self.workspace_dir or current_workspace).resolve())
             logfire.warning("workspace_guard_blocked", error=str(e), tool_use_id=str(tool_use_id), tool_name=tool_name)
             return {
-                "systemMessage": f"⚠️ {e}",
+                "systemMessage": (
+                    f"⚠️ {e}\n\n"
+                    f"Correct workspace root: {ws_hint}"
+                ),
                 "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -1045,6 +1151,8 @@ class AgentHookSet:
         except Exception:
             pass  # Don't block on guard errors
         
+        if _ws_corrected_input is not None:
+            return {"tool_input": _ws_corrected_input}
         return {}
 
     async def on_pre_tool_use_ledger(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
