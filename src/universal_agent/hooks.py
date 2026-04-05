@@ -12,6 +12,7 @@ from typing import Any, Optional, Callable
 from dataclasses import dataclass
 import shlex
 from pathlib import Path
+from datetime import datetime
 from claude_agent_sdk import HookMatcher
 from universal_agent.agent_core import (
     AgentEvent,
@@ -35,6 +36,14 @@ from universal_agent.durable.classification import classify_tool
 from universal_agent.identity import (
     resolve_email_recipients,
     validate_recipient_policy,
+)
+from universal_agent.agentmail_official import (
+    extract_agentmail_delivery_fields,
+    extract_agentmail_result_ids,
+    is_agentmail_delivery_tool,
+    looks_like_receipt_ack,
+    request_requires_single_final_response,
+    resolve_email_tracking_from_runtime,
 )
 from universal_agent.task_stop_guardrails import (
     evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
@@ -1137,6 +1146,98 @@ class AgentHookSet:
         is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
         current_run_kind = self._get_cached_run_kind()
 
+        if is_agentmail_delivery_tool(tool_name):
+            fields = extract_agentmail_delivery_fields(tool_input)
+            conn = None
+            try:
+                runtime, bridge, mapping, run_kind, claimed_task_ids, conn = resolve_email_tracking_from_runtime()
+                effective_run_kind = run_kind or current_run_kind
+                subject = fields.get("subject") or ""
+                body = fields.get("body") or ""
+
+                if effective_run_kind == "email_triage" and bridge and mapping:
+                    thread_id = str(mapping.get("thread_id") or "").strip()
+                    if request_requires_single_final_response(getattr(runtime, "user_input", "")):
+                        return {
+                            "systemMessage": (
+                                "⚠️ This email task requires exactly one final response. "
+                                "Do not send a receipt acknowledgement."
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Receipt acknowledgement blocked by single-final-response requirement.",
+                            },
+                        }
+                    if thread_id and bridge.has_final_outbound(thread_id):
+                        return {
+                            "systemMessage": "⚠️ Final email already exists for this thread. Duplicate acknowledgement blocked.",
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Final outbound already recorded for thread.",
+                            },
+                        }
+                    if thread_id and bridge.has_ack_outbound(thread_id):
+                        return {
+                            "systemMessage": "⚠️ Receipt acknowledgement already exists for this thread. Do not send another one.",
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Ack outbound already recorded for thread.",
+                            },
+                        }
+
+                if effective_run_kind == "todo_execution":
+                    if looks_like_receipt_ack(subject, body):
+                        return {
+                            "systemMessage": (
+                                "⚠️ Receipt-style acknowledgements are not allowed during canonical ToDo execution. "
+                                "Send only the final substantive delivery."
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Receipt-style acknowledgement blocked in todo_execution.",
+                            },
+                        }
+                    if bridge and mapping:
+                        thread_id = str(mapping.get("thread_id") or "").strip()
+                        if thread_id and bridge.has_final_outbound(thread_id):
+                            return {
+                                "systemMessage": "⚠️ Final email or draft already exists for this thread. Duplicate final delivery blocked.",
+                                "decision": "block",
+                                "hookSpecificOutput": {
+                                    "hookEventName": "PreToolUse",
+                                    "permissionDecision": "deny",
+                                    "permissionDecisionReason": "Final outbound already recorded for thread.",
+                                },
+                            }
+                    if conn is not None and claimed_task_ids:
+                        from universal_agent import task_hub
+
+                        for task_id in claimed_task_ids:
+                            if task_hub._email_side_effects_detected(conn, task_id):
+                                return {
+                                    "systemMessage": "⚠️ Final email or draft already exists for this task. Duplicate final delivery blocked.",
+                                    "decision": "block",
+                                    "hookSpecificOutput": {
+                                        "hookEventName": "PreToolUse",
+                                        "permissionDecision": "deny",
+                                        "permissionDecisionReason": "Final outbound already recorded for task.",
+                                    },
+                                }
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
         if current_run_kind == "todo_execution" and normalized_tool_name in {
             "ask_user_questions",
             "ask_user_questions",
@@ -2099,6 +2200,99 @@ class AgentHookSet:
         return {}
 
     async def on_post_email_send_artifact(self, *args) -> dict:
+        input_data = args[0] if len(args) > 0 and isinstance(args[0], dict) else {}
+        raw_tool_name = str(
+            input_data.get("tool_name", "")
+            or ((args[2] if len(args) > 2 and isinstance(args[2], dict) else {}).get("tool_name", ""))
+            or ""
+        )
+        tool_input = input_data.get("tool_input", {}) or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+        tool_response = input_data.get("tool_response")
+        if tool_response is None:
+            tool_response = input_data.get("tool_result")
+
+        def _load_json_payload(payload: Any) -> Any:
+            if isinstance(payload, dict):
+                return payload
+            if isinstance(payload, str):
+                try:
+                    return json.loads(payload)
+                except json.JSONDecodeError:
+                    return None
+            if isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict) and "text" in item:
+                        try:
+                            return json.loads(item.get("text") or "")
+                        except json.JSONDecodeError:
+                            continue
+            return None
+
+        def _write_artifact(records: list[dict[str, Any]]) -> None:
+            if not records or not self.workspace_dir:
+                return
+            base_dir = os.path.join(self.workspace_dir, "work_products", "email_verification")
+            os.makedirs(base_dir, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = os.path.join(base_dir, f"email_send_{ts}.json")
+            try:
+                with open(out_path, "w", encoding="utf-8") as handle:
+                    json.dump({"emails": records}, handle, indent=2)
+            except Exception:
+                return
+
+        records: list[dict[str, Any]] = []
+        if is_agentmail_delivery_tool(raw_tool_name):
+            fields = extract_agentmail_delivery_fields(tool_input)
+            payload = _load_json_payload(tool_response)
+            message_id, draft_id = extract_agentmail_result_ids(tool_response)
+            records.append(
+                {
+                    "tool": raw_tool_name,
+                    "recipient_email": fields.get("to"),
+                    "subject": fields.get("subject"),
+                    "body_preview": (fields.get("body") or "")[:2000],
+                    "attachments": tool_input.get("attachments"),
+                    "response": payload or tool_response,
+                }
+            )
+
+            is_error = bool(input_data.get("is_error"))
+            if isinstance(tool_response, dict):
+                is_error = bool(is_error or tool_response.get("is_error") or tool_response.get("error"))
+
+            if not is_error:
+                conn = None
+                try:
+                    _runtime, bridge, mapping, run_kind, claimed_task_ids, conn = resolve_email_tracking_from_runtime()
+                    if bridge and mapping:
+                        thread_id = str(mapping.get("thread_id") or "").strip()
+                        if thread_id:
+                            if run_kind == "email_triage":
+                                bridge.record_ack_outbound(thread_id, message_id=message_id, draft_id=draft_id)
+                            elif run_kind == "todo_execution":
+                                bridge.record_final_outbound(thread_id, message_id=message_id, draft_id=draft_id)
+                    if conn is not None and run_kind == "todo_execution":
+                        from universal_agent import task_hub
+
+                        for task_id in claimed_task_ids:
+                            task_hub.record_task_outbound_delivery(
+                                conn,
+                                task_id=task_id,
+                                channel="agentmail",
+                                message_id=message_id,
+                                draft_id=draft_id,
+                            )
+                finally:
+                    if conn is not None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+
+        _write_artifact(records)
         return {}
 
     async def on_post_task_guidance(self, *args) -> dict:

@@ -1,4 +1,7 @@
 from typing import Any
+import base64
+import json
+from pathlib import Path
 import sys
 import os
 from claude_agent_sdk import tool
@@ -191,6 +194,36 @@ async def write_text_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = write_text_file_core(path, content, overwrite=overwrite)
     return {"content": [{"type": "text", "text": result_str}]}
+
+
+@tool(
+    name="prepare_agentmail_attachment",
+    description=(
+        "Prepare a local file for the official AgentMail MCP send/reply tools. "
+        "Reads a file from disk and returns an official AgentMail attachment object "
+        "with base64 content and filename."
+    ),
+    input_schema={"path": str, "filename": str, "content_id": str},
+)
+async def prepare_agentmail_attachment_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    raw_path = str(args.get("path") or "").strip()
+    if not raw_path:
+        return {"content": [{"type": "text", "text": "error: 'path' is required"}]}
+
+    file_path = Path(raw_path).expanduser()
+    if not file_path.is_file():
+        return {"content": [{"type": "text", "text": f"error: file not found: {file_path}"}]}
+
+    filename = str(args.get("filename") or "").strip() or file_path.name
+    content_id = str(args.get("content_id") or "").strip()
+
+    payload = {
+        "filename": filename,
+        "content": base64.b64encode(file_path.read_bytes()).decode("ascii"),
+    }
+    if content_id:
+        payload["content_id"] = content_id
+    return {"content": [{"type": "text", "text": json.dumps(payload)}]}
 
 
 @tool(

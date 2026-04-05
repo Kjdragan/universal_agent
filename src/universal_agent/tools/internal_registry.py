@@ -28,6 +28,7 @@ from universal_agent.tools.local_toolkit_bridge import (
     inspect_session_workspace_wrapper,
     append_to_file_wrapper,
     write_text_file_wrapper,
+    prepare_agentmail_attachment_wrapper,
     finalize_research_wrapper,
     generate_image_wrapper,
     generate_image_with_review_wrapper,
@@ -72,9 +73,6 @@ from universal_agent.tools.vp_orchestration import (
 # Live Chrome Bridge (CDP session attachment) — feature-gated
 from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
 
-# AgentMail Tool
-from universal_agent.tools.agentmail_bridge import mcp__internal__send_agentmail
-
 # Artifact Publisher Tool
 from universal_agent.tools.artifact_publisher import mcp__internal__publish_artifact
 
@@ -97,6 +95,7 @@ def get_core_internal_tools() -> List[Callable]:
         inspect_session_workspace_wrapper,
         append_to_file_wrapper,
         write_text_file_wrapper,
+        prepare_agentmail_attachment_wrapper,
         finalize_research_wrapper,
         generate_image_wrapper,
         generate_image_with_review_wrapper,
@@ -114,7 +113,6 @@ def get_core_internal_tools() -> List[Callable]:
         csi_watchlist_snapshot_wrapper,
         task_hub_task_action_wrapper,
         task_hub_decompose_wrapper,
-        mcp__internal__send_agentmail,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,
         vp_list_missions_wrapper,

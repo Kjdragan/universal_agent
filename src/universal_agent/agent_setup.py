@@ -53,6 +53,7 @@ from universal_agent.tools.local_toolkit_bridge import (
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.internal_registry import get_all_internal_tools
 from universal_agent.execution_context import bind_workspace_env
+from universal_agent.agentmail_official import build_agentmail_mcp_server_config
 from universal_agent.feature_flags import (
     memory_enabled,
     memory_max_tokens,
@@ -575,6 +576,10 @@ class AgentSetup:
         notebooklm_config = build_notebooklm_mcp_server_config()
         if notebooklm_config is not None:
             servers["notebooklm-mcp"] = notebooklm_config
+
+        agentmail_config = build_agentmail_mcp_server_config()
+        if agentmail_config is not None:
+            servers["agentmail"] = agentmail_config
 
         return servers
 

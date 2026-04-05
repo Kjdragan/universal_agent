@@ -1667,7 +1667,7 @@ class UniversalAgent:
             "- **Filesystem**: `CURRENT_RUN_WORKSPACE/work_products/` is your target for all files. Use `publish_artifact` to save permanent output to long-term storage.\n"
             "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
             "## 📧 EMAIL & COMMUNICATION\n"
-            "- **Simone's own email**: Use `send_agentmail` tool directly (NOT bash, curl, SDK scripts, or CLI commands). This is Simone's default for sending reports, notifications, replies.\n"
+            "- **Simone's own email**: Use the official AgentMail MCP tools directly (`mcp__agentmail__send_message`, `mcp__agentmail__reply_to_message`). For local attachments, call `prepare_agentmail_attachment` first and pass the returned object in `attachments`. Do NOT use bash, curl, SDK scripts, or CLI commands in-session.\n"
             "- **Kevin's Gmail**: Use the `gmail` Skill (gws CLI) ONLY when explicitly acting as Kevin.\n"
             "- **Deprecated**: Composio Gmail tools. Do NOT use.\n"
             "- Keep email bodies concise.\n\n"

@@ -1,58 +1,109 @@
 ---
 name: agentmail
-description: Send emails from Simone's own inbox using the native `send_agentmail` MCP tool. Use when you need to send an email, reply, deliver a report, or communicate with anyone via email. Do NOT use bash, curl, SDK scripts, or CLI commands — just call the MCP tool directly.
+description: Use the official AgentMail MCP tools for Simone's own inbox. Send outbound mail with `mcp__agentmail__send_message`, reply with `mcp__agentmail__reply_to_message`, and prepare local attachments with `prepare_agentmail_attachment`. Do not use bash, curl, SDK scripts, or CLI commands for in-session email delivery.
 ---
 
-# AgentMail — Simone's Email
+# AgentMail — Official MCP Path
 
-Simone sends email via `send_agentmail`. One tool call — no scripts, no CLI, no SDK.
+Simone sends email through the official AgentMail MCP server.
 
-## Sending Email
+Primary tools:
+- `mcp__agentmail__send_message`
+- `mcp__agentmail__reply_to_message`
+- `mcp__agentmail__create_draft`
+- `mcp__agentmail__send_draft`
+- `mcp__agentmail__list_threads`
+- `mcp__agentmail__get_thread`
+- `mcp__agentmail__get_attachment`
+
+Local file helper:
+- `prepare_agentmail_attachment`
+
+## Sending a new email
+
+Use the official MCP send tool directly.
 
 ```json
-send_agentmail({
-  "to": "recipient@example.com",
+mcp__agentmail__send_message({
+  "inboxId": "oddcity216@agentmail.to",
+  "to": ["recipient@example.com"],
   "subject": "Subject line",
-  "body": "Email body content — plain text or HTML"
+  "text": "Plain text body",
+  "html": "<p>HTML body</p>"
 })
 ```
 
-Required: `to`, `subject`, `body`. Optional: `cc`, `bcc`, `dry_run`, `require_approval`.
+Notes:
+- Prefer providing both `text` and `html` for readable email.
+- Use Simone's AgentMail inbox for Simone-authored delivery.
+- Use the `gmail` skill only when Kevin explicitly wants the message sent from his own Gmail.
 
-- Default behavior: send directly.
-- Use `require_approval: true` only when a human should explicitly review the draft before it is sent.
+## Sending attachments
 
-## Before Sending, Ask Yourself
+The official AgentMail MCP tools expect attachment payloads, not raw local paths.
 
-- **Who is the sender?** If Simone → this tool. If Kevin's Gmail → `gmail` skill instead.
-- **Is the body formatted?** For reports/structured content, wrap in basic HTML (`<h2>`, `<p>`, `<ul>`) for readable email. Raw markdown renders poorly in email clients.
-- **Is this a duplicate?** The tool has built-in dedup guards. If it returns a "duplicate delivery blocked" error, your email was already sent — do NOT retry.
-- **Is the recipient correct?** Kevin's email: `kevinjdragan@gmail.com`.
+1. Call:
 
-## Anti-Patterns — NEVER Do These
+```json
+prepare_agentmail_attachment({
+  "path": "/absolute/path/to/file.pdf"
+})
+```
 
-1. **NEVER use bash, curl, or Python scripts** to send email. The MCP tool handles auth, formatting, and Task Hub lifecycle tracking automatically. Scripts bypass all of this.
-2. **NEVER use `mcp__AgentMail__send_message`** — that's the raw AgentMail MCP endpoint. It bypasses delivery tracking and dedup guards, causing phantom sends and orphaned tasks.
-3. **NEVER send receipt acknowledgements** like "Got it, working on it" — the system blocks these. Only send the final, substantive response.
-4. **NEVER construct AgentMail SDK code** (`from agentmail import AgentMail`, `client.inboxes.messages.send(...)`) — that's for external app development, not for Simone.
-5. **NEVER try to `curl` to `/api/v1/ops/agentmail/send` or similar endpoints.** This is a frequent hallucination and will fail.
-6. **NEVER install `agentmail-cli` via npm** — the CLI is not needed; the native MCP tool is the correct path.
+2. Parse the returned JSON object.
+3. Pass that object in the official AgentMail MCP `attachments` array.
 
-## Error Handling
+```json
+mcp__agentmail__send_message({
+  "inboxId": "oddcity216@agentmail.to",
+  "to": ["recipient@example.com"],
+  "subject": "Attached report",
+  "text": "Please see attached.",
+  "attachments": [
+    {
+      "filename": "report.pdf",
+      "content": "<base64>"
+    }
+  ]
+})
+```
 
-| Error Message | Meaning | Action |
-|--------------|---------|--------|
-| `'to' is required` | Missing recipient | Add the `to` field |
-| `AgentMail service is not available` | Service not configured | Report error to user — cannot send |
-| `duplicate final delivery blocked` | Email already sent for this task | **Stop** — delivery succeeded earlier. Do NOT retry. |
-| `Receipt acknowledgement blocked` | Tried to send a "got it" message | Skip the ack — only send final substantive content |
-| Connection/timeout error | Transient failure | Retry once, then report failure |
+## Replies
 
-## Quick Routing
+When replying in an existing thread, use the official reply tool instead of inventing your own thread logic.
+
+```json
+mcp__agentmail__reply_to_message({
+  "inboxId": "oddcity216@agentmail.to",
+  "messageId": "<latest-message-id>",
+  "text": "Reply body",
+  "html": "<p>Reply body</p>"
+})
+```
+
+Use `list_threads` / `get_thread` first if you need to inspect the thread or recover the latest message ID.
+
+## Human approval drafts
+
+If a message genuinely requires human approval, use the official draft flow instead of inventing a custom review transport:
+- `mcp__agentmail__create_draft`
+- `mcp__agentmail__update_draft`
+- `mcp__agentmail__send_draft`
+- `mcp__agentmail__delete_draft`
+
+## Anti-patterns
+
+1. Never use bash, curl, or ad hoc Python scripts to send AgentMail.
+2. Never invent a fake `send_agentmail` tool call when the official MCP tools are available.
+3. Never shell out to `agentmail-cli` from an agent run. The CLI is operator tooling, not the in-session delivery path.
+4. Never use the backend ops API directly from an agent run for normal email delivery.
+5. Never assume a local file path can be passed straight into AgentMail attachments. Convert it with `prepare_agentmail_attachment`.
+
+## Quick routing
 
 | Request | Action |
 |---------|--------|
-| "Email this to Kevin" | `send_agentmail` → `kevinjdragan@gmail.com` |
-| "Send this report" | `send_agentmail` → specified recipient |
-| "Reply to this email" | `send_agentmail` → original sender |
-| "Send from Kevin's Gmail" | Use `gmail` skill (gws CLI) — completely different channel |
+| "Email this to Kevin" | `mcp__agentmail__send_message` to `kevinjdragan@gmail.com` |
+| "Reply to this email" | `mcp__agentmail__reply_to_message` |
+| "Send this report with PDF attached" | `prepare_agentmail_attachment` then `mcp__agentmail__send_message` |
+| "Send from my Gmail" | Use the `gmail` skill instead |

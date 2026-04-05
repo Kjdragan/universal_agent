@@ -489,7 +489,7 @@ def test_todo_execution_auto_completes_chat_task_after_final_delivery(monkeypatc
         run_kind="todo_execution",
     )
     tracker.record_tool_call(
-        "mcp__internal__send_agentmail",
+        "mcp__agentmail__send_message",
         tool_input={"to": "kevin@example.com", "subject": "AI model releases report"},
     )
 

@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
+from universal_agent.agentmail_official import build_agentmail_mcp_server_config
 from universal_agent.task_stop_guardrails import (
     evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
     extract_task_stop_id as _shared_extract_task_stop_id,
@@ -81,6 +82,7 @@ from universal_agent.tools.local_toolkit_bridge import (
 )
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapper
+from universal_agent.tools.internal_registry import get_all_internal_tools
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 from universal_agent import hooks as hook_events
 from universal_agent.hooks import AgentHookSet
@@ -8624,35 +8626,17 @@ async def setup_session(
         "internal": create_sdk_mcp_server(
             name="internal",
             version="1.0.0",
-            tools=[
-                run_research_pipeline_wrapper,
-                run_research_phase_wrapper,
-                crawl_parallel_wrapper,
-                run_report_generation_wrapper,
-                generate_outline_wrapper,
-                draft_report_parallel_wrapper,
-                cleanup_report_wrapper,
-                compile_report_wrapper,
-                upload_to_composio_wrapper,
-                list_directory_wrapper,
-                append_to_file_wrapper,
-                write_text_file_wrapper,
-                finalize_research_wrapper,
-                generate_image_wrapper,
-                describe_image_wrapper,
-                preview_image_wrapper,
-                html_to_pdf_wrapper,
-                memory_search_wrapper,
-                memory_get_wrapper,
-                ask_user_questions_wrapper,
-                batch_tool_execute_wrapper,
-            ],
+            tools=get_all_internal_tools(enable_memory=memory_enabled()),
         ),
     }
 
     notebooklm_mcp_config = build_notebooklm_mcp_server_config()
     if notebooklm_mcp_config is not None:
         mcp_servers_config["notebooklm-mcp"] = notebooklm_mcp_config
+
+    agentmail_mcp_config = build_agentmail_mcp_server_config()
+    if agentmail_mcp_config is not None:
+        mcp_servers_config["agentmail"] = agentmail_mcp_config
 
     options = ClaudeAgentOptions(
         model=resolve_claude_code_model(default="sonnet"),

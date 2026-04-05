@@ -45,8 +45,8 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
-    "If you need to send an email, strictly use the native `send_agentmail` tool. "
-    "Do NOT use `mcp__AgentMail__send_message` or Python/Bash scripts for emails, as they bypass critical lifecycle tracking. "
+    "If you need to send an email, use the official AgentMail MCP tools (`mcp__agentmail__send_message` / `reply_to_message`). "
+    "For local attachments, call `prepare_agentmail_attachment` first. Do NOT use Python/Bash scripts or CLI commands for email. "
     "If you need to create tasks, use the native `task_hub_task_action` tool. "
     "Do NOT write or run Python/Bash scripts to interact with Task Hub. "
     "If nothing needs attention, reply HEARTBEAT_OK."
@@ -2917,4 +2917,3 @@ class HeartbeatService:
                     pass
             if not keep_busy_until_collect_finishes:
                 self.busy_sessions.discard(session.session_id)
-
