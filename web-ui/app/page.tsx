@@ -2760,7 +2760,7 @@ export default function HomePage() {
           {/* PANEL 2: ACTIVITY LOG */}
           <div
             className={`
-              bg-background/20 relative transition-all duration-300 flex-col border-r border-border/40
+              min-w-0 bg-background/20 relative transition-all duration-300 flex-col border-r border-border/40
               ${activeMobileTab === 'activity' ? 'flex w-full' : 'hidden md:flex'}
               ${activityCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
             `}
@@ -2825,7 +2825,7 @@ export default function HomePage() {
           {/* PANEL 3: FILE EXPLORER */}
           <div
             className={`
-              bg-background/30 relative transition-all duration-300 flex-col
+              min-w-0 bg-background/30 relative transition-all duration-300 flex-col
               ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden md:flex'}
               ${filesCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
             `}
