@@ -73,3 +73,17 @@ These guidelines apply when Codex reviews pull requests targeting `develop`.
 - Flag changes that touch `.github/workflows/deploy-staging.yml` or `.github/workflows/deploy-prod.yml` if the corresponding canonical docs in `docs/deployment/` were not updated in the same PR.
 - Do not flag formatting-only issues (whitespace, line length) unless they break a linter gate.
 - Treat typos in user-facing strings or documentation as P1.
+
+If you are the codex agent, then: """# Browser debugging rules
+
+When working on frontend bugs, local web apps, or browser-based verification:
+
+1. Use the browser MCP tools instead of guessing.
+2. Start by navigating to the local app URL.
+3. Reproduce the bug in the browser.
+4. Inspect screenshots and page state.
+5. Inspect failed network requests if relevant.
+6. Only then edit code.
+7. After edits, retest in the browser to confirm the fix.
+
+Do not claim a UI bug is fixed unless it has been verified through the browser tools."""
