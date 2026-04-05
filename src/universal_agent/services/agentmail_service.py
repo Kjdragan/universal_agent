@@ -1588,12 +1588,12 @@ class AgentMailService:
         task_id: str,
         thread_id: str,
         sender_email: str,
-    ) -> None:
-        """Classify email priority and dispatch immediately for P0/P1.
+    ) -> dict[str, Any]:
+        """Classify a promoted trusted email and request canonical ToDo execution.
 
-        For P0 (immediate) and P1 (soon) priorities, triggers a heartbeat
-        wake so Simone picks up the task without waiting for the next
-        scheduled heartbeat cycle.
+        All clean trusted inbound email should hand off into the canonical ToDo
+        lane. Priority determines urgency and notification framing, but not
+        whether the work gets a wake request at all.
         """
         try:
             from universal_agent.services.priority_classifier import (
@@ -1617,31 +1617,58 @@ class AgentMailService:
                 subject[:60],
             )
 
-            # P0/P1: trigger immediate dispatch via callback
-            if decision.priority in (TaskPriority.P0_IMMEDIATE, TaskPriority.P1_SOON):
-                if self._priority_dispatch_fn:
-                    dispatch_result = self._priority_dispatch_fn(
-                        task_id=task_id,
-                        thread_id=thread_id,
-                        sender_email=sender_email,
-                        priority=decision.priority.value,
-                        reason=decision.reason,
-                    )
-                    logger.info(
-                        "📧⚡ Immediate dispatch result: %s",
-                        dispatch_result,
-                    )
+            if self._priority_dispatch_fn:
+                dispatch_result = self._priority_dispatch_fn(
+                    task_id=task_id,
+                    thread_id=thread_id,
+                    sender_email=sender_email,
+                    priority=decision.priority.value,
+                    reason=decision.reason,
+                )
+                logger.info("📧⚡ ToDo wake request result: %s", dispatch_result)
+                if isinstance(dispatch_result, dict):
+                    result = dict(dispatch_result)
                 else:
-                    logger.debug(
-                        "📧⚡ Priority dispatch fn not wired — "
-                        "falling back to heartbeat for %s task",
-                        decision.priority.value,
-                    )
-            # P2/P3: no immediate dispatch, heartbeat will pick it up
+                    result = {"dispatched": bool(dispatch_result), "reason": "callback_result"}
+                result.setdefault("priority", decision.priority.value)
+                result.setdefault("classification_reason", decision.reason)
+                result.setdefault("strategy", decision.strategy)
+                return result
+
+            try:
+                from universal_agent.services.idle_dispatch_loop import nudge_dispatch
+
+                nudge_dispatch(reason=f"email_promoted:{thread_id[:16]}")
+                logger.info(
+                    "📧⚡ No priority dispatch callback wired; nudged idle dispatch for promoted email thread=%s",
+                    thread_id,
+                )
+                return {
+                    "dispatched": True,
+                    "reason": "idle_nudge",
+                    "priority": decision.priority.value,
+                    "classification_reason": decision.reason,
+                    "strategy": decision.strategy,
+                }
+            except Exception as nudge_exc:
+                logger.debug("📧⚡ Idle dispatch nudge unavailable: %s", nudge_exc)
+                return {
+                    "dispatched": False,
+                    "reason": "dispatch_callback_unavailable",
+                    "error": str(nudge_exc),
+                    "priority": decision.priority.value,
+                    "classification_reason": decision.reason,
+                    "strategy": decision.strategy,
+                }
 
         except Exception as exc:
-            # Never fail the email flow due to priority classification
+            # Never fail the email flow due to priority classification.
             logger.debug("📧⚡ Priority dispatch failed (non-fatal): %s", exc)
+            return {
+                "dispatched": False,
+                "reason": "priority_dispatch_failed",
+                "error": str(exc),
+            }
 
     # ------------------------------------------------------------------
     # Trusted inbox queue
@@ -2184,10 +2211,10 @@ class AgentMailService:
         *,
         payload: dict[str, Any],
         bridge_result: Optional[dict[str, Any]],
-    ) -> None:
+    ) -> dict[str, Any]:
         bridge = self._get_email_task_bridge()
         if bridge is None:
-            return
+            return {"dispatched": False, "reason": "email_task_bridge_unavailable"}
 
         session_key = str(payload.get("session_key") or "").strip()
         mapping = bridge.get_mapping_for_session_key(session_key) if session_key else None
@@ -2195,7 +2222,7 @@ class AgentMailService:
         if thread_id:
             bridge.promote_to_agent_ready(thread_id)
 
-        self._try_priority_dispatch(
+        return self._try_priority_dispatch(
             sender_trusted=True,
             is_reply=bool(payload.get("reply_text")),
             thread_message_count=int((bridge_result or {}).get("message_count", 1) or 1),
@@ -2643,36 +2670,72 @@ class AgentMailService:
                         ack_message_id=ack_message_id if ack_status == "sent" else "",
                         last_error=ack_error,
                     )
-                    self._promote_trusted_email_task(payload=payload, bridge_result=None)
-                    self._set_queue_status(
-                        queue_id,
-                        status=_QUEUE_STATUS_DISPATCHED_TO_TODO,
-                        attempts=attempts,
-                        last_error="",
-                        session_exit_status="dispatched_to_todo",
-                        classification=classification,
-                        reply_sent=reply_sent,
-                        completed=True,
-                    )
-                    self._emit_notification(
-                        kind="agentmail_dispatched_to_todo",
-                        title="Email Dispatched To ToDo",
-                        message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
-                        severity="info",
-                        metadata={
-                            "queue_id": queue_id,
-                            "message_id": str(payload.get("message_id") or ""),
-                            "subject": subject,
-                            "sender_email": sender_email,
-                            "session_id": session_id,
-                            "trigger": "trusted_email",
-                            "workflow_decision": decision,
-                            "workflow_reason": str(result.get("reason") or decision),
-                            "run_id": workflow_run_id,
-                            "attempt_id": workflow_attempt_id,
-                            "routing_decision": routing_decision or "trusted_execute",
-                        },
-                    )
+                    dispatch_result = self._promote_trusted_email_task(payload=payload, bridge_result=None)
+                    dispatch_reason = str(dispatch_result.get("reason") or "").strip().lower()
+                    dispatched = bool(dispatch_result.get("dispatched"))
+                    if dispatched:
+                        self._set_queue_status(
+                            queue_id,
+                            status=_QUEUE_STATUS_DISPATCHED_TO_TODO,
+                            attempts=attempts,
+                            last_error="",
+                            session_exit_status="dispatched_to_todo",
+                            classification=classification,
+                            reply_sent=reply_sent,
+                            completed=True,
+                        )
+                        self._emit_notification(
+                            kind="agentmail_dispatched_to_todo",
+                            title="Email Dispatched To ToDo",
+                            message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
+                            severity="info",
+                            metadata={
+                                "queue_id": queue_id,
+                                "message_id": str(payload.get("message_id") or ""),
+                                "subject": subject,
+                                "sender_email": sender_email,
+                                "session_id": session_id,
+                                "trigger": "trusted_email",
+                                "workflow_decision": decision,
+                                "workflow_reason": str(result.get("reason") or decision),
+                                "run_id": workflow_run_id,
+                                "attempt_id": workflow_attempt_id,
+                                "routing_decision": routing_decision or "trusted_execute",
+                                "dispatch_reason": dispatch_reason or "dispatched",
+                            },
+                        )
+                    else:
+                        waiting_reason = dispatch_reason or "awaiting_todo_dispatch"
+                        self._set_queue_status(
+                            queue_id,
+                            status=_QUEUE_STATUS_TRIAGED,
+                            attempts=attempts,
+                            last_error=waiting_reason,
+                            session_exit_status=waiting_reason,
+                            classification=classification,
+                            reply_sent=reply_sent,
+                            completed=False,
+                        )
+                        self._emit_notification(
+                            kind="agentmail_triaged_waiting_for_todo",
+                            title="Email Triaged — Awaiting ToDo Executor",
+                            message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
+                            severity="warning" if waiting_reason in {"todo_dispatch_unavailable", "no_todo_sessions"} else "info",
+                            metadata={
+                                "queue_id": queue_id,
+                                "message_id": str(payload.get("message_id") or ""),
+                                "subject": subject,
+                                "sender_email": sender_email,
+                                "session_id": session_id,
+                                "trigger": "trusted_email",
+                                "workflow_decision": decision,
+                                "workflow_reason": str(result.get("reason") or decision),
+                                "run_id": workflow_run_id,
+                                "attempt_id": workflow_attempt_id,
+                                "routing_decision": routing_decision or "trusted_execute",
+                                "dispatch_reason": waiting_reason,
+                            },
+                        )
                     continue
 
                 self._mark_queue_ack_status(

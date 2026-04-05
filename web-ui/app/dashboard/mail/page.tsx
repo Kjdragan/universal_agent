@@ -42,6 +42,23 @@ type Draft = {
   created_at: string;
 };
 
+type InboxQueueItem = {
+  queue_id: string;
+  message_id: string;
+  thread_id: string;
+  sender_email: string;
+  sender_role: string;
+  subject: string;
+  status: string;
+  ack_status: string;
+  reply_sent: boolean;
+  classification: string;
+  session_exit_status: string;
+  last_error: string;
+  updated_at: string;
+  completed_at?: string;
+};
+
 type MailStatus = {
   inbox_address: string;
   messages_sent: number;
@@ -137,6 +154,7 @@ export default function MailPage() {
   /* ── State ─── */
   const [threads, setThreads] = useState<Thread[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [queueItems, setQueueItems] = useState<InboxQueueItem[]>([]);
   const [status, setStatus] = useState<MailStatus | null>(null);
   const [inboxes, setInboxes] = useState<string[]>([]);
   const [selectedInbox, setSelectedInbox] = useState<string>("");
@@ -208,6 +226,24 @@ export default function MailPage() {
     return await res.json();
   }, []);
 
+  const fetchInboxQueue = useCallback(async (signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    params.set("limit", "8");
+    params.set("trusted_only", "1");
+    const res = await fetch(`${API_BASE}/api/v1/ops/agentmail/inbox-queue?${params}`, {
+      cache: "no-store",
+      signal,
+    });
+    if (!res.ok) {
+      throw new Error(await readErrorDetail(res, "inbox queue"));
+    }
+    const data = await res.json();
+    return {
+      items: data.items || [],
+      count: Number(data.count || 0),
+    };
+  }, []);
+
   const fetchAll = useCallback(async (mode: "initial" | "manual" | "poll" = "manual") => {
     const fetchId = refreshSeqRef.current + 1;
     refreshSeqRef.current = fetchId;
@@ -232,6 +268,7 @@ export default function MailPage() {
       ),
       fetchDrafts(controller.signal),
       fetchStatus(controller.signal),
+      fetchInboxQueue(controller.signal),
     ]);
 
     if (controller.signal.aborted || refreshSeqRef.current !== fetchId) {
@@ -252,6 +289,11 @@ export default function MailPage() {
     const statusResult = results[2];
     if (statusResult.status === "fulfilled") {
       setStatus(statusResult.value as MailStatus);
+    }
+
+    const queueResult = results[3];
+    if (queueResult.status === "fulfilled") {
+      setQueueItems(queueResult.value.items);
     }
 
     const failures = results
@@ -280,7 +322,7 @@ export default function MailPage() {
     if (foreground && refreshSeqRef.current === fetchId) {
       setLoading(false);
     }
-  }, [fetchThreads, fetchDrafts, fetchStatus, selectedInbox, viewMode]);
+  }, [fetchThreads, fetchDrafts, fetchStatus, fetchInboxQueue, selectedInbox, viewMode]);
 
   const fetchThreadMessages = useCallback(async (thread: Thread) => {
     setSelectedThread(thread);
@@ -668,6 +710,24 @@ export default function MailPage() {
             )}
           </div>
 
+          <div
+            style={{
+              borderTop: `1px solid ${TOKENS.ghostBorder}`,
+              padding: "16px 16px 8px",
+            }}
+          >
+            <SectionTitle icon="schedule" label="INBOUND QUEUE" count={queueItems.length} />
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto", padding: "0 16px 16px" }}>
+            {queueItems.length === 0 ? (
+              <EmptyState message="No recent inbound queue activity" />
+            ) : (
+              queueItems.map((item) => (
+                <InboxQueueCard key={item.queue_id} item={item} />
+              ))
+            )}
+          </div>
+
           {/* Stats Panel */}
           {status && (
             <div
@@ -962,6 +1022,96 @@ export default function MailPage() {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function queueStatusTone(status: string): { color: string; bg: string; label: string } {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "dispatched_to_todo") {
+    return { color: TOKENS.green, bg: TOKENS.greenDim, label: "DISPATCHED" };
+  }
+  if (normalized === "triaged") {
+    return { color: TOKENS.cyan, bg: TOKENS.cyanDim, label: "TRIAGED" };
+  }
+  if (normalized === "review_required") {
+    return { color: TOKENS.amber, bg: TOKENS.amberDim, label: "REVIEW" };
+  }
+  if (normalized === "quarantined") {
+    return { color: TOKENS.red, bg: TOKENS.redDim, label: "QUARANTINED" };
+  }
+  if (normalized === "failed" || normalized === "cancelled") {
+    return { color: TOKENS.red, bg: TOKENS.redDim, label: normalized.toUpperCase() };
+  }
+  return { color: TOKENS.textPrimary, bg: TOKENS.surfaceHigh, label: normalized.toUpperCase() || "QUEUED" };
+}
+
+function InboxQueueCard({ item }: { item: InboxQueueItem }) {
+  const tone = queueStatusTone(item.status);
+  const ackLabel = item.ack_status && item.ack_status !== "not_sent"
+    ? `ack:${item.ack_status}`
+    : "ack:pending";
+  const detail = item.session_exit_status || item.classification || item.last_error || "awaiting processing";
+
+  return (
+    <div
+      style={{
+        borderLeft: `2px solid ${tone.color}`,
+        background: TOKENS.surfaceLow,
+        borderRadius: 6,
+        padding: 12,
+        marginBottom: 10,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: TOKENS.textPrimary,
+            lineHeight: 1.4,
+          }}
+        >
+          {item.subject || "(no subject)"}
+        </div>
+        <span
+          style={{
+            alignSelf: "flex-start",
+            background: tone.bg,
+            color: tone.color,
+            border: `1px solid ${tone.color}33`,
+            borderRadius: 999,
+            padding: "2px 8px",
+            fontSize: 10,
+            fontFamily: TOKENS.fontMono,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+          }}
+        >
+          {tone.label}
+        </span>
+      </div>
+      <div
+        style={{
+          marginTop: 6,
+          fontSize: 10,
+          color: TOKENS.textMuted,
+          fontFamily: TOKENS.fontMono,
+        }}
+      >
+        {senderShortName(item.sender_email)} · {ackLabel} · {timeAgo(item.updated_at)}
+      </div>
+      <div
+        style={{
+          marginTop: 8,
+          fontSize: 11,
+          color: TOKENS.textSecondary,
+          lineHeight: 1.4,
+          wordBreak: "break-word",
+        }}
+      >
+        {detail}
       </div>
     </div>
   );

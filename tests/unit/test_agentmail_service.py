@@ -112,10 +112,12 @@ async def service_with_queue(mock_agentmail_client, monkeypatch, tmp_path):
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "activity_state.db"))
     dispatch_fn = AsyncMock(return_value=(True, "agent"))
     dispatch_with_admission_fn = AsyncMock(return_value={"decision": "accepted", "status": "completed"})
+    priority_dispatch_fn = MagicMock(return_value={"dispatched": True, "reason": "immediate_wake"})
 
     svc = AgentMailService(
         dispatch_fn=dispatch_fn,
         dispatch_with_admission_fn=dispatch_with_admission_fn,
+        priority_dispatch_fn=priority_dispatch_fn,
         notification_sink=MagicMock(),
     )
     svc._client = mock_agentmail_client
@@ -575,6 +577,7 @@ class TestTrustedInboundHandling:
         assert items[0]["classification"] == "instruction"
         assert items[0]["sender_role"] == "trusted_operator"
         service_with_queue._dispatch_with_admission_fn.assert_awaited_once()
+        service_with_queue._priority_dispatch_fn.assert_called_once()
         mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
 
         bridge = service_with_queue._get_email_task_bridge()
@@ -644,6 +647,7 @@ class TestTrustedInboundHandling:
         assert item["status"] == "dispatched_to_todo"
         assert item["attempt_count"] == 2
         assert service_with_queue._dispatch_with_admission_fn.await_count == 2
+        assert service_with_queue._priority_dispatch_fn.call_count == 1
         mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -742,6 +746,7 @@ class TestTrustedInboundHandling:
         )
         item = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)[0]
         assert item["status"] == "dispatched_to_todo"
+        service_with_queue._priority_dispatch_fn.assert_called_once()
         mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -783,7 +788,94 @@ class TestTrustedInboundHandling:
         assert item["status"] == "dispatched_to_todo"
         assert item["ack_status"] == "skipped_single_final_response"
         assert item["reply_sent"] is False
+        service_with_queue._priority_dispatch_fn.assert_called_once()
         mock_agentmail_client.inboxes.messages.reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_trusted_inbound_queue_stays_triaged_when_no_todo_executor_is_available(
+        self, service_with_queue, mock_agentmail_client
+    ):
+        service_with_queue._priority_dispatch_fn = MagicMock(
+            return_value={"dispatched": False, "reason": "no_todo_sessions"}
+        )
+        service_with_queue._dispatch_with_admission_fn = AsyncMock(
+            return_value={
+                "decision": "accepted",
+                "status": "completed",
+                "execution_summary": {
+                    "response_preview": (
+                        "safety_status: clean\n"
+                        "routing_decision: trusted_execute\n"
+                        "classification: instruction\n"
+                        "priority: p1\n"
+                        "subject_summary: Missing executor"
+                    )
+                },
+            }
+        )
+
+        class _Message:
+            from_ = "Kevin Dragan <kevin@clearspringcg.com>"
+            subject = "Kick this off"
+            thread_id = "thd_queue_missing_executor"
+            message_id = "msg_queue_missing_executor"
+            text = "please handle this"
+            html = "<p>please handle this</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service_with_queue._handle_inbound_email(_Event())
+        await asyncio.sleep(0.2)
+
+        item = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)[0]
+        assert item["status"] == "triaged"
+        assert item["session_exit_status"] == "no_todo_sessions"
+        assert item["completed_at"] == ""
+        assert item["ack_status"] == "sent"
+        mock_agentmail_client.inboxes.messages.reply.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_trusted_low_priority_email_still_requests_todo_wake(
+        self, service_with_queue, mock_agentmail_client
+    ):
+        service_with_queue._dispatch_with_admission_fn = AsyncMock(
+            return_value={
+                "decision": "accepted",
+                "status": "completed",
+                "execution_summary": {
+                    "response_preview": (
+                        "safety_status: clean\n"
+                        "routing_decision: trusted_execute\n"
+                        "classification: instruction\n"
+                        "priority: p2\n"
+                        "subject_summary: Low priority but trusted"
+                    )
+                },
+            }
+        )
+
+        class _Message:
+            from_ = "Kevin Dragan <kevin@clearspringcg.com>"
+            subject = "Later this weekend"
+            thread_id = "thd_queue_low_priority"
+            message_id = "msg_queue_low_priority"
+            text = "this can happen later"
+            html = "<p>this can happen later</p>"
+            attachments = []
+
+        class _Event:
+            message = _Message()
+
+        await service_with_queue._handle_inbound_email(_Event())
+        await asyncio.sleep(0.2)
+
+        item = service_with_queue.list_inbox_queue(limit=10, trusted_only=True)[0]
+        assert item["status"] == "dispatched_to_todo"
+        assert service_with_queue._priority_dispatch_fn.call_count == 1
+        dispatch_call = service_with_queue._priority_dispatch_fn.call_args.kwargs
+        assert dispatch_call["priority"] == "p2"
 
     @pytest.mark.asyncio
     async def test_untrusted_clean_inbound_routes_to_review_without_auto_execution(
