@@ -57,3 +57,7 @@ DONE: omc  install
 start using gemini deep research in notebooklm daily: automate?
 
 build a nemoclaw as an extra agent to use in our system if infrence is free
+
+be more amnitious re what you can do...
+
+feeds into idea of "work to give agents more agency"

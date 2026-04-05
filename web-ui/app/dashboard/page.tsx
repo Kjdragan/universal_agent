@@ -319,8 +319,6 @@ function formatLocalDateTime(value?: string | number | null): string {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const sessionSectionRef = useRef<HTMLElement>(null);
   const notificationSectionRef = useRef<HTMLElement>(null);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -332,18 +330,8 @@ export default function DashboardPage() {
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [sessionFilter, setSessionFilter] = useState<"all" | "active">("active");
   const [notificationFilter, setNotificationFilter] = useState<"all" | "unread">("all");
-  const [notifCategoryFilter, setNotifCategoryFilter] = useState<NotificationCategoryKey>(
-    () => {
-      if (typeof window === "undefined") return "important";
-      return (localStorage.getItem("ua.notif_category_filter.v1") as NotificationCategoryKey) || "important";
-    },
-  );
-  const [notifSeverityFilter, setNotifSeverityFilter] = useState<string>(
-    () => {
-      if (typeof window === "undefined") return "all";
-      return localStorage.getItem("ua.notif_severity_filter.v1") || "all";
-    },
-  );
+  const [notifCategoryFilter, setNotifCategoryFilter] = useState<NotificationCategoryKey>("important");
+  const [notifSeverityFilter, setNotifSeverityFilter] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
@@ -358,13 +346,7 @@ export default function DashboardPage() {
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
   const [approvalHighlight, setApprovalHighlight] = useState<ApprovalHighlightResponse | null>(null);
   const [tutorialDispatchingId, setTutorialDispatchingId] = useState<string>("");
-  const [dismissedVpEventIds, setDismissedVpEventIds] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set();
-    try {
-      const stored = localStorage.getItem("ua.dismissed_vp_events.v1");
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch { return new Set(); }
-  });
+  const [dismissedVpEventIds, setDismissedVpEventIds] = useState<Set<string>>(new Set());
   const [expandedMissionEvents, setExpandedMissionEvents] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
@@ -542,6 +524,18 @@ export default function DashboardPage() {
     const timer = window.setInterval(load, 8000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  // Load initial preferences
+  useEffect(() => {
+    try {
+      const cat = localStorage.getItem("ua.notif_category_filter.v1");
+      if (cat) setNotifCategoryFilter(cat as NotificationCategoryKey);
+      const sev = localStorage.getItem("ua.notif_severity_filter.v1");
+      if (sev) setNotifSeverityFilter(sev);
+      const dismissed = localStorage.getItem("ua.dismissed_vp_events.v1");
+      if (dismissed) setDismissedVpEventIds(new Set(JSON.parse(dismissed)));
+    } catch { /* ignore */ }
+  }, []);
 
   // Persist notification filter preferences
   useEffect(() => {
@@ -993,10 +987,6 @@ export default function DashboardPage() {
     setSelectedSessions(new Set());
     setDeletingIds(new Set());
   }, [selectedSessions]);
-
-  if (!mounted) {
-    return <div className="space-y-6 flex items-center justify-center min-h-[40vh]"><span className="text-muted-foreground text-sm animate-pulse">Loading dashboard...</span></div>;
-  }
 
   return (
     <div className="space-y-6">
