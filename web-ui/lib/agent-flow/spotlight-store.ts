@@ -1,7 +1,8 @@
 'use client'
 
 import { create } from 'zustand'
-import { createJSONStorage, persist } from 'zustand/middleware'
+import { persist } from 'zustand/middleware'
+import type { PersistStorage, StorageValue } from 'zustand/middleware'
 import type { ConnectionStatus } from './bridge-types'
 import type {
   SpotlightMode,
@@ -22,6 +23,59 @@ type ControlSnapshot = {
   selectionSource: SpotlightSelectionSource
   currentReplayLoopIndex: number
   currentReplayGeneration: number
+}
+
+type PersistedSpotlightState = ControlSnapshot
+
+const PERSIST_VERSION = 2
+
+function normalizePersistedSnapshot(value: unknown): PersistedSpotlightState {
+  const row = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  const mode = row.mode === 'greatest_hits' ? 'greatest_hits' : 'recent'
+  const selectedSessionId = typeof row.selectedSessionId === 'string' && row.selectedSessionId.trim()
+    ? row.selectedSessionId.trim()
+    : null
+  const selectionSource = row.selectionSource === 'manual' ? 'manual' : 'auto'
+  const currentReplayLoopIndex = Number.isFinite(Number(row.currentReplayLoopIndex))
+    ? Math.max(0, Number(row.currentReplayLoopIndex))
+    : 0
+  const currentReplayGeneration = Number.isFinite(Number(row.currentReplayGeneration))
+    ? Math.max(0, Number(row.currentReplayGeneration))
+    : 0
+
+  return {
+    mode,
+    selectedSessionId,
+    selectionSource,
+    currentReplayLoopIndex,
+    currentReplayGeneration,
+  }
+}
+
+const spotlightStorage: PersistStorage<PersistedSpotlightState> = {
+  getItem: (name) => {
+    try {
+      const raw = localStorage.getItem(name)
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as StorageValue<Partial<PersistedSpotlightState> & { archivesBySessionId?: unknown }>
+      return {
+        state: normalizePersistedSnapshot(parsed?.state),
+        version: typeof parsed?.version === 'number' ? parsed.version : 0,
+      }
+    } catch {
+      localStorage.removeItem(name)
+      return null
+    }
+  },
+  setItem: (name, value) => {
+    localStorage.setItem(name, JSON.stringify({
+      ...value,
+      state: normalizePersistedSnapshot(value.state),
+    }))
+  },
+  removeItem: (name) => {
+    localStorage.removeItem(name)
+  },
 }
 
 interface SpotlightStoreState extends ControlSnapshot {
@@ -109,13 +163,21 @@ export const useAgentFlowSpotlightStore = create<SpotlightStoreState>()(
     }),
     {
       name: STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      version: PERSIST_VERSION,
+      storage: spotlightStorage,
       partialize: (state) => ({
         mode: state.mode,
         selectedSessionId: state.selectedSessionId,
         selectionSource: state.selectionSource,
-        archivesBySessionId: state.archivesBySessionId,
+        currentReplayLoopIndex: state.currentReplayLoopIndex,
+        currentReplayGeneration: state.currentReplayGeneration,
       }),
+      migrate: (persistedState) => {
+        const row = persistedState && typeof persistedState === 'object'
+          ? (persistedState as Record<string, unknown>)
+          : {}
+        return normalizePersistedSnapshot(row)
+      },
       onRehydrateStorage: () => (state) => {
         if (!state) return
         const lists = recomputeLists(state.archivesBySessionId)
