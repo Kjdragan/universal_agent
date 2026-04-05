@@ -69,3 +69,5 @@ use the phrase red/green TDD as a part of the prompt for code generation
 """Build a Python function to extract headers from a markdown string. Use red/green TDD."""
 
 If you have a starting template for each project, it will improve the development. For example, just having a template that you start with that has a one plus one test will encourage the agents to build tests. So we should start to develop a starting template on our projects.
+
+sample save
