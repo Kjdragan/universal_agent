@@ -74,17 +74,6 @@ const EventMarkers = memo(function EventMarkers({ events, totalDuration, classNa
   )
 })
 
-/** Hook to cache the full set of timeline events (dots don't disappear when seeking backward) */
-function useScrubberEvents(timelineEvents: TimelineEvent[], totalDuration: number) {
-  const fullEventsRef = useRef<TimelineEvent[]>([])
-  if (timelineEvents.length === 0 && totalDuration < 0.1) {
-    fullEventsRef.current = []
-  } else if (timelineEvents.length >= fullEventsRef.current.length) {
-    fullEventsRef.current = timelineEvents
-  }
-  return fullEventsRef.current
-}
-
 export function ControlBar(props: ControlBarProps) {
   const { isReviewing = false } = props
   return isReviewing ? <ReviewControlBar {...props} /> : <LiveControlBar {...props} />
@@ -97,7 +86,6 @@ function LiveControlBar({
   eventCount = 0, onEnterReview, isReviewing,
 }: ControlBarProps) {
   const [pulseOn, setPulseOn] = useState(true)
-  const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
 
   useEffect(() => {
     if (isReviewing) return
@@ -137,7 +125,7 @@ function LiveControlBar({
             className="w-full rounded-full relative"
             style={{ height: 3, background: COLORS.holoBg10 }}
           >
-            <EventMarkers events={scrubberEvents} totalDuration={totalDuration} eventCount={scrubberEvents.length} className="opacity-80" />
+            <EventMarkers events={timelineEvents} totalDuration={totalDuration} eventCount={timelineEvents.length} className="opacity-80" />
           </div>
         </div>
 
@@ -174,7 +162,6 @@ function ReviewControlBar({
 }: ControlBarProps) {
   const scrubberRef = useRef<HTMLDivElement>(null)
   const [isScrubbing, setIsScrubbing] = useState(false)
-  const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
   const progress = totalDuration > 0 ? currentTime / totalDuration : 0
 
   const scrubToClientX = useCallback((clientX: number) => {
@@ -245,9 +232,9 @@ function ReviewControlBar({
               }}
             />
             <EventMarkers
-              events={scrubberEvents}
+              events={timelineEvents}
               totalDuration={totalDuration}
-              eventCount={scrubberEvents.length}
+              eventCount={timelineEvents.length}
               className="opacity-60 group-hover:opacity-100 transition-opacity"
             />
           </div>

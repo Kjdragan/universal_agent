@@ -22,6 +22,48 @@ export type SessionDirectoryItem = {
   heartbeat_last?: number;
 };
 
+function asText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asOptionalText(value: unknown): string | undefined {
+  const normalized = asText(value);
+  return normalized || undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && normalized !== 0 ? normalized : undefined;
+}
+
+function normalizeSessionDirectoryItem(item: SessionDirectoryItem): SessionDirectoryItem {
+  const sessionId = asText(item.session_id);
+  const source = asText(item.source) || inferSource(sessionId);
+  const channel = asText(item.channel) || source;
+
+  return {
+    session_id: sessionId,
+    is_live_session: item.is_live_session !== false,
+    run_id: asOptionalText(item.run_id),
+    run_status: asOptionalText(item.run_status),
+    run_kind: asOptionalText(item.run_kind),
+    trigger_source: asOptionalText(item.trigger_source),
+    attempt_count: asNumber(item.attempt_count),
+    status: asText(item.status) || "unknown",
+    source,
+    channel,
+    owner: asText(item.owner) || "unknown",
+    memory_mode: asText(item.memory_mode) || "direct_only",
+    description: asOptionalText(item.description),
+    workspace_dir: asOptionalText(item.workspace_dir),
+    last_activity: asOptionalText(item.last_activity),
+    active_connections: Number(item.active_connections || 0),
+    active_runs: Number(item.active_runs || 0),
+    last_run_source: asOptionalText(item.last_run_source),
+    heartbeat_last: asNumber(item.heartbeat_last),
+  };
+}
+
 function inferSource(sessionId: string): string {
   const sid = (sessionId || "").toLowerCase();
   if (sid.startsWith("tg_")) return "telegram";
@@ -64,8 +106,8 @@ function mergeRunMetadata(
 
   return baseRows.map((item) => {
     const runRow = byWorkspace.get(String(item.workspace_dir || "").trim()) || bySessionId.get(item.session_id);
-    if (!runRow) return item;
-    return {
+    if (!runRow) return normalizeSessionDirectoryItem(item);
+    return normalizeSessionDirectoryItem({
       ...item,
       run_id: runRow.run_id ? String(runRow.run_id) : item.run_id,
       run_status: runRow.status ? String(runRow.status) : item.run_status,
@@ -76,7 +118,7 @@ function mergeRunMetadata(
       source: inferRunSource(runRow, item.session_id),
       channel: inferRunSource(runRow, item.session_id),
       workspace_dir: runRow.workspace_dir ? String(runRow.workspace_dir) : item.workspace_dir,
-    };
+    });
   });
 }
 
@@ -100,7 +142,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
         const source = sourceRaw;
         const channelRaw = String(row.channel || sourceRaw || "local");
         const channel = channelRaw;
-        return {
+        return normalizeSessionDirectoryItem({
           session_id: sessionId,
           is_live_session: true,
           run_id: row.run_id ? String(row.run_id) : undefined,
@@ -120,7 +162,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
           active_runs: Number(row.active_runs || 0),
           last_run_source: row.last_run_source ? String(row.last_run_source) : undefined,
           heartbeat_last: row.heartbeat_last ? Number(row.heartbeat_last) : undefined,
-        };
+        });
       });
       return mergeRunMetadata(baseRows, Array.isArray(runRows) ? runRows : []);
     }
@@ -137,7 +179,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
         return runRows.map((row) => {
           const sessionId = sessionIdFromRunRow(row);
           const source = inferRunSource(row, sessionId);
-          return {
+          return normalizeSessionDirectoryItem({
             session_id: sessionId,
             is_live_session: false,
             run_id: row.run_id ? String(row.run_id) : undefined,
@@ -155,7 +197,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
             last_activity: row.updated_at ? String(row.updated_at) : row.created_at ? String(row.created_at) : undefined,
             active_connections: 0,
             active_runs: 0,
-          };
+          });
         });
       }
     }
@@ -170,7 +212,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
   return legacySessions.map((row) => {
     const sessionId = String(row.session_id || "");
     const source = inferSource(sessionId);
-    return {
+    return normalizeSessionDirectoryItem({
       session_id: sessionId,
       is_live_session: true,
       status: String(row.status || "unknown"),
@@ -187,7 +229,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
       last_activity: row.last_activity ? String(row.last_activity) : undefined,
       active_connections: Number(row.active_connections || 0),
       active_runs: Number(row.active_runs || 0),
-    };
+    });
   });
 }
 

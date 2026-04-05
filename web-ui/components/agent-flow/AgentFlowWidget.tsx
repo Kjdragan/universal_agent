@@ -181,35 +181,22 @@ export function AgentFlowWidget({
     if (replayTransitionTimeoutRef.current) clearTimeout(replayTransitionTimeoutRef.current)
   }, [])
 
-  // Timeline events
-  const timelineCacheRef = useRef<{
-    counts: Map<string, number>
-    events: TimelineEvent[]
-    idCounter: number
-  }>({ counts: new Map(), events: [], idCounter: 0 })
-
   const timelineEvents = useMemo((): TimelineEvent[] => {
-    const cache = timelineCacheRef.current
-    let appended = false
+    const events: TimelineEvent[] = []
     for (const [agentId, msgs] of conversations) {
-      const prevLen = cache.counts.get(agentId) ?? 0
-      if (msgs.length > prevLen) {
-        for (let i = prevLen; i < msgs.length; i++) {
-          const msg = msgs[i]
-          cache.events.push({
-            id: `event-${cache.idCounter++}`,
-            type: msg.type === 'tool_call' ? 'tool_call' : msg.type === 'tool_result' ? 'tool_result' : 'message',
-            label: msg.content.slice(0, 20),
-            timestamp: msg.timestamp,
-            nodeId: agentId,
-          })
-        }
-        cache.counts.set(agentId, msgs.length)
-        appended = true
+      for (let i = 0; i < msgs.length; i += 1) {
+        const msg = msgs[i]
+        events.push({
+          id: `${agentId}:${msg.timestamp}:${msg.type}:${i}`,
+          type: msg.type === 'tool_call' ? 'tool_call' : msg.type === 'tool_result' ? 'tool_result' : 'message',
+          label: msg.content.slice(0, 20),
+          timestamp: msg.timestamp,
+          nodeId: agentId,
+        })
       }
     }
-    if (appended) cache.events.sort((a, b) => a.timestamp - b.timestamp)
-    return cache.events
+    events.sort((a, b) => a.timestamp - b.timestamp)
+    return events
   }, [conversations])
 
   // Play/pause
@@ -258,7 +245,7 @@ export function AgentFlowWidget({
     toggleMute: handleToggleMute,
     setSpeed,
     selectedAgentId: selection.selectedAgentId,
-  }), [handlePlayPause, selection.clearAllSelections, selection.clearAgent, selection.selectedAgentId, setSpeed, handleToggleMute, toggleExclusivePanel])
+  }), [handlePlayPause, selection, setSpeed, handleToggleMute, toggleExclusivePanel])
 
   useKeyboardShortcuts(mode !== "mini" ? keyboardActions : null)
 
@@ -323,6 +310,7 @@ export function AgentFlowWidget({
 
     bridge.restartReplay()
   }, [
+    bridge,
     bridge.advanceGreatestHitsLoop,
     bridge.currentReplayGeneration,
     bridge.greatestHitSessionIds.length,

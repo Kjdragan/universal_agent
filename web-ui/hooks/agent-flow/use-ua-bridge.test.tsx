@@ -245,4 +245,22 @@ describe('useUABridge', () => {
 
     expect(result.current.selectedPlaybackEvents.length).toBeGreaterThanOrEqual(4)
   })
+
+  it('does not reconnect after unmount closes the socket', async () => {
+    fetchSessionDirectoryMock.mockResolvedValue([])
+
+    const { unmount } = renderHook(() => useUABridge())
+
+    expect(sockets).toHaveLength(1)
+
+    unmount()
+
+    act(() => {
+      sockets[0].onclose?.()
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(sockets).toHaveLength(1)
+  })
 })

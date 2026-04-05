@@ -61,3 +61,9 @@ build a nemoclaw as an extra agent to use in our system if infrence is free
 be more amnitious re what you can do...
 
 feeds into idea of "work to give agents more agency"
+
+So if prototyping is free, how do we get AI to automate the evaluation of prototypes? I we can generate lots of code programs, but we don't use them to check to see if they work properly and therefore improve them. So the signal of a well-developed code with documentation, etc., is gone now. because anyone can develop code in minutes with full professional looking code. How do we automate the testing of the prototype?
+
+use the phrase red/green TDD as a part of the prompt for code generation  
+
+"""Build a Python function to extract headers from a markdown string. Use red/green TDD."""

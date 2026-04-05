@@ -138,6 +138,39 @@ function formatElapsed(ms: number): string {
   return `${hr}h ${rmMin}m`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function textStartsWith(value: unknown, prefix: string): boolean {
+  return asText(value).startsWith(prefix);
+}
+
+function normalizeNotification(value: unknown): DashboardNotification | null {
+  const row = asRecord(value);
+  const id = asText(row.id);
+  if (!id) return null;
+
+  return {
+    id,
+    title: asText(row.title) || "(untitled notification)",
+    kind: asText(row.kind),
+    message: asText(row.message),
+    severity: asText(row.severity) || "info",
+    requires_action: Boolean(row.requires_action),
+    status: asText(row.status) || "new",
+    created_at: asText(row.created_at),
+    session_id: asText(row.session_id) || null,
+    metadata: asRecord(row.metadata),
+  };
+}
+
 // ── Notification filter categories ──────────────────────────────────────────
 const NOTIFICATION_CATEGORIES = {
   important: {
@@ -152,19 +185,19 @@ const NOTIFICATION_CATEGORIES = {
     label: "Heartbeat",
     icon: "♥",
     match: (n: DashboardNotification) =>
-      n.kind.startsWith("heartbeat_") || n.kind.startsWith("autonomous_heartbeat_") ||
+      textStartsWith(n.kind, "heartbeat_") || textStartsWith(n.kind, "autonomous_heartbeat_") ||
       n.kind === "agentmail_heartbeat_wake_queued",
   },
   csi: {
     label: "CSI",
     icon: "📊",
-    match: (n: DashboardNotification) => n.kind.startsWith("csi_"),
+    match: (n: DashboardNotification) => textStartsWith(n.kind, "csi_"),
   },
   tutorials: {
     label: "Tutorials",
     icon: "🎬",
     match: (n: DashboardNotification) =>
-      n.kind.startsWith("tutorial_") || n.kind.startsWith("youtube_"),
+      textStartsWith(n.kind, "tutorial_") || textStartsWith(n.kind, "youtube_"),
   },
   system: {
     label: "System",
@@ -180,16 +213,6 @@ const NOTIF_CATEGORY_KEYS: NotificationCategoryKey[] = [
   "important", "heartbeat", "csi", "tutorials", "system", "all",
 ];
 const SEVERITY_OPTIONS = ["all", "info", "warning", "error", "critical"] as const;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function workspacePathFromResultRef(resultRef?: string | null): string {
   const ref = asText(resultRef);
@@ -401,13 +424,13 @@ export default function DashboardPage() {
           ...((summaryData && (summaryData as Partial<SummaryResponse>).notifications) || {}),
         },
       });
-      setNotifications(
-        Array.isArray(notificationsData.notifications)
-          ? notificationsData.notifications.filter(
-            (item: DashboardNotification) => item.status !== "dismissed" && item.status !== "resolved",
-          )
-          : [],
-      );
+      const normalizedNotifications: DashboardNotification[] = Array.isArray(notificationsData.notifications)
+        ? notificationsData.notifications
+          .map(normalizeNotification)
+          .filter((item: DashboardNotification | null): item is DashboardNotification => Boolean(item))
+          .filter((item: DashboardNotification) => item.status !== "dismissed" && item.status !== "resolved")
+        : [];
+      setNotifications(normalizedNotifications);
       setVpSessions(Array.isArray(vpSessionsData.sessions) ? vpSessionsData.sessions : []);
       setVpMissions(Array.isArray(vpMissionsData.missions) ? vpMissionsData.missions : []);
       const nextVpMetrics: Record<string, VpMetricsSnapshot> = {};

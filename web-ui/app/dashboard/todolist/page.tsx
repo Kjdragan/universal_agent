@@ -412,26 +412,37 @@ export default function ToDoListDashboardPage() {
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<any | null>(null);
   const [sessionDetailLoading, setSessionDetailLoading] = useState("");
-  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(() => {
-    try {
-      const stored = localStorage.getItem("ua.deleted_completed_tasks.v1");
-      if (stored) return new Set(JSON.parse(stored) as string[]);
-    } catch { /* ignore */ }
-    return new Set();
-  });
+  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+  const [deletedTaskIdsHydrated, setDeletedTaskIdsHydrated] = useState(false);
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddPending, setQuickAddPending] = useState(false);
   const [morningReport, setMorningReport] = useState<any>(null);
-  const [morningReportExpanded, setMorningReportExpanded] = useState(() => new Date().getHours() < 12);
+  const [morningReportExpanded, setMorningReportExpanded] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("ua.deleted_completed_tasks.v1");
+      if (stored) {
+        setDeletedTaskIds(new Set(JSON.parse(stored) as string[]));
+      }
+    } catch {
+      // Ignore localStorage corruption and fall back to an empty set.
+    } finally {
+      setDeletedTaskIdsHydrated(true);
+    }
+
+    setMorningReportExpanded(new Date().getHours() < 12);
+  }, []);
 
   // Persist deletedTaskIds to localStorage whenever it changes
   useEffect(() => {
+    if (!deletedTaskIdsHydrated) return;
     try {
       localStorage.setItem("ua.deleted_completed_tasks.v1", JSON.stringify([...deletedTaskIds]));
     } catch { /* ignore */ }
-  }, [deletedTaskIds]);
+  }, [deletedTaskIds, deletedTaskIdsHydrated]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1176,7 +1187,7 @@ export default function ToDoListDashboardPage() {
         ) : null}
       </div>
       {!taskHistory ? (
-        <p className="text-xs text-muted-foreground italic">Select "Review" on any work item to load run history.</p>
+        <p className="text-xs text-muted-foreground italic">Select &quot;Review&quot; on any work item to load run history.</p>
       ) : (
         <div className="space-y-3 text-xs">
           <div className="rounded border border-border/70 bg-background/50 p-2">

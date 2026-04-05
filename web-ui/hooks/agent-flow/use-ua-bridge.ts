@@ -176,6 +176,7 @@ export function useUABridge(): BridgeHookResult {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const directoryHintsRef = useRef<Map<string, DirectoryHint>>(new Map())
+  const allowReconnectRef = useRef(true)
 
   const selectedArchive = selectedSessionId ? (archivesBySessionId[selectedSessionId] || null) : null
   const selectedIsLive = selectedArchive?.status === 'active'
@@ -269,7 +270,8 @@ export function useUABridge(): BridgeHookResult {
     pendingEventsRef.current.length = 0
   }, [])
 
-  const connect = useCallback(() => {
+  const connect = useCallback(function connectImpl() {
+    if (!allowReconnectRef.current) return
     if (
       wsRef.current
       && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)
@@ -285,6 +287,7 @@ export function useUABridge(): BridgeHookResult {
       wsRef.current = ws
 
       ws.onopen = () => {
+        if (!allowReconnectRef.current) return
         useAgentFlowSpotlightStore.getState().setConnectionStatus('watching')
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current)
@@ -340,7 +343,8 @@ export function useUABridge(): BridgeHookResult {
       ws.onclose = () => {
         useAgentFlowSpotlightStore.getState().setConnectionStatus('disconnected')
         wsRef.current = null
-        reconnectTimeoutRef.current = setTimeout(connect, 3000)
+        if (!allowReconnectRef.current) return
+        reconnectTimeoutRef.current = setTimeout(connectImpl, 3000)
       }
 
       ws.onerror = (error) => {
@@ -353,8 +357,10 @@ export function useUABridge(): BridgeHookResult {
   }, [])
 
   useEffect(() => {
+    allowReconnectRef.current = true
     connect()
     return () => {
+      allowReconnectRef.current = false
       if (wsRef.current) {
         wsRef.current.close()
       }
