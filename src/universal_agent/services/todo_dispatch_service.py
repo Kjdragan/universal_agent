@@ -59,6 +59,8 @@ def infer_workflow_kind(
 
     if any(marker in text for marker in _CODE_WORKFLOW_MARKERS):
         return "code_change"
+    if mode == "interactive_email":
+        return "interactive_answer_email"
     if mode in {"standard_report", "enhanced_report"}:
         suffix = "chat" if channel == "chat" else "email"
         return f"research_report_{suffix}"
@@ -180,15 +182,23 @@ def build_todo_execution_prompt(
             modes=", ".join(delivery_modes) if delivery_modes else "standard_report"
         )
     )
-    lines.append(
-        "For standard_report and enhanced_report: send exactly one final email with an executive summary in the body and attach the full report artifact when available."
-    )
-    lines.append(
-        "For fast_summary: send exactly one concise body-only final email unless the task is explicitly upgraded."
-    )
-    lines.append(
-        "For interactive_chat: deliver the final answer in this chat session and do not send email unless the user explicitly asked for email delivery."
-    )
+    mode_set = set(delivery_modes or ["standard_report"])
+    if mode_set & {"standard_report", "enhanced_report"}:
+        lines.append(
+            "For standard_report and enhanced_report: send exactly one final email with an executive summary in the body and attach the full report artifact when available."
+        )
+    if "fast_summary" in mode_set:
+        lines.append(
+            "For fast_summary: send exactly one concise body-only final email unless the task is explicitly upgraded."
+        )
+    if "interactive_email" in mode_set:
+        lines.append(
+            "For interactive_email: send exactly one direct final email aligned to the user's request. Do not prepend an executive summary unless the user explicitly asked for one."
+        )
+    if "interactive_chat" in mode_set:
+        lines.append(
+            "For interactive_chat: deliver the final answer in this chat session and do not send email unless the user explicitly asked for email delivery."
+        )
     lines.append("")
     lines.append("== CAPACITY SNAPSHOT ==")
     snapshot = capacity_snapshot_data or {}

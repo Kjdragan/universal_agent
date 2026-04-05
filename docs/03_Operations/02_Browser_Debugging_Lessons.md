@@ -50,6 +50,37 @@ We ran long listing/navigation tasks.
 * **Lesson**: Fast iteration is better. A simple script ("Go to URL, Type 'Check X', Click Link") allows for rapid retry cycles after backend changes.
 * **Action**: Create focused "Reproduction" tasks for the browser subagent rather than generic "Explore" tasks.
 
+### D. Compare The User's Browser Profile Against A Clean Browser
+
+Browser automation can prove that a route works in a clean session while the user's real browser still fails.
+
+* **Lesson**: "Clean automation works" does not contradict "the user's browser is still broken." It usually means browser-local state is part of the bug.
+* **Action**:
+  1. inspect `localStorage` and `sessionStorage`
+  2. measure suspicious payload sizes
+  3. compare authenticated production behavior in the real browser against a clean browser session
+
+### E. Clear One Suspect Key Before Nuking All Site Data
+
+In the dashboard return-crash incident, the decisive browser-side artifact was one oversized key: `ua.agent-flow-spotlight.v1`.
+
+* **Lesson**: clearing one suspected key preserves the rest of the user's session and gives a cleaner yes/no test than clearing all site data.
+* **Action**:
+  1. identify the most suspicious persisted key
+  2. remove only that key
+  3. rerun the failing flow
+  4. only wipe all site data if the narrow reset does not help
+
+### F. Use Production Network + Storage Together
+
+If the route returns fine in automation but still crashes in the user's browser, capture:
+
+1. fresh console entries
+2. the API request list for the failing transition
+3. the persisted storage relevant to the route
+
+* **Lesson**: network traces alone can miss browser-profile corruption, and storage inspection alone can miss response-shape differences. Use both.
+
 ---
 
 ## 3. Skill Development Recommendation

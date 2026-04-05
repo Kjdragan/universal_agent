@@ -21,32 +21,66 @@ This is a living operational reference, not a single-incident report.
 
 ---
 
-## 2026-04-05: Next.js Client-Side Exceptions from Hydration Mismatches
+## 2026-04-05: Dashboard Return Crash Was A Browser-State Incident, Not Just A Hydration Bug
 
 ### Incident Summary
 
-The production `/dashboard` crashed completely with "Application error: a client-side exception has occurred" specifically when accessed by standard web browsers.
+The production `/dashboard` showed the generic Next.js message "Application error: a client-side exception has occurred" for one real authenticated browser profile during navigation back to the dashboard from `/dashboard/todolist`.
 
-The root cause was React 18 hydration mistmatches triggered by Server-Side Rendering (SSR) vs. Client-Side Evaluation of dynamic values. Specifically:
-1. `Date.now()` used to calculate dynamic mission time intervals during render.
-2. `localStorage` access wrapped in naive `if (typeof window === "undefined") return "default"` checks resulting in fallback-to-actual values matching incorrectly.
-3. `formatDateTimeTz()` relying on browser local timezones instead of the expected UTC timezone output by the Node.js server. 
+The investigation had three phases:
 
-When React detects that the server HTML and the first-render client DOM don't match structurally or textually (e.g. "5s elapsed" vs "10s elapsed", or different timezones), Next.js throws an unrecoverable client exception.
+1. **Initial code review found real hydration hazards**:
+   - client-only state initializers in the dashboard and To Do pages
+   - render-phase mutation inside the embedded Agent Flow widget
+   - navigation-sensitive state derived from `localStorage`
+2. **A convincing but wrong intermediate theory** was that production had not received the UI fix. This was disproven by checking the deployed `HEAD` SHA directly on VPS: production was already running the same fix SHA as `develop`.
+3. **The decisive production-only signal** was browser-local state:
+   - the crashing browser profile had a large `localStorage["ua.agent-flow-spotlight.v1"]` payload containing archived Agent Flow session timelines
+   - a clean browser session did not reproduce the crash
+   - clearing that key stopped the crash in the affected browser
+   - the permanent code fix changed spotlight persistence so only lightweight control state survives rehydrate
 
-### Lesson 1: Suppress SSR For Highly Dynamic Client Panels
+The durable lesson is that the earlier hydration-only explanation was incomplete. There were legitimate render/hydration hardening fixes, but the remaining production incident was driven by persisted browser state for an always-mounted widget.
 
-When an entire panel or route relies strictly on client-side state, API data, browser timestamps, or LocalStorage, attempting to SSR it provides almost no SEO benefit but introduces massive hydration hazards.
+### Lesson 1: When One Browser Profile Fails And Another Does Not, Inspect Browser State First
 
 Reusable rule:
-- Short-circuit SSR in components that rely heavily on dynamic time, local storage, or browser APIs by putting a `[mounted, setMounted] = useState(false)` guard at the component root, returning a loading skeleton or `null` until `mounted` is true.
 
-### Lesson 2: "Works On My Machine" For SSR Means Checking Timezones And Build Modes
+1. compare the real authenticated user browser with a clean browser profile or automation run
+2. inspect `localStorage` and `sessionStorage` before assuming the fault is server-side
+3. clear the smallest plausible key first rather than wiping all site data immediately
 
-The hydration mismatch did not crash local `npm run dev` in the same way because Next.js development mode provides soft error overlays and attempts to recover, while a production `npm start` build strictly enforces hydration integrity and hides the UI with a generic error block. Also, testing API endpoints via Python scripts/Playwright without Javascript evaluation completely bypasses React hydration.
+For this incident, the `ua.agent-flow-spotlight.v1` key was the differentiator.
+
+### Lesson 2: Do Not Persist Large Archive Graphs For Always-Mounted Widgets
 
 Reusable rule:
-- If a user reports a "client-side exception" specifically on a production Next.js app, always suspect a timezone difference, a `Date.now()`, or a `window` evaluation mismatch between server and client.
+
+- persist lightweight control state only
+- do not persist large event timelines, archive graphs, or replay payloads into browser storage for widgets that mount on high-traffic routes
+- when legacy persisted shape is already in the field, add an explicit migration that discards heavy historical payloads during rehydrate
+
+The permanent fix here was to trim Agent Flow spotlight persistence to mode/selection/replay control fields only.
+
+### Lesson 3: Verify Production Releases By Deployed SHA, Not Branch Assumption
+
+Reusable rule:
+
+1. check the deployed checkout `HEAD` SHA first
+2. only then infer whether production is missing a fix
+3. do not use local branch position or a checkout label like `develop` as the primary proof of what is deployed
+
+In this incident, "production must still be on an older branch" looked plausible and was wrong. The live VPS checkout already contained the fix chain; the remaining issue was browser state.
+
+### Lesson 4: Fix The Render Path Anyway, But Do Not Stop There
+
+Reusable rule:
+
+- when a navigation crash is reported, still harden render-phase behavior:
+  - remove client-only initializers from first render
+  - move local-only state hydration into `useEffect`
+  - eliminate render-phase ref mutation
+- but if the browser-specific crash remains, continue until you have explained the browser-specific difference
 
 ---
 

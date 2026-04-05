@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useMemo } from 'react';
-import { useAgentStore } from '@/lib/store';
+import { sanitizeToolPayload, useAgentStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { ChevronRight, ChevronDown, Terminal, Play, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
@@ -117,12 +117,13 @@ function ActivityItemRow({ item, expandMode }: { item: ActivityItem; expandMode:
 
 const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: string, data: any, isError?: boolean, expandMode: ExpandMode }) => {
     const [expanded, setExpanded] = React.useState(false);
-    const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data]);
+    const safeData = useMemo(() => sanitizeToolPayload(data), [data]);
+    const jsonString = useMemo(() => JSON.stringify(safeData, null, 2), [safeData]);
     const preview = useMemo(() => {
-        if (typeof data === 'string') return data.slice(0, 60) + (data.length > 60 ? '...' : '');
-        if (typeof data === 'object') return Object.keys(data).join(', ').slice(0, 60) + '...';
-        return String(data);
-    }, [data]);
+        if (typeof safeData === 'string') return safeData.slice(0, 60) + (safeData.length > 60 ? '...' : '');
+        if (safeData && typeof safeData === 'object') return Object.keys(safeData).join(', ').slice(0, 60) + '...';
+        return String(safeData);
+    }, [safeData]);
     const effectiveExpanded = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : expanded;
 
     // Calculate approximate size for the label
@@ -155,7 +156,7 @@ const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: 
                         "p-2 text-xs font-mono whitespace-pre-wrap break-words",
                         isError ? "text-red-400" : "text-foreground/80"
                     )}>
-                        <LinkifiedText text={String(data?.content_preview ?? jsonString)} />
+                        <LinkifiedText text={String((safeData as Record<string, unknown> | null)?.content_preview ?? jsonString)} />
                     </pre>
                 </div>
             )}

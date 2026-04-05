@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import sqlite3
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
 from universal_agent.gateway import GatewaySession
-from universal_agent.services.todo_dispatch_service import ToDoDispatchService, build_execution_manifest
+from universal_agent.services.todo_dispatch_service import (
+    ToDoDispatchService,
+    build_execution_manifest,
+    build_todo_execution_prompt,
+)
 
 
 def _conn() -> sqlite3.Connection:
@@ -28,6 +33,10 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     )
 
     monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", lambda *a, **k: conn)
+    monkeypatch.setattr(
+        "universal_agent.services.execution_run_service.allocate_execution_run",
+        lambda **kwargs: SimpleNamespace(run_id="run_todo_001", workspace_dir="/tmp/run_todo_001"),
+    )
     monkeypatch.setattr(
         "universal_agent.services.dispatch_service.dispatch_sweep",
         lambda _conn, **kwargs: [
@@ -137,3 +146,43 @@ def test_todo_dispatch_service_emits_utc_timestamps():
     for event in events:
         timestamp = str(event.get("timestamp") or "")
         assert timestamp.endswith("+00:00")
+
+
+def test_build_execution_manifest_supports_interactive_email():
+    manifest = build_execution_manifest(
+        user_input="Write a short poem about a rabbit and email it to me.",
+        delivery_mode="interactive_email",
+        final_channel="email",
+    )
+
+    assert manifest["workflow_kind"] == "interactive_answer_email"
+    assert manifest["delivery_mode"] == "interactive_email"
+    assert manifest["requires_pdf"] is False
+    assert manifest["final_channel"] == "email"
+
+
+def test_build_todo_execution_prompt_uses_mode_specific_delivery_contract():
+    prompt = build_todo_execution_prompt(
+        claimed_items=[
+            {
+                "task_id": "chat:1",
+                "title": "Write a poem",
+                "description": "Write a poem and email it.",
+                "metadata": {
+                    "delivery_mode": "interactive_email",
+                    "workflow_manifest": build_execution_manifest(
+                        user_input="Write a poem and email it.",
+                        delivery_mode="interactive_email",
+                        final_channel="email",
+                    ),
+                },
+            }
+        ],
+        capacity_snapshot_data={"available_slots": 1, "active_slots": 0, "max_concurrent": 2, "in_backoff": False},
+        active_assignments=[],
+        origin_label="interactive_chat:session_test",
+    )
+
+    assert "interactive_email" in prompt
+    assert "direct final email aligned to the user's request" in prompt
+    assert "executive summary in the body" not in prompt

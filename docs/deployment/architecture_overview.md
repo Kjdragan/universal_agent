@@ -12,6 +12,9 @@ This document defines the current supported deployment model for Universal Agent
 >
 > Staging deploys from `develop` automatically. Production deploys via manual SHA promotion from `main`.
 
+> [!IMPORTANT]
+> Release verification is SHA-based. The authoritative proof of what is deployed on VPS is the checkout `HEAD` commit, not the branch name reported by the checkout alone.
+
 ## Git Branching Model
 
 We use branch-driven automated deployment with a single PR review gate on `develop`.
@@ -101,3 +104,15 @@ Kevin's desktop has two supported runtime modes:
 3. Promote the exact validated `develop` SHA to `main` using the promotion workflow.
 4. Do not use local-to-VPS file sync as the default deployment path.
 5. The canonical deployment runbooks live in `docs/deployment/`.
+
+## Release Verification Rule
+
+When a production or staging incident appears to suggest "the fix is not deployed":
+
+1. verify the live checkout `HEAD` SHA on the target VPS
+2. compare that SHA to the validated `develop` and `main` SHAs
+3. only then decide whether you have a deploy-gap problem or a runtime/browser-state problem
+
+Important nuance:
+- a checkout can still report `develop` from `git branch --show-current` even after being reset to the exact release commit
+- treat the deployed `HEAD` SHA as authoritative and the branch label as secondary context

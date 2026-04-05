@@ -11,6 +11,10 @@ This is the only supported app deployment path in this repository.
 - Promote the exact validated `develop` SHA to `main` via the promotion workflow to deploy to production automatically.
 - Do not treat `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, or manual SSH deploy steps as the primary deployment path.
 
+Release verification rule:
+- prove release state by deployed `HEAD` SHA plus live behavior
+- do not assume a missing fix solely from branch expectations or `git branch --show-current` output on the VPS checkout
+
 ## Workflows
 
 ### Primary Deployment Workflows
@@ -120,6 +124,21 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
 7. **Production deploy** is dispatched explicitly by the promotion workflow after `main` is advanced.
 8. **Dispatch acknowledgement is mandatory**. The promotion workflow treats any non-`204` response from GitHub's workflow-dispatch API as a failed promotion so production cannot silently skip deployment after `main` moves.
+9. **Post-release verification should use the deployed checkout SHA**. If production appears to be missing a fix, confirm the VPS `HEAD` commit before reopening code investigation or assuming a deploy gap.
+
+## Lessons From The April 5 Dashboard Incident
+
+An intermediate theory during the dashboard return-crash investigation was that production must still be on an older UI SHA. That theory was wrong.
+
+What actually mattered:
+
+1. production was already on the newer dashboard fix SHA
+2. the remaining browser-specific crash was driven by persisted browser state
+3. the deploy-gap theory was disproven only after checking the live VPS checkout `HEAD`
+
+Operational rule:
+- do not use "production is probably behind" as a debugging shortcut
+- verify the deployed SHA first, then debug the live runtime state that still differs
 
 ## Bootstrap Identity Written By Deploys
 

@@ -205,6 +205,67 @@ function classifyArtifactPaths(paths: string[]): { primary: string[]; supporting
   return { primary, supporting };
 }
 
+const BLOB_FIELD_KEYS = new Set(["content", "image_base64", "base64_data"]);
+
+function looksBase64Blob(value: string): boolean {
+  const normalized = String(value || "").replace(/\s+/g, "");
+  return normalized.length > 512 && /^[A-Za-z0-9+/=_-]+$/.test(normalized);
+}
+
+function redactBlobField(key: string, value: string): string {
+  const chars = String(value || "").length;
+  return `[redacted ${key}: ${chars} chars]`;
+}
+
+function sanitizePreviewString(value: string): string {
+  const text = String(value || "");
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.stringify(sanitizeToolPayload(JSON.parse(trimmed)), null, 2);
+    } catch {
+      // Fall through to blob detection below.
+    }
+  }
+
+  if (looksBase64Blob(trimmed)) {
+    return redactBlobField("content_preview", trimmed);
+  }
+  return text;
+}
+
+export function sanitizeToolPayload(payload: unknown): unknown {
+  if (Array.isArray(payload)) {
+    return payload.map((item) => sanitizeToolPayload(item));
+  }
+
+  if (!payload || typeof payload !== "object") {
+    if (typeof payload === "string" && looksBase64Blob(payload)) {
+      return redactBlobField("content", payload);
+    }
+    return payload;
+  }
+
+  const row = payload as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (typeof value === "string") {
+      if (BLOB_FIELD_KEYS.has(key) && value) {
+        next[key] = redactBlobField(key, value);
+        continue;
+      }
+      if (key === "content_preview") {
+        next[key] = sanitizePreviewString(value);
+        continue;
+      }
+    }
+    next[key] = sanitizeToolPayload(value);
+  }
+  return next;
+}
+
 function vpMissionEventLevel(eventType: string): "INFO" | "WARN" | "ERROR" {
   if (eventType.endsWith(".failed")) return "ERROR";
   if (eventType.endsWith(".cancelled") || eventType.endsWith(".cancel_requested")) return "WARN";
@@ -462,18 +523,40 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         ...next[existingIdx],
         ...toolCall,
         id,
+        input: sanitizeToolPayload(toolCall.input) as Record<string, unknown>,
         // Preserve the original "first seen" timestamp unless absent.
         timestamp: next[existingIdx].timestamp ?? Date.now(),
       };
       return { toolCalls: next };
     }
     return {
-      toolCalls: [...state.toolCalls, { ...toolCall, id, status: "pending", timestamp: Date.now() }],
+      toolCalls: [
+        ...state.toolCalls,
+        {
+          ...toolCall,
+          id,
+          input: sanitizeToolPayload(toolCall.input) as Record<string, unknown>,
+          status: "pending",
+          timestamp: Date.now(),
+        },
+      ],
     };
   }),
   updateToolCall: (id, updates) => set((state) => ({
     toolCalls: state.toolCalls.map((tc) =>
-      tc.id === id ? { ...tc, ...updates } : tc
+      tc.id === id
+        ? {
+            ...tc,
+            ...updates,
+            input: updates.input ? sanitizeToolPayload(updates.input) as Record<string, unknown> : tc.input,
+            result: updates.result
+              ? {
+                  ...updates.result,
+                  content_preview: sanitizePreviewString(String(updates.result.content_preview ?? "")),
+                }
+              : tc.result,
+          }
+        : tc
     ),
   })),
   clearToolCalls: () => set({ toolCalls: [] }),

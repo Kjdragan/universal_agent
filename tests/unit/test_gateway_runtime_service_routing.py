@@ -46,3 +46,14 @@ def test_role_filters_match_canonical_runtime_split():
 
     assert gateway_server._should_register_with_heartbeat(triage_session) is False
     assert gateway_server._should_register_with_todo_dispatch(triage_session) is False
+
+
+def test_heartbeat_registration_honors_explicit_skip_flag():
+    user_session = GatewaySession(
+        session_id="session_chat_direct",
+        user_id="user",
+        workspace_dir="/tmp/session_chat_direct",
+        metadata={"session_role": "user", "run_kind": "user", "skip_heartbeat": True},
+    )
+
+    assert gateway_server._should_register_with_heartbeat(user_session) is False

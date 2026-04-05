@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: March 12, 2026
+Last updated: April 5, 2026
 
 ## Purpose
 
@@ -92,6 +92,21 @@ Only after staging validation is acceptable:
 4. wait for the `Deploy Production` workflow to pass
 5. validate production
 
+Validation rule:
+
+- confirm the live environment by deployed `HEAD` SHA and observed runtime behavior
+- do not treat a checkout label like `develop` or local branch assumptions as sufficient proof of what is running
+
+### 5. Return The Local Checkout To The Active Feature Branch
+
+After staging validation, production promotion, or deploy debugging, return the local coding checkout to the active feature branch.
+
+Current default:
+
+1. production/staging operations may temporarily move the local repo to `develop`
+2. once validation is finished, restore the local repo to `feature/latest2`
+3. only leave a different feature branch checked out if it has explicitly replaced `feature/latest2` as the active development lane
+
 ## What Not To Do
 
 1. Do not do normal coding directly on `main`.
@@ -99,6 +114,7 @@ Only after staging validation is acceptable:
 3. Do not use `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, `ssh`, `scp`, or `rsync` as the default application deployment path.
 
 Those older scripts are legacy or break-glass tooling only.
+4. Do not assume production is missing a fix until you verify the deployed VPS `HEAD` SHA directly.
 
 ## Status Snapshot As Of March 12, 2026
 

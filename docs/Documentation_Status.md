@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-05
 
 ## ⚠️ MANDATORY: Documentation Rules
 
@@ -16,7 +16,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 |-----|---------| 
 | Heartbeat_Service.md | **Canonical source of truth** — heartbeat supervision cycle, health findings contract, mediation flow, and the separation between heartbeat runtimes and dedicated ToDo execution |
 | Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: trusted email triage, Task Hub scoring, dedicated ToDo dispatch lifecycle, delivery-mode heuristics, brainstorm refinement, morning report, roadmap, and test coverage |
-| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, dispatcher health, forensic task history, and derived board-lane UX |
+| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget, lightweight spotlight persistence contract, dispatcher health, forensic task history, and derived board-lane UX |
 | Memory_System.md | Tiered memory & auto-flush |
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |
 | Durable_Execution.md | Resilience features |
@@ -86,8 +86,8 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | secrets_and_environments.md | **Canonical entry-point** — Infisical secrets, environments, deploy workflow secrets contract |
-| architecture_overview.md | Git branching, environmental mapping, service topology |
-| ci_cd_pipeline.md | Workflow details, timing, pipeline structure |
+| architecture_overview.md | Git branching, environmental mapping, service topology, and SHA-based release verification |
+| ci_cd_pipeline.md | Workflow details, timing, pipeline structure, and SHA-first post-release verification |
 | infisical_factories.md | Stage naming and machine bootstrap (superseded by secrets_and_environments.md) |
 
 ## Review & Decision Documents
@@ -102,7 +102,7 @@ These are the authoritative references for each subsystem. When any other docume
 
 | Doc | Subject |
 |-----|---------|
-| 04 | Branching and release workflow |
+| 04 | Branching and release workflow, including return-to-feature-branch operator rule and SHA-based release confirmation |
 | 05 | Local HQ dev vs desktop worker runtime modes |
 | 06 | Production deploy incident |
 | 07 | Stage-based Infisical and machine bootstrap migration plan |
@@ -186,7 +186,7 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | 01 | Heartbeat Debug Fixes — historical debug reference |
-| 02 | Browser Debugging Lessons — debugging patterns |
+| 02 | Browser Debugging Lessons — debugging patterns, browser-profile comparison, and targeted storage-key resets |
 | 11 | Scheduling Runtime V2 Operational Runbook — cron operations |
 | 13 | Skill Dependency Setup Guide — skill installation |
 | 14 | Session Runtime Behavior And Recovery Model |
@@ -207,7 +207,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 79 | Golden Run Research Report Pipeline Reference |
 | 80 | Google Workspace Integration Retrospective Memo |
 | 99 | **Documentation Drift Maintenance Pipeline** — canonical source-of-truth |
-| 103 | Debugging Lessons Living Document — reusable debugging lessons from complex production incidents |
+| 103 | Debugging Lessons Living Document — reusable debugging lessons from complex production incidents, including the April 5 dashboard browser-state incident and SHA-first deploy verification |
 | 106 | TaskStop Guardrails and Task Hub Execution Hardening — explainer for the March 31 hardening work: SDK task control versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and the resulting pipeline reliability improvements |
 
 ## Cleanup Summary

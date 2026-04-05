@@ -43,7 +43,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Lossless Memory](02_Subsystems/Lossless_Memory.md)**: Opt-in DAG-based context compression and SQLite history store.
 - **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Heartbeat supervision only — health checks, mediation, and role-isolated heartbeat runtimes separate from Task Hub execution.
 - **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — trusted email triage, Task Hub scoring, dedicated ToDo execution, delivery-mode heuristics, delegation lifecycle, brainstorm refinement, morning report.
-- **[Task Hub Dashboard](02_Subsystems/Task_Hub_Dashboard.md)**: Frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, dispatcher health, forensic task history, and canonical execution visibility.
+- **[Task Hub Dashboard](02_Subsystems/Task_Hub_Dashboard.md)**: Frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget behavior, spotlight persistence rules, dispatcher health, forensic task history, and canonical execution visibility.
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
 
@@ -80,7 +80,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[OpenClaw Release Sync Pipeline (2026-03-20)](03_Operations/100_OpenClaw_Release_Sync_Pipeline.md)**: Biweekly automated pipeline — Stage 1 release scanner fetches OpenClaw releases, Stage 2 VP sync agent analyzes features for adoption. Reports saved to `Openclaw Sync Discoveries/`.
 - [VP Agent Identity & Prompt Architecture (2026-03-21)](03_Operations/101_VP_Agent_Identity_And_Prompt_Architecture_2026-03-21.md): Canonical reference for VP agent identities (CODIE & ATLAS), soul files, streamlined VP system prompt, mission briefing injection, sub-agent capability, and prompt size logging.
 - **[E2BIG Kernel Limits and Prompt Architecture (2026-03-22)](03_Operations/102_E2BIG_Kernel_Limits_And_Prompt_Architecture_2026-03-22.md)**: Architectural boundary constraints regarding kernel execution limits (`MAX_ARG_STRLEN`), prompt density formatting, and strategies to prevent subprocess prompt float.
-- **[Debugging Lessons Living Document (2026-03-23)](03_Operations/103_Debugging_Lessons_Living_Document.md)**: Living collection of reusable debugging lessons from complex incidents, including target-host verification, fresh-process versus live-service checks, and post-bootstrap env-mutation failures.
+- **[Debugging Lessons Living Document (2026-03-23)](03_Operations/103_Debugging_Lessons_Living_Document.md)**: Living collection of reusable debugging lessons from complex incidents, including target-host verification, browser-profile state failures, SHA-first release verification, and post-bootstrap env-mutation failures.
 - **[Run/Attempt Lifecycle and Nomenclature Migration Plan (2026-03-24)](03_Operations/104_Run_Attempt_Lifecycle_And_Nomenclature_Migration_Plan_2026-03-24.md)**: Canonical migration plan for moving durable work from session-based terminology to run/attempt/run-workspace terminology, including packet gates, rollback scope, and CSI boundary rules.
 - **[YouTube Tutorial Pipeline Run/Attempt Triage (2026-03-24)](03_Operations/105_YouTube_Tutorial_Pipeline_Run_Attempt_Triage_2026-03-24.md)**: Detailed operational report on the first notification-center audit after the run/attempt refactor, plus the follow-up closure update that moved tutorial hooks and cron admission onto durable run/attempt lifecycle handling.
 - **[TaskStop Guardrails and Task Hub Execution Hardening (2026-03-31)](03_Operations/106_TaskStop_Guardrails_And_Task_Hub_Execution_Hardening_2026-03-31.md)**: Official explainer for the March 31 hardening work, covering SDK task controls versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and why the unified pipeline is more reliable.
@@ -88,7 +88,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 
-- **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy for feature work, staging promotion, and production release.
+- **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy for feature work, staging promotion, production release, SHA-based verification, and returning the local checkout to the active feature branch.
 - **[Local Runtime Modes](06_Deployment_And_Environments/05_Local_Runtime_Modes.md)**: Canonical split between HQ dev and the separate desktop worker lane.
 - **[Production Deploy Incident (2026-03-12)](06_Deployment_And_Environments/06_Production_Deploy_Incident_2026-03-12.md)**: Root cause, fix, verification, and prevention notes for the March 12 production `.venv` deployment regression.
 - **[Stage-Based Infisical and Machine Bootstrap Migration Plan (2026-03-12)](06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)**: Living migration record for stage environments, machine-local bootstrap identity, and CI/CD runtime validation.
@@ -98,7 +98,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 - **[Secrets and Environments](deployment/secrets_and_environments.md)**: Single entry-point for Infisical secrets management, environment configuration, and deploy workflow secrets contract.
 - **[Architecture Overview](deployment/architecture_overview.md)**: Git branching, environmental mapping, and service topology.
-- **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, and pipeline structure.
+- **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, pipeline structure, and SHA-first post-release verification guidance.
 - **[Infisical Factories](deployment/infisical_factories.md)**: Stage naming and machine bootstrap detail (superseded by Secrets and Environments).
 
 ### 4C. [CSI Subsystem](04_CSI)

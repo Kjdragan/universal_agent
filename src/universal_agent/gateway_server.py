@@ -6468,6 +6468,23 @@ def _infer_tracked_chat_delivery_mode(user_input: str) -> str:
     if not email_requested:
         return "interactive_chat"
 
+    report_markers = (
+        "report",
+        "analysis",
+        "brief",
+        "research",
+        "citation",
+        "citations",
+        "pdf",
+        "infographic",
+        "slide deck",
+        "notebooklm",
+        "detailed",
+        "comprehensive",
+    )
+    if not any(marker in candidate for marker in report_markers):
+        return "interactive_email"
+
     from universal_agent.services.email_task_bridge import infer_delivery_mode
 
     return infer_delivery_mode(body=text)
@@ -6537,6 +6554,10 @@ def _prepare_tracked_chat_execution(
         "labels": ["chat-panel", "interactive"],
         "metadata": task_metadata,
     }
+    if isinstance(session.metadata, dict):
+        session.metadata["skip_heartbeat"] = True
+    if _heartbeat_service is not None:
+        _heartbeat_service.unregister_session(session.session_id)
 
     # ── Run-per-task: allocate a fresh execution run workspace ──
     run_ctx = allocate_execution_run(
@@ -7397,7 +7418,14 @@ def _session_run_kind(session: Any) -> str:
     return str(metadata.get("run_kind") or "").strip().lower()
 
 
+def _session_skip_heartbeat(session: Any) -> bool:
+    metadata = _session_metadata_dict(session)
+    return bool(metadata.get("skip_heartbeat"))
+
+
 def _should_register_with_heartbeat(session: Any) -> bool:
+    if _session_skip_heartbeat(session):
+        return False
     role = _session_role(session)
     return role not in {"todo_execution", "todo", "email_triage", "hook"}
 

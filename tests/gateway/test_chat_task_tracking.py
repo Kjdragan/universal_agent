@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,6 +60,10 @@ def test_prepare_tracked_chat_execution_claims_task_and_builds_prompt(monkeypatc
     db_path = tmp_path / "activity_state.db"
     monkeypatch.setattr(gateway_server, "_task_hub_open_conn", lambda: _db_connect(db_path))
     monkeypatch.setattr(
+        "universal_agent.services.execution_run_service.allocate_execution_run",
+        lambda **kwargs: SimpleNamespace(run_id="run_chat_001", workspace_dir=str(tmp_path / "run_chat_001")),
+    )
+    monkeypatch.setattr(
         "universal_agent.services.capacity_governor.capacity_snapshot",
         lambda: {"available_slots": 1, "active_slots": 0, "max_concurrent": 2, "in_backoff": False},
     )
@@ -101,6 +107,10 @@ def test_prepare_tracked_chat_execution_honors_explicit_email_delivery(monkeypat
     db_path = tmp_path / "activity_state.db"
     monkeypatch.setattr(gateway_server, "_task_hub_open_conn", lambda: _db_connect(db_path))
     monkeypatch.setattr(
+        "universal_agent.services.execution_run_service.allocate_execution_run",
+        lambda **kwargs: SimpleNamespace(run_id="run_chat_002", workspace_dir=str(tmp_path / "run_chat_002")),
+    )
+    monkeypatch.setattr(
         "universal_agent.services.capacity_governor.capacity_snapshot",
         lambda: {"available_slots": 1, "active_slots": 0, "max_concurrent": 2, "in_backoff": False},
     )
@@ -121,6 +131,51 @@ def test_prepare_tracked_chat_execution_honors_explicit_email_delivery(monkeypat
     )
 
     assert tracked["delivery_mode"] == "standard_report"
+
+
+def test_prepare_tracked_chat_execution_uses_interactive_email_for_creative_requests(monkeypatch, tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    monkeypatch.setattr(gateway_server, "_task_hub_open_conn", lambda: _db_connect(db_path))
+    monkeypatch.setattr(
+        "universal_agent.services.execution_run_service.allocate_execution_run",
+        lambda **kwargs: SimpleNamespace(run_id="run_chat_003", workspace_dir=str(tmp_path / "run_chat_003")),
+    )
+    monkeypatch.setattr(
+        "universal_agent.services.capacity_governor.capacity_snapshot",
+        lambda: {"available_slots": 1, "active_slots": 0, "max_concurrent": 2, "in_backoff": False},
+    )
+
+    heartbeat_service = MagicMock()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", heartbeat_service)
+
+    workspace = tmp_path / "creative_email_workspace"
+    workspace.mkdir()
+    session = GatewaySession(
+        session_id="session_chat_003",
+        user_id="owner",
+        workspace_dir=str(workspace),
+        metadata={"source": "user"},
+    )
+
+    tracked = gateway_server._prepare_tracked_chat_execution(
+        session=session,
+        original_user_input="Create a story about a chocolate Easter bunny and email it to me.",
+        turn_id="turn_chat_003",
+    )
+
+    assert tracked["delivery_mode"] == "interactive_email"
+    assert "interactive_email" in tracked["prompt"]
+    assert "with an executive summary in the body" not in tracked["prompt"].lower()
+    assert session.metadata["skip_heartbeat"] is True
+    heartbeat_service.unregister_session.assert_called_once_with("session_chat_003")
+
+    with _db_connect(db_path) as conn:
+        item = task_hub.get_item(conn, tracked["task_id"])
+
+    assert item is not None
+    assert item["metadata"]["delivery_mode"] == "interactive_email"
+    assert item["metadata"]["workflow_manifest"]["workflow_kind"] == "interactive_answer_email"
+    assert item["metadata"]["workflow_manifest"]["final_channel"] == "email"
 
 
 def test_gateway_ws_accepts_query_message_alias(ws_client, tmp_path, monkeypatch):

@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-03-31 — dispatcher health, canonical execution forensics, tracked chat-panel Task Hub ingress, lifecycle-mutation failure visibility, and role-separated heartbeat vs ToDo execution semantics documented.
+> **Last updated:** 2026-04-05 — embedded dashboard Agent Flow spotlight widget, lightweight spotlight persistence contract, and browser-state troubleshooting guidance documented.
 
 ---
 
@@ -16,6 +16,8 @@ The Task Hub Dashboard is the primary UI for managing proactive tasks within Uni
 - **Responsive**: Stacking columns on `< md` breakpoints
 - **Real-time awareness**: Polling-based data refresh with optimistic UI updates
 
+The `/dashboard` landing page also embeds a mini Agent Flow widget beneath the main dashboard panels. That widget is part of the dashboard runtime surface even though its full-screen view lives at `/dashboard/agent-flow`.
+
 ---
 
 ## 2. File Map
@@ -28,6 +30,7 @@ The Task Hub Dashboard is the primary UI for managing proactive tasks within Uni
 | `src/universal_agent/gateway_server.py` | Backend API endpoints consumed by the dashboard |
 | `src/universal_agent/task_hub.py` | Core Task Hub data layer (SQLite) |
 | `src/universal_agent/services/dispatch_service.py` | Dispatch logic for "Start Now" / approval / scheduled tasks |
+| `web-ui/lib/agent-flow/spotlight-store.ts` | Persisted Agent Flow spotlight control state used by the embedded mini widget and the full Agent Flow route |
 
 ---
 
@@ -119,6 +122,27 @@ The ToDo dashboard includes a dedicated dispatcher-health strip for the separate
 - Whether a successful VP dispatch was auto-linked into Task Hub delegation by the server because the model omitted the explicit lifecycle tool call
 - The latest final execution result rather than just dispatch admission, so repeated retries and reopened tasks do not masquerade as healthy accepted executions
 
+### 4.4 Embedded Agent Flow Mini Widget
+
+The dashboard landing page renders an embedded mini Agent Flow panel so operators can see current spotlight activity without leaving `/dashboard`.
+
+Operational notes:
+- it mounts on every dashboard load
+- it reads spotlight control state from `ua.agent-flow-spotlight.v1`
+- it must not depend on persisted archive timelines or replay payloads
+- browser storage for this widget is intentionally lightweight because `/dashboard` is a frequently revisited route
+
+### 4.5 Spotlight Persistence Contract
+
+The persisted Agent Flow spotlight store is browser-local UI state, not a durable event archive.
+
+Current contract:
+- storage key: `ua.agent-flow-spotlight.v1`
+- allowed persisted fields: spotlight mode, selected session id, selection source, replay loop index, replay generation
+- forbidden persisted fields: `archivesBySessionId`, normalized event timelines, replay payloads, or any large archived graph state
+
+If old browser state contains the legacy heavy payload shape, rehydrate should discard the archived timeline graph and keep only the lightweight control fields.
+
 ### 4.4 Helper Functions
 
 | Function | Purpose |
@@ -182,6 +206,17 @@ graph LR
     DS --> DB
     PA --> DB
 ```
+
+## 5.4 Troubleshooting: Browser-State Navigation Instability
+
+If `/dashboard` crashes for one browser profile but not another:
+
+1. inspect `localStorage`, especially `ua.agent-flow-spotlight.v1`
+2. compare the failing browser against a clean browser session
+3. clear the spotlight key before clearing all site data
+4. verify the key remains small after reload; large archive-style payloads are a regression
+
+This pattern matters because the dashboard embeds the mini Agent Flow widget and always pays the cost of spotlight rehydrate.
 
 ---
 
