@@ -319,6 +319,8 @@ function formatLocalDateTime(value?: string | number | null): string {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const sessionSectionRef = useRef<HTMLElement>(null);
   const notificationSectionRef = useRef<HTMLElement>(null);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -991,6 +993,10 @@ export default function DashboardPage() {
     setSelectedSessions(new Set());
     setDeletingIds(new Set());
   }, [selectedSessions]);
+
+  if (!mounted) {
+    return <div className="space-y-6 flex items-center justify-center min-h-[40vh]"><span className="text-muted-foreground text-sm animate-pulse">Loading dashboard...</span></div>;
+  }
 
   return (
     <div className="space-y-6">
