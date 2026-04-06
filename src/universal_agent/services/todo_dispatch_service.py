@@ -185,7 +185,7 @@ def build_todo_execution_prompt(
     mode_set = set(delivery_modes or ["standard_report"])
     if mode_set & {"standard_report", "enhanced_report"}:
         lines.append(
-            "For standard_report and enhanced_report: send exactly one final email with an executive summary in the body and attach the full report artifact when available."
+            "For standard_report and enhanced_report: send exactly one single final email with a natural, friendly introduction. Attach both the generated HTML report and the PDF report using the `attachments` array. Do not put the full report content in the email body."
         )
     if "fast_summary" in mode_set:
         lines.append(

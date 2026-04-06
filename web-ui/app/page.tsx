@@ -1844,9 +1844,12 @@ function ChatInterface() {
                 const traceData = await traceResp.json() as TraceJsonData;
                 const traceResult = extractHistoryFromTraceJson(traceData);
 
-                // Populate chat messages from trace.json (full query text)
-                if (traceResult.messages.length > 0 && store.messages.length === 0) {
-                  for (const msg of traceResult.messages) {
+                const { messages: runLogMessages } = extractHistoryFromRunLog(raw);
+                const messagesToUse = runLogMessages.length > 0 ? runLogMessages : traceResult.messages;
+
+                // Populate chat messages from run.log preferably (has full conversational blocks) or trace.json
+                if (messagesToUse.length > 0 && store.messages.length === 0) {
+                  for (const msg of messagesToUse) {
                     store.addMessage({
                       role: msg.role,
                       content: msg.content,
@@ -1854,7 +1857,7 @@ function ChatInterface() {
                       is_complete: true,
                     });
                   }
-                  hydratedMessageCount += traceResult.messages.length;
+                  hydratedMessageCount += messagesToUse.length;
                 }
 
                 // Populate structured tool calls (rich ToolRow rendering)

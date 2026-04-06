@@ -62,6 +62,19 @@ If `command -v nlm` fails, this is an installation or PATH problem, not an auth 
 2. Restart UA process (or trigger a fresh session bootstrap).
 3. Run a NotebookLM auth preflight task and verify `nlm login --check --profile vps` succeeds.
 
+## Alternative Auth Method: Direct Desktop Sync (Headless Bypass)
+
+If the VPS is headless and cannot process the manual login flow effectively during setup or rotation, you can bypass the Infisical cookie-injection pipeline completely by syncing a valid local session:
+
+1. Authenticate locally on your desktop machine (e.g., `uvx nlm login`).
+2. Sync your local `notebooklm-mcp-cli` profile directly to the VPS `ua` user over SSH:
+
+   ```bash
+   rsync -avz ~/.notebooklm-mcp-cli/ ua@<VPS_IP>:/home/ua/.notebooklm-mcp-cli/
+   ```
+
+3. Run `nlm login --check --profile vps` (or `default`) on the VPS to verify the copied cookies are valid.
+
 ## Security Constraints
 
 1. Never print or persist cookie header values.
