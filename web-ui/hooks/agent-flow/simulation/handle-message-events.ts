@@ -54,7 +54,22 @@ export function handleMessage(
     }
   }
 
-  appendConversation(state.conversations, agentName, { type: msgType, content, timestamp: currentTime })
+  const msgs = state.conversations.get(agentName) || []
+  const lastMsg = msgs[msgs.length - 1]
+
+  const messageId = asString(payload.message_id || payload.id)
+  const isStreamUpdate = lastMsg && lastMsg.type === msgType && (
+    (messageId && lastMsg.id === messageId) ||
+    (content.length > 0 && content.startsWith(lastMsg.content))
+  )
+
+  if (isStreamUpdate) {
+    const updated = [...msgs]
+    updated[updated.length - 1] = { ...lastMsg, content, timestamp: currentTime, id: messageId || lastMsg.id }
+    state.conversations.set(agentName, updated)
+  } else {
+    appendConversation(state.conversations, agentName, { id: messageId || undefined, type: msgType, content, timestamp: currentTime })
+  }
 }
 
 export function handleContextUpdate(
