@@ -43,6 +43,7 @@ def enforce_workspace_path(
     file_path: Union[str, Path],
     workspace_root: Path,
     allow_reads_outside: bool = False,
+    allowed_write_roots: Optional[Iterable[Union[str, Path]]] = None,
     operation: str = "access",
 ) -> Path:
     """
@@ -84,6 +85,12 @@ def enforce_workspace_path(
         resolved.relative_to(root)
         return resolved
     except ValueError:
+        for extra_root in allowed_write_roots or ():
+            try:
+                resolved.relative_to(Path(extra_root).expanduser().resolve())
+                return resolved
+            except Exception:
+                continue
         if allow_reads_outside:
             return resolved
         raise WorkspaceGuardError(
@@ -97,6 +104,7 @@ def workspace_scoped_path(
     file_path: Union[str, Path],
     workspace_root: Path,
     create_parents: bool = False,
+    allowed_write_roots: Optional[Iterable[Union[str, Path]]] = None,
 ) -> Path:
     """
     Convert a path to an absolute workspace-scoped path.
@@ -115,7 +123,12 @@ def workspace_scoped_path(
     Raises:
         WorkspaceGuardError: If absolute path is outside workspace
     """
-    resolved = enforce_workspace_path(file_path, workspace_root, operation="write")
+    resolved = enforce_workspace_path(
+        file_path,
+        workspace_root,
+        allowed_write_roots=allowed_write_roots,
+        operation="write",
+    )
     
     if create_parents:
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -127,6 +140,7 @@ def validate_tool_paths(
     tool_input: dict,
     workspace_root: Path,
     path_keys: Optional[list[str]] = None,
+    allowed_write_roots: Optional[Iterable[Union[str, Path]]] = None,
 ) -> dict:
     """
     Validate and rewrite file paths in tool input to be workspace-scoped.
@@ -166,7 +180,11 @@ def validate_tool_paths(
             if str(normalized) != original:
                 modified[key] = str(normalized)
             try:
-                scoped = workspace_scoped_path(modified[key], workspace_root)
+                scoped = workspace_scoped_path(
+                    modified[key],
+                    workspace_root,
+                    allowed_write_roots=allowed_write_roots,
+                )
                 modified[key] = str(scoped)
             except WorkspaceGuardError:
                 # Re-raise with more context

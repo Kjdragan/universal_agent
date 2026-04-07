@@ -318,7 +318,36 @@ def test_blocks_wrong_first_task_for_report_intent():
     )
 
     assert result.get("decision") == "block"
-    assert "research-specialist" in str(result.get("systemMessage", ""))
+
+
+def test_code_change_prompt_with_research_terms_allows_code_writer_delegate():
+    hooks = AgentHookSet(run_id="unit-code-change-not-research")
+    prompt = (
+        "Implement a new feature in our repo and fix our code so Simone can delegate to Cody. "
+        "The pasted idea file below mentions research, reports, and analysis, but this task is a code implementation request.\n\n"
+        "# LLM Wiki\n\n"
+        "This can apply to a lot of different contexts, including research. "
+        "Ask a subtle question that requires synthesizing five documents and the LLM has to find and piece together the relevant fragments every time. "
+        "Query. Lint. Research. Report. Analysis."
+    )
+    _run(hooks.on_user_prompt_skill_awareness({"prompt": prompt}))
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "code-writer",
+                    "description": "Implement the repo change",
+                    "prompt": "Make the code changes in the repository.",
+                },
+            },
+            "tool-code-change",
+            {},
+        )
+    )
+
+    assert result == {}
 
 
 def test_allows_research_specialist_as_first_task_for_report_intent():

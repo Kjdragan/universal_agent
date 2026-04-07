@@ -80,6 +80,34 @@ in `prompt_builder.py` instead of hook-level blocking. The prompt tells the prim
 to delegate research to the specialist. This is a soft guardrail but the only one
 that doesn't break the subagent pipeline.
 
+## 3A. Repo-Backed Coding Sessions
+
+The SDK hook layer now supports a **dual-root** execution model for explicit coding work:
+
+- `CURRENT_RUN_WORKSPACE` remains the canonical root for transcripts, checkpoints, scratch files, and generated artifacts.
+- `CURRENT_CODEBASE_ROOT` is an optional second root for repo-tracked source edits during approved coding sessions.
+
+This is intentionally not the same as redefining the run workspace. The repo is a mutation target, not the scratch/output root.
+
+Current policy shape in `session_policy.json`:
+
+```json
+{
+  "codebase_access": {
+    "enabled": true,
+    "roots": ["/opt/universal_agent"],
+    "mutation_agents": ["simone", "code-writer", "vp.coder.primary"]
+  }
+}
+```
+
+Important current rules:
+
+- only approved repo roots are allowed; the allowlist is sourced from `UA_APPROVED_CODEBASE_ROOTS`
+- hook/path guards still block arbitrary absolute paths outside the run workspace, artifacts root, and approved codebase roots
+- the research-first hook heuristic checks coding signals before research/report signals so pasted implementation specs do not get misrouted to `research-specialist`
+- Bash receives `CURRENT_CODEBASE_ROOT` and `CURRENT_ALLOWED_CODEBASE_ROOTS` when repo-backed coding is active, but `CURRENT_RUN_WORKSPACE` stays the default artifact/log root
+
 ## 4. PreToolUse Hook Input Schema
 
 The `PreToolUseHookInput` TypedDict contains these fields:

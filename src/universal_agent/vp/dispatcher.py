@@ -26,6 +26,7 @@ from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
+from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.profiles import VpProfile, get_vp_profile
 
 
@@ -244,6 +245,8 @@ def _validate_dispatch_constraints(
 
     vp_label = profile.display_name or profile.vp_id
     for raw_path in candidate_paths:
+        if repo_mutation_requested(constraints) and is_approved_codebase_path(raw_path):
+            continue
         try:
             enforce_external_target_path(
                 raw_path,

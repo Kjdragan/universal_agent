@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from universal_agent.ops_config import apply_merge_patch
+from universal_agent.codebase_policy import normalize_codebase_access
 
 
 _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|payment)\b", re.IGNORECASE)
@@ -104,6 +105,7 @@ def normalize_memory_policy(policy: dict[str, Any] | None) -> dict[str, Any]:
 def normalize_session_policy(policy: dict[str, Any]) -> dict[str, Any]:
     payload = dict(policy)
     payload["memory"] = normalize_memory_policy(payload.get("memory"))
+    payload["codebase_access"] = normalize_codebase_access(payload.get("codebase_access"))
     return payload
 
 def default_session_policy(session_id: str, user_id: str) -> dict[str, Any]:
@@ -165,6 +167,7 @@ def default_session_policy(session_id: str, user_id: str) -> dict[str, Any]:
         },
         "email_whitelist": sorted(set(email_whitelist)),
         "memory": default_memory_policy(),
+        "codebase_access": normalize_codebase_access({"enabled": False}),
         "created_at": now,
         "updated_at": now,
     }

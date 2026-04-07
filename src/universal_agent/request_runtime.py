@@ -11,8 +11,11 @@ from typing import Any, Optional
 class RequestRuntimeContext:
     session_id: str = ""
     workspace_dir: str = ""
+    codebase_root: str = ""
     source: str = ""
     run_kind: str = ""
+    workflow_kind: str = ""
+    repo_mutation_allowed: bool = False
     user_input: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 

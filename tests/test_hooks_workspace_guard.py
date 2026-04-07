@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from universal_agent.execution_context import workspace_context
@@ -128,6 +130,86 @@ async def test_write_blocks_absolute_file_path_outside_workspace_and_artifacts(t
 
 
 @pytest.mark.asyncio
+async def test_write_allows_absolute_codebase_root_when_policy_authorizes(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    artifacts = tmp_path / "artifacts"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    artifacts.mkdir()
+    repo.mkdir()
+
+    monkeypatch.setenv("UA_ARTIFACTS_DIR", str(artifacts))
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", str(repo))
+    (workspace / "session_policy.json").write_text(
+        json.dumps(
+            {
+                "codebase_access": {
+                    "enabled": True,
+                    "roots": [str(repo)],
+                    "mutation_agents": ["simone", "code-writer", "vp.coder.primary"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(repo / "src" / "feature.py"),
+            "content": "print('ok')",
+        },
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_tool_use_workspace_guard(input_data, tool_use_id="w-codebase-1", context={})
+
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_write_blocks_codebase_root_for_non_mutation_agent(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    artifacts = tmp_path / "artifacts"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    artifacts.mkdir()
+    repo.mkdir()
+
+    monkeypatch.setenv("UA_ARTIFACTS_DIR", str(artifacts))
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", str(repo))
+    (workspace / "session_policy.json").write_text(
+        json.dumps(
+            {
+                "codebase_access": {
+                    "enabled": True,
+                    "roots": [str(repo)],
+                    "mutation_agents": ["simone", "code-writer", "vp.coder.primary"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(repo / "src" / "blocked.py"),
+            "content": "print('no')",
+        },
+        "agent_type": "research-specialist",
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_tool_use_workspace_guard(input_data, tool_use_id="w-codebase-2", context={})
+
+    assert out.get("decision") == "block"
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+@pytest.mark.asyncio
 async def test_pre_bash_injects_workspace_and_artifacts(tmp_path, monkeypatch):
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -238,6 +320,41 @@ async def test_pre_bash_rewrites_literal_artifacts_dir_paths_top_level_command_s
     cmd = out["command"]
     assert "/opt/universal_agent/UA_ARTIFACTS_DIR" not in cmd
     assert str(artifacts) in cmd
+
+
+@pytest.mark.asyncio
+async def test_pre_bash_injects_codebase_env_when_policy_present(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    repo.mkdir()
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", str(repo))
+    monkeypatch.delenv("UA_ARTIFACTS_DIR", raising=False)
+    (workspace / "session_policy.json").write_text(
+        json.dumps(
+            {
+                "codebase_access": {
+                    "enabled": True,
+                    "roots": [str(repo)],
+                    "mutation_agents": ["simone", "code-writer", "vp.coder.primary"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo $CURRENT_CODEBASE_ROOT && echo $CURRENT_ALLOWED_CODEBASE_ROOTS"},
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_bash_inject_workspace_env(input_data, tool_use_id="b-codebase-1", context={})
+
+    cmd = out["tool_input"]["command"]
+    assert "export CURRENT_CODEBASE_ROOT=" in cmd
+    assert "export CURRENT_ALLOWED_CODEBASE_ROOTS=" in cmd
 
 
 @pytest.mark.asyncio

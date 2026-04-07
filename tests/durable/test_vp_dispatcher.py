@@ -106,3 +106,31 @@ def test_dispatch_coder_blocks_ua_repo_target(monkeypatch):
                 priority=100,
             ),
         )
+
+
+def test_dispatch_coder_allows_approved_repo_target_when_repo_mutation_authorized(monkeypatch):
+    conn = _conn()
+    monkeypatch.setenv("UA_VP_HARD_BLOCK_UA_REPO", "1")
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", "/opt/universal_agent")
+
+    row = dispatch_mission(
+        conn,
+        MissionDispatchRequest(
+            vp_id="vp.coder.primary",
+            mission_type="coding_task",
+            objective="work in the approved UA repo",
+            constraints={
+                "target_path": "/opt/universal_agent",
+                "workflow_kind": "code_change",
+                "repo_mutation_allowed": True,
+            },
+            budget={},
+            idempotency_key="approved-repo",
+            source_session_id="session-a",
+            source_turn_id="turn-1",
+            reply_mode="async",
+            priority=100,
+        ),
+    )
+
+    assert row["mission_id"]

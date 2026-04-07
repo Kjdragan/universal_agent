@@ -75,6 +75,8 @@ The execution contract itself is normalized by `build_execution_manifest(...)` i
 - `requires_pdf`
 - `final_channel`
 - `canonical_executor`
+- `codebase_root` when the work item is an approved repo-backed coding task
+- `repo_mutation_allowed` when repo mutation authority is explicitly active
 
 ---
 
@@ -144,8 +146,10 @@ That mutation happens in [gateway_server.py](../../src/universal_agent/gateway_s
 Important current limitation:
 
 - tracked chat already enters the canonical `todo_execution` lane
-- but the claim path still uses `provider_session_id=session.session_id` and `workspace_dir=session.workspace_dir` in [gateway_server.py](../../src/universal_agent/gateway_server.py#L6415)
-- so the transport session can still act as the artifact root for multiple tracked chat tasks
+- the request metadata now carries both:
+  - a run-scoped artifact workspace (`workspace_dir`, `workflow_run_id`)
+  - an optional repo mutation target (`codebase_root`) for explicit coding tasks
+- source edits should target `codebase_root` only when `repo_mutation_allowed=true`; all logs/checkpoints/work products still belong to the run workspace
 
 ### 5.3 Manual Dashboard / Other Task Hub Sources
 
@@ -185,6 +189,7 @@ Important current rule:
 
 - attempts are run-scoped, not task-scoped
 - task-specific research/report outputs are task-scoped under `tasks/<task_name>/...`
+- repo-backed coding authority is request-scoped and may coexist with the run workspace; it does not redefine the run workspace itself
 
 ---
 

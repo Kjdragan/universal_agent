@@ -339,3 +339,29 @@ def test_dispatch_guardrails_block_general_cli_targeting_ua_repo():
             execution_mode="cli",
         )
 
+
+def test_dispatch_guardrails_allow_general_cli_for_approved_codebase_when_authorized(monkeypatch):
+    """CLI guardrails should allow explicit repo-backed coding missions on approved roots."""
+    from universal_agent.vp.dispatcher import _validate_dispatch_constraints
+    from universal_agent.vp.profiles import VpProfile
+
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", "/opt/universal_agent")
+    monkeypatch.setenv("UA_VP_HARD_BLOCK_UA_REPO", "1")
+
+    profile = VpProfile(
+        vp_id="vp.general.primary",
+        display_name="GENERALIST",
+        runtime_id="runtime.general.external",
+        client_kind="claude_generalist",
+        workspace_root=Path("/tmp/test_ws"),
+    )
+
+    _validate_dispatch_constraints(
+        profile=profile,
+        constraints={
+            "target_path": "/opt/universal_agent",
+            "workflow_kind": "code_change",
+            "repo_mutation_allowed": True,
+        },
+        execution_mode="cli",
+    )

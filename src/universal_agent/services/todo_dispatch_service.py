@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Callable, Awaitable
 
 from universal_agent.gateway import GatewaySession, GatewayRequest
+from universal_agent.codebase_policy import approved_codebase_roots_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def build_execution_manifest(
     delivery_mode: str,
     final_channel: str,
     canonical_executor: str = "simone_first",
+    codebase_root: str | None = None,
 ) -> dict[str, Any]:
     """Return the durable execution contract for a single work item."""
     workflow_kind = infer_workflow_kind(
@@ -88,12 +90,18 @@ def build_execution_manifest(
     text = str(user_input or "").strip().lower()
     mode = str(delivery_mode or "").strip().lower() or "standard_report"
     requires_pdf = mode in {"standard_report", "enhanced_report"} or "pdf" in text
+    approved_roots = approved_codebase_roots_from_env()
+    resolved_codebase_root = ""
+    if workflow_kind == "code_change":
+        resolved_codebase_root = str(codebase_root or (approved_roots[0] if approved_roots else "")).strip()
     return {
         "workflow_kind": workflow_kind,
         "delivery_mode": mode,
         "requires_pdf": requires_pdf,
         "final_channel": str(final_channel or "chat").strip().lower() or "chat",
         "canonical_executor": str(canonical_executor or "simone_first").strip() or "simone_first",
+        "codebase_root": resolved_codebase_root,
+        "repo_mutation_allowed": bool(workflow_kind == "code_change" and resolved_codebase_root),
     }
 
 
@@ -114,12 +122,15 @@ def resolve_execution_manifest(
             "requires_pdf": bool(manifest.get("requires_pdf")),
             "final_channel": str(manifest.get("final_channel") or final_channel or "chat").strip().lower() or "chat",
             "canonical_executor": str(manifest.get("canonical_executor") or canonical_executor).strip() or canonical_executor,
+            "codebase_root": str(manifest.get("codebase_root") or meta.get("codebase_root") or "").strip(),
+            "repo_mutation_allowed": bool(manifest.get("repo_mutation_allowed")),
         }
     return build_execution_manifest(
         user_input=fallback_description,
         delivery_mode=str(meta.get("delivery_mode") or "standard_report"),
         final_channel=final_channel or ("chat" if str(meta.get("delivery_mode") or "").strip() == "interactive_chat" else "email"),
         canonical_executor=canonical_executor,
+        codebase_root=str(meta.get("codebase_root") or "").strip() or None,
     )
 
 TODO_DISPATCH_PROMPT = """
@@ -243,6 +254,15 @@ def build_todo_execution_prompt(
         lines.append(f"requires_pdf={str(bool(manifest['requires_pdf'])).lower()}")
         lines.append(f"final_channel={manifest['final_channel']}")
         lines.append(f"canonical_executor={manifest['canonical_executor']}")
+        if str(manifest.get("codebase_root") or "").strip():
+            lines.append(f"codebase_root={manifest['codebase_root']}")
+            lines.append(
+                f"repo_mutation_allowed={str(bool(manifest.get('repo_mutation_allowed'))).lower()}"
+            )
+            lines.append(
+                "Repo-backed coding is authorized for this work item. Edit repo files under "
+                "`CURRENT_CODEBASE_ROOT`, but keep generated artifacts in `CURRENT_RUN_WORKSPACE`."
+            )
         routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
         if routing:
             lines.append(f"Routing Hint: {routing}")
@@ -446,6 +466,56 @@ class ToDoDispatchService:
                 active_assignments=active_assignments,
                 origin_label="todo_dispatcher",
             )
+            manifest_roots = sorted(
+                {
+                    str(
+                        (
+                            (
+                                item.get("metadata")
+                                if isinstance(item.get("metadata"), dict)
+                                else {}
+                            ).get("workflow_manifest")
+                            if isinstance(
+                                (
+                                    item.get("metadata")
+                                    if isinstance(item.get("metadata"), dict)
+                                    else {}
+                                ).get("workflow_manifest"),
+                                dict,
+                            )
+                            else {}
+                        ).get("codebase_root")
+                        or ""
+                    ).strip()
+                    for item in task_hub_claimed
+                }
+                - {""}
+            )
+            manifest_workflow_kinds = sorted(
+                {
+                    str(
+                        (
+                            (
+                                item.get("metadata")
+                                if isinstance(item.get("metadata"), dict)
+                                else {}
+                            ).get("workflow_manifest")
+                            if isinstance(
+                                (
+                                    item.get("metadata")
+                                    if isinstance(item.get("metadata"), dict)
+                                    else {}
+                                ).get("workflow_manifest"),
+                                dict,
+                            )
+                            else {}
+                        ).get("workflow_kind")
+                        or ""
+                    ).strip()
+                    for item in task_hub_claimed
+                }
+                - {""}
+            )
 
             # Provide visibility of progress specifically for To-Do List Tab UI
             if self.event_callback:
@@ -471,6 +541,10 @@ class ToDoDispatchService:
                     # ── Run-per-task lineage (first task's run) ──
                     "workflow_run_id": str(task_hub_claimed[0].get("workflow_run_id") or "").strip() if task_hub_claimed else "",
                     "workspace_dir": str(task_hub_claimed[0].get("workspace_dir") or "").strip() if task_hub_claimed else "",
+                    "workflow_kind": manifest_workflow_kinds[0] if len(manifest_workflow_kinds) == 1 else "",
+                    "codebase_root": manifest_roots[0] if len(manifest_roots) == 1 else "",
+                    "repo_mutation_allowed": bool(len(manifest_roots) == 1 and manifest_roots[0]),
+                    "allowed_codebase_roots": approved_codebase_roots_from_env(),
                 },
             )
             

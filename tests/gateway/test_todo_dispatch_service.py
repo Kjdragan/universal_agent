@@ -161,6 +161,19 @@ def test_build_execution_manifest_supports_interactive_email():
     assert manifest["final_channel"] == "email"
 
 
+def test_build_execution_manifest_marks_code_change_with_codebase_root(monkeypatch):
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", "/opt/universal_agent")
+    manifest = build_execution_manifest(
+        user_input="Implement this feature in the repo, add tests, and fix the code.",
+        delivery_mode="interactive_chat",
+        final_channel="chat",
+    )
+
+    assert manifest["workflow_kind"] == "code_change"
+    assert manifest["codebase_root"] == "/opt/universal_agent"
+    assert manifest["repo_mutation_allowed"] is True
+
+
 def test_build_todo_execution_prompt_uses_mode_specific_delivery_contract():
     prompt = build_todo_execution_prompt(
         claimed_items=[

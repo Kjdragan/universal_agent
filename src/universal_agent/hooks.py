@@ -37,6 +37,13 @@ from universal_agent.identity import (
     resolve_email_recipients,
     validate_recipient_policy,
 )
+from universal_agent.codebase_policy import (
+    agent_can_mutate_codebase,
+    normalize_codebase_access,
+    path_is_within_roots,
+    resolve_codebase_access,
+)
+from universal_agent.request_runtime import get_request_runtime
 from universal_agent.agentmail_official import (
     extract_agentmail_delivery_fields,
     extract_agentmail_result_ids,
@@ -130,6 +137,29 @@ _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
     "send to me",
 )
 
+_CODE_CHANGE_INTENT_MARKERS = (
+    "fix ",
+    "debug",
+    "refactor",
+    "implement",
+    "code change",
+    "update the code",
+    "update code",
+    "write code",
+    "repository",
+    "typescript",
+    "javascript",
+    "python",
+    "unit test",
+    "test failure",
+    "api route",
+    "coding agent",
+    "code-writer",
+    "coder vp",
+    "fix our code",
+    "/opt/universal_agent",
+)
+
 _NOTEBOOKLM_INTENT_MARKERS = (
     "notebooklm",
     "notebook lm",
@@ -190,6 +220,8 @@ _EXECUTION_MANIFEST_KEYS = (
     "requires_pdf",
     "final_channel",
     "canonical_executor",
+    "codebase_root",
+    "repo_mutation_allowed",
 )
 
 
@@ -207,7 +239,7 @@ def _extract_execution_manifest(text: str) -> dict[str, Any]:
         if key not in _EXECUTION_MANIFEST_KEYS:
             continue
         parsed_value = value.strip()
-        if key == "requires_pdf":
+        if key in {"requires_pdf", "repo_mutation_allowed"}:
             manifest[key] = parsed_value.lower() == "true"
         else:
             manifest[key] = parsed_value
@@ -463,18 +495,59 @@ _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS = (
 )
 
 
+def _extract_operator_instruction_envelope(text: Any, *, max_chars: int = 1600) -> str:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return ""
+
+    collected: list[str] = []
+    seen_non_empty = 0
+    total = 0
+    for idx, raw_line in enumerate(candidate.splitlines()):
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if (
+            idx > 0
+            and seen_non_empty >= 3
+            and stripped.startswith(("# ", "## ", "### ", "```"))
+        ):
+            break
+        collected.append(line)
+        if stripped:
+            seen_non_empty += 1
+        total += len(line) + 1
+        if total >= max_chars:
+            break
+    envelope = "\n".join(collected).strip()
+    return envelope or candidate[:max_chars]
+
+
+def _looks_like_code_change_intent(text: Any) -> bool:
+    candidate = str(text or "").strip().lower()
+    if not candidate:
+        return False
+    envelope = _extract_operator_instruction_envelope(candidate).lower()
+    search_space = "\n".join(filter(None, [envelope, candidate[:2400]])).strip()
+    return any(marker in search_space for marker in _CODE_CHANGE_INTENT_MARKERS)
+
+
 def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     candidate = str(text or "").strip().lower()
     if not candidate:
         return False
-    has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
-    has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
-    has_delivery = any(marker in candidate for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
+    envelope = _extract_operator_instruction_envelope(candidate).lower()
+    if _looks_like_code_change_intent(envelope) or _looks_like_code_change_intent(candidate):
+        return False
+
+    search_space = "\n".join(filter(None, [envelope, candidate[:2400]])).strip()
+    has_search = any(marker in search_space for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
+    has_report = any(marker in search_space for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
+    has_delivery = any(marker in search_space for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
     has_research_signal = has_search or has_report
     # Avoid false positives for media-only requests (e.g., "get transcript").
     # Mixed requests that include media plus broader research/report instructions
     # should still trigger research delegation.
-    has_media_hint = any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS)
+    has_media_hint = any(m in search_space for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS)
     if has_media_hint and not has_research_signal:
         return False
     # Delivery hints (email/pdf/send) are not enough on their own; they should
@@ -496,6 +569,48 @@ def _looks_like_notebooklm_intent(text: Any) -> bool:
     if not candidate:
         return False
     return any(marker in candidate for marker in _NOTEBOOKLM_INTENT_MARKERS)
+
+
+def _load_workspace_codebase_access(workspace_dir: str | None) -> dict[str, Any]:
+    if not workspace_dir:
+        return normalize_codebase_access({"enabled": False})
+    policy_path = Path(workspace_dir) / "session_policy.json"
+    if not policy_path.exists():
+        return normalize_codebase_access({"enabled": False})
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except Exception:
+        return normalize_codebase_access({"enabled": False})
+    if not isinstance(payload, dict):
+        return normalize_codebase_access({"enabled": False})
+    return normalize_codebase_access(payload.get("codebase_access"))
+
+
+def _resolve_active_codebase_access(workspace_dir: str | None) -> dict[str, Any]:
+    runtime = get_request_runtime()
+    metadata = dict(runtime.metadata) if runtime and isinstance(runtime.metadata, dict) else {}
+    if runtime:
+        if runtime.codebase_root and not str(metadata.get("codebase_root") or "").strip():
+            metadata["codebase_root"] = runtime.codebase_root
+        if "repo_mutation_allowed" not in metadata:
+            metadata["repo_mutation_allowed"] = bool(runtime.repo_mutation_allowed)
+        if runtime.workflow_kind and not str(metadata.get("workflow_kind") or "").strip():
+            metadata["workflow_kind"] = runtime.workflow_kind
+    return resolve_codebase_access(
+        policy=_load_workspace_codebase_access(workspace_dir),
+        request_metadata=metadata,
+    )
+
+
+def _resolve_code_mutation_actor(input_data: dict) -> str:
+    _agent_id, agent_type = _extract_hook_agent_identity(input_data)
+    actor = str(agent_type or "").strip().lower()
+    if actor:
+        return actor
+    transcript_path = str(input_data.get("transcript_path", "") or "").strip().lower()
+    if "code-writer" in transcript_path or "code_writer" in transcript_path:
+        return "code-writer"
+    return "simone"
 
 
 def _extract_hook_agent_identity(input_data: dict) -> tuple[Optional[str], Optional[str]]:
@@ -1024,6 +1139,11 @@ class AgentHookSet:
         if is_read_only:
             return {}  # Allow reads from anywhere
 
+        codebase_access = _resolve_active_codebase_access(self.workspace_dir or current_workspace)
+        mutation_actor = _resolve_code_mutation_actor(input_data)
+        actor_can_mutate_codebase = agent_can_mutate_codebase(mutation_actor, codebase_access)
+        allowed_codebase_roots = list(codebase_access.get("roots") or []) if actor_can_mutate_codebase else []
+
         # ── Workspace path auto-correction ──────────────────────────────────
         # LLMs frequently hallucinate wrong hex suffixes in AGENT_RUN_WORKSPACES
         # paths (e.g. ...a62199cf vs ...e62199cf).  Since write operations must
@@ -1086,6 +1206,11 @@ class AgentHookSet:
                             allowed = True
                         except Exception:
                             pass
+                    if not allowed and allowed_codebase_roots and path_is_within_roots(
+                        resolved,
+                        allowed_codebase_roots,
+                    ):
+                        allowed = True
                     if not allowed:
                         # If auto-rewrite already ran and corrected tool_input,
                         # re-read the corrected path and re-check.
@@ -1099,7 +1224,7 @@ class AgentHookSet:
                                 pass
                         msg = (
                             f"Tool input 'path' contains path '{raw_path}' which is outside the "
-                            f"run workspace and UA_ARTIFACTS_DIR. "
+                            f"run workspace, UA_ARTIFACTS_DIR, and any authorized codebase roots. "
                             f"Correct workspace root: {ws_root}"
                         )
                         logfire.warning(
@@ -1128,8 +1253,12 @@ class AgentHookSet:
 
         try:
             from pathlib import Path
-            workspace_path = Path(self.workspace_dir)
-            validated_input = validate_tool_paths(tool_input, workspace_path)
+            workspace_path = Path(self.workspace_dir or current_workspace)
+            validated_input = validate_tool_paths(
+                tool_input,
+                workspace_path,
+                allowed_write_roots=allowed_codebase_roots,
+            )
             # If paths were modified, update the tool input
             if validated_input != tool_input:
                 return {"tool_input": validated_input}
@@ -1982,6 +2111,17 @@ class AgentHookSet:
             and not self._is_cron_lane
         )
         self._youtube_skill_seen_this_turn = False
+        codebase_access = _resolve_active_codebase_access(self.workspace_dir or get_current_workspace())
+        codebase_guidance = ""
+        if codebase_access.get("enabled") and codebase_access.get("codebase_root"):
+            codebase_root = str(codebase_access.get("codebase_root") or "").strip()
+            codebase_guidance = (
+                "\n\n### 🧩 Repo-Backed Coding Session\n"
+                f"- Authorized codebase root: `{codebase_root}`\n"
+                "- Use absolute paths under `CURRENT_CODEBASE_ROOT` for source-code edits.\n"
+                "- Keep transcripts, checkpoints, and generated artifacts under `CURRENT_RUN_WORKSPACE`.\n"
+                "- Do not treat the repo as scratch space for outputs; only edit repo-tracked code there.\n"
+            )
 
         # Reset counters for the new user turn
         self._current_turn_tool_count = 0
@@ -2013,7 +2153,7 @@ class AgentHookSet:
         if (
             current_run_kind != "email_triage"
             and not self._initial_decomposition_prompt_injected
-            and len(prompt_text.split()) > 10
+            and (len(prompt_text.split()) > 10 or bool(codebase_guidance))
         ):
             self._initial_decomposition_prompt_injected = True
             nlm_hint = ""
@@ -2050,6 +2190,7 @@ class AgentHookSet:
                         "```\n"
                         "**Key: Start with Step 1 immediately.** Your first tool call must be "
                         "productive work — a `Task()` delegation, a direct MCP tool, or a search action."
+                        + codebase_guidance
                         + nlm_hint
                     ),
                 }
@@ -2153,6 +2294,7 @@ class AgentHookSet:
             from universal_agent.artifacts import resolve_artifacts_dir
 
             artifacts_root = str(resolve_artifacts_dir())
+            codebase_access = _resolve_active_codebase_access(self.workspace_dir or ws)
             rewritten_command, rewrote_artifacts_paths = _rewrite_literal_artifacts_dir_paths(
                 command,
                 artifacts_root,
@@ -2178,6 +2320,15 @@ class AgentHookSet:
                 prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
             if "UA_ARTIFACTS_DIR=" not in command:
                 prefix_parts.append(f"export UA_ARTIFACTS_DIR={shlex.quote(artifacts_root)}")
+            codebase_root = str(codebase_access.get("codebase_root") or "").strip()
+            allowed_codebase_roots = [str(item).strip() for item in codebase_access.get("roots") or [] if str(item).strip()]
+            if codebase_root and "CURRENT_CODEBASE_ROOT=" not in command:
+                prefix_parts.append(f"export CURRENT_CODEBASE_ROOT={shlex.quote(codebase_root)}")
+            if allowed_codebase_roots and "CURRENT_ALLOWED_CODEBASE_ROOTS=" not in command:
+                prefix_parts.append(
+                    "export CURRENT_ALLOWED_CODEBASE_ROOTS="
+                    + shlex.quote(os.pathsep.join(allowed_codebase_roots))
+                )
             if auto_cd_enabled and not has_cd_prefix:
                 prefix_parts.append(f"cd {shlex.quote(ws)}")
 

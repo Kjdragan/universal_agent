@@ -11,6 +11,7 @@ from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
+from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 
 
@@ -103,15 +104,17 @@ def _resolve_workspace_dir(
     target_path = str(constraints.get("target_path") or "").strip()
     if target_path:
         resolved = Path(target_path).expanduser().resolve()
-        _enforce_coder_target_guardrails(resolved)
+        _enforce_coder_target_guardrails(resolved, constraints=constraints)
         return resolved
 
     safe_mission = mission_id.replace("/", "_").replace("..", "_").strip() or "mission"
     return (workspace_root / safe_mission).resolve()
 
 
-def _enforce_coder_target_guardrails(target: Path) -> None:
+def _enforce_coder_target_guardrails(target: Path, *, constraints: dict[str, Any]) -> None:
     if not vp_hard_block_ua_repo(default=True):
+        return
+    if repo_mutation_requested(constraints) and is_approved_codebase_path(target):
         return
     handoff = Path(vp_handoff_root()).expanduser().resolve()
 

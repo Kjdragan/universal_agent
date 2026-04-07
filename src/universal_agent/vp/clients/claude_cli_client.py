@@ -24,6 +24,7 @@ from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
+from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 
 # Lazy-import session budget to avoid circular dependencies
@@ -471,7 +472,7 @@ def _resolve_workspace(
     target_path = str(payload.get("target_path") or "").strip()
     if target_path:
         resolved = Path(target_path).expanduser().resolve()
-        _enforce_cli_target_guardrails(resolved)
+        _enforce_cli_target_guardrails(resolved, payload=payload)
         resolved.mkdir(parents=True, exist_ok=True)
         return resolved
 
@@ -479,9 +480,11 @@ def _resolve_workspace(
     return (workspace_root / safe_id).resolve()
 
 
-def _enforce_cli_target_guardrails(target: Path) -> None:
+def _enforce_cli_target_guardrails(target: Path, *, payload: dict[str, Any]) -> None:
     """Block CLI sessions from writing into the UA repository tree."""
     if not vp_hard_block_ua_repo(default=True):
+        return
+    if repo_mutation_requested(payload) and is_approved_codebase_path(target):
         return
     handoff = Path(vp_handoff_root()).expanduser().resolve()
 

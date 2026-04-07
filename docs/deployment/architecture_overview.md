@@ -105,6 +105,19 @@ Kevin's desktop has two supported runtime modes:
 4. Do not use local-to-VPS file sync as the default deployment path.
 5. The canonical deployment runbooks live in `docs/deployment/`.
 
+## Repo-Backed Coding Sessions On VPS
+
+Production and staging agent sessions may now be explicitly authorized to edit approved repo roots (for example `/opt/universal_agent`) during coding tasks. This changes **execution authority**, not deployment policy.
+
+Important distinction:
+
+- repo-backed coding sessions let Simone / Cody mutate the checked-out repo on the VPS when the session policy and request metadata explicitly authorize that codebase root
+- they do **not** change how releases are promoted
+- staging still deploys from `develop`
+- production still deploys only through the exact-SHA promotion workflow to `main`
+
+In other words: repo-backed coding enables the agent to do the work on the VPS checkout; the supported path for making that work live remains the existing branch-driven CI/CD pipeline
+
 ## Release Verification Rule
 
 When a production or staging incident appears to suggest "the fix is not deployed":

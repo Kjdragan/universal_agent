@@ -147,6 +147,10 @@ from universal_agent.services.refinement_agent import (
     refine_with_llm, RefinementError,
 )
 from universal_agent.services.capacity_governor import capacity_snapshot
+from universal_agent.services.execution_run_service import (
+    resolve_active_codebase_root,
+    resolve_active_execution_workspace,
+)
 
 from universal_agent import process_heartbeat
 from universal_agent.workflow_admission import (
@@ -165,6 +169,11 @@ from universal_agent.session_policy import (
     normalize_memory_policy,
     save_session_policy,
     update_session_policy,
+)
+from universal_agent.codebase_policy import (
+    approved_codebase_roots_from_env,
+    build_codebase_access,
+    validate_codebase_root,
 )
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
@@ -1770,6 +1779,7 @@ class CreateSessionRequest(BaseModel):
     user_id: Optional[str] = None
     workspace_dir: Optional[str] = None
     session_id: Optional[str] = None
+    codebase_root: Optional[str] = None
 
 
 class CreateSessionResponse(BaseModel):
@@ -6525,6 +6535,13 @@ def _prepare_tracked_chat_execution(
     task_id = f"chat:{session.session_id}:{turn_id}"
     delivery_mode = _infer_tracked_chat_delivery_mode(original_user_input)
     final_channel = "email" if delivery_mode != "interactive_chat" else "chat"
+    workflow_manifest = build_execution_manifest(
+        user_input=original_user_input,
+        delivery_mode=delivery_mode,
+        final_channel=final_channel,
+        canonical_executor="simone_first",
+    )
+    codebase_root = str(workflow_manifest.get("codebase_root") or "").strip() or None
     task_metadata = {
         "delivery_mode": delivery_mode,
         "canonical_execution_owner": "interactive_chat_session",
@@ -6533,13 +6550,11 @@ def _prepare_tracked_chat_execution(
         "origin_turn_id": turn_id,
         "client_turn_id": client_turn_id or "",
         "original_user_input": original_user_input,
-        "workflow_manifest": build_execution_manifest(
-            user_input=original_user_input,
-            delivery_mode=delivery_mode,
-            final_channel=final_channel,
-            canonical_executor="simone_first",
-        ),
+        "workflow_manifest": workflow_manifest,
     }
+    if codebase_root:
+        task_metadata["codebase_root"] = codebase_root
+        task_metadata["repo_mutation_allowed"] = bool(workflow_manifest.get("repo_mutation_allowed"))
     task_row = {
         "task_id": task_id,
         "title": _tracked_chat_task_title(original_user_input),
@@ -6610,6 +6625,8 @@ def _prepare_tracked_chat_execution(
         "delivery_mode": delivery_mode,
         "run_id": run_ctx.run_id,
         "workspace_dir": run_ctx.workspace_dir,
+        "codebase_root": codebase_root,
+        "workflow_manifest": workflow_manifest,
     }
 
 
@@ -6676,9 +6693,25 @@ async def _run_gateway_session_request(
         request_runtime_token = set_request_runtime(
             RequestRuntimeContext(
                 session_id=session_id,
-                workspace_dir=str(session.workspace_dir or ""),
+                workspace_dir=str(
+                    resolve_active_execution_workspace(
+                        session=session,
+                        request_metadata=request_metadata,
+                    )
+                    or session.workspace_dir
+                    or ""
+                ),
+                codebase_root=str(
+                    resolve_active_codebase_root(
+                        session=session,
+                        request_metadata=request_metadata,
+                    )
+                    or ""
+                ),
                 source=request_source,
                 run_kind=request_run_kind,
+                workflow_kind=str(request_metadata.get("workflow_kind") or "").strip(),
+                repo_mutation_allowed=bool(request_metadata.get("repo_mutation_allowed")),
                 user_input=request.user_input,
                 metadata=dict(request_metadata),
             )
@@ -12725,6 +12758,16 @@ def _sanitize_workspace_dir_or_400(workspace_dir: Optional[str]) -> Optional[str
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _sanitize_codebase_root_or_400(codebase_root: Optional[str]) -> Optional[str]:
+    raw = str(codebase_root or "").strip()
+    if not raw:
+        return None
+    try:
+        return validate_codebase_root(raw, approved_roots=approved_codebase_roots_from_env())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _session_policy(session: GatewaySession) -> dict:
     policy = load_session_policy(
         session.workspace_dir,
@@ -12745,6 +12788,9 @@ def _policy_metadata_snapshot(policy: dict[str, Any]) -> dict[str, Any]:
         "memory_session_enabled": memory.get("sessionMemory"),
         "memory_sources": memory.get("sources", []),
         "memory_scope": memory.get("scope"),
+        "codebase_access_enabled": bool((policy.get("codebase_access") or {}).get("enabled")),
+        "codebase_roots": list((policy.get("codebase_access") or {}).get("roots") or []),
+        "codebase_mutation_agents": list((policy.get("codebase_access") or {}).get("mutation_agents") or []),
     }
 
 
@@ -15381,6 +15427,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
 
     workspace_dir = _sanitize_workspace_dir_or_400(request.workspace_dir)
+    codebase_root = _sanitize_codebase_root_or_400(request.codebase_root)
     session_id = (
         _sanitize_session_id_or_400(request.session_id)
         if str(request.session_id or "").strip()
@@ -15395,6 +15442,17 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
         )
         session.metadata["user_id"] = session.user_id
         policy = _session_policy(session)
+        if codebase_root:
+            policy["codebase_access"] = build_codebase_access(
+                enabled=True,
+                roots=[codebase_root],
+            )
+            save_session_policy(session.workspace_dir, policy)
+            session.metadata["codebase_root"] = codebase_root
+            session.metadata["repo_mutation_allowed"] = True
+            session.metadata["allowed_codebase_roots"] = list(
+                (policy.get("codebase_access") or {}).get("roots") or []
+            )
         session.metadata["policy"] = _policy_metadata_snapshot(policy)
         store_session(session)
         _increment_metric("sessions_created")
@@ -27077,6 +27135,17 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             # ── Run-per-task lineage ──
                             "workflow_run_id": tracked_chat.get("run_id", ""),
                             "workspace_dir": tracked_chat.get("workspace_dir", ""),
+                            "workflow_kind": str(
+                                (
+                                    tracked_chat.get("workflow_manifest")
+                                    if isinstance(tracked_chat.get("workflow_manifest"), dict)
+                                    else {}
+                                ).get("workflow_kind")
+                                or ""
+                            ).strip(),
+                            "codebase_root": tracked_chat.get("codebase_root") or "",
+                            "repo_mutation_allowed": bool(tracked_chat.get("codebase_root")),
+                            "allowed_codebase_roots": approved_codebase_roots_from_env(),
                         }
                         request_source = _normalize_run_source(request_metadata.get("source"))
 

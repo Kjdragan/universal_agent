@@ -649,6 +649,15 @@ class ProcessTurnAdapter:
                 run_source_env = str(self.config.__dict__.get("_run_source", "user") or "user")
                 request_metadata = self.config.__dict__.get("_request_metadata")
                 request_md = request_metadata if isinstance(request_metadata, dict) else {}
+                codebase_root = str(request_md.get("codebase_root") or "").strip()
+                allowed_codebase_roots = request_md.get("allowed_codebase_roots")
+                if not isinstance(allowed_codebase_roots, list):
+                    allowed_codebase_roots = []
+                allowed_codebase_roots = [
+                    str(item).strip()
+                    for item in allowed_codebase_roots
+                    if str(item).strip()
+                ]
                 investigation_env_default = (
                     str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "0") or "0").strip().lower()
                     not in {"0", "false", "no", "off", ""}
@@ -671,6 +680,12 @@ class ProcessTurnAdapter:
                 env_overrides["UA_HEARTBEAT_INVESTIGATION_ONLY"] = (
                     "1" if heartbeat_investigation_only else "0"
                 )
+                if codebase_root:
+                    env_overrides["CURRENT_CODEBASE_ROOT"] = codebase_root
+                if allowed_codebase_roots:
+                    env_overrides["CURRENT_ALLOWED_CODEBASE_ROOTS"] = os.pathsep.join(
+                        allowed_codebase_roots
+                    )
 
                 system_events = self.config.__dict__.get("_system_events")
                 _events_tmp_path: Optional[str] = None

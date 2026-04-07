@@ -16,6 +16,9 @@ The most important rule is:
 - local workspaces and local artifacts are the canonical storage roots for the current running node
 - mirrored VPS storage is a debugging and inspection surface, not the source of truth for active local runtime execution
 
+Additional current rule for coding sessions:
+- approved repo roots are a separate execution surface from run workspaces; source edits may target an approved `codebase_root`, but scratch files, logs, checkpoints, and generated outputs still belong in the run workspace or artifacts root
+
 ## Current Canonical Storage Roots
 
 Primary implementation:
@@ -72,6 +75,25 @@ Important storage rule:
 - `tasks/<task_name>/...` is the canonical home for task-specific research artifacts
 - run-root `search_results/` may still exist as a temporary inbox/staging area during execution, but finalized search archives and crawl outputs belong under `tasks/<task_name>/search_results/`
 - path strings such as `/opt/.../run_workspace/tasks/foo` must not be normalized into synthetic task names; task identity is resolved separately from workspace identity
+
+### Repo-Backed Coding Sessions
+
+Current coding sessions may expose a second root:
+
+- `CURRENT_CODEBASE_ROOT` -> approved repo root for source edits
+- `CURRENT_ALLOWED_CODEBASE_ROOTS` -> path-separated list of approved repo roots
+
+This does **not** replace the run workspace contract.
+
+- `CURRENT_RUN_WORKSPACE` remains the home for:
+  - `run.log`
+  - `trace.json`
+  - `run_checkpoint.json`
+  - `work_products/`
+  - transient session scratch files
+- `CURRENT_CODEBASE_ROOT` is only for repo-tracked source changes during authorized coding work
+
+The default approved root set is driven by `UA_APPROVED_CODEBASE_ROOTS`, seeded for the VPS repo path `/opt/universal_agent` and optionally known sibling UA checkouts when present.
 
 ### Workspace Identity Patterns
 

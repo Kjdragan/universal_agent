@@ -242,3 +242,28 @@ def resolve_active_run_id(
                     return rid
 
     return None
+
+
+def resolve_active_codebase_root(
+    *,
+    session: Any = None,
+    request_metadata: Optional[dict[str, Any]] = None,
+    assignment: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    """Return the best available codebase root for the current execution."""
+    if assignment:
+        root = str(assignment.get("codebase_root") or "").strip()
+        if root:
+            return root
+
+    if request_metadata:
+        root = str(request_metadata.get("codebase_root") or "").strip()
+        if root:
+            return root
+
+    if session is not None and isinstance(getattr(session, "metadata", None), dict):
+        root = str(session.metadata.get("codebase_root") or "").strip()
+        if root:
+            return root
+
+    return None
