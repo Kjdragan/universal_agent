@@ -120,6 +120,52 @@ Current behavior:
 
 This is an approved use.
 
+## 4. Agent One-Off Proxy Skill (residential-proxy)
+
+Added: 2026-04-07
+
+Implementation:
+- `.agents/skills/residential-proxy/SKILL.md`
+- `.agents/skills/residential-proxy/scripts/get_proxy_url.py`
+- `.agents/skills/residential-proxy/scripts/proxy_fetch.py`
+
+The `residential-proxy` agent skill provides **one-off** access to the Webshare rotating residential proxy for situations where the VPS datacenter IP is blocked by a target site before any content or CAPTCHA is reachable.
+
+This skill:
+- Loads credentials from Infisical via `initialize_runtime_secrets()` (same pattern as `check_webshare_proxy.py`)
+- Prints or returns the full proxy URL for use with any HTTP client, Playwright, or curl
+- Includes a `proxy_fetch.py` convenience script that fetches a URL through the proxy and prints/saves the response
+
+This is an **approved use** with cost-sensitivity rules:
+- Try without proxy first — only escalate when you hit an IP-based block (403, 503, Cloudflare "Access Denied")
+- One-off usage only, no retry loops
+- Small HTML payloads only — never route binary or video downloads through this path
+- 3 GB/month bandwidth cap applies
+
+## 5. CAPTCHA Solver Chaining (captcha-solver + residential-proxy)
+
+Added: 2026-04-07
+
+Implementation:
+- `.agents/skills/captcha-solver/SKILL.md`
+- `.agents/skills/captcha-solver/scripts/solve_with_nopecha.py`
+
+The `captcha-solver` skill uses the NopeCHA browser extension to automatically solve CAPTCHAs (Cloudflare Turnstile, reCAPTCHA, hCaptcha). It now accepts a `--proxy` flag for chaining with the residential proxy:
+
+```bash
+PROXY_URL=$(uv run .agents/skills/residential-proxy/scripts/get_proxy_url.py)
+uv run .agents/skills/captcha-solver/scripts/solve_with_nopecha.py \
+  "<URL>" --proxy "$PROXY_URL" --out-html /tmp/bypassed.html --wait-time 30
+```
+
+Chaining rationale:
+- The residential proxy gets past IP-reputation blocks (datacenter IP rejected before any challenge)
+- The captcha solver handles CAPTCHA challenges that appear after IP validation passes
+- Together they provide maximum bypass capability for stubborn anti-bot sites
+
+> [!IMPORTANT]
+> The captcha solver has a **100 attempts/day** limit (NopeCHA free tier). Use judiciously.
+
 ## Explicitly Disallowed Uses
 
 The residential proxy must **not** be used for:
@@ -127,6 +173,7 @@ The residential proxy must **not** be used for:
 - generic web scraping by default
 - random experimentation against unknown targets without explicit approval
 - expensive bandwidth-heavy data transfer that is not part of an approved path
+- retry loops that could burn through bandwidth (use one-off only)
 
 The reason is both operational and financial:
 - residential proxy traffic costs money
@@ -142,16 +189,19 @@ Approved now:
 - YouTube transcript fetching via VPS proxy when desktop is unavailable
 - YouTube metadata-only extraction paired with transcript workflows
 - approved TGTG use
+- **one-off agent scraping** via the `residential-proxy` skill when a target site blocks the VPS datacenter IP
+- **captcha bypass chaining** via `residential-proxy` → `captcha-solver` when a site blocks by IP AND has a CAPTCHA
 - explicitly user-authorized additional use cases when anti-bot behavior justifies the cost and the user understands the tradeoff
 
 ### Requires Explicit Approval
 
-Any new non-YouTube, non-TGTG use should be considered opt-in and explicitly authorized by the user.
+Any new non-YouTube, non-TGTG, non-one-off use should be considered opt-in and explicitly authorized by the user.
 
 ### Never Allowed by Default
 
 - binary video fetch through proxy
 - broad general scraping through the proxy
+- automated retry loops through the proxy
 
 ## Enforced Guardrails
 
@@ -206,10 +256,10 @@ Alias/fallback env vars seen in code:
 - `WEBSHARE_PROXY_LOCATIONS`
 
 Canonical default Webshare residential endpoint:
-- `proxy.webshare.io:80`
+- `p.webshare.io:80` (rotating residential)
 
 Operational note:
-- `p.webshare.io:80` is a stale default for the residential ingest path and may surface as DNS failures (`NXDOMAIN`).
+- `proxy.webshare.io:80` is a **legacy static-proxy host** and should not be used. If this appears in configuration, update `WEBSHARE_PROXY_HOST` in Infisical to `p.webshare.io`.
 
 Operational env vars:
 - `UA_YOUTUBE_INGEST_REQUIRE_PROXY`
@@ -272,6 +322,17 @@ Primary implementation:
 - `src/universal_agent/gateway_server.py`
 - `src/universal_agent/hooks_service.py`
 - `src/universal_agent/tgtg/config.py`
+
+Agent skill implementation:
+- `.agents/skills/residential-proxy/SKILL.md`
+- `.agents/skills/residential-proxy/scripts/get_proxy_url.py`
+- `.agents/skills/residential-proxy/scripts/proxy_fetch.py`
+- `.agents/skills/captcha-solver/SKILL.md`
+- `.agents/skills/captcha-solver/scripts/solve_with_nopecha.py`
+
+Diagnostic scripts:
+- `scripts/check_webshare_proxy.py`
+- `scripts/check_webshare_proxy_credentials.py`
 
 Related tests and behavior references:
 - `tests/unit/test_youtube_ingest.py`

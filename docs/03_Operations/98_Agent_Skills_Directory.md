@@ -1,6 +1,6 @@
 # Agent Skills Directory (`.agents/skills/`)
 
-Last updated: 2026-04-03
+Last updated: 2026-04-07
 
 ## Purpose
 
@@ -24,6 +24,10 @@ The `.agents/skills/` directory contains reusable agent skills that are separate
     │   └── SKILL.md          # arXiv paper search and analysis
     ├── banana-squad/
     │   └── SKILL.md          # Infographic prompt variation generator
+    ├── captcha-solver/
+    │   ├── SKILL.md          # CAPTCHA bypass via NopeCHA extension
+    │   └── scripts/
+    │       └── solve_with_nopecha.py
     ├── clean-code/
     │   └── SKILL.md          # Clean Code principles from Robert C. Martin
     ├── gemini/
@@ -34,6 +38,11 @@ The `.agents/skills/` directory contains reusable agent skills that are separate
     │   └── SKILL.md          # GitHub CLI integration
     ├── image-generation/
     │   └── SKILL.md          # AI-powered image generation via Gemini
+    ├── residential-proxy/
+    │   ├── SKILL.md          # One-off rotating residential proxy via Webshare
+    │   └── scripts/
+    │       ├── get_proxy_url.py
+    │       └── proxy_fetch.py
     ├── skill-judge/
     │   └── SKILL.md          # Evaluate skill quality against specifications
     ├── systematic-debugging/
@@ -61,6 +70,7 @@ The directory contains 50+ skills spanning categories:
 | **Integration** | `vp-orchestration`, `google_calendar`, `notion`, `trello` |
 | **Data** | `data-fusion`, `financial-extractor`, `pdf` |
 | **Obsidian** | `obsidian-cli`, `obsidian-bases`, `obsidian-markdown`, `obsidian-power-user` |
+| **Anti-Bot Bypass** | `residential-proxy`, `captcha-solver` |
 
 ### Featured Skills
 
@@ -73,6 +83,8 @@ The directory contains 50+ skills spanning categories:
 | `systematic-debugging` | Systematic debugging methodology - always find root cause before proposing fixes |
 | `vp-orchestration` | Operate external primary VP agents through tool-first mission control |
 | `image-generation` | AI-powered image generation and editing using Gemini |
+| `residential-proxy` | One-off rotating residential proxy via Webshare — bypass datacenter IP blocks on target sites |
+| `captcha-solver` | Automated CAPTCHA bypass using NopeCHA browser extension — supports Cloudflare Turnstile, reCAPTCHA, hCaptcha |
 
 ## Usage
 
@@ -97,3 +109,4 @@ ls -1 .agents/skills/
 - Glossary definition: `docs/Glossary.md` (see "Skill" entry)
 - SDK Permissions, Hooks & Subagents: `docs/002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md`
 - Email Architecture: `docs/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md`
+- Residential Proxy Policy: `docs/03_Operations/86_Residential_Proxy_Architecture_And_Usage_Policy_Source_Of_Truth_2026-03-06.md`

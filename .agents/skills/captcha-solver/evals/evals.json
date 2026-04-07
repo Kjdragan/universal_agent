@@ -1,0 +1,17 @@
+{
+  "skill_name": "captcha-solver",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We need to scrape data from https://nopecha.com/demo/cloudflare but normal tools fail. Please extract the text that appears after solving the Turnstile CAPTCHA. Make sure you don't query it multiple times, we only have 100 uses per day.",
+      "expected_output": "The agent should invoke the solve_with_nopecha.py script, read the resulting html output, and capture the text showing completion/success status.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I need the html payload of https://nopecha.com/demo/recaptcha but there is a recaptcha on it. Please get the bypassed HTML.",
+      "expected_output": "The agent uses the captcha-solver skill script explicitly and returns the HTML string from the protected site.",
+      "files": []
+    }
+  ]
+}
