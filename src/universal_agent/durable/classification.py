@@ -215,6 +215,10 @@ KNOWN_MCP_SIDE_EFFECTS = {
     "generate_image": "local",
     "preview_image": "local",
     "core_memory_append": "memory",
+    "wiki_init_vault": "local",
+    "wiki_ingest_external_source": "local",
+    "wiki_sync_internal_memory": "local",
+    "wiki_lint": "local",
 }
 
 KNOWN_MCP_READ_ONLY = {
@@ -225,6 +229,7 @@ KNOWN_MCP_READ_ONLY = {
     "memory_get",
     "describe_image",
     "crawl_parallel",
+    "wiki_query",
 }
 
 

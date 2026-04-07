@@ -607,7 +607,7 @@ class AgentSetup:
                     "live-chrome",
                     "cdp",
                 ],
-                "🔬 Research & Analysis": ["research-specialist", "arxiv-specialist", "trend-specialist", "csi-trend-analyst", "professor", "scribe"],
+                "🔬 Research & Analysis": ["research-specialist", "arxiv-specialist", "trend-specialist", "csi-trend-analyst", "professor", "scribe", "wiki-maintainer"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
                 "⚙️ Engineering & Code": ["task-decomposer", "code-writer", "codeinterpreter", "github"],
                 "🏢 Operations & Communication": [

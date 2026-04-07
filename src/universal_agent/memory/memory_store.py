@@ -153,6 +153,12 @@ def append_memory_entry(
                 preview,
                 entry.content,
             )
+    try:
+        from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+
+        maybe_auto_sync_internal_memory_vault(trigger="append_memory_entry")
+    except Exception:
+        pass
     return paths
 
 

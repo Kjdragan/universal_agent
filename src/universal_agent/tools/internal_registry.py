@@ -69,6 +69,13 @@ from universal_agent.tools.vp_orchestration import (
     vp_read_result_artifacts_wrapper,
     vp_wait_mission_wrapper,
 )
+from universal_agent.tools.wiki_bridge import (
+    wiki_init_vault_wrapper,
+    wiki_ingest_external_source_wrapper,
+    wiki_sync_internal_memory_wrapper,
+    wiki_query_wrapper,
+    wiki_lint_wrapper,
+)
 
 # Live Chrome Bridge (CDP session attachment) — feature-gated
 from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
@@ -113,6 +120,11 @@ def get_core_internal_tools() -> List[Callable]:
         csi_watchlist_snapshot_wrapper,
         task_hub_task_action_wrapper,
         task_hub_decompose_wrapper,
+        wiki_init_vault_wrapper,
+        wiki_ingest_external_source_wrapper,
+        wiki_sync_internal_memory_wrapper,
+        wiki_query_wrapper,
+        wiki_lint_wrapper,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,
         vp_list_missions_wrapper,

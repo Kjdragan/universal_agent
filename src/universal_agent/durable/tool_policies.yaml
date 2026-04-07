@@ -62,3 +62,18 @@ policies:
     replay_policy: REPLAY_EXACT
     patterns:
       - "^Bash$"
+  - name: internal_wiki_query_read_only
+    tool_namespace: internal
+    side_effect_class: read_only
+    replay_policy: REPLAY_IDEMPOTENT
+    patterns:
+      - "^wiki_query$"
+  - name: internal_wiki_local_writes
+    tool_namespace: internal
+    side_effect_class: local
+    replay_policy: REPLAY_IDEMPOTENT
+    patterns:
+      - "^wiki_init_vault$"
+      - "^wiki_ingest_external_source$"
+      - "^wiki_sync_internal_memory$"
+      - "^wiki_lint$"

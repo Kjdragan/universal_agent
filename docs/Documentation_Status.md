@@ -21,6 +21,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |
 | Durable_Execution.md | Resilience features |
 | URW_Orchestration.md | Multi-phase tasks |
+| LLM_Wiki_System.md | **Canonical source of truth** — shared wiki engine, external knowledge vault, derived internal memory vault, runtime surfaces, provenance, and integrity/query workflows |
 
 ## Architecture (01_Architecture/)
 
@@ -74,6 +75,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 104 | Run/Attempt Lifecycle and Nomenclature Migration Plan — canonical migration plan for run/attempt terminology, packet rollout, rollback scope, and CSI boundary handling |
 | 105 | YouTube Tutorial Pipeline Run/Attempt Triage — notification-center audit of the tutorial hook flow after the refactor, plus the closure update that migrated tutorial hooks and cron admission onto durable run/attempt lifecycle handling |
 | 107 | Task Hub and Multi-Channel Execution Master Reference — central code-verified map of ingress channels, To Do execution, run workspaces, specialist delegation, delivery, lifecycle events, and Session Explorer file resolution |
+| 109 | LLM Wiki Implementation Status — living tracker for subsystem progress, blockers, verified tests, and current implementation state |
 | 108 | Gateway Test Hardening And Regression Follow-Up — operational handoff for the April gateway regression pass, including what was fixed, what remains, and how to continue pruning stale tests while development resumes |
 
 ## CSI Subsystem (04_CSI/)

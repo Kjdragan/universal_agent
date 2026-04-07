@@ -2033,6 +2033,7 @@ class AgentHookSet:
             "pdf": ["pdf", "reportlab", "pypdf", "pdfplumber"],
             "docx": ["docx", "python-docx", "word document"],
             "pptx": ["pptx", "python-pptx", "powerpoint", "presentation"],
+            "llm-wiki-orchestration": ["obsidian", "wikilink", "frontmatter", "dataview", "vault", "knowledge base", "memory vault"],
         }
         
         for skill_name, triggers in DOCUMENT_SKILL_TRIGGERS.items():

@@ -46,6 +46,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Task Hub Dashboard](02_Subsystems/Task_Hub_Dashboard.md)**: Frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget behavior, spotlight persistence rules, dispatcher health, forensic task history, and canonical execution visibility.
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
+- **[LLM Wiki System](02_Subsystems/LLM_Wiki_System.md)**: Canonical subsystem reference for the external knowledge vault and derived internal memory vault — architecture, vault contracts, runtime surfaces, provenance, and query/lint behavior.
 
 ### 3. [Flows](02_Flows)
 
@@ -86,6 +87,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[TaskStop Guardrails and Task Hub Execution Hardening (2026-03-31)](03_Operations/106_TaskStop_Guardrails_And_Task_Hub_Execution_Hardening_2026-03-31.md)**: Official explainer for the March 31 hardening work, covering SDK task controls versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and why the unified pipeline is more reliable.
 - **[Task Hub and Multi-Channel Execution Master Reference (2026-03-31)](03_Operations/107_Task_Hub_And_Multi_Channel_Execution_Master_Reference_2026-03-31.md)**: Central code-verified master document for the To Do List tab pipeline and adjacent execution paths — ingress channels, Task Hub lifecycle, run/attempt/workspace structure, specialist delegation, artifact generation, delivery, event lifecycle, and Session Explorer file resolution.
 - **[Gateway Test Hardening And Regression Follow-Up (2026-04-06)](03_Operations/108_Gateway_Test_Hardening_And_Regression_Followup_2026-04-06.md)**: Official follow-up note for the April gateway regression pass — lifecycle repair, startup latency fixes, stale-test cleanup patterns, current stop point, and the explicit resume plan for finishing `tests/gateway`.
+- **[LLM Wiki Implementation Status (2026-04-06)](03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md)**: Living implementation tracker for the LLM wiki subsystem — current phase, completed surfaces, pending work, blockers, and latest verified status.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

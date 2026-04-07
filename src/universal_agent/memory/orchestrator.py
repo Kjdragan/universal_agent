@@ -271,6 +271,13 @@ class MemoryOrchestrator:
         written = self._write_session_entry(entry)
         state[key] = {"size": current_size, "lines": current_lines}
         _safe_write_json(self.session_state_path, state)
+        if written:
+            try:
+                from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+
+                maybe_auto_sync_internal_memory_vault(trigger="sync_session")
+            except Exception:
+                pass
         return {
             "indexed": written,
             "reason": "indexed" if written else "duplicate",
@@ -390,6 +397,12 @@ class MemoryOrchestrator:
                 preview,
                 content,
             )
+        try:
+            from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+
+            maybe_auto_sync_internal_memory_vault(trigger=f"capture_session_rollover:{trigger}")
+        except Exception:
+            pass
         return {
             "captured": True,
             "path": rel_path,

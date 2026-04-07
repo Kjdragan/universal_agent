@@ -405,7 +405,7 @@ def _agent_domain(name: str) -> str:
     lowered = name.lower()
     if any(token in lowered for token in ("agent-browser", "chrome")):
         return "🌐 Browser Operations"
-    if any(token in lowered for token in ("research", "trend", "report", "data-analyst", "evaluation")):
+    if any(token in lowered for token in ("research", "trend", "report", "data-analyst", "evaluation", "wiki")):
         return "🔬 Research & Analysis"
     if any(token in lowered for token in ("image", "video", "mermaid", "youtube", "banana")):
         return "🎨 Creative & Media"
@@ -439,6 +439,7 @@ def build_live_capabilities_snapshot(project_root: Optional[str] = None) -> str:
         "The term 'research' is broad. You must decompose the user's intent and select the appropriate specialist:",
         "- **General Web & News Research**: For finding articles, scraping sites, and building standard knowledge corporas, delegate to `research-specialist`.",
         "- **Audio & Synthesis (NotebookLM)**: If the request involves generating podcasts, audio overviews, slide decks, or deep study guides, delegate to `notebooklm-operator` or use the `notebooklm-orchestration` skill.",
+        "- **Persistent Knowledge / Memory Vaults**: If the request is about long-lived markdown knowledge bases, Obsidian-friendly vaults, or internal memory projection, delegate to `wiki-maintainer` or use the `llm-wiki-orchestration` skill.",
         "- **Video Transcripts (YouTube)**: If the research requires analyzing YouTube content, delegate to `youtube-expert`.",
         "Do not default blindly to one specialist. Chain them if required (e.g., use `research-specialist` to find URLs, then `notebooklm-operator` to synthesize them into a podcast).",
         "",

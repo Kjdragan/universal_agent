@@ -412,3 +412,30 @@ def dynamic_mcp_enabled(default: bool = False) -> bool:
     if _is_truthy(os.getenv("UA_ENABLE_DYNAMIC_MCP")):
         return True
     return default
+
+
+def llm_wiki_internal_projection_enabled(default: bool = True) -> bool:
+    """Enable the internal memory wiki projection feature surface."""
+    if _is_truthy(os.getenv("UA_DISABLE_LLM_WIKI_INTERNAL_PROJECTION")):
+        return False
+    if _is_truthy(os.getenv("UA_LLM_WIKI_ENABLE_INTERNAL_PROJECTION")):
+        return True
+    return default
+
+
+def llm_wiki_external_vault_enabled(default: bool = True) -> bool:
+    """Enable the external knowledge vault feature surface."""
+    if _is_truthy(os.getenv("UA_DISABLE_LLM_WIKI_EXTERNAL_VAULT")):
+        return False
+    if _is_truthy(os.getenv("UA_LLM_WIKI_ENABLE_EXTERNAL_VAULT")):
+        return True
+    return default
+
+
+def llm_wiki_auto_sync_internal(default: bool = False) -> bool:
+    """Automatically refresh the internal memory wiki after canonical memory updates."""
+    if _is_truthy(os.getenv("UA_DISABLE_LLM_WIKI_AUTO_SYNC_INTERNAL")):
+        return False
+    if _is_truthy(os.getenv("UA_LLM_WIKI_AUTO_SYNC_INTERNAL")):
+        return True
+    return default

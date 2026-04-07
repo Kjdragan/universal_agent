@@ -1245,6 +1245,7 @@ DOCUMENT_SKILL_TRIGGERS = {
     "docx": ["docx", "python-docx", "word document"],
     "pptx": ["pptx", "python-pptx", "powerpoint", "presentation"],
     "xlsx": ["xlsx", "openpyxl", "excel", "spreadsheet"],
+    "llm-wiki-orchestration": ["obsidian", "wikilink", "frontmatter", "dataview", "vault", "knowledge base", "memory vault"],
 }
 
 _READ_BLOCK_IMAGE_EXTS = {
@@ -3162,6 +3163,17 @@ SKILL_PROMPT_TRIGGERS_OVERRIDE = {
         ".jpeg",
         ".webp",
     ],
+    "llm-wiki-orchestration": [
+        "wiki",
+        "knowledge vault",
+        "knowledge base",
+        "obsidian",
+        "vault",
+        "wikilink",
+        "memory vault",
+        "internal memory wiki",
+        "external knowledge vault",
+    ],
 }
 
 
@@ -3350,6 +3362,7 @@ SUBAGENT_EXPECTED_SKILLS = {
         "youtube-transcript-metadata",
         "youtube-tutorial-creation",
     ],  # legacy alias
+    "wiki-maintainer": ["llm-wiki-orchestration", "obsidian"],
 }
 
 

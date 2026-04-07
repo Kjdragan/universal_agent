@@ -50,12 +50,15 @@ DOCS_EXCLUDE = {"KEVIN_OTHER_DOCUMENTATION", "__pycache__"}
 # Code areas → likely doc areas mapping
 CODE_TO_DOCS_MAP = {
     "src/universal_agent/tools/": ["03_Operations/", "04_API_Reference/"],
+    "src/universal_agent/wiki/": ["02_Subsystems/LLM_Wiki_System.md", "03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md"],
     "src/universal_agent/gateway_server": ["02_Flows/", "04_API_Reference/"],
     "src/universal_agent/cron_service": ["03_Operations/"],
     ".github/workflows/deploy": ["deployment/", "06_Deployment_And_Environments/"],
     ".agents/": ["AGENTS.md"],
     "src/universal_agent/heartbeat": ["02_Subsystems/Heartbeat_Service.md", "03_Operations/88_"],
     "src/universal_agent/memory": ["02_Subsystems/Memory_System.md"],
+    ".claude/skills/llm-wiki-orchestration/": ["02_Subsystems/LLM_Wiki_System.md", "03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md"],
+    ".claude/agents/wiki-maintainer.md": ["02_Subsystems/LLM_Wiki_System.md", "03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md"],
 }
 
 # Agentic config files that should be updated when agent behavior changes
@@ -651,4 +654,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

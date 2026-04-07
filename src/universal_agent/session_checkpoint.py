@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
 @dataclass
 class SessionCheckpoint:
     """Consolidated session checkpoint for context continuity."""
@@ -394,6 +393,12 @@ class SessionCheckpointGenerator:
         markdown = checkpoint.to_markdown()
         md_path.write_text(markdown)
         (self.workspace_path / self.LEGACY_CHECKPOINT_MARKDOWN_FILENAME).write_text(markdown)
+        try:
+            from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+
+            maybe_auto_sync_internal_memory_vault(trigger="session_checkpoint_save")
+        except Exception:
+            pass
 
         return json_path
 
