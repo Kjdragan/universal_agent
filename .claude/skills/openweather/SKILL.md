@@ -39,9 +39,11 @@ uv run .claude/skills/openweather/scripts/openweather_weather.py current --lat 3
 # Forecast by zip (US example)
 uv run .claude/skills/openweather/scripts/openweather_weather.py forecast --zip 78701 --country US
 
-# JSON output (for downstream processing)
+# JSON output (for downstream processing of current weather)
 uv run .claude/skills/openweather/scripts/openweather_weather.py current --location "London, UK" --json
 ```
+
+**CRITICAL ANTI-PATTERN:** NEVER use the `--json` flag when returning `forecast` data. The 5-day forecast payloads exceed 32KB in JSON and will consistently crash the file reader and context limits. ONLY use the default human-readable mode for forecasts unless you are aggressively piping it through a parser like `jq`.
 
 ## Output Contract (Script)
 
