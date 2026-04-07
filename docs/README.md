@@ -88,6 +88,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Task Hub and Multi-Channel Execution Master Reference (2026-03-31)](03_Operations/107_Task_Hub_And_Multi_Channel_Execution_Master_Reference_2026-03-31.md)**: Central code-verified master document for the To Do List tab pipeline and adjacent execution paths — ingress channels, Task Hub lifecycle, run/attempt/workspace structure, specialist delegation, artifact generation, delivery, event lifecycle, and Session Explorer file resolution.
 - **[Gateway Test Hardening And Regression Follow-Up (2026-04-06)](03_Operations/108_Gateway_Test_Hardening_And_Regression_Followup_2026-04-06.md)**: Official follow-up note for the April gateway regression pass — lifecycle repair, startup latency fixes, stale-test cleanup patterns, current stop point, and the explicit resume plan for finishing `tests/gateway`.
 - **[LLM Wiki Implementation Status (2026-04-06)](03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md)**: Living implementation tracker for the LLM wiki subsystem — current phase, completed surfaces, pending work, blockers, and latest verified status.
+- **[LLM Wiki Smoke Test (2026-04-07)](03_Operations/110_LLM_Wiki_Smoke_Test_2026-04-07.md)**: First manual smoke-test report for the LLM wiki subsystem — external vault success path, internal sync timeout findings, and prioritized hardening opportunities.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

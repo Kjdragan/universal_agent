@@ -76,6 +76,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 105 | YouTube Tutorial Pipeline Run/Attempt Triage — notification-center audit of the tutorial hook flow after the refactor, plus the closure update that migrated tutorial hooks and cron admission onto durable run/attempt lifecycle handling |
 | 107 | Task Hub and Multi-Channel Execution Master Reference — central code-verified map of ingress channels, To Do execution, run workspaces, specialist delegation, delivery, lifecycle events, and Session Explorer file resolution |
 | 109 | LLM Wiki Implementation Status — living tracker for subsystem progress, blockers, verified tests, and current implementation state |
+| 110 | LLM Wiki Smoke Test — first manual smoke-test results, runtime issues, and next hardening targets |
 | 108 | Gateway Test Hardening And Regression Follow-Up — operational handoff for the April gateway regression pass, including what was fixed, what remains, and how to continue pruning stale tests while development resumes |
 
 ## CSI Subsystem (04_CSI/)
