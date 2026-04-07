@@ -31,6 +31,43 @@ async def _wait_for_server(base_url: str, timeout: float = 20.0) -> bool:
     return False
 
 
+def _gateway_subprocess_env(port: int, workspace_root: Path, env_overrides: dict[str, str]) -> dict[str, str]:
+    passthrough_keys = [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+    ]
+    env = {key: value for key, value in os.environ.items() if key in passthrough_keys and value}
+    env.update(
+        {
+            "PYTHONPATH": str(Path(__file__).parent.parent.parent / "src"),
+            "UA_GATEWAY_PORT": str(port),
+            "UA_WORKSPACES_DIR": str(workspace_root),
+            "UA_DEPLOYMENT_PROFILE": "local_workstation",
+            "UA_ENABLE_HEARTBEAT": "1",
+            "UA_HEARTBEAT_INTERVAL": "1",
+            "UA_HEARTBEAT_MIN_INTERVAL_SECONDS": "1",
+            "UA_HEARTBEAT_MOCK_RESPONSE": "1",
+            "UA_DISABLE_CRON": "1",
+            "UA_AGENTMAIL_ENABLED": "0",
+            "UA_YT_PLAYLIST_WATCHER_ENABLED": "0",
+            "UA_ENABLE_GOOGLE_WORKSPACE_EVENTS": "0",
+            "UA_INTERNAL_API_TOKEN": "",
+            "UA_OPS_TOKEN": "",
+            **env_overrides,
+        }
+    )
+    return env
+
+
 async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, instruction: str, timeout: float = 15.0):
     workspace_dir.mkdir(parents=True, exist_ok=True)
     (workspace_dir / "HEARTBEAT.md").write_text(instruction, encoding="utf-8")
@@ -75,15 +112,7 @@ def _run_gateway(env_overrides: dict[str, str], workspace_root: Path):
     port = _get_free_port()
     base_url = f"http://127.0.0.1:{port}"
     ws_url = f"ws://127.0.0.1:{port}"
-    env = {
-        **os.environ,
-        "UA_GATEWAY_PORT": str(port),
-        "UA_WORKSPACES_DIR": str(workspace_root),
-        "UA_ENABLE_HEARTBEAT": "1",
-        "UA_HEARTBEAT_INTERVAL": "1",
-        "UA_HEARTBEAT_MOCK_RESPONSE": "1",
-        **env_overrides,
-    }
+    env = _gateway_subprocess_env(port, workspace_root, env_overrides)
 
     process = subprocess.Popen(
         [sys.executable, "-m", "universal_agent.gateway_server"],

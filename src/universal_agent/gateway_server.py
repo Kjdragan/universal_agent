@@ -306,6 +306,14 @@ _heartbeat_classification_cooldowns: dict[str, float] = {}
 # Email-level cooldown: prevents duplicate operator emails for the same
 # classification within operator_email_cooldown_minutes.
 _heartbeat_operator_email_cooldowns: dict[str, float] = {}
+AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS = max(
+    3600,
+    int(os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS", "86400") or 86400),
+)
+AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS = max(
+    1,
+    int(os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS", "50") or 50),
+)
 
 
 def _normalize_host_label(value: str) -> str:
@@ -6264,20 +6272,35 @@ def _todo_execution_auto_complete_after_final_delivery(
     unresolved: list[dict[str, Any]],
     chat_response_delivered: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    # Simplifying the pipeline: If a session finished execution without crashing,
-    # we assume the pipeline completed successfully and any unresolved tasks 
-    # should be automatically marked as complete.
-    unresolved_task_ids: list[str] = []
-    for snapshot in unresolved:
-        task_id = str(snapshot.get("task_id") or "").strip()
-        if task_id:
-            unresolved_task_ids.append(task_id)
-
+    unresolved_task_ids = [
+        str(snapshot.get("task_id") or "").strip()
+        for snapshot in unresolved
+        if str(snapshot.get("task_id") or "").strip()
+    ]
     if not unresolved_task_ids:
         return goal_satisfaction, unresolved
 
+    auto_complete_candidates: list[dict[str, Any]] = []
+    for snapshot in unresolved:
+        item = snapshot.get("item") if isinstance(snapshot.get("item"), dict) else {}
+        if not item:
+            continue
+        if not _todo_task_has_recorded_final_delivery(conn, snapshot=snapshot):
+            continue
+        # Chat-facing tasks need both a durable outbound delivery marker and
+        # confirmation that this run actually delivered the final response.
+        if _todo_task_expected_final_channel(item) == "chat" and not chat_response_delivered:
+            continue
+        auto_complete_candidates.append(snapshot)
+
+    if not auto_complete_candidates:
+        return goal_satisfaction, unresolved
+
     auto_completed_task_ids: list[str] = []
-    for task_id in unresolved_task_ids:
+    for snapshot in auto_complete_candidates:
+        task_id = str(snapshot.get("task_id") or "").strip()
+        if not task_id:
+            continue
         task_hub.perform_task_action(
             conn,
             task_id=task_id,
@@ -6293,9 +6316,10 @@ def _todo_execution_auto_complete_after_final_delivery(
     ]
 
     goal_satisfaction = dict(goal_satisfaction)
-    goal_satisfaction["passed"] = True
-    goal_satisfaction["stage_status"] = "completed"
-    goal_satisfaction["terminal"] = True
+    if not remaining_unresolved:
+        goal_satisfaction["passed"] = True
+        goal_satisfaction["stage_status"] = "completed"
+        goal_satisfaction["terminal"] = True
     
     observed = goal_satisfaction.get("observed") if isinstance(goal_satisfaction.get("observed"), dict) else {}
     observed_payload = dict(observed)
@@ -7642,6 +7666,57 @@ def _maybe_trigger_heartbeat_from_agentmail_action(action_payload: dict[str, Any
         thread_id=thread_id,
         message_id=message_id,
     )
+
+
+async def _startup_recover_interrupted_youtube_sessions(workspaces_dir: Path) -> None:
+    try:
+        recovered = await _hooks_service.recover_interrupted_youtube_sessions(workspaces_dir)
+    except Exception:
+        logger.exception("Failed recovering interrupted youtube hook sessions on startup")
+    else:
+        if recovered > 0:
+            logger.warning("🔁 Recovered %d interrupted youtube hook session(s) on startup", recovered)
+        else:
+            logger.info("🔁 No interrupted youtube hook sessions required recovery")
+
+
+async def _startup_start_youtube_playlist_watcher() -> None:
+    if _yt_playlist_watcher is None:
+        return
+    try:
+        await _yt_playlist_watcher.start()
+    except Exception:
+        logger.exception("Failed starting YouTube playlist watcher")
+
+
+async def _startup_start_gws_event_listener() -> None:
+    if _gws_event_listener is None:
+        return
+    try:
+        await _gws_event_listener.start()
+    except Exception:
+        logger.exception("Failed starting gws event listener")
+
+
+async def _startup_start_agentmail_service() -> None:
+    if _agentmail_service is None:
+        return
+    try:
+        await _agentmail_service.startup()
+    except Exception:
+        logger.exception("Failed starting AgentMail service")
+        return
+
+    try:
+        _email_recovery_stats = await _agentmail_service.recover_abandoned_sessions()
+        if any(v > 0 for v in _email_recovery_stats.values()):
+            logger.warning(
+                "📧🔄 Email queue startup recovery: %s", _email_recovery_stats
+            )
+        else:
+            logger.info("📧🔄 No email queue items required startup recovery")
+    except Exception:
+        logger.exception("Email queue startup recovery failed (non-fatal)")
 
 
 def _heartbeat_has_meaningful_activity(payload: dict, classification: dict) -> bool:
@@ -13453,7 +13528,7 @@ async def lifespan(app: FastAPI):
         dispatch_fn=_yt_watcher_dispatch_fn,
         notification_sink=_hook_notification_sink,
     )
-    await _yt_playlist_watcher.start()
+    _spawn_background_task(_startup_start_youtube_playlist_watcher())
 
     # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
     async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
@@ -13467,7 +13542,7 @@ async def lifespan(app: FastAPI):
         dispatch_fn=_gws_event_dispatch_fn,
         notification_sink=_hook_notification_sink,
     )
-    await _gws_event_listener.start()
+    _spawn_background_task(_startup_start_gws_event_listener())
 
     # --- AgentMail Service (Simone's native inbox) ---
     global _agentmail_service
@@ -13642,32 +13717,9 @@ async def lifespan(app: FastAPI):
         trusted_ingress_fn=_maybe_trigger_heartbeat_from_agentmail_action,
         priority_dispatch_fn=_priority_dispatch_for_email,
     )
-    try:
-        await _agentmail_service.startup()
-    except Exception:
-        logger.exception("Failed starting AgentMail service")
+    _spawn_background_task(_startup_start_agentmail_service())
 
-    # Recover email queue items orphaned by a previous gateway restart
-    try:
-        _email_recovery_stats = await _agentmail_service.recover_abandoned_sessions()
-        if any(v > 0 for v in _email_recovery_stats.values()):
-            logger.warning(
-                "📧🔄 Email queue startup recovery: %s", _email_recovery_stats
-            )
-        else:
-            logger.info("📧🔄 No email queue items required startup recovery")
-    except Exception:
-        logger.exception("Email queue startup recovery failed (non-fatal)")
-
-    try:
-        recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
-    except Exception:
-        logger.exception("Failed recovering interrupted youtube hook sessions on startup")
-    else:
-        if recovered > 0:
-            logger.warning("🔁 Recovered %d interrupted youtube hook session(s) on startup", recovered)
-        else:
-            logger.info("🔁 No interrupted youtube hook sessions required recovery")
+    _spawn_background_task(_startup_recover_interrupted_youtube_sessions(WORKSPACES_DIR))
 
     if _scheduling_projection.enabled:
         _scheduling_projection.seed_from_runtime()
@@ -19593,7 +19645,7 @@ async def dashboard_events(
             "has_more": has_more,
         }
 
-    fallback: list[dict[str, Any]] = []
+    fallback_all: list[dict[str, Any]] = []
     for item in reversed(_notifications):
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         if pinned is not None and bool(metadata.get("pinned")) != bool(pinned):
@@ -19604,7 +19656,7 @@ async def dashboard_events(
             session_id=str(item.get("session_id") or "") or None,
             metadata=metadata,
         )
-        fallback.append(
+        fallback_all.append(
             {
                 "id": str(item.get("id") or ""),
                 "event_class": "notification",
@@ -19631,9 +19683,37 @@ async def dashboard_events(
                 "metadata": metadata,
             }
         )
-        if len(fallback) >= limit:
-            break
-    return {"events": fallback, "source": "in_memory", "next_cursor": None, "has_more": False}
+
+    cursor_parts = _activity_cursor_decode(cursor)
+    if cursor_parts is not None:
+        cursor_created, cursor_id = cursor_parts
+        fallback_all = [
+            item
+            for item in fallback_all
+            if (
+                str(item.get("created_at_utc") or "") < cursor_created
+                or (
+                    str(item.get("created_at_utc") or "") == cursor_created
+                    and str(item.get("id") or "") < cursor_id
+                )
+            )
+        ]
+
+    has_more = len(fallback_all) > limit
+    fallback = fallback_all[:limit]
+    next_cursor = None
+    if has_more and fallback:
+        tail = fallback[-1]
+        next_cursor = _activity_cursor_encode(
+            str(tail.get("created_at_utc") or ""),
+            str(tail.get("id") or ""),
+        )
+    return {
+        "events": fallback,
+        "source": "in_memory",
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
 
 @app.get("/api/v1/dashboard/events/stream")

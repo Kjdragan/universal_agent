@@ -422,7 +422,15 @@ Lifecycle actions can still be explicitly triggered by the agent via `perform_ta
 
 ### 13.1 Enforcement and Auto-Completion
 
-If a `todo_execution` run finishes execution naturally (without runtime crashes or hard application exceptions), `_todo_execution_auto_complete_after_final_delivery(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py) executes unconditionally. It safely issues a `complete` action for every unresolved task claimed by the given session.
+If a `todo_execution` run ends without an explicit lifecycle mutation, `_todo_execution_auto_complete_after_final_delivery(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py) is only allowed to repair the task when final delivery already happened and is durably recorded. It does **not** auto-complete unresolved tasks unconditionally.
+
+Current repair rule:
+
+- chat-facing work may auto-complete only after both:
+  - the runtime marked the final chat response as delivered for this run, and
+  - Task Hub has a durable outbound-delivery record for the claimed task
+- email/report-style work may auto-complete only after Task Hub has a durable final-delivery side effect on the task
+- if no verified final delivery exists, lifecycle enforcement fails and the task is reopened or routed to review instead of being silently marked complete
 
 Only if the run suffers a critical abort or timeout does the pipeline fallback state apply:
 

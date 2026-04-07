@@ -177,6 +177,48 @@ def _parse_natural_run_at(value: str, now_dt: datetime) -> float | None:
     return candidate.timestamp()
 
 
+def _parse_run_at_duration_seconds(raw: str) -> int:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return 0
+    if text.startswith("in "):
+        text = text[3:].strip()
+
+    compact = re.match(r"^(\d+)\s*([smhdw])$", text)
+    if compact:
+        amount = int(compact.group(1))
+        unit = compact.group(2)
+        multipliers = {
+            "s": 1,
+            "m": 60,
+            "h": 3600,
+            "d": 86400,
+            "w": 604800,
+        }
+        return amount * multipliers[unit]
+
+    spaced = re.match(
+        r"^(\d+)\s*(second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)$",
+        text,
+    )
+    if not spaced:
+        return 0
+
+    amount = int(spaced.group(1))
+    unit = spaced.group(2)
+    if unit.startswith(("second", "sec")):
+        return amount
+    if unit.startswith(("minute", "min")):
+        return amount * 60
+    if unit.startswith(("hour", "hr")):
+        return amount * 3600
+    if unit.startswith("day"):
+        return amount * 86400
+    if unit.startswith("week"):
+        return amount * 604800
+    return 0
+
+
 def parse_run_at(
     value: str | float | None,
     now: float | None = None,
@@ -205,11 +247,17 @@ def parse_run_at(
     tz = _resolve_run_at_timezone(timezone_name)
     now_ts = now if now is not None else time.time()
     now_dt = datetime.fromtimestamp(now_ts, tz)
-    
+
+    natural_time_hint = (
+        _parse_time_of_day(value) is not None
+        or value.lower().startswith(("tomorrow", "today", "tonight", "at "))
+    )
+
     # Try relative duration first (e.g., "20m", "2h")
-    duration = _parse_duration_seconds(value, 0)
-    if duration > 0:
-        return now_ts + duration
+    if not natural_time_hint:
+        duration = _parse_run_at_duration_seconds(value)
+        if duration > 0:
+            return now_ts + duration
 
     # Unix timestamp as string
     if re.match(r"^\d{9,}(?:\.\d+)?$", value):

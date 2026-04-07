@@ -227,6 +227,9 @@ _STRIP_PREFIXES = (
     "LESS_TERMCAP_",
 )
 
+# Backward-compatible alias kept for existing tests and internal references.
+_ENV_STRIP_CANDIDATES = tuple(sorted(_STRIP_EXACT))
+
 # Safety cap: if total env exceeds this, fall back to aggressive stripping.
 _ENV_SAFE_THRESHOLD_BYTES = 1_500_000  # 1.5 MB
 
@@ -635,12 +638,27 @@ class ProcessTurnAdapter:
                 from universal_agent.execution_session import ExecutionSession
                 from universal_agent.main import process_turn
                 import universal_agent.main as main_module
+                from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+                from universal_agent.durable.migrations import ensure_schema
+
+                runtime_db_conn = getattr(main_module, "runtime_db_conn", None)
+                needs_runtime_db_reset = runtime_db_conn is None
+                if runtime_db_conn is not None:
+                    try:
+                        runtime_db_conn.execute("SELECT 1")
+                    except Exception:
+                        needs_runtime_db_reset = True
+
+                if needs_runtime_db_reset:
+                    runtime_db_conn = connect_runtime_db(get_runtime_db_path())
+                    ensure_schema(runtime_db_conn)
+                    setattr(main_module, "runtime_db_conn", runtime_db_conn)
 
                 execution_session = ExecutionSession(
                     workspace_dir=self.config.workspace_dir,
                     run_id=self.config.run_id,
                     trace=self._trace,
-                    runtime_db_conn=getattr(main_module, "runtime_db_conn", None),
+                    runtime_db_conn=runtime_db_conn,
                 )
                 memory_policy = self.config.__dict__.get("_memory_policy")
                 env_overrides = _build_memory_env_overrides(

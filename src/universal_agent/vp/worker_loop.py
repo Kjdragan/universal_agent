@@ -194,6 +194,7 @@ class VpWorkerLoop:
             max_concurrent_missions or vp_max_concurrent_missions(default=1)
         )
         self._stopped = asyncio.Event()
+        self._client: Optional[VpClient] = None
         self._default_client = self._create_client()
 
     def stop(self) -> None:
@@ -521,6 +522,8 @@ class VpWorkerLoop:
 
     def _select_client_for_mission(self, mission: Any) -> VpClient:
         """Select SDK or CLI client based on mission payload's execution_mode."""
+        if self._client is not None:
+            return self._client
         payload_json = mission["payload_json"] if "payload_json" in mission.keys() else None
         if isinstance(payload_json, str) and payload_json.strip():
             try:

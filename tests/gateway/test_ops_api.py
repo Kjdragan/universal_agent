@@ -1019,8 +1019,13 @@ def test_ops_agentmail_delete_draft_uses_optional_inbox_and_discards(client, mon
 
 def test_dashboard_activity_actions_are_audited(client, monkeypatch):
     class _HookDispatchStub:
-        async def dispatch_internal_action(self, action_payload: dict):
-            return True, "agent"
+        async def dispatch_internal_action_background_with_admission(self, action_payload: dict):
+            return {
+                "decision": "accepted",
+                "reason": "agent",
+                "run_id": "run_simone_123",
+                "attempt_id": "attempt_simone_1",
+            }
 
     monkeypatch.setattr(gateway_server, "_hooks_service", _HookDispatchStub())
     record = gateway_server._add_notification(
@@ -3335,9 +3340,9 @@ def test_ops_session_continuity_metrics_alerts(client):
     gateway_server._increment_metric("resume_attempts", 10)
     gateway_server._increment_metric("resume_successes", 6)
     gateway_server._increment_metric("resume_failures", 4)
-    gateway_server._increment_metric("ws_attach_attempts", 5)
+    gateway_server._increment_metric("ws_attach_attempts", 10)
     gateway_server._increment_metric("ws_attach_successes", 2)
-    gateway_server._increment_metric("ws_attach_failures", 3)
+    gateway_server._increment_metric("ws_attach_failures", 8)
 
     resp = client.get("/api/v1/ops/metrics/session-continuity")
     assert resp.status_code == 200

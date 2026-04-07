@@ -600,6 +600,141 @@ def test_todo_execution_auto_completes_interactive_chat_task_after_final_chat_de
     assert assignment["ended_at"]
 
 
+def test_todo_execution_does_not_auto_complete_chat_task_without_durable_delivery_record(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path, session_id="session_chat_missing_delivery")
+
+    with _db_connect(db_path) as conn:
+        _seed_tracked_chat_task(
+            conn,
+            task_id="chat:session_chat_missing_delivery:turn_001",
+            title="Summarize the latest session activity",
+            source_ref=session.session_id,
+            description="Summarize the latest session activity directly in chat.",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id=f"todo:{session.session_id}",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_id = history[0]["assignment_id"]
+
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Summarize the latest session activity directly in chat."),
+        run_kind="todo_execution",
+    )
+
+    result = gateway_server._enforce_todo_execution_lifecycle(
+        session=session,
+        request=GatewayRequest(
+            user_input="Summarize the latest session activity directly in chat.",
+            metadata={
+                "source": "chat_panel",
+                "run_kind": "todo_execution",
+                "claimed_task_ids": ["chat:session_chat_missing_delivery:turn_001"],
+                "claimed_assignment_ids": [assignment_id],
+                "todo_final_response_delivered": True,
+            },
+        ),
+        mission_tracker=tracker,
+        goal_satisfaction=tracker.evaluate(),
+    )
+
+    with _db_connect(db_path) as conn:
+        item = task_hub.get_item(conn, "chat:session_chat_missing_delivery:turn_001")
+        assignment = conn.execute(
+            "SELECT state, ended_at, result_summary FROM task_hub_assignments WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+
+    assert result["passed"] is False
+    assert result["missing"][0]["requirement"] == "lifecycle_mutation"
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_OPEN
+    assert item["seizure_state"] == "unseized"
+    assert assignment["state"] == "failed"
+    assert assignment["ended_at"]
+
+
+def test_todo_execution_only_auto_completes_tasks_with_verified_delivery(monkeypatch, tmp_path):
+    db_path = _wire_runtime(monkeypatch, tmp_path)
+    session, _workspace = _make_session(tmp_path, session_id="session_chat_partial_delivery")
+
+    with _db_connect(db_path) as conn:
+        _seed_tracked_chat_task(
+            conn,
+            task_id="chat:session_chat_partial_delivery:turn_001",
+            title="Delivered chat answer",
+            source_ref=session.session_id,
+            description="Summarize the latest session activity directly in chat.",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        _seed_tracked_chat_task(
+            conn,
+            task_id="chat:session_chat_partial_delivery:turn_002",
+            title="Undelivered chat answer",
+            source_ref=session.session_id,
+            description="Summarize the latest session activity directly in chat.",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        history = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=2,
+            agent_id=f"todo:{session.session_id}",
+            provider_session_id=session.session_id,
+            workspace_dir=session.workspace_dir,
+        )
+        assignment_ids = [row["assignment_id"] for row in history]
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="chat:session_chat_partial_delivery:turn_001",
+            channel="chat",
+            message_id="turn_001",
+            sent_at="2026-04-04T13:00:00Z",
+        )
+
+    tracker = MissionGuardrailTracker(
+        build_mission_contract("Summarize the latest session activity directly in chat."),
+        run_kind="todo_execution",
+    )
+
+    result = gateway_server._enforce_todo_execution_lifecycle(
+        session=session,
+        request=GatewayRequest(
+            user_input="Summarize the latest session activity directly in chat.",
+            metadata={
+                "source": "chat_panel",
+                "run_kind": "todo_execution",
+                "claimed_task_ids": [
+                    "chat:session_chat_partial_delivery:turn_001",
+                    "chat:session_chat_partial_delivery:turn_002",
+                ],
+                "claimed_assignment_ids": assignment_ids,
+                "todo_final_response_delivered": True,
+            },
+        ),
+        mission_tracker=tracker,
+        goal_satisfaction=tracker.evaluate(),
+    )
+
+    with _db_connect(db_path) as conn:
+        delivered = task_hub.get_item(conn, "chat:session_chat_partial_delivery:turn_001")
+        undelivered = task_hub.get_item(conn, "chat:session_chat_partial_delivery:turn_002")
+
+    assert result["passed"] is False
+    assert result["missing"][0]["requirement"] == "lifecycle_mutation"
+    assert delivered is not None
+    assert delivered["status"] == task_hub.TASK_STATUS_COMPLETED
+    assert undelivered is not None
+    assert undelivered["status"] == task_hub.TASK_STATUS_OPEN
+
+
 @pytest.mark.asyncio
 async def test_todo_queue_shows_self_reviewed_delivery_as_completed(monkeypatch, tmp_path):
     db_path = _wire_runtime(monkeypatch, tmp_path)

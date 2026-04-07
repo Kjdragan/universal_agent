@@ -6,6 +6,7 @@ import sys
 import time
 
 import aiohttp
+from pathlib import Path
 
 
 def _get_free_port() -> int:
@@ -29,15 +30,40 @@ async def _wait_for_server(base_url: str, timeout: float = 20.0) -> bool:
     return False
 
 
+def _gateway_subprocess_env(port: int) -> dict[str, str]:
+    passthrough_keys = [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+    ]
+    env = {key: value for key, value in os.environ.items() if key in passthrough_keys and value}
+    env.update(
+        {
+            "PYTHONPATH": str(Path(__file__).parent.parent.parent / "src"),
+            "UA_GATEWAY_PORT": str(port),
+            "UA_ENABLE_CRON": "1",
+            "UA_CRON_MOCK_RESPONSE": "1",
+            "UA_DISABLE_HEARTBEAT": "1",
+            "UA_AGENTMAIL_ENABLED": "0",
+            "UA_YT_PLAYLIST_WATCHER_ENABLED": "0",
+            "UA_ENABLE_GOOGLE_WORKSPACE_EVENTS": "0",
+        }
+    )
+    return env
+
+
 def test_cron_auto_run():
     port = _get_free_port()
     base_url = f"http://127.0.0.1:{port}"
-    env = {
-        **os.environ,
-        "UA_GATEWAY_PORT": str(port),
-        "UA_ENABLE_CRON": "1",
-        "UA_CRON_MOCK_RESPONSE": "1",
-    }
+    env = _gateway_subprocess_env(port)
 
     process = subprocess.Popen(
         [sys.executable, "-m", "universal_agent.gateway_server"],
@@ -84,12 +110,7 @@ def test_cron_auto_run():
 def test_cron_one_shot_runs_and_deletes():
     port = _get_free_port()
     base_url = f"http://127.0.0.1:{port}"
-    env = {
-        **os.environ,
-        "UA_GATEWAY_PORT": str(port),
-        "UA_ENABLE_CRON": "1",
-        "UA_CRON_MOCK_RESPONSE": "1",
-    }
+    env = _gateway_subprocess_env(port)
 
     process = subprocess.Popen(
         [sys.executable, "-m", "universal_agent.gateway_server"],

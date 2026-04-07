@@ -1217,10 +1217,6 @@ class HeartbeatService:
 
     def register_session(self, session: GatewaySession):
         logger.info(f"Registering session {session.session_id} for heartbeat")
-        # Tag the session as source=heartbeat so the gateway reaper applies
-        # the correct (short) TTL for admin sessions.
-        if isinstance(session.metadata, dict):
-            session.metadata.setdefault("source", "heartbeat")
         self.active_sessions[session.session_id] = session
 
     def unregister_session(self, session_id: str):
@@ -1359,10 +1355,20 @@ class HeartbeatService:
     # heartbeats on them wastes LLM tokens and produces false-alarm timeout
     # notifications.
     _HEARTBEAT_EXCLUDED_PREFIXES = (
-        "session_hook_yt_",       # YouTube tutorial processing
-        "session_hook_simone_",   # Simone webhook listener
-        "session_hook_agentmail_",  # AgentMail listener
+        "session_hook_yt_",          # YouTube tutorial processing
+        "session_hook_agentmail_",   # AgentMail listener
     )
+
+    @staticmethod
+    def _session_is_heartbeat_excluded(session_id: str) -> bool:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return False
+        if sid.startswith("session_hook_simone_heartbeat_"):
+            return False
+        if sid.startswith("session_hook_simone_"):
+            return True
+        return sid.startswith(HeartbeatService._HEARTBEAT_EXCLUDED_PREFIXES)
 
     async def _process_session(self, session: GatewaySession):
         """Check if a session needs a heartbeat run."""
@@ -1371,7 +1377,7 @@ class HeartbeatService:
             return
 
         # Ephemeral hook sessions are fire-and-forget; skip heartbeat entirely.
-        if session.session_id.startswith(self._HEARTBEAT_EXCLUDED_PREFIXES):
+        if self._session_is_heartbeat_excluded(session.session_id):
             return
 
         # Load state

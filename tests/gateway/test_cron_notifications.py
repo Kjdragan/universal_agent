@@ -5,6 +5,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from universal_agent import gateway_server
 from universal_agent.gateway import GatewaySessionSummary
 from universal_agent.cron_service import CronRunRecord, CronService
@@ -14,6 +16,21 @@ from universal_agent.gateway import GatewaySession
 class _StubGateway:
     async def create_session(self, user_id: str, workspace_dir: str):
         return SimpleNamespace(user_id=user_id, workspace_dir=workspace_dir)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gateway_notification_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    monkeypatch.setattr(gateway_server, "_cron_service", None)
+    monkeypatch.setattr(
+        gateway_server,
+        "_agentmail_heartbeat_wake_seen_ids",
+        gateway_server.deque(maxlen=1024),
+    )
+    monkeypatch.setattr(gateway_server, "_agentmail_heartbeat_wake_seen_set", set())
 
 
 def test_autonomous_cron_to_heartbeat_enabled_defaults_off(monkeypatch):
@@ -426,7 +443,9 @@ def test_emit_heartbeat_event_accepts_legacy_findings_filename(tmp_path: Path, m
     assert heartbeat["metadata"]["heartbeat_findings"]["findings"][0]["finding_id"] == "gateway_errors_elevated"
 
 
-def test_agentmail_trusted_heartbeat_request_queues_wake(monkeypatch):
+def test_agentmail_trusted_heartbeat_request_queues_wake(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+
     class _HeartbeatStub:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str]] = []
@@ -510,7 +529,9 @@ def test_agentmail_heartbeat_request_requires_trusted_sender(monkeypatch):
     assert result["reason"] == "not_requested"
 
 
-def test_agentmail_heartbeat_request_dedupes_by_message_id(monkeypatch):
+def test_agentmail_heartbeat_request_dedupes_by_message_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+
     class _HeartbeatStub:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str]] = []

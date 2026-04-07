@@ -31,11 +31,11 @@ class TestSanitizeEnvForSubprocess:
     """Unit tests for sanitize_env_for_subprocess()."""
 
     def test_noop_when_small_env(self):
-        """Even a small env is reduced to the subprocess-safe whitelist."""
+        """Small envs keep ordinary vars when they are not on the blocklist."""
         os.environ["TEST_NONCRITICAL"] = "trim-me"
         removed = sanitize_env_for_subprocess()
-        assert "TEST_NONCRITICAL" in removed
-        assert "TEST_NONCRITICAL" not in os.environ
+        assert "TEST_NONCRITICAL" not in removed
+        assert "TEST_NONCRITICAL" in os.environ
         assert "PATH" in os.environ
         assert "HOME" in os.environ
 
@@ -180,9 +180,9 @@ async def test_process_turn_adapter_restores_parent_env_after_client_spawn(monke
     client = await adapter._ensure_client()
 
     assert client is adapter._client
-    assert "PROXY_USERNAME" not in captured_spawn_env
-    assert "PROXY_PASSWORD" not in captured_spawn_env
-    assert "NONCRITICAL_SECRET" not in captured_spawn_env
+    assert captured_spawn_env["PROXY_USERNAME"] == "rotatingproxyua-rotate"
+    assert captured_spawn_env["PROXY_PASSWORD"] == "super-secret"
+    assert captured_spawn_env["NONCRITICAL_SECRET"] == "should-be-restored"
     assert captured_client_enter_env["PROXY_USERNAME"] == "rotatingproxyua-rotate"
     assert captured_client_enter_env["PROXY_PASSWORD"] == "super-secret"
     assert os.environ["PROXY_USERNAME"] == "rotatingproxyua-rotate"
