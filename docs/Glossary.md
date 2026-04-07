@@ -10,9 +10,11 @@
 | **CSI (Creator Signal Intelligence)** | The ingestion subsystem that monitors, fetches, and processes creator signals from external sources (YouTube RSS, Reddit, X/Twitter trends) for trend analysis and opportunity detection. |
 | **Durable Execution** | The system's ability to survive restarts and crashes by persisting state and resuming from checkpoints. |
 | **Execution Session** | The temporary live provider/runtime process attached to an active attempt. This is the correct place to use the word `session` for runtime execution. |
+| **External Knowledge Vault** | A canonical markdown wiki for outside sources, part of the LLM Wiki System. Raw sources are immutable; the wiki is the maintained synthesis layer. See LLM Wiki System documentation. |
 | **Gateway** | A communication adapter that mediates between an interface (Telegram, CLI, Web) and the agent. |
 | **Heartbeat** | An autonomic loop that triggers periodic agent "thinking" turns without user input. |
 | **Heartbeat Environment Context** | A factory-aware context string injected into heartbeat prompts that tells the agent: (1) which machine/factory it's running on (`UA_MACHINE_SLUG`, `FACTORY_ROLE`), (2) the current run workspace path, (3) to run commands locally (not SSH), (4) to use `mcp__internal__write_text_file` for file writes, and (5) to consolidate health checks into single compound commands. |
+| **Internal Memory Vault** | A derived markdown wiki built from existing canonical memory, session, checkpoint, and run evidence. Supplements recall and continuity without replacing runtime state. Part of the LLM Wiki System. |
 | **MCP (Model Context Protocol)** | The protocol used to expose local and remote tools to the Claude Agent SDK. |
 | **OK Token** | A special string (e.g., `HEARTBEAT_OK`) used by the agent to indicate it has completed its background work. |
 | **Run** | The durable logical unit of work. A run may have one or more attempts and one durable run workspace. |
