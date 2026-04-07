@@ -1,0 +1,521 @@
+{
+  "report_date": "2026-04-07",
+  "openclaw_release": "v2026.4.5",
+  "total_features_analyzed": 47,
+  "relevance_summary": {
+    "high": 8,
+    "medium": 15,
+    "low": 12,
+    "not_applicable": 12
+  },
+  "features": [
+    {
+      "name": "Legacy Config Removal & Migration",
+      "category": "Configuration",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/identity/config_loader.py",
+      "openclaw_references": ["config/schema.ts", "doctor/fix.ts"],
+      "gap_analysis": "We have basic config loading with .env and YAML. This adds breaking change management, migration support, and doctor --fix tooling.",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "name": "Config Schema JSON Enrichment",
+      "category": "Configuration",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/identity/config_schema.py",
+      "openclaw_references": ["config/schema-export.ts"],
+      "gap_analysis": "We have basic config validation via Pydantic. This adds field titles, descriptions, and editor integration.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "name": "Raw Config View Preservation",
+      "category": "Configuration",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/identity/config_snapshot.py",
+      "openclaw_references": ["config/snapshot.ts"],
+      "gap_analysis": "We have config loading. This adds snapshot integrity when sensitive fields are blank.",
+      "effort": "S",
+      "priority": 5
+    },
+    {
+      "name": "Built-in Video Generation Tool",
+      "category": "Agent Runtime",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/tools/ (new tool needed)",
+      "openclaw_references": ["tools/video_generate.ts", "providers/video/*.ts"],
+      "gap_analysis": "We have no native video generation. This adds video_generate tool with provider abstraction (xAI, Alibaba, Runway).",
+      "effort": "L",
+      "priority": 2
+    },
+    {
+      "name": "Built-in Music Generation Tool",
+      "category": "Agent Runtime",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/tools/ (new tool needed)",
+      "openclaw_references": ["tools/music_generate.ts", "providers/music/*.ts"],
+      "gap_analysis": "We have no native music generation. This adds music_generate tool with Google Lyria, MiniMax, Comfy workflow support.",
+      "effort": "L",
+      "priority": 2
+    },
+    {
+      "name": "Claude CLI MCP Bridge",
+      "category": "Agent Runtime",
+      "relevance": "MEDIUM",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/vp/ (VP system)",
+      "openclaw_references": ["agents/claude-cli/loopback-mcp.ts"],
+      "gap_analysis": "We have VP agent delegation. This adds loopback MCP bridge for exposing tools to Claude CLI runs.",
+      "effort": "M",
+      "priority": 5
+    },
+    {
+      "name": "Structured Progress Events",
+      "category": "Agent Runtime",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/execution_engine.py",
+      "openclaw_references": ["agents/progress.ts"],
+      "gap_analysis": "We have basic execution tracking. This adds structured plan updates and execution item events for UI.",
+      "effort": "M",
+      "priority": 4
+    },
+    {
+      "name": "Prompt Cache Diagnostics",
+      "category": "Agent Runtime",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/execution_engine.py",
+      "openclaw_references": ["agents/cache-diagnostics.ts"],
+      "gap_analysis": "We have basic caching. This adds cache break diagnostics and reuse visibility in status.",
+      "effort": "S",
+      "priority": 5
+    },
+    {
+      "name": "ComfyUI Workflow Plugin",
+      "category": "Providers",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/tools/ (new integration)",
+      "openclaw_references": ["providers/comfy/plugin.ts", "providers/comfy/workflows/"],
+      "gap_analysis": "We have no ComfyUI integration. This adds local ComfyUI + Comfy Cloud workflow support for image/video/music.",
+      "effort": "L",
+      "priority": 3
+    },
+    {
+      "name": "New Provider Bundles (Qwen, Fireworks, StepFun)",
+      "category": "Providers",
+      "relevance": "MEDIUM",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/identity/provider_router.py",
+      "openclaw_references": ["providers/qwen/", "providers/fireworks/", "providers/stepfun/"],
+      "gap_analysis": "We have basic provider routing. This adds bundled provider configs for Qwen, Fireworks, StepFun.",
+      "effort": "S",
+      "priority": 5
+    },
+    {
+      "name": "Amazon Bedrock Mantle Support",
+      "category": "Providers",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/identity/provider_router.py",
+      "openclaw_references": ["providers/bedrock/mantle.ts"],
+      "gap_analysis": "We have no Bedrock integration. This adds Mantle support, inference-profile discovery, and auto region injection.",
+      "effort": "M",
+      "priority": 5
+    },
+    {
+      "name": "Provider Request Overrides",
+      "category": "Providers",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/identity/provider_router.py",
+      "openclaw_references": ["providers/request-overrides.ts"],
+      "gap_analysis": "We have basic provider config. This adds headers, auth, proxy, TLS controls across OpenAI/Anthropic/Google paths.",
+      "effort": "M",
+      "priority": 1
+    },
+    {
+      "name": "Claude CLI Security Hardening",
+      "category": "Security",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/vp/ (if we shell to Claude CLI)",
+      "openclaw_references": ["agents/claude-cli/security.ts"],
+      "gap_analysis": "We have basic VP isolation. This adds clearing inherited env overrides and preventing config-root/plugin-root attacks.",
+      "effort": "S",
+      "priority": 1
+    },
+    {
+      "name": "Plugin Tool Allowlist Enforcement",
+      "category": "Security",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/guardrails/",
+      "openclaw_references": ["security/allowlist.ts"],
+      "gap_analysis": "We have basic tool filtering. This adds plugin-only allowlists and owner access for allowlist management.",
+      "effort": "S",
+      "priority": 3
+    },
+    {
+      "name": "Gateway Auth Throttling",
+      "category": "Security",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/gateway.py",
+      "openclaw_references": ["gateway/auth-throttle.ts"],
+      "gap_analysis": "We have basic gateway auth. This adds origin-scoped auth throttling.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "name": "Memory Dreaming System",
+      "category": "Memory & Search",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/memory/",
+      "openclaw_references": ["memory/dreaming/", "commands/dreaming.ts"],
+      "gap_analysis": "We have basic memory storage. This adds three-phase dreaming (light, deep, REM), weighted recall promotion, and dreams.md.",
+      "effort": "XL",
+      "priority": 2
+    },
+    {
+      "name": "Memory Aging Controls",
+      "category": "Memory & Search",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/memory/",
+      "openclaw_references": ["memory/dreaming/aging.ts"],
+      "gap_analysis": "We have no aging controls. This adds recencyHalfLifeDays, maxAgeDays, and verbose logging.",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "name": "Amazon Bedrock Embeddings",
+      "category": "Memory & Search",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "src/universal_agent/memory/",
+      "openclaw_references": ["memory/embeddings/bedrock.ts"],
+      "gap_analysis": "We have basic embeddings. This adds Bedrock-specific embeddings (Titan, Cohere, Nova, TwelveLabs).",
+      "effort": "M",
+      "priority": null
+    },
+    {
+      "name": "Embedded ACP Runtime",
+      "category": "ACPX",
+      "relevance": "MEDIUM",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/execution_engine.py",
+      "openclaw_references": ["plugins/acpx/embedded-runtime.ts"],
+      "gap_analysis": "We have no ACP support. This adds embedded ACP runtime and reply_dispatch hook.",
+      "effort": "L",
+      "priority": 5
+    },
+    {
+      "name": "Reply Dispatch Hook",
+      "category": "ACPX",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/hooks.py",
+      "openclaw_references": ["plugins/acpx/reply-dispatch.ts"],
+      "gap_analysis": "We have hook system. This adds generic reply interception hook for bundled plugins.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "name": "Plugin Config TUI Prompts",
+      "category": "Plugin SDK",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/sdk/",
+      "openclaw_references": ["plugins/config-tui.ts"],
+      "gap_analysis": "We have basic plugin config. This adds guided onboarding with TUI prompts.",
+      "effort": "M",
+      "priority": 5
+    },
+    {
+      "name": "Lobster In-Process Execution",
+      "category": "Plugin SDK",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "openclaw_references": ["plugins/lobster/in-process.ts"],
+      "gap_analysis": "We have no Lobster integration. This adds in-process Lobster workflow execution.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "name": "ClawHub Integration in Control UI",
+      "category": "Skills System",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "web-ui/ (Mission Control tab)",
+      "openclaw_references": ["control-ui/skills/clawhub.ts"],
+      "gap_analysis": "We have ClawHub CLI skill. This adds in-UI search, detail, and install flows.",
+      "effort": "M",
+      "priority": 4
+    },
+    {
+      "name": "Skills JSON Output to Stdout",
+      "category": "Skills System",
+      "relevance": "LOW",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/sdk/",
+      "openclaw_references": ["cli/skills-json.ts"],
+      "gap_analysis": "We have skills commands. This adds proper stdout routing for JSON output.",
+      "effort": "S",
+      "priority": 5
+    },
+    {
+      "name": "Matrix Exec Approvals",
+      "category": "Exec & Sandboxing",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "openclaw_references": ["exec/matrix-approvals.ts"],
+      "gap_analysis": "We have no Matrix integration. This adds Matrix-native exec approval prompts.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "name": "Exec Host Routing",
+      "category": "Exec & Sandboxing",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/execution_engine.py",
+      "openclaw_references": ["exec/host-routing.ts"],
+      "gap_analysis": "We have basic exec routing. This adds clearer host exec policy routing and blocked override errors.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "name": "Context Visibility Controls",
+      "category": "Messaging Channels",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/bot/",
+      "openclaw_references": ["channels/context-visibility.ts"],
+      "gap_analysis": "We have basic channel context. This adds per-channel contextVisibility (all, allowlist, allowlist_quote).",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "name": "Telegram Fixes",
+      "category": "Messaging Channels",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/bot/telegram/",
+      "openclaw_references": ["channels/telegram/*.ts"],
+      "gap_analysis": "We have basic Telegram integration. This adds model picker fixes, HTML formatting, reaction persistence, and voice note transcription.",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "name": "Cron Replay on Restart",
+      "category": "Cron & Scheduling",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/cron_service.py",
+      "openclaw_references": ["cron/replay.ts"],
+      "gap_analysis": "We have basic cron service. This adds replay of interrupted recurring jobs on first gateway restart.",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "name": "Cron Failure Notifications",
+      "category": "Cron & Scheduling",
+      "relevance": "MEDIUM",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/cron_service.py",
+      "openclaw_references": ["cron/failure-notifications.ts"],
+      "gap_analysis": "We have basic cron execution. This adds failure notifications through job's primary delivery channel.",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "name": "Multilingual Control UI",
+      "category": "Control UI",
+      "relevance": "LOW",
+      "recommendation": "WATCH",
+      "our_counterpart": "web-ui/",
+      "openclaw_references": ["control-ui/i18n/"],
+      "gap_analysis": "We have English-only UI. This adds 12 language support (Chinese, Portuguese, German, Spanish, Japanese, Korean, French, Turkish, Indonesian, Polish, Ukrainian).",
+      "effort": "L",
+      "priority": 5
+    },
+    {
+      "name": "Dreams UI",
+      "category": "Control UI",
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "web-ui/",
+      "openclaw_references": ["control-ui/dreams/"],
+      "gap_analysis": "We have no dreams UI. This adds Dream Diary surface with lobster animation.",
+      "effort": "M",
+      "priority": 5
+    },
+    {
+      "name": "Provider Compatibility Fixes",
+      "category": "Tools System",
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/identity/provider_router.py",
+      "openclaw_references": ["providers/compat.ts"],
+      "gap_analysis": "We have basic provider routing. This adds preservation of native vendor behavior across Anthropic/Mistral/Moonshot/OpenRouter/xAI/Z.ai.",
+      "effort": "M",
+      "priority": 2
+    },
+    {
+      "name": "Kimi Web Search Base URL Inheritance",
+      "category": "Tools System",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "openclaw_references": ["tools/web_search/kimi.ts"],
+      "gap_analysis": "We have no Kimi integration. This adds base URL inheritance for Moonshot chat.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "name": "iOS Exec Approvals",
+      "category": "iOS Client",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "openclaw_references": ["ios/exec-approvals.ts"],
+      "gap_analysis": "Platform-specific iOS feature.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "name": "Android Talk Mode Fixes",
+      "category": "Android Client",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "openclaw_references": ["android/talk-mode.ts"],
+      "gap_analysis": "Platform-specific Android feature.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "name": "Mobile Pairing Security",
+      "category": "Android Client",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "N/A",
+      "openclaw_references": ["android/pairing.ts"],
+      "gap_analysis": "Platform-specific Android feature.",
+      "effort": null,
+      "priority": null
+    }
+  ],
+  "recurring_gaps": [
+    {
+      "feature": "Memory Dreaming System",
+      "status": "ELEVATED TO ADOPT",
+      "rationale": "Third consecutive appearance with significant enhancements (three-phase system, aging controls, REM preview tooling). Now a mature feature addressing critical memory gap."
+    },
+    {
+      "feature": "Video/Music Generation Tools",
+      "status": "ELEVATED TO ADOPT",
+      "rationale": "Second appearance with expanded provider support (xAI, Alibaba, Runway, Lyria, MiniMax). Significant capability gap."
+    },
+    {
+      "feature": "ComfyUI Integration",
+      "status": "ELEVATED TO ADOPT",
+      "rationale": "Second appearance with workflow-backed media generation. Enables flexible local/cloud media creation."
+    }
+  ],
+  "implementation_roadmap": {
+    "phase_1": {
+      "name": "Security & Stability",
+      "duration": "Week 1-2",
+      "features": [
+        "Claude CLI Security Hardening",
+        "Provider Request Overrides",
+        "Plugin Tool Allowlist Enforcement"
+      ]
+    },
+    "phase_2": {
+      "name": "Media Generation",
+      "duration": "Week 3-4",
+      "features": [
+        "Video Generation Tool",
+        "Music Generation Tool",
+        "ComfyUI Provider"
+      ]
+    },
+    "phase_3": {
+      "name": "Memory Enhancement",
+      "duration": "Week 5-8",
+      "features": [
+        "Memory Dreaming System",
+        "Memory Aging Controls"
+      ]
+    },
+    "phase_4": {
+      "name": "Configuration & Tooling",
+      "duration": "Week 9-10",
+      "features": [
+        "Config Schema Enrichment",
+        "Legacy Config Migration"
+      ]
+    },
+    "phase_5": {
+      "name": "Channel & Scheduling",
+      "duration": "Week 11-12",
+      "features": [
+        "Context Visibility Controls",
+        "Telegram Fixes",
+        "Cron Improvements"
+      ]
+    }
+  },
+  "openclaw_files_to_study": {
+    "security": [
+      "agents/claude-cli/security.ts",
+      "security/allowlist.ts"
+    ],
+    "media_generation": [
+      "tools/video_generate.ts",
+      "tools/music_generate.ts",
+      "providers/comfy/plugin.ts",
+      "providers/video/xai.ts",
+      "providers/video/alibaba.ts",
+      "providers/video/runway.ts",
+      "providers/music/lyria.ts",
+      "providers/music/minimax.ts"
+    ],
+    "memory": [
+      "memory/dreaming/engine.ts",
+      "memory/dreaming/promoter.ts",
+      "memory/dreaming/aging.ts",
+      "commands/dreaming.ts"
+    ],
+    "configuration": [
+      "config/schema.ts",
+      "config/schema-export.ts",
+      "doctor/fix.ts"
+    ],
+    "providers": [
+      "providers/request-overrides.ts",
+      "providers/compat.ts"
+    ],
+    "channels": [
+      "channels/context-visibility.ts",
+      "channels/telegram/*.ts"
+    ],
+    "scheduling": [
+      "cron/replay.ts",
+      "cron/failure-notifications.ts"
+    ]
+  }
+}
