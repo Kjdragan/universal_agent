@@ -294,7 +294,8 @@ def build_system_prompt(
         "- **Reminders & Brainstorm Progression**: Task Hub tools for quick capture, dedupe, and heartbeat-visible backlog movement\n"
         "- **System Ops**: Cron scheduling, heartbeat config, monitoring via `system-configuration-agent`\n"
         "- **...and many more**: You have 250+ Composio integrations available. Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover tools for ANY service not listed above.\n"
-        "  Exception: **Never** use Composio for X/Twitter. Always use `x_trends_posts` (or `grok-x-trends` fallback)."
+        "  Exception: **Never** use Composio for X/Twitter. Always use `x_trends_posts` (or `grok-x-trends` fallback).\n\n"
+        "💡 **Deep-Dive Guides**: Use the `list_system_guides` fast-tool to discover syntax and usage rules for specific domains."
     )
 
     # ── 7. EXECUTION STRATEGY ─────────────────────────────────────────
@@ -339,24 +340,9 @@ def build_system_prompt(
     # ── 7c. ZAI VISION (IMAGE / VIDEO ANALYSIS) ──────────────────────
     sections.append(
         "## 👁️ IMAGE & VIDEO ANALYSIS (ZAI VISION MCP)\n"
-        "You have access to `mcp__zai_vision__*` tools powered by ZAI GLM-4.6V for analyzing images and video.\n\n"
-        "**Available tools:**\n"
-        "- `mcp__zai_vision__image_analysis` — General image analysis and description\n"
-        "- `mcp__zai_vision__extract_text_from_screenshot` — OCR / text extraction from screenshots\n"
-        "- `mcp__zai_vision__diagnose_error_screenshot` — Diagnose errors shown in screenshots\n"
-        "- `mcp__zai_vision__understand_technical_diagram` — Interpret technical diagrams and flowcharts\n"
-        "- `mcp__zai_vision__analyze_data_visualization` — Analyze charts, graphs, and data visualizations\n"
-        "- `mcp__zai_vision__ui_diff_check` — Compare UI screenshots for differences\n"
-        "- `mcp__zai_vision__ui_to_artifact` — Convert UI screenshots to code artifacts\n"
-        "- `mcp__zai_vision__video_analysis` — Analyze video content\n\n"
-        "**When to use:**\n"
-        "- When the user attaches an image file to chat, the file path will appear in the message (e.g., `uploads/screenshot.png`).\n"
-        "- Pass the **absolute file path** to the appropriate ZAI vision tool. The path is relative to `CURRENT_RUN_WORKSPACE` (`CURRENT_SESSION_WORKSPACE` is a legacy alias).\n"
-        "- For screenshots with text/lists/tables: prefer `extract_text_from_screenshot`.\n"
-        "- For error screenshots: prefer `diagnose_error_screenshot`.\n"
-        "- For general images: use `image_analysis`.\n\n"
-        "**IMPORTANT**: Do NOT try to view image files with `Read` or `cat`. You cannot see images natively. "
-        "Always use ZAI Vision MCP tools for image understanding."
+        "You have access to `mcp__zai_vision__*` tools powered by ZAI GLM-4.6V for analyzing images and video.\n"
+        "**IMPORTANT**: Do NOT try to view image files with `Read` or `cat`. You cannot see images natively.\n"
+        "For full usage rules and tool selection, run `get_system_guide('zai_vision')`."
     )
 
     # ── 8. SHOWCASE / OPEN-ENDED GUIDANCE ─────────────────────────────
@@ -413,14 +399,8 @@ def build_system_prompt(
     # ── 11. WORKBENCH RESTRICTIONS ────────────────────────────────────
     sections.append(
         "## 🖥️ REMOTE WORKBENCH RESTRICTIONS\n"
-        "Use the Remote Workbench ONLY for:\n"
-        "- External Action execution (APIs, Browsing).\n"
-        "- Untrusted code execution.\n\n"
-        "DO NOT use Remote Workbench for:\n"
-        "- PDF creation, image processing, or document generation — do that LOCALLY with native Bash/Python.\n"
-        "- Text editing or file buffer for small data — do that LOCALLY.\n"
-        "- 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
-        "- 🚫 NEVER try to access local files from REMOTE_WORKBENCH — local paths don't exist there!"
+        "Use the Remote Workbench ONLY for External Actions or Untrusted Code.\n"
+        "For full restrictions, run `get_system_guide('workbench_restrictions')`."
     )
 
     # ── 12. ARTIFACT OUTPUT POLICY ────────────────────────────────────
@@ -452,12 +432,7 @@ def build_system_prompt(
         "   - Do NOT use bash or CLI commands to send mail when the official MCP tools are available.\n"
         "- Simone sends FROM her own `@agentmail.to` address.\n\n"
         "### 2. GWS CLI — Kevin's Gmail (ONLY when acting as Kevin)\n"
-        "- **When to use**: Only when the user explicitly asks you to send email FROM Kevin's Gmail (`kevinjdragan@gmail.com`).\n"
-        "- **How to use**: Review the `gmail` skill for using gws CLI.\n"
-        "- For attachments, pass local file paths directly — no upload step needed.\n\n"
-        "### ❌ Deprecated — Do NOT Use\n"
-        "- **Composio Gmail tools** (`GMAIL_SEND_EMAIL`, `mcp__composio__GMAIL_*`) — fully replaced by GWS CLI.\n"
-        "- **`upload_to_composio`** for email attachments — not needed with GWS CLI.\n\n"
+        "For instructions on sending email FROM Kevin's Gmail, run `get_system_guide('gws_gmail_guide')`.\n\n"
         "### Quick Decision:\n"
         "- 'Email this to Kevin' → `mcp__agentmail__send_message` (Simone sends to Kevin)\n"
         "- 'Send this from my Gmail' → GWS CLI (acting as Kevin)\n"
@@ -708,7 +683,8 @@ def build_vp_system_prompt(
         "- **Browser Operations**: agent-browser for automation, screenshots, data extraction\n"
         "- **Engineering**: GitHub API, code analysis, test execution\n"
         "- **Knowledge Capture**: Notion, Google Docs/Sheets/Drive, memory tools\n"
-        "- **250+ integrations**: Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover more"
+        "- **250+ integrations**: Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover more\n\n"
+        "💡 **Guides**: Run `list_system_guides` to discover deep-dive instructions for specific domains."
     )
 
     # ── 7. ZAI VISION ─────────────────────────────────────────────────
