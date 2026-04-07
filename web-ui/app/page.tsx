@@ -26,6 +26,7 @@ import { LinkifiedText, PathLink, linkify } from "@/components/LinkifiedText";
 import { formatTimeTz } from "@/lib/timezone";
 import { SecurityDashboardTab } from "@/components/dashboard/SecurityDashboardTab";
 import { AgentFlowWidget } from "@/components/agent-flow/AgentFlowWidget";
+import { GlobalSidebar } from "@/components/dashboard/GlobalSidebar";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -2628,9 +2629,11 @@ export default function HomePage() {
 
   return (
     <OpsProvider>
-      <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-foreground relative z-10">
-        {/* Header */}
-        <header className="h-14 border-b border-border/80 bg-background/85 backdrop-blur-md flex items-center px-3 shrink-0 z-20 relative gap-2">
+      <div className="flex h-screen overflow-hidden">
+        <GlobalSidebar />
+        <div className="h-screen flex flex-1 flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-foreground relative z-10 md:ml-20 overflow-hidden">
+          {/* Header */}
+          <header className="h-14 border-b border-border/80 bg-background/85 backdrop-blur-md flex items-center px-3 pl-12 md:pl-3 shrink-0 z-20 relative gap-2">
 
           {/* Left: Logo & Brand */}
           <div className="relative z-40 flex items-center gap-2 shrink-0 h-full pointer-events-auto">
@@ -2948,7 +2951,8 @@ export default function HomePage() {
           onSubmit={handleInputSubmit}
           onCancel={handleInputCancel}
         />
-      </div >
-    </OpsProvider >
+        </div>
+      </div>
+    </OpsProvider>
   );
 }
