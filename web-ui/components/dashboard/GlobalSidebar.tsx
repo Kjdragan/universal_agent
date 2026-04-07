@@ -14,6 +14,7 @@ import {
   Orbit,
   Clipboard,
   HeartPulse,
+  MessageSquare,
   Mail,
   Send,
   CalendarDays,
@@ -52,6 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: "Operations",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
       { href: "/dashboard/mission-control", label: "Mission Control", icon: Activity },
       { href: "/dashboard/corporation", label: "Corporation", icon: Building2, requiresHeadquarters: true },
       { href: "/dashboard/supervisors", label: "Supervisor Agents", icon: ShieldCheck, requiresHeadquarters: true },

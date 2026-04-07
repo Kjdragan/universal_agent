@@ -1303,6 +1303,11 @@ function ChatMessage({ message }: { message: any }) {
     );
   }
 
+  // Standalone thinking message (committed by type-transition)
+  if (message.messageType === "thought" && message.thinking) {
+    return <ThinkingBubble content={message.thinking} />;
+  }
+
   // Assistant: single consolidated bubble per message
   const author = message.author || "Simone";
   const authorDisplay = displayAuthorName(author);
@@ -1310,7 +1315,7 @@ function ChatMessage({ message }: { message: any }) {
 
   return (
     <div className="flex flex-col gap-2 mb-6">
-      {/* Thinking block (collapsible, attached to this message) */}
+      {/* Thinking block (collapsible, attached to this message — legacy messages) */}
       {message.thinking && <ThinkingBubble content={message.thinking} />}
 
       <div className="flex justify-start group">
@@ -1351,6 +1356,7 @@ function ChatInterface() {
   const sessionAttachMode = useAgentStore((s) => s.sessionAttachMode);
   const setSessionAttachMode = useAgentStore((s) => s.setSessionAttachMode);
   const currentStreamingMessage = useAgentStore((s) => s.currentStreamingMessage);
+  const currentStreamType = useAgentStore((s) => s.currentStreamType);
   const currentThinking = useAgentStore((s) => s.currentThinking);
   const currentAuthor = useAgentStore((s) => s.currentAuthor);
   const setStartTime = useAgentStore((s) => s.setStartTime);
@@ -2072,10 +2078,10 @@ function ChatInterface() {
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
-            {/* Streaming Thinking Context */}
-            {currentThinking && <ThinkingBubble content={currentThinking} />}
+            {/* Live stream area — render based on currentStreamType */}
+            {currentStreamType === "thinking" && currentThinking && <ThinkingBubble content={currentThinking} />}
 
-            {currentStreamingMessage && (() => {
+            {currentStreamType === "text" && currentStreamingMessage && (() => {
               const author = currentAuthor || "Simone";
               const authorDisplay = displayAuthorName(author);
               const style = getAgentStyle(author);

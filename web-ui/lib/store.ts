@@ -42,6 +42,7 @@ interface AgentStore {
 
   // Current streaming message
   currentStreamingMessage: string;
+  currentStreamType: "text" | "thinking" | null;
   currentAuthor?: string;
   currentOffset?: number;
   appendToStream: (text: string, author?: string, offset?: number) => void;
@@ -452,13 +453,37 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   // Current streaming message
   currentStreamingMessage: "",
+  currentStreamType: null,
   currentAuthor: undefined,
   currentOffset: undefined,
   appendToStream: (text, author, offset) => set((state) => {
     const incomingAuthor = author || "Simone";
     const currentAuthor = state.currentAuthor || incomingAuthor;
 
-    // If the author changed and we have buffered text, finalize the old stream first
+    // ── Type transition: if we were accumulating thinking, finalize it first ──
+    if (state.currentStreamType === "thinking" && state.currentThinking.trim()) {
+      const thinkingMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        time_offset: state.currentOffset ?? 0,
+        is_complete: true,
+        author: currentAuthor,
+        messageType: "thought",
+        thinking: state.currentThinking,
+      };
+      return {
+        messages: [...state.messages, thinkingMessage],
+        currentThinking: "",
+        currentStreamingMessage: text,
+        currentStreamType: "text",
+        currentAuthor: incomingAuthor,
+        currentOffset: offset !== undefined ? offset : undefined,
+      };
+    }
+
+    // ── Author change: finalize old text stream ──
     if (state.currentStreamingMessage.trim() && incomingAuthor !== currentAuthor) {
       const finishedMessage: Message = {
         id: generateId(),
@@ -468,28 +493,46 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         time_offset: state.currentOffset ?? 0,
         is_complete: true,
         author: currentAuthor,
-        thinking: state.currentThinking || undefined,
       };
       return {
         messages: [...state.messages, finishedMessage],
         currentStreamingMessage: text,
+        currentStreamType: "text",
         currentAuthor: incomingAuthor,
         currentOffset: offset !== undefined ? offset : undefined,
         currentThinking: "",
       };
     }
 
-    // Same author — just append
+    // ── Same author, same type (text) — just append ──
     return {
       currentStreamingMessage: state.currentStreamingMessage + text,
+      currentStreamType: "text",
       currentAuthor: incomingAuthor,
       currentOffset: offset !== undefined ? offset : state.currentOffset,
     };
   }),
   finishStream: () => set((state) => {
-    // Add the completed message to the messages list
+    const messagesToAdd: Message[] = [];
+
+    // Finalize any pending thinking
+    if (state.currentThinking.trim()) {
+      messagesToAdd.push({
+        id: generateId(),
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        time_offset: state.currentOffset ?? 0,
+        is_complete: true,
+        author: state.currentAuthor,
+        messageType: "thought",
+        thinking: state.currentThinking,
+      });
+    }
+
+    // Finalize any pending text stream
     if (state.currentStreamingMessage.trim()) {
-      const newMessage: Message = {
+      messagesToAdd.push({
         id: generateId(),
         role: "assistant",
         content: state.currentStreamingMessage,
@@ -497,16 +540,18 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         time_offset: state.currentOffset ?? 0,
         is_complete: true,
         author: state.currentAuthor,
-        thinking: state.currentThinking,
-      };
-      return {
-        messages: [...state.messages, newMessage],
-        currentStreamingMessage: "",
-        currentAuthor: undefined,
-        currentThinking: "",
-      };
+      });
     }
-    return { currentStreamingMessage: "", currentAuthor: undefined, currentThinking: "" };
+
+    return {
+      messages: messagesToAdd.length > 0
+        ? [...state.messages, ...messagesToAdd]
+        : state.messages,
+      currentStreamingMessage: "",
+      currentStreamType: null,
+      currentAuthor: undefined,
+      currentThinking: "",
+    };
   }),
 
   // Tool calls
@@ -568,9 +613,42 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   })),
   clearWorkProducts: () => set({ workProducts: [] }),
 
-  // Thinking
+  // Thinking — type-transition aware
   currentThinking: "",
-  setCurrentThinking: (thinking) => set({ currentThinking: thinking }),
+  setCurrentThinking: (thinking) => set((state) => {
+    // ── Type transition: if we were accumulating text, finalize it first ──
+    if (state.currentStreamType === "text" && state.currentStreamingMessage.trim()) {
+      const textMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: state.currentStreamingMessage,
+        timestamp: Date.now(),
+        time_offset: state.currentOffset ?? 0,
+        is_complete: true,
+        author: state.currentAuthor,
+      };
+      return {
+        messages: [...state.messages, textMessage],
+        currentStreamingMessage: "",
+        currentStreamType: "thinking",
+        currentThinking: thinking,
+      };
+    }
+
+    // ── Same type (thinking) — append with newline separator ──
+    if (state.currentStreamType === "thinking" && state.currentThinking) {
+      return {
+        currentThinking: state.currentThinking + "\n\n" + thinking,
+        currentStreamType: "thinking",
+      };
+    }
+
+    // ── Starting fresh thinking ──
+    return {
+      currentThinking: thinking,
+      currentStreamType: "thinking",
+    };
+  }),
 
   // Token usage
   tokenUsage: { input: 0, output: 0, total: 0 },
