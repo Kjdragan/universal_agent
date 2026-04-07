@@ -58,7 +58,10 @@ export function handleMessage(
   const lastMsg = msgs[msgs.length - 1]
 
   const messageId = asString(payload.message_id || payload.id)
-  const isStreamUpdate = lastMsg && lastMsg.type === msgType && messageId && lastMsg.id === messageId
+  const isStreamUpdate = lastMsg && lastMsg.type === msgType && (
+    (messageId && lastMsg.id === messageId) ||
+    (content.length > 0 && content.startsWith(lastMsg.content))
+  )
 
   if (isStreamUpdate) {
     const updated = [...msgs]

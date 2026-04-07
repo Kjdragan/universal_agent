@@ -86,26 +86,51 @@ export function MessageFeedPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded ? conversations : null, expanded, agentKey])
 
+  // Incremental message cache
+  const messagesCacheRef = useRef<{
+    key: string
+    counts: Map<string, number>
+    result: (ConversationMessage & { agentId: string })[]
+  }>({ key: '', counts: new Map(), result: [] })
+
   const messages = useMemo(() => {
     if (!expanded) return []
     const currentAgents = agentsRef.current
-    const result: (ConversationMessage & { agentId: string })[] = []
+    const cache = messagesCacheRef.current
+    const cacheKey = `${activeTab}:${agentKey}`
+
+    if (cache.key !== cacheKey) {
+      cache.key = cacheKey
+      cache.counts = new Map()
+      cache.result = []
+    }
 
     if (activeTab === 'all') {
+      let appended = false
       for (const [agentId, msgs] of conversations) {
         if (!currentAgents.has(agentId)) continue
-        for (const msg of msgs) {
-          if (TEXT_TYPES.has(msg.type)) result.push({ ...msg, agentId })
+        const prevLen = cache.counts.get(agentId) ?? 0
+        if (msgs.length > prevLen) {
+          for (let i = prevLen; i < msgs.length; i++) {
+            if (TEXT_TYPES.has(msgs[i].type)) cache.result.push({ ...msgs[i], agentId })
+          }
+          cache.counts.set(agentId, msgs.length)
+          appended = true
         }
       }
-      return result.sort((a, b) => a.timestamp - b.timestamp)
+      if (appended) cache.result.sort((a, b) => a.timestamp - b.timestamp)
+      return cache.result
     }
 
     const msgs = conversations.get(activeTab) ?? []
-    for (const msg of msgs) {
-      if (TEXT_TYPES.has(msg.type)) result.push({ ...msg, agentId: activeTab })
+    const prevLen = cache.counts.get(activeTab) ?? 0
+    if (msgs.length > prevLen) {
+      for (let i = prevLen; i < msgs.length; i++) {
+        if (TEXT_TYPES.has(msgs[i].type)) cache.result.push({ ...msgs[i], agentId: activeTab })
+      }
+      cache.counts.set(activeTab, msgs.length)
     }
-    return result
+    return cache.result
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded ? conversations : null, expanded, activeTab, agentKey])
 

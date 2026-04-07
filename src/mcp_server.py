@@ -427,58 +427,6 @@ def fix_path_typos(path: str) -> str:
 
 @mcp.tool()
 @trace_tool_output
-def get_system_guide(guide_name: str) -> str:
-    """
-    Retrieve an optional system guide to learn about specific workflows and limits.
-    Available guides: zai_vision, workbench_restrictions, system_configuration_delegation, gws_gmail_guide.
-    """
-    try:
-        guide_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "universal_agent", "prompt_assets", "guides", f"{guide_name}.md"
-        )
-        if not os.path.exists(guide_path):
-            return f"Error: Guide '{guide_name}' not found."
-        with open(guide_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading guide: {str(e)}"
-
-@mcp.tool()
-@trace_tool_output
-def list_system_guides() -> str:
-    """
-    List all available optional system guides and their descriptions.
-    """
-    try:
-        guides_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "universal_agent", "prompt_assets", "guides"
-        )
-        if not os.path.exists(guides_dir):
-            return "No guides available."
-        
-        guides = []
-        for filename in os.listdir(guides_dir):
-            if filename.endswith(".md"):
-                guide_name = filename[:-3]
-                filepath = os.path.join(guides_dir, filename)
-                description = "No description available."
-                with open(filepath, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("#"):
-                            description = line.lstrip("#").strip()
-                            break
-                guides.append(f"- **{guide_name}**: {description}")
-        if not guides:
-            return "No guides available."
-        return "Available System Guides:\n" + "\n".join(guides)
-    except Exception as e:
-        return f"Error listing guides: {str(e)}"
-
-@mcp.tool()
-@trace_tool_output
 def workbench_download(
     remote_path: str, local_path: str, session_id: str = None
 ) -> str:

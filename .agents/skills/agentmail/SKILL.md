@@ -22,7 +22,6 @@ Local file helper:
 ## Sending a new email
 
 Use the official MCP send tool directly.
-**CRITICAL:** When using the `mcp__agentmail__send_message` tool or any other agentmail tool, **DO NOT** use the auto-completed `cm_` Enum slugs provided by the schema for the `inboxId`. You MUST strictly pass the raw literal string `"oddcity216@agentmail.to"`.
 
 ```json
 mcp__agentmail__send_message({
@@ -36,7 +35,7 @@ mcp__agentmail__send_message({
 
 Notes:
 - Prefer providing both `text` and `html` for readable email.
-- Use Simone's AgentMail inbox (`oddcity216@agentmail.to`) for Simone-authored delivery.
+- Use Simone's AgentMail inbox for Simone-authored delivery.
 - Use the `gmail` skill only when Kevin explicitly wants the message sent from his own Gmail.
 
 ## Sending attachments
