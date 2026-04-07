@@ -161,6 +161,135 @@ The subsystem requires:
 - wiki integrity tests
 - documentation index/link tests
 
+## Final Buildout Instructions
+
+The next implementation work should proceed in this order:
+
+1. **Improve semantic page quality**
+   - Replace or augment heuristic entity/concept extraction with stronger semantic selection.
+   - Reduce low-value auto-pages.
+   - Keep source pages dominant in query results.
+   - Consider a confidence threshold before auto-creating new concept/entity pages.
+
+2. **Add real shared-memory integration coverage**
+   - Create a dedicated integration/smoke test for the actual shared memory workspace.
+   - Validate behavior against real session evidence, checkpoint files, and warm reruns.
+   - Confirm `sync_state.json`, `sync_progress.json`, and `sync_progress.md` remain coherent across repeated runs.
+
+3. **Keep internal sync observable**
+   - Preserve timing telemetry from `sync_internal_memory_vault()`.
+   - Expand human-readable progress reporting if future runs become harder to diagnose.
+   - If warm-run timing regresses, inspect phase timing output first before changing the data model.
+
+4. **Expand runtime usage only after validation**
+   - Use the current external vault for controlled experimentation.
+   - Use the internal memory vault in bounded form only.
+   - Do not promote either vault into broader agent recall paths until semantic quality and integration coverage improve further.
+
+## How To Try It
+
+These commands are intended for local operator smoke testing from the repo root.
+
+### External Knowledge Vault
+
+Create a temporary source file, initialize an external vault, ingest the source, query it, and lint it:
+
+```bash
+PYTHONPATH=src uv run python - <<'PY'
+import json
+import tempfile
+from pathlib import Path
+from universal_agent.wiki.core import ensure_vault, ingest_external_source, query_vault, lint_vault
+
+work_dir = Path(tempfile.mkdtemp(prefix='llm_wiki_try_external_'))
+external_root = work_dir / 'external_roots'
+source_path = work_dir / 'sample_source.md'
+source_path.write_text(
+    "# Sample Source\n\n"
+    "Universal Agent can maintain a persistent wiki with immutable raw sources, "
+    "an index, and a log. Agents should query the wiki before raw sources.\n",
+    encoding='utf-8',
+)
+
+ctx = ensure_vault('external', 'try-vault', root_override=str(external_root))
+ingest = ingest_external_source(
+    vault_slug='try-vault',
+    source_path=str(source_path),
+    title='Sample Source',
+    root_override=str(external_root),
+)
+query = query_vault(
+    vault_kind='external',
+    vault_slug='try-vault',
+    query='What is canonical and how should agents query it?',
+    save_answer=True,
+    answer_title='Try Query Result',
+    root_override=str(external_root),
+)
+lint = lint_vault(
+    vault_kind='external',
+    vault_slug='try-vault',
+    root_override=str(external_root),
+)
+
+print(json.dumps({
+    'vault_path': str(ctx.path),
+    'ingest': ingest,
+    'query': query,
+    'lint': lint,
+}, indent=2))
+PY
+```
+
+What to inspect after it runs:
+
+- `sources/*.md`
+- `entities/*.md`
+- `analyses/*.md`
+- `index.md`
+- `log.md`
+- `overview.md`
+- `lint/*.md`
+
+### Internal Memory Vault
+
+Run a bounded internal sync and inspect the output plus sync telemetry:
+
+```bash
+PYTHONPATH=src uv run python - <<'PY'
+import json
+from universal_agent.wiki.core import sync_internal_memory_vault
+
+result = sync_internal_memory_vault(trigger='manual_tryout')
+print(json.dumps({
+    'vault_path': result['vault_path'],
+    'generated_pages': result['generated_pages'],
+    'timings_ms': result.get('timings_ms', {}),
+    'total_duration_ms': result.get('total_duration_ms'),
+    'copied_counts': result.get('copied_counts', {}),
+    'skipped_counts': result.get('skipped_counts', {}),
+}, indent=2))
+PY
+```
+
+Then inspect:
+
+```bash
+sed -n '1,200p' Memory_System/ua_shared_workspace/memory/wiki/sync_progress.md
+find Memory_System/ua_shared_workspace/memory/wiki -maxdepth 2 -type f | sort
+```
+
+What to look for:
+
+- `decisions/decision-ledger.md`
+- `preferences/preferences-ledger.md`
+- `incidents/incidents-ledger.md`
+- `threads/recent-threads.md`
+- `projects/project-memory.md`
+- `sync_state.json`
+- `sync_progress.json`
+- `sync_progress.md`
+
 ## Related Files
 
 - `src/universal_agent/wiki/`

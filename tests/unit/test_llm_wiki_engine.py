@@ -36,6 +36,10 @@ def test_external_wiki_roundtrip(tmp_path):
     )
     assert query["matches"]
     assert query["saved_analysis_path"].startswith("analyses/")
+    source_page = init_ctx.path / result["source_page"]
+    source_text = source_page.read_text(encoding="utf-8")
+    assert "## Related Analyses" in source_text
+    assert "Codex Analysis" in source_text
 
 
 def test_internal_memory_sync_creates_projection_without_mutating_sources(tmp_path, monkeypatch):
@@ -76,6 +80,12 @@ def test_internal_memory_sync_creates_projection_without_mutating_sources(tmp_pa
 
     assert result["generated_pages"]
     assert (tmp_path / "internal_vault" / "decisions" / "decision-ledger.md").exists()
+    assert "timings_ms" in result
+    assert "total_duration_ms" in result
+    assert "copied_counts" in result
+    assert "skipped_counts" in result
+    assert (tmp_path / "internal_vault" / "sync_state.json").exists()
+    assert (tmp_path / "internal_vault" / "sync_progress.json").exists()
     assert daily.read_text(encoding="utf-8") == original_memory
     assert checkpoint_path.read_text(encoding="utf-8") == original_checkpoint
 
