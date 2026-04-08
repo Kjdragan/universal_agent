@@ -1,0 +1,71 @@
+{
+  "generated_at": "2026-04-08T20:31:58.247039",
+  "bot_user": "UA Disc Agent#6842",
+  "total_servers": 1,
+  "servers": [
+    {
+      "name": "kdragan's server",
+      "id": "1211337705875841064",
+      "member_count": 2,
+      "owner": "kdragan1",
+      "description": "",
+      "categories": [
+        {
+          "name": "Text Channels",
+          "id": "1211337706861236244",
+          "position": 0,
+          "channels": [
+            {
+              "name": "general",
+              "id": "1211337706861236246",
+              "type": "text",
+              "topic": "",
+              "position": 0,
+              "_monitor": "",
+              "_tier": "",
+              "_notes": ""
+            }
+          ]
+        },
+        {
+          "name": "Voice Channels",
+          "id": "1211337706861236245",
+          "position": 0,
+          "channels": [
+            {
+              "name": "General",
+              "id": "1211337706861236247",
+              "type": "voice",
+              "topic": "",
+              "position": 0,
+              "_monitor": "",
+              "_tier": "",
+              "_notes": ""
+            }
+          ]
+        },
+        {
+          "name": "(Uncategorized)",
+          "id": "none",
+          "position": 999,
+          "channels": [
+            {
+              "name": "priority-feed",
+              "id": "1447812541228257382",
+              "type": "text",
+              "topic": "",
+              "position": 1,
+              "_monitor": "",
+              "_tier": "",
+              "_notes": ""
+            }
+          ]
+        }
+      ],
+      "_tier": "",
+      "_priority": "",
+      "_notes": "",
+      "scheduled_events": []
+    }
+  ]
+}

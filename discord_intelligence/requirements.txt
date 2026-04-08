@@ -1,0 +1,13 @@
+# Discord Intelligence Subsystem - Requirements
+# Part of Universal Agent
+
+# User token support (selfbot fork of discord.py)
+# Standard discord.py blocks user tokens; this fork allows them
+discord.py-self>=2.0
+
+# Standard discord.py for the bot-token Command & Control server (Phase 2)
+# NOTE: discord.py and discord.py-self conflict if installed in the same env.
+# For Phase 1 (inventory + daemon), only discord.py-self is needed.
+# For Phase 2 (CC server with slash commands), you may need a separate venv
+# or use discord.py-self for both (it supports bot tokens too).
+# discord.py>=2.7.0
