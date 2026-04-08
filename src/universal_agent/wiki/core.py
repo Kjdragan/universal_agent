@@ -14,10 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.memory.paths import resolve_shared_memory_workspace
-from universal_agent.wiki import llm as wiki_llm
 from universal_agent.workspace_catalog import list_workspace_summaries
 
 REQUIRED_FRONTMATTER_FIELDS = (
@@ -218,25 +216,6 @@ def _dump_markdown(meta: dict[str, Any], body: str) -> str:
     return f"---\n{yaml.safe_dump(meta, sort_keys=False, allow_unicode=False).strip()}\n---\n\n{body.rstrip()}\n"
 
 
-def _extract_summary_heuristic(body: str) -> str:
-    """Heuristic fallback: first non-heading, non-empty line, truncated."""
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#"):
-            continue
-        return stripped[:180]
-    return ""
-
-
-def _extract_summary(body: str, title: str = "") -> str:
-    """Extract a summary using LLM if available, else heuristic fallback."""
-    llm_summary = wiki_llm.generate_summary_llm(body, title)
-    if llm_summary:
-        return llm_summary
-    return _extract_summary_heuristic(body)
-
 
 def _read_text_limited(path: Path, *, max_chars: int = MAX_EVIDENCE_TEXT_CHARS) -> str:
     with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -252,41 +231,24 @@ def _relative(path: Path, root: Path) -> str:
 
 def resolve_vault_path(vault_kind: str, vault_slug: str, *, root_override: str | None = None) -> Path:
     kind = str(vault_kind or "").strip().lower()
+    if kind != "internal":
+        raise ValueError(f"Unsupported vault kind: {vault_kind}")
     slug = _slugify(vault_slug, fallback="default")
     if root_override:
-        base = Path(root_override).expanduser().resolve()
-        return base / slug if kind == "external" else base
-    if kind == "external":
-        root = os.getenv("UA_LLM_WIKI_ROOT", "").strip()
-        if root:
-            return Path(root).expanduser().resolve() / slug
-        return Path(resolve_artifacts_dir()) / "knowledge-vaults" / slug
-    if kind == "internal":
-        return Path(resolve_shared_memory_workspace()) / "memory" / "wiki"
-    raise ValueError(f"Unsupported vault kind: {vault_kind}")
+        return Path(root_override).expanduser().resolve()
+    return Path(resolve_shared_memory_workspace()) / "memory" / "wiki"
 
 
 def _vault_schema_text(kind: str, slug: str, title: str) -> str:
-    if kind == "internal":
-        return (
-            f"# {title} Schema\n\n"
-            "This vault is a derived operational memory projection.\n\n"
-            "Rules:\n"
-            "- Evidence in `evidence/` is derived from canonical memory, sessions, checkpoints, and run artifacts.\n"
-            "- Pages under `decisions/`, `preferences/`, `incidents/`, `projects/`, and `threads/` are compiled views.\n"
-            "- Do not use this vault as the source of truth for resumability or runtime state.\n"
-            "- Preserve provenance refs on every managed page.\n"
-            "- Keep `index.md`, `log.md`, and `overview.md` current after sync and lint operations.\n"
-        )
     return (
         f"# {title} Schema\n\n"
-        "This vault is a canonical external knowledge base.\n\n"
+        "This vault is a derived operational memory projection.\n\n"
         "Rules:\n"
-        "- `raw/` holds immutable imported source material.\n"
-        "- `sources/`, `entities/`, `concepts/`, and `analyses/` are LLM-maintained pages.\n"
-        "- Keep `index.md`, `log.md`, and `overview.md` current after ingest, query filing, and lint.\n"
+        "- Evidence in `evidence/` is derived from canonical memory, sessions, checkpoints, and run artifacts.\n"
+        "- Pages under `decisions/`, `preferences/`, `incidents/`, `projects/`, and `threads/` are compiled views.\n"
+        "- Do not use this vault as the source of truth for resumability or runtime state.\n"
         "- Preserve provenance refs on every managed page.\n"
-        "- Query the wiki first; only fall back to raw sources when necessary.\n"
+        "- Keep `index.md`, `log.md`, and `overview.md` current after sync and lint operations.\n"
     )
 
 
@@ -314,11 +276,13 @@ def _write_page(path: Path, meta: dict[str, Any], body: str) -> None:
 
 def ensure_vault(vault_kind: str, vault_slug: str, *, title: str | None = None, root_override: str | None = None) -> VaultContext:
     kind = str(vault_kind or "").strip().lower()
+    if kind != "internal":
+        raise ValueError(f"Unsupported vault kind: {kind}")
     slug = _slugify(vault_slug, fallback="default")
-    resolved_title = str(title or "").strip() or _titleize_slug(slug if kind == "external" else "internal-memory-vault")
+    resolved_title = str(title or "").strip() or _titleize_slug("internal-memory-vault")
     vault_path = resolve_vault_path(kind, slug, root_override=root_override)
     vault_path.mkdir(parents=True, exist_ok=True)
-    for rel_dir in (EXTERNAL_DIRS if kind == "external" else INTERNAL_DIRS):
+    for rel_dir in INTERNAL_DIRS:
         (vault_path / rel_dir).mkdir(parents=True, exist_ok=True)
 
     manifest_path = vault_path / "vault_manifest.json"
@@ -448,275 +412,7 @@ def refresh_overview(vault_path: Path) -> Path:
     return vault_path / "overview.md"
 
 
-def _copy_external_raw(vault_path: Path, *, source_path: str | None, content: str | None, title: str, source_id: str) -> Path:
-    raw_dir = vault_path / "raw"
-    if source_path:
-        src = Path(source_path).expanduser().resolve()
-        suffix = src.suffix or ".txt"
-        dest = raw_dir / f"{source_id}{suffix}"
-        if not dest.exists():
-            shutil.copy2(src, dest)
-        return dest
-    dest = raw_dir / f"{source_id}.md"
-    if not dest.exists():
-        _write_text(dest, content or "")
-    return dest
 
-
-def _candidate_lines(text: str) -> list[str]:
-    lines = []
-    for raw in text.splitlines():
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#"):
-            continue
-        if stripped.endswith(":"):
-            continue
-        if stripped.lower() in {"summary", "source details", "excerpt", "mentioned in", "related entities", "related concepts"}:
-            continue
-        lines.append(stripped)
-    return lines
-
-
-def _extract_entity_candidates(text: str) -> list[str]:
-    matches = []
-    for line in _candidate_lines(text):
-        matches.extend(re.findall(r"\b[A-Z][a-z]+(?: [A-Z][a-z]+){0,2}\b", line))
-    filtered = []
-    for match in matches:
-        candidate = match.strip()
-        if not candidate or candidate in ENTITY_STOPWORDS:
-            continue
-        if len(candidate) <= 3:
-            continue
-        parts = candidate.split()
-        if len(parts) == 1 and candidate not in ALLOWED_SINGLE_WORD_ENTITIES:
-            continue
-        filtered.append(candidate)
-    counts = Counter(filtered)
-    return [item for item, _count in counts.most_common(5)]
-
-
-def _extract_concept_candidates(text: str) -> list[str]:
-    words = []
-    for line in _candidate_lines(text):
-        words.extend(re.findall(r"\b[a-z][a-z]{5,}\b", line.lower()))
-    counts = Counter(word for word in words if word not in STOPWORDS)
-    concepts = []
-    for item, count in counts.most_common(10):
-        if count < 2:
-            continue
-        concepts.append(item)
-        if len(concepts) >= 5:
-            break
-    return concepts
-
-
-def _upsert_reference_page(
-    vault_path: Path,
-    category: str,
-    name: str,
-    *,
-    source_title: str,
-    source_page_rel: str,
-    source_id: str,
-    description: str = "",
-) -> str:
-    kind = CATEGORY_KIND.get(category, category.rstrip("s"))
-    slug = _slugify(name, fallback=kind)
-    page_path = vault_path / category / f"{slug}.md"
-    link_line = f"- [[{source_page_rel}|{source_title}]]"
-    if page_path.exists():
-        meta, body = _frontmatter_and_body(page_path)
-        body = body.rstrip()
-        if link_line not in body:
-            body += f"\n{link_line}\n"
-        source_ids = set(meta.get("source_ids") or [])
-        source_ids.add(source_id)
-        meta["source_ids"] = sorted(source_ids)
-        refs = set(meta.get("provenance_refs") or [])
-        refs.add(source_page_rel)
-        meta["provenance_refs"] = sorted(refs)
-        _write_page(page_path, meta, body)
-    else:
-        meta = _default_page_meta(
-            name,
-            kind,
-            provenance_kind="derived",
-            provenance_refs=[source_page_rel],
-            source_ids=[source_id],
-            tags=[kind, "auto-generated"],
-        )
-        desc_text = description.strip() if description else f"Auto-maintained {kind} page."
-        body = f"# {name}\n\n{desc_text}\n\n## Mentioned In\n\n{link_line}\n"
-        _write_page(page_path, meta, body)
-    return _relative(page_path, vault_path)
-
-
-def ingest_external_source(
-    *,
-    vault_slug: str,
-    source_path: str | None = None,
-    content: str | None = None,
-    title: str | None = None,
-    source_url: str | None = None,
-    root_override: str | None = None,
-) -> dict[str, Any]:
-    if not source_path and not content:
-        raise ValueError("source_path or content is required")
-    raw_content = content
-    if source_path:
-        raw_content = Path(source_path).expanduser().read_text(encoding="utf-8", errors="replace")
-    resolved_title = str(title or "").strip()
-    if not resolved_title:
-        if source_path:
-            resolved_title = Path(source_path).stem.replace("-", " ").replace("_", " ").strip().title()
-        elif source_url:
-            resolved_title = source_url.rstrip("/").split("/")[-1] or "Imported Source"
-        else:
-            resolved_title = "Imported Source"
-    source_id = _sha256_text(raw_content or "")[:12]
-    context = ensure_vault("external", vault_slug, root_override=root_override)
-    raw_path = _copy_external_raw(
-        context.path,
-        source_path=source_path,
-        content=raw_content,
-        title=resolved_title,
-        source_id=source_id,
-    )
-    source_slug = _slugify(resolved_title, fallback=source_id)
-    source_page = context.path / "sources" / f"{source_slug}.md"
-    excerpt = (raw_content or "").strip()
-    if len(excerpt) > 1500:
-        excerpt = excerpt[:1500].rstrip() + "..."
-    meta = _default_page_meta(
-        resolved_title,
-        "source",
-        provenance_kind="raw_source",
-        provenance_refs=[_relative(raw_path, context.path)] + ([source_url] if source_url else []),
-        source_ids=[source_id],
-        tags=["source", "external"],
-        confidence="high",
-    )
-    if source_url:
-        meta["source_url"] = source_url
-    related_entities = []
-    related_concepts = []
-
-    # --- LLM-powered extraction with heuristic fallback ---
-    llm_entities = wiki_llm.extract_entities_llm(raw_content or "", resolved_title)
-    llm_concepts = wiki_llm.extract_concepts_llm(raw_content or "", resolved_title)
-    summary = _extract_summary(raw_content or "", resolved_title)
-
-    body = (
-        f"# {resolved_title}\n\n"
-        f"## Summary\n\n{summary or 'Imported source.'}\n\n"
-        f"## Source Details\n\n"
-        f"- Raw source: `{_relative(raw_path, context.path)}`\n"
-        + (f"- URL: {source_url}\n" if source_url else "")
-        + "\n## Excerpt\n\n"
-        + excerpt
-        + "\n"
-    )
-
-    # Build entity/concept lists from LLM output or heuristic fallback
-    entity_items: list[dict[str, str]] = []  # [{"name": ..., "slug": ..., "description": ...}]
-    concept_items: list[dict[str, str]] = []
-
-    if llm_entities:
-        for ent in llm_entities[:5]:
-            name = ent.get("name", "").strip()
-            if not name:
-                continue
-            slug = _slugify(name)
-            # Generate a description for the entity page
-            desc = wiki_llm.generate_entity_description_llm(
-                name, [excerpt[:500]]
-            )
-            entity_items.append({"name": name, "slug": slug, "description": desc})
-    else:
-        # Heuristic fallback
-        for entity in _extract_entity_candidates(raw_content or "")[:3]:
-            entity_items.append({"name": entity, "slug": _slugify(entity), "description": ""})
-
-    if llm_concepts:
-        for con in llm_concepts[:5]:
-            name = con.get("name", "").strip()
-            if not name:
-                continue
-            title_name = name.replace("-", " ").title()
-            slug = _slugify(title_name)
-            # Use the LLM-provided definition as the page description
-            definition = con.get("definition", "")
-            desc = definition or wiki_llm.generate_concept_description_llm(
-                name, [excerpt[:500]]
-            )
-            concept_items.append({"name": title_name, "slug": slug, "description": desc})
-    else:
-        # Heuristic fallback
-        for concept in _extract_concept_candidates(raw_content or "")[:3]:
-            title_name = concept.replace("-", " ").title()
-            concept_items.append({"name": title_name, "slug": _slugify(title_name), "description": ""})
-
-    if entity_items:
-        related_entities = [f"- [[entities/{item['slug']}.md|{item['name']}]]" for item in entity_items]
-        body += "\n## Related Entities\n\n" + "\n".join(related_entities) + "\n"
-    if concept_items:
-        related_concepts = [f"- [[concepts/{item['slug']}.md|{item['name']}]]" for item in concept_items]
-        body += "\n## Related Concepts\n\n" + "\n".join(related_concepts) + "\n"
-
-    _write_page(source_page, meta, body)
-    source_page_rel = _relative(source_page, context.path)
-
-    entity_paths = []
-    concept_paths = []
-    for item in entity_items:
-        entity_paths.append(
-            _upsert_reference_page(
-                context.path,
-                "entities",
-                item["name"],
-                source_title=resolved_title,
-                source_page_rel=source_page_rel,
-                source_id=source_id,
-                description=item.get("description", ""),
-            )
-        )
-    for item in concept_items:
-        concept_paths.append(
-            _upsert_reference_page(
-                context.path,
-                "concepts",
-                item["name"],
-                source_title=resolved_title,
-                source_page_rel=source_page_rel,
-                source_id=source_id,
-                description=item.get("description", ""),
-            )
-        )
-
-    update_index(context.path)
-    append_log_entry(
-        context.path,
-        "ingest",
-        resolved_title,
-        details=(
-            f"- source_id: `{source_id}`\n"
-            f"- source_page: `sources/{source_slug}.md`\n"
-            f"- raw_path: `{_relative(raw_path, context.path)}`\n"
-        ),
-    )
-    refresh_overview(context.path)
-    return {
-        "status": "success",
-        "vault_path": str(context.path),
-        "source_id": source_id,
-        "source_page": source_page_rel,
-        "raw_path": _relative(raw_path, context.path),
-        "entities": entity_paths,
-        "concepts": concept_paths,
-    }
 
 
 def _parse_index_entries(vault_path: Path) -> list[dict[str, str]]:
@@ -914,23 +610,7 @@ def lint_vault(*, vault_kind: str, vault_slug: str, root_override: str | None = 
         if record["kind"] not in {"source", "overview"} and inbound[record["path"]] == 0:
             findings.append({"kind": "orphan_page", "path": record["path"], "detail": "No inbound wikilinks"})
 
-    existing_entities = {_slugify(Path(record["path"]).stem) for record in records if record["path"].startswith("entities/")}
-    entity_tokens = {token for slug in existing_entities for token in slug.split("-")}
-    existing_concepts = {_slugify(Path(record["path"]).stem) for record in records if record["path"].startswith("concepts/")}
-    for record in records:
-        if not record["path"].startswith("sources/"):
-            continue
-        _meta, body = _frontmatter_and_body(context.path / record["path"])
-        candidate_text = _source_content_for_candidate_checks(body)
-        for entity in _extract_entity_candidates(candidate_text)[:3]:
-            if _slugify(entity) not in existing_entities:
-                findings.append({"kind": "missing_entity_page", "path": record["path"], "detail": entity})
-        for concept in _extract_concept_candidates(candidate_text)[:3]:
-            concept_slug = _slugify(concept)
-            if concept_slug in existing_entities or concept_slug in entity_tokens:
-                continue
-            if concept_slug not in existing_concepts:
-                findings.append({"kind": "missing_concept_page", "path": record["path"], "detail": concept})
+
 
     lint_dir = context.path / "lint"
     lint_path = lint_dir / f"lint_{_timestamp_slug()}.md"

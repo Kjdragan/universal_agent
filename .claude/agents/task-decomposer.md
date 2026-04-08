@@ -183,6 +183,7 @@ Notes:
 | `trend-specialist` | Reddit/X/Web pulse checks, "what's new" | x/reddit internal tools (+ CSI work-product tools) |
 | `csi-trend-analyst` | CSI report/bundle review and bounded follow-up synthesis | CSI work-product tools + x/reddit validation |
 | `report-writer` | HTML/PDF report generation from corpus | Local compile + PDF tools |
+| `notebooklm-operator` | NotebookLM research, artifacts, KB management | NLM MCP tools + kb_bridge |
 | `image-expert` | Image generation and editing | Local Gemini image gen |
 | `video-creation-expert` | Video/audio download, processing, effects | Local FFmpeg + yt-dlp |
 | `video-remotion-expert` | Programmatic React-based video generation | Local Remotion |
@@ -349,6 +350,14 @@ Every task MUST have:
 - Phase 1 (Input): `playwright-bowser-agent` fan-out for critical user stories
 - Phase 2 (Processing): `bowser-qa-agent` aggregates step-level pass/fail + screenshots
 - Phase 3 (Delivery): gws Gmail send with screenshots attached + optional `SLACK_*` summary
+
+### Example F: Knowledge Base Creation
+
+**Request:** "Create a knowledge base about agentic harnesses"
+
+- Phase 1 (Build): notebooklm-operator → kb_research_and_build with topic "agentic harnesses"
+   → Internally: auth → create notebook → user URLs → web research → import → generate report → register KB
+- Output: vault slug, notebook URL, source count, artifact paths
 
 ---
 

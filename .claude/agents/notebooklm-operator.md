@@ -14,7 +14,7 @@ description: |
   - Prefers NotebookLM MCP tools when available.
   - Falls back to `nlm` CLI when MCP is unavailable or unsuitable.
   - Enforces confirmation gates for destructive/share operations.
-tools: Read, Bash, mcp__notebooklm-mcp__refresh_auth, mcp__notebooklm-mcp__save_auth_tokens, mcp__notebooklm-mcp__notebook_list, mcp__notebooklm-mcp__notebook_create, mcp__notebooklm-mcp__notebook_get, mcp__notebooklm-mcp__notebook_describe, mcp__notebooklm-mcp__notebook_rename, mcp__notebooklm-mcp__notebook_delete, mcp__notebooklm-mcp__source_add, mcp__notebooklm-mcp__source_list_drive, mcp__notebooklm-mcp__source_sync_drive, mcp__notebooklm-mcp__source_delete, mcp__notebooklm-mcp__source_describe, mcp__notebooklm-mcp__source_get_content, mcp__notebooklm-mcp__notebook_query, mcp__notebooklm-mcp__chat_configure, mcp__notebooklm-mcp__research_start, mcp__notebooklm-mcp__research_status, mcp__notebooklm-mcp__research_import, mcp__notebooklm-mcp__studio_create, mcp__notebooklm-mcp__studio_status, mcp__notebooklm-mcp__studio_delete, mcp__notebooklm-mcp__studio_revise, mcp__notebooklm-mcp__download_artifact, mcp__notebooklm-mcp__export_artifact, mcp__notebooklm-mcp__note, mcp__notebooklm-mcp__notebook_share_status, mcp__notebooklm-mcp__notebook_share_public, mcp__notebooklm-mcp__notebook_share_invite, mcp__notebooklm-mcp__server_info
+tools: Read, Bash, mcp__internal__kb_list, mcp__internal__kb_get, mcp__internal__kb_register, mcp__internal__kb_update, mcp__notebooklm-mcp__refresh_auth, mcp__notebooklm-mcp__save_auth_tokens, mcp__notebooklm-mcp__notebook_list, mcp__notebooklm-mcp__notebook_create, mcp__notebooklm-mcp__notebook_get, mcp__notebooklm-mcp__notebook_describe, mcp__notebooklm-mcp__notebook_rename, mcp__notebooklm-mcp__notebook_delete, mcp__notebooklm-mcp__source_add, mcp__notebooklm-mcp__source_list_drive, mcp__notebooklm-mcp__source_sync_drive, mcp__notebooklm-mcp__source_delete, mcp__notebooklm-mcp__source_describe, mcp__notebooklm-mcp__source_get_content, mcp__notebooklm-mcp__notebook_query, mcp__notebooklm-mcp__chat_configure, mcp__notebooklm-mcp__research_start, mcp__notebooklm-mcp__research_status, mcp__notebooklm-mcp__research_import, mcp__notebooklm-mcp__studio_create, mcp__notebooklm-mcp__studio_status, mcp__notebooklm-mcp__studio_delete, mcp__notebooklm-mcp__studio_revise, mcp__notebooklm-mcp__download_artifact, mcp__notebooklm-mcp__export_artifact, mcp__notebooklm-mcp__note, mcp__notebooklm-mcp__notebook_share_status, mcp__notebooklm-mcp__notebook_share_public, mcp__notebooklm-mcp__notebook_share_invite, mcp__notebooklm-mcp__server_info
 model: opus
 ---
 
@@ -123,6 +123,54 @@ what you produced and where to find it. See Output Contract below.
 3. **Do NOT stringify list parameters** — pass actual JSON arrays
 4. **Do NOT run preflight scripts** — they break on VPS
 5. **Default to `mode="fast"` for research** — only use `mode="deep"` if user explicitly requests comprehensive/thorough/exhaustive research. Deep mode can be slow (~5 min) and may return 0 sources.
+
+## Knowledge Base Lifecycle (Wiki)
+
+In addition to one-off research, you build and maintain durable Knowledge Bases (KBs). These are tracked in a local registry (`kb_registry.json`).
+
+### Mission: kb_research_and_build
+"Create a knowledge base about X"
+1. Auth refresh
+2. notebook_create(title="X")
+3. source_add(user-provided URLs, one at a time)
+4. research_start(query="X [current year]", mode=user_choice or "fast")
+5. Poll: research_status → sleep 15 → repeat until completed
+6. research_import(all sources)
+7. studio_create(report, mind_map)  [optional based on user preference]
+8. Poll studio_status until completed
+9. download_artifact(report → workspace)
+10. mcp__internal__kb_register(slug, notebook_id, title, tags)
+11. Return structured handoff
+
+### Mission: kb_add_sources
+"Add these sources to the X knowledge base"
+1. Auth refresh
+2. mcp__internal__kb_get(slug) → notebook_id
+3. source_add(urls/text/youtube, one at a time)
+4. mcp__internal__kb_update(slug, source_count=updated)
+5. Return handoff
+
+### Mission: kb_query
+"What does the X knowledge base say about Y?"
+1. Auth refresh
+2. mcp__internal__kb_get(slug) → notebook_id
+3. notebook_query(notebook_id, question)
+4. mcp__internal__kb_update(slug, last_queried=now)
+5. Return answer with citations
+
+### Mission: kb_generate_artifact
+"Generate a podcast/report/mind map from the X knowledge base"
+1. Auth refresh
+2. mcp__internal__kb_get(slug) → notebook_id
+3. studio_create(notebook_id, artifact_type, options)
+4. Poll studio_status
+5. download_artifact
+6. Return handoff with artifact paths
+
+### Mission: kb_list
+"What knowledge bases do we have?"
+1. mcp__internal__kb_list() → registry contents
+2. Return formatted list
 
 ## Execution Policy
 

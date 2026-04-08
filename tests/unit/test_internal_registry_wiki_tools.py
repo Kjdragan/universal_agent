@@ -8,7 +8,11 @@ def test_internal_registry_includes_wiki_tools():
     names = [getattr(tool, "name", getattr(tool, "__name__", str(tool))) for tool in tools]
 
     assert "wiki_init_vault" in names
-    assert "wiki_ingest_external_source" in names
     assert "wiki_sync_internal_memory" in names
     assert "wiki_query" in names
     assert "wiki_lint" in names
+    
+    assert "kb_list" in names
+    assert "kb_get" in names
+    assert "kb_register" in names
+    assert "kb_update" in names

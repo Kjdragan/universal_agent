@@ -71,10 +71,17 @@ from universal_agent.tools.vp_orchestration import (
 )
 from universal_agent.tools.wiki_bridge import (
     wiki_init_vault_wrapper,
-    wiki_ingest_external_source_wrapper,
     wiki_sync_internal_memory_wrapper,
     wiki_query_wrapper,
     wiki_lint_wrapper,
+)
+
+# NotebookLM Knowledge Base Bridge Tools
+from universal_agent.tools.kb_bridge import (
+    kb_list_wrapper,
+    kb_get_wrapper,
+    kb_register_wrapper,
+    kb_update_wrapper,
 )
 
 # Live Chrome Bridge (CDP session attachment) — feature-gated
@@ -121,7 +128,6 @@ def get_core_internal_tools() -> List[Callable]:
         task_hub_task_action_wrapper,
         task_hub_decompose_wrapper,
         wiki_init_vault_wrapper,
-        wiki_ingest_external_source_wrapper,
         wiki_sync_internal_memory_wrapper,
         wiki_query_wrapper,
         wiki_lint_wrapper,
@@ -132,6 +138,10 @@ def get_core_internal_tools() -> List[Callable]:
         vp_cancel_mission_wrapper,
         vp_read_result_artifacts_wrapper,
         mcp__internal__publish_artifact,
+        kb_list_wrapper,
+        kb_get_wrapper,
+        kb_register_wrapper,
+        kb_update_wrapper,
     ]
 
 def get_memory_tools() -> List[Callable]:

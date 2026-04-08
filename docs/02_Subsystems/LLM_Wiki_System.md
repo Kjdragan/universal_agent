@@ -121,7 +121,8 @@ Deterministic checks include:
 
 ### Agent
 
-- `.claude/agents/wiki-maintainer.md`
+- `.claude/agents/notebooklm-operator.md` (for external KBs)
+- Internal wiki is handled locally without a delegating subagent.
 
 ### Internal Tools
 
@@ -135,11 +136,11 @@ Deterministic checks include:
 
 ## NotebookLM Role
 
-NotebookLM is optional and derivative:
-
-- useful for external-source acceleration and derivative artifact generation
-- not canonical for either vault
-- outputs imported from NotebookLM must preserve derivative provenance
+NotebookLM is the CANONICAL engine for External Knowledge Bases (KBs).
+- KBs are built and queried via the `notebooklm-operator` subagent using MCP tools.
+- We maintain a local `kb_registry.json` mapping slugs to NotebookLM notebook UUIDs.
+- Outputs imported from NotebookLM preserve derivative provenance and can be exported as Markdown, Audio, or PDFs.
+- For internal memory syncs, the local Python tools are still used.
 
 ## Obsidian Compatibility
 
