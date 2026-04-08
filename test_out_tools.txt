@@ -1,0 +1,14 @@
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.AssistantMessage'>
+MSG: <class 'claude_agent_sdk.types.AssistantMessage'>
+TOOL[0]: Bash
+MSG: <class 'claude_agent_sdk.types.UserMessage'>
+MSG: <class 'claude_agent_sdk.types.AssistantMessage'>
+TEXT[0] len: 132 -> "Your system has been up for **2 days, 22 hours, and 18 minutes**. You've got one user logged in and a moderate load average of ~5.5."
+MSG: <class 'claude_agent_sdk.types.ResultMessage'>

@@ -1,0 +1,11 @@
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.SystemMessage'>
+MSG: <class 'claude_agent_sdk.types.AssistantMessage'>
+MSG: <class 'claude_agent_sdk.types.AssistantMessage'>
+TEXT[0] len: 14 -> '5 + 5 = **10**'
+MSG: <class 'claude_agent_sdk.types.ResultMessage'>

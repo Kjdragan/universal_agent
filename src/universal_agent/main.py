@@ -6619,6 +6619,7 @@ async def run_conversation(
         final_text = ""  # Buffer to capture final agent response for printing after execution summary
         # Agent author tracking for sub-agent attribution
         _tool_name_map: dict[str, str] = {}  # tool_use_id -> resolved agent name
+        _emitted_text_lens: dict[int, int] = {}  # block_idx -> length of text already emitted
         _current_author = "Primary Agent"
         compaction_observed_this_turn = False
         compaction_grace_turns = _read_env_int(
@@ -6970,7 +6971,7 @@ async def run_conversation(
                         iteration=iteration,
                         parent_tool_use_id=parent_tool_use_id,
                     ):
-                        for block in msg.content:
+                        for block_idx, block in enumerate(msg.content):
                             if isinstance(block, ToolUseBlock):
                                 if is_malformed_tool_name(block.name):
                                     logfire.warning(
@@ -7186,9 +7187,13 @@ async def run_conversation(
 
                             elif isinstance(block, TextBlock):
                                 # Emit TEXT event for streaming with author attribution
-                                hook_events.emit_text_event(
-                                    block.text, author=_current_author
-                                )
+                                prev_len = _emitted_text_lens.get(block_idx, 0)
+                                new_text = block.text[prev_len:]
+                                if new_text:
+                                    hook_events.emit_text_event(
+                                        new_text, author=_current_author
+                                    )
+                                    _emitted_text_lens[block_idx] = len(block.text)
 
                                 if "connect.composio.dev/link" in block.text:
                                     import re
