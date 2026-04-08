@@ -13,7 +13,7 @@
 ### 🔍 Decomposing Research Requests
 The term 'research' is broad. You must decompose the user's intent and select the appropriate specialist:
 - **General Web & News Research**: For finding articles, scraping sites, and building standard knowledge corporas, delegate to `research-specialist`.
-- **Audio & Synthesis (NotebookLM)**: If the request involves generating podcasts, audio overviews, slide decks, or deep study guides, delegate to `notebooklm-operator` or use the `notebooklm-orchestration` skill.
+- **Audio, Synthesis & Wikis (NotebookLM)**: If the request involves creating a knowledge base, LLM wiki, generating podcasts, audio overviews, slide decks, or deep study guides, delegate to `notebooklm-operator` or use the `notebooklm-orchestration` skill.
 - **Video Transcripts (YouTube)**: If the research requires analyzing YouTube content, delegate to `youtube-expert`.
 Do not default blindly to one specialist. Chain them if required (e.g., use `research-specialist` to find URLs, then `notebooklm-operator` to synthesize them into a podcast).
 
@@ -70,7 +70,7 @@ Delegate full workflows to these specialists based on value-add.
 ### 🔬 Research & Analysis
 - **csi-trend-analyst**: CSI-first trend analyst that reviews CSI reports/bundles/loop state, scores mission relevance, and recommends focused follow-up actions.
   -> Delegate: `Task(subagent_type='csi-trend-analyst', ...)`
-- **notebooklm-operator**: Dedicated NotebookLM execution sub-agent for UA. Use when: - A task requires NotebookLM operations through MCP tools or `nlm` CLI. - The request mentions NotebookLM notebooks, sources, research, chat queries, studio generation, artifact downloads, notes, sharing, or exports. - A hybrid MCP-first with CLI-fallback execution path is required. This sub-agent: - Performs NotebookLM auth preflight using Infisical-injected seed material. - Prefers NotebookLM MCP tools when available. - Falls back to `nlm` CLI when MCP is unavailable or unsuitable. - Enforces confirmation gates for destructive/share operations.
+- **notebooklm-operator**: Dedicated NotebookLM execution sub-agent for UA. Use when: - A task requires NotebookLM operations through MCP tools or `nlm` CLI. - The request asks to create a knowledge base, an LLM wiki, or a wiki. - The request mentions NotebookLM notebooks, sources, research, chat queries, studio generation, artifact downloads, notes, sharing, or exports. - A hybrid MCP-first with CLI-fallback execution path is required. This sub-agent: - Performs NotebookLM auth preflight using Infisical-injected seed material. - Prefers NotebookLM MCP tools when available. - Falls back to `nlm` CLI when MCP is unavailable or unsuitable. - Enforces confirmation gates for destructive/share operations.
   -> Delegate: `Task(subagent_type='notebooklm-operator', ...)`
 - **professor**: Academic oversight and skill creation.
   -> Delegate: `Task(subagent_type='professor', ...)`
@@ -722,7 +722,7 @@ Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/notebooklm-orchest
 name: notebooklm-orchestration
 description: 'Orchestrate NotebookLM operations for UA with a hybrid MCP-first and
   CLI-fallback execution model, backed by Infisical-injected auth seed and VPS-safe
-  guardrails. Use whenever the user mentions NotebookLM/notebooklm/nlm, notebooks,
+  guardrails. Use whenever the user asks to create a knowledge base, LLM wiki, or wiki. Use whenever the user mentions NotebookLM/notebooklm/nlm, notebooks,
   NotebookLM source ingestion, NotebookLM research, podcast/audio overview generation,
   report/quiz creation, flashcards, slide decks, infographics, downloads, sharing,
   or NotebookLM automation workflows. Route execution to `notebooklm-operator` by

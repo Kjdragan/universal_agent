@@ -166,10 +166,22 @@ Chaining rationale:
 > [!IMPORTANT]
 > The captcha solver has a **100 attempts/day** limit (NopeCHA free tier). Use judiciously.
 
+## 6. Full Payload A/V Fetching (Native VPS + PoT)
+
+Added: 2026-04-08
+
+Implementation:
+- `.agents/skills/youtube-media/SKILL.md`
+- `.agents/skills/youtube-media/scripts/fetch_youtube_media.py`
+
+When the agent requires raw media blobs (a full audio stream `.m4a` or video `.mp4`), the system must strictly avoid using the rotating residential proxy. Heavy A/V downloads are approved **only** when routed natively on the VPS IP combined with the `bgutil-ytdlp-pot-provider` PoT token generator to bypass YouTube signatures natively. 
+
+This hybrid extraction strategy bifurcates traffic to avoid datacenter IP bans under rapid-fire API limits, while rescuing the project from astronomical residential proxy gigabyte charges on multi-megabyte media payloads.
+
 ## Explicitly Disallowed Uses
 
 The residential proxy must **not** be used for:
-- video binary downloads
+- video binary downloads (Media payloads must route natively via PoT, never the proxy)
 - generic web scraping by default
 - random experimentation against unknown targets without explicit approval
 - expensive bandwidth-heavy data transfer that is not part of an approved path
