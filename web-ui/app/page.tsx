@@ -120,7 +120,14 @@ function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[
     const assistantMatch = line.match(RUN_LOG_ASSISTANT_LINE);
     if (assistantMatch?.[1]) {
       const content = assistantMatch[1].trim();
-      if (content) messages.push({ role: "assistant", content });
+      if (content) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.role === "assistant") {
+          lastMsg.content += "\n" + content;
+        } else {
+          messages.push({ role: "assistant", content });
+        }
+      }
       continue;
     }
 
