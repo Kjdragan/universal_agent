@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import tool
@@ -12,6 +13,7 @@ from universal_agent.wiki.core import (
     query_vault,
     sync_internal_memory_vault,
 )
+from universal_agent.wiki import llm as wiki_llm
 
 
 def _ok(payload: dict[str, Any]) -> dict[str, Any]:
@@ -136,3 +138,154 @@ async def wiki_lint_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _err(str(exc))
     return _ok(result)
+
+
+# ---------------------------------------------------------------------------
+# New runtime tools: wiki_health and wiki_rebuild_page
+# ---------------------------------------------------------------------------
+
+
+@tool(
+    name="wiki_health",
+    description=(
+        "Check the health of a wiki vault. Returns page counts by category, "
+        "LLM availability, index freshness, and any structural issues. "
+        "Use this to verify vault integrity before querying or presenting wiki data."
+    ),
+    input_schema={"vault_kind": str, "vault_slug": str, "root_override": str},
+)
+async def wiki_health_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        vault_kind = str(args.get("vault_kind") or "external")
+        vault_slug = str(args.get("vault_slug") or "default")
+        root_override = str(args.get("root_override") or "").strip() or None
+
+        # Ensure vault exists
+        context = ensure_vault(vault_kind, vault_slug, root_override=root_override)
+        vault_path = context.path
+
+        # Count pages by category
+        categories = ["sources", "entities", "concepts", "analyses"]
+        page_counts: dict[str, int] = {}
+        for cat in categories:
+            cat_dir = vault_path / cat
+            if cat_dir.is_dir():
+                page_counts[cat] = len(list(cat_dir.glob("*.md")))
+            else:
+                page_counts[cat] = 0
+
+        # Check index freshness
+        index_path = vault_path / "index.md"
+        index_exists = index_path.exists()
+        index_mtime = ""
+        if index_exists:
+            import datetime
+            stat = index_path.stat()
+            index_mtime = datetime.datetime.fromtimestamp(
+                stat.st_mtime, tz=datetime.timezone.utc
+            ).isoformat()
+
+        # Run a quick lint
+        lint_result = lint_vault(
+            vault_kind=vault_kind,
+            vault_slug=vault_slug,
+            root_override=root_override,
+        )
+        finding_count = len(lint_result.get("findings", []))
+
+        # LLM status
+        llm_available = wiki_llm.is_llm_available()
+
+        return _ok({
+            "status": "healthy" if finding_count == 0 else "degraded",
+            "vault_kind": vault_kind,
+            "vault_slug": vault_slug,
+            "vault_path": str(vault_path),
+            "page_counts": page_counts,
+            "total_pages": sum(page_counts.values()),
+            "index_exists": index_exists,
+            "index_last_modified": index_mtime,
+            "lint_finding_count": finding_count,
+            "llm_available": llm_available,
+            "llm_model": wiki_llm.MODEL_ID if llm_available else None,
+        })
+    except Exception as exc:
+        return _err(str(exc))
+
+
+@tool(
+    name="wiki_rebuild_page",
+    description=(
+        "Re-ingest a single source from an external wiki vault, regenerating "
+        "its summary, entities, and concept pages with the latest LLM-powered "
+        "semantic extraction. Use when a page has stale or low-quality content "
+        "that needs refreshing. Requires the source page path relative to the vault root."
+    ),
+    input_schema={
+        "vault_slug": str,
+        "source_page_rel": str,
+        "root_override": str,
+    },
+)
+async def wiki_rebuild_page_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        vault_slug = str(args.get("vault_slug") or "default")
+        source_page_rel = str(args.get("source_page_rel") or "").strip()
+        root_override = str(args.get("root_override") or "").strip() or None
+
+        if not source_page_rel:
+            return _err("source_page_rel is required (e.g., 'sources/my-doc.md')")
+
+        context = ensure_vault("external", vault_slug, root_override=root_override)
+        source_page = context.path / source_page_rel
+
+        if not source_page.exists():
+            return _err(f"Source page not found: {source_page_rel}")
+
+        # Read the source page to extract metadata
+        import yaml
+        text = source_page.read_text(encoding="utf-8")
+        meta_raw = {}
+        body = text
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                meta_raw = yaml.safe_load(parts[1]) or {}
+                body = parts[2].strip()
+
+        title = meta_raw.get("title", source_page.stem.replace("-", " ").title())
+
+        # Find the raw source via provenance
+        raw_refs = meta_raw.get("provenance_refs") or []
+        raw_path = None
+        for ref in raw_refs:
+            candidate = context.path / ref
+            if candidate.exists():
+                raw_path = candidate
+                break
+
+        if raw_path is None:
+            # Try finding by source_id
+            source_ids = meta_raw.get("source_ids") or []
+            for sid in source_ids:
+                candidate = context.path / "raw" / f"{sid}.md"
+                if candidate.exists():
+                    raw_path = candidate
+                    break
+
+        if raw_path is None:
+            return _err("Cannot find raw source for this page. Manual re-ingest needed.")
+
+        # Re-ingest from the raw source
+        result = ingest_external_source(
+            vault_slug=vault_slug,
+            source_path=str(raw_path),
+            title=title,
+            root_override=root_override,
+        )
+        result["rebuild"] = True
+        result["rebuilt_from"] = source_page_rel
+        return _ok(result)
+    except Exception as exc:
+        return _err(str(exc))
+

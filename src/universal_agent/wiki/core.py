@@ -17,6 +17,7 @@ import yaml
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.wiki import llm as wiki_llm
 from universal_agent.workspace_catalog import list_workspace_summaries
 
 REQUIRED_FRONTMATTER_FIELDS = (
@@ -217,7 +218,8 @@ def _dump_markdown(meta: dict[str, Any], body: str) -> str:
     return f"---\n{yaml.safe_dump(meta, sort_keys=False, allow_unicode=False).strip()}\n---\n\n{body.rstrip()}\n"
 
 
-def _extract_summary(body: str) -> str:
+def _extract_summary_heuristic(body: str) -> str:
+    """Heuristic fallback: first non-heading, non-empty line, truncated."""
     for line in body.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -226,6 +228,14 @@ def _extract_summary(body: str) -> str:
             continue
         return stripped[:180]
     return ""
+
+
+def _extract_summary(body: str, title: str = "") -> str:
+    """Extract a summary using LLM if available, else heuristic fallback."""
+    llm_summary = wiki_llm.generate_summary_llm(body, title)
+    if llm_summary:
+        return llm_summary
+    return _extract_summary_heuristic(body)
 
 
 def _read_text_limited(path: Path, *, max_chars: int = MAX_EVIDENCE_TEXT_CHARS) -> str:
@@ -503,7 +513,16 @@ def _extract_concept_candidates(text: str) -> list[str]:
     return concepts
 
 
-def _upsert_reference_page(vault_path: Path, category: str, name: str, *, source_title: str, source_page_rel: str, source_id: str) -> str:
+def _upsert_reference_page(
+    vault_path: Path,
+    category: str,
+    name: str,
+    *,
+    source_title: str,
+    source_page_rel: str,
+    source_id: str,
+    description: str = "",
+) -> str:
     kind = CATEGORY_KIND.get(category, category.rstrip("s"))
     slug = _slugify(name, fallback=kind)
     page_path = vault_path / category / f"{slug}.md"
@@ -529,7 +548,8 @@ def _upsert_reference_page(vault_path: Path, category: str, name: str, *, source
             source_ids=[source_id],
             tags=[kind, "auto-generated"],
         )
-        body = f"# {name}\n\nAuto-maintained {kind} page.\n\n## Mentioned In\n\n{link_line}\n"
+        desc_text = description.strip() if description else f"Auto-maintained {kind} page."
+        body = f"# {name}\n\n{desc_text}\n\n## Mentioned In\n\n{link_line}\n"
         _write_page(page_path, meta, body)
     return _relative(page_path, vault_path)
 
@@ -584,9 +604,14 @@ def ingest_external_source(
     related_entities = []
     related_concepts = []
 
+    # --- LLM-powered extraction with heuristic fallback ---
+    llm_entities = wiki_llm.extract_entities_llm(raw_content or "", resolved_title)
+    llm_concepts = wiki_llm.extract_concepts_llm(raw_content or "", resolved_title)
+    summary = _extract_summary(raw_content or "", resolved_title)
+
     body = (
         f"# {resolved_title}\n\n"
-        f"## Summary\n\n{_extract_summary(raw_content or '') or 'Imported source.'}\n\n"
+        f"## Summary\n\n{summary or 'Imported source.'}\n\n"
         f"## Source Details\n\n"
         f"- Raw source: `{_relative(raw_path, context.path)}`\n"
         + (f"- URL: {source_url}\n" if source_url else "")
@@ -595,18 +620,50 @@ def ingest_external_source(
         + "\n"
     )
 
-    created_entities = []
-    created_concepts = []
-    for entity in _extract_entity_candidates(raw_content or "")[:3]:
-        created_entities.append(_slugify(entity))
-    for concept in _extract_concept_candidates(raw_content or "")[:3]:
-        created_concepts.append(_slugify(concept.replace("-", " ").title()))
+    # Build entity/concept lists from LLM output or heuristic fallback
+    entity_items: list[dict[str, str]] = []  # [{"name": ..., "slug": ..., "description": ...}]
+    concept_items: list[dict[str, str]] = []
 
-    if created_entities:
-        related_entities = [f"- [[entities/{slug}.md|{slug.replace('-', ' ').title()}]]" for slug in created_entities]
+    if llm_entities:
+        for ent in llm_entities[:5]:
+            name = ent.get("name", "").strip()
+            if not name:
+                continue
+            slug = _slugify(name)
+            # Generate a description for the entity page
+            desc = wiki_llm.generate_entity_description_llm(
+                name, [excerpt[:500]]
+            )
+            entity_items.append({"name": name, "slug": slug, "description": desc})
+    else:
+        # Heuristic fallback
+        for entity in _extract_entity_candidates(raw_content or "")[:3]:
+            entity_items.append({"name": entity, "slug": _slugify(entity), "description": ""})
+
+    if llm_concepts:
+        for con in llm_concepts[:5]:
+            name = con.get("name", "").strip()
+            if not name:
+                continue
+            title_name = name.replace("-", " ").title()
+            slug = _slugify(title_name)
+            # Use the LLM-provided definition as the page description
+            definition = con.get("definition", "")
+            desc = definition or wiki_llm.generate_concept_description_llm(
+                name, [excerpt[:500]]
+            )
+            concept_items.append({"name": title_name, "slug": slug, "description": desc})
+    else:
+        # Heuristic fallback
+        for concept in _extract_concept_candidates(raw_content or "")[:3]:
+            title_name = concept.replace("-", " ").title()
+            concept_items.append({"name": title_name, "slug": _slugify(title_name), "description": ""})
+
+    if entity_items:
+        related_entities = [f"- [[entities/{item['slug']}.md|{item['name']}]]" for item in entity_items]
         body += "\n## Related Entities\n\n" + "\n".join(related_entities) + "\n"
-    if created_concepts:
-        related_concepts = [f"- [[concepts/{slug}.md|{slug.replace('-', ' ').title()}]]" for slug in created_concepts]
+    if concept_items:
+        related_concepts = [f"- [[concepts/{item['slug']}.md|{item['name']}]]" for item in concept_items]
         body += "\n## Related Concepts\n\n" + "\n".join(related_concepts) + "\n"
 
     _write_page(source_page, meta, body)
@@ -614,28 +671,28 @@ def ingest_external_source(
 
     entity_paths = []
     concept_paths = []
-    for slug in created_entities:
-        label = slug.replace("-", " ").title()
+    for item in entity_items:
         entity_paths.append(
             _upsert_reference_page(
                 context.path,
                 "entities",
-                label,
+                item["name"],
                 source_title=resolved_title,
                 source_page_rel=source_page_rel,
                 source_id=source_id,
+                description=item.get("description", ""),
             )
         )
-    for slug in created_concepts:
-        label = slug.replace("-", " ").title()
+    for item in concept_items:
         concept_paths.append(
             _upsert_reference_page(
                 context.path,
                 "concepts",
-                label,
+                item["name"],
                 source_title=resolved_title,
                 source_page_rel=source_page_rel,
                 source_id=source_id,
+                description=item.get("description", ""),
             )
         )
 

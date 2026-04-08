@@ -130,6 +130,8 @@ Deterministic checks include:
 - `wiki_sync_internal_memory`
 - `wiki_query`
 - `wiki_lint`
+- `wiki_health` — observability: vault integrity, page counts, LLM availability
+- `wiki_rebuild_page` — targeted re-ingestion and semantic enrichment of a source page
 
 ## NotebookLM Role
 
@@ -161,30 +163,42 @@ The subsystem requires:
 - wiki integrity tests
 - documentation index/link tests
 
-## Final Buildout Instructions
+## LLM Integration Layer
 
-The next implementation work should proceed in this order:
+Since April 2026, the wiki engine uses a semantic LLM layer (`wiki/llm.py`) for:
 
-1. **Improve semantic page quality**
-   - Replace or augment heuristic entity/concept extraction with stronger semantic selection.
-   - Reduce low-value auto-pages.
-   - Keep source pages dominant in query results.
-   - Consider a confidence threshold before auto-creating new concept/entity pages.
+- **Entity extraction** — named entities worth creating wiki pages for
+- **Concept extraction** — abstract concepts and techniques
+- **Summary generation** — 2-3 sentence semantic summaries for index pages
+- **Description generation** — entity/concept page content synthesis
+- **Ledger synthesis** — structuring raw memory evidence into markdown
 
-2. **Add real shared-memory integration coverage**
-   - Create a dedicated integration/smoke test for the actual shared memory workspace.
-   - Validate behavior against real session evidence, checkpoint files, and warm reruns.
-   - Confirm `sync_state.json`, `sync_progress.json`, and `sync_progress.md` remain coherent across repeated runs.
+### Provider
 
-3. **Keep internal sync observable**
-   - Preserve timing telemetry from `sync_internal_memory_vault()`.
-   - Expand human-readable progress reporting if future runs become harder to diagnose.
-   - If warm-run timing regresses, inspect phase timing output first before changing the data model.
+The LLM layer uses the project's standard **Z.AI Anthropic emulation** (same pattern as `llm_classifier.py`). API key chain: `ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `ZAI_API_KEY`. Model resolved via `resolve_model('sonnet')` which currently maps to GLM-4.7.
 
-4. **Expand runtime usage only after validation**
-   - Use the current external vault for controlled experimentation.
-   - Use the internal memory vault in bounded form only.
-   - Do not promote either vault into broader agent recall paths until semantic quality and integration coverage improve further.
+### Graceful Degradation
+
+All LLM-driven features fall back to existing heuristic methods if:
+
+- No API key is available
+- The LLM call fails (timeout, rate limit, etc.)
+
+This keeps the wiki engine functional in CI, tests, and offline environments.
+
+## TDD Test Suite
+
+- `tests/unit/test_wiki_llm.py` — 18 unit tests (mocked LLM responses)
+- `tests/unit/test_wiki_semantic_ingest.py` — 5 semantic ingest pipeline tests
+- `tests/integration/test_wiki_integration_real_workspace.py` — 9 integration tests against real shared-memory workspace
+- `tests/unit/test_llm_wiki_engine.py` — 3 existing engine tests
+
+## Next Steps
+
+1. **Monitor semantic quality** — use `wiki_health` to track vault integrity as usage scales
+2. **Tune prompts** — adjust extraction prompts in `wiki/llm.py` if semantic quality needs refinement
+3. **Expand recall integration** — connect wiki query into agent recall paths once quality is validated
+4. **Keep internal sync observable** — preserve timing telemetry; if warm-run timing regresses, inspect phase timing output first
 
 ## How To Try It
 
