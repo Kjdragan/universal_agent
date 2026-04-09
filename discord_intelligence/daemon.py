@@ -123,8 +123,7 @@ def main():
     db = DiscordIntelligenceDB(db_path)
     
     client = DiscordIntelligenceClient(db=db)
-    # Using bot=False for self-bot behavior, as requested by HANDOFF
-    client.run(token, bot=False)
+    client.run(token)
 
 if __name__ == "__main__":
     main()
