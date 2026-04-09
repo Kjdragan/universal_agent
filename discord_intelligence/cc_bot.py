@@ -108,9 +108,9 @@ class CCBot(commands.Bot):
                     # Color code by severity
                     color = discord.Color.red() if sig['severity'] == 'high' else discord.Color.gold()
                     
-                    # Truncate content for embed
-                    content_preview = (sig.get('content') or '')[:300]
-                    if len(sig.get('content') or '') > 300:
+                    # Truncate content for embed, respecting Discord limits while keeping most info
+                    content_preview = (sig.get('content') or '')[:2000]
+                    if len(sig.get('content') or '') > 2000:
                         content_preview += "…"
                     
                     embed = discord.Embed(
@@ -160,7 +160,7 @@ class CCBot(commands.Bot):
                     
                     embed = discord.Embed(
                         title=f"📊 Insight: {ins['topic']}",
-                        description=ins['summary'][:1000],
+                        description=ins['summary'][:4000],
                         color=color,
                         timestamp=datetime.fromisoformat(ins['created_at']) if ins.get('created_at') else None
                     )
@@ -257,7 +257,8 @@ def setup_commands(bot: CCBot):
             await interaction.response.send_message(f"No results found for '{query}'")
             return
             
-        reply = "\n".join([f"**{r['author_name']}**: {r['content'][:100]}" for r in results])
+        # Total length of message cannot exceed 2000 characters, so limit individual results to 350 chars
+        reply = "\n".join([f"**{r['author_name']}**: {r['content'][:350]}" for r in results])
         await interaction.response.send_message(f"Search results:\n{reply}")
 
     @bot.tree.command(name="discord_signals", description="Show recent detected signals")

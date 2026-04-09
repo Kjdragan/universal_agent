@@ -102,6 +102,12 @@ infisical secrets set MY_KEY=my_value --env=development
 # Multiple secrets
 infisical secrets set DB_HOST=localhost DB_PORT=5432 --env=development
 
+# Setting across all environments (development, staging, production)
+# IMPORTANT: When adding new system-level secrets, ensure they are present in all stages
+for ENV in development staging production; do
+  infisical secrets set --env=$ENV NEW_SECRET_KEY="the_value"
+done
+
 # From file content
 infisical secrets set CERT=@/path/to/cert.pem --env=development
 ```

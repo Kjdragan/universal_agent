@@ -107,7 +107,7 @@ class DiscordIntelligenceClient(discord.Client):
             event_id=f"text_evt_{message.id}",
             server_id=str(message.guild.id),
             name="Textual Mention Event",
-            description=message.content[:200] + "...\n" + message.jump_url,
+            description=message.content + "\n\n" + message.jump_url,
             start_time=message.created_at,
             end_time=None,
             location=message.channel.name,
