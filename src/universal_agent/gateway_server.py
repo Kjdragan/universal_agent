@@ -24145,8 +24145,14 @@ async def run_cron_job(job_id: str):
     job = _cron_service.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Chron job not found")
-    record = await _cron_service.run_job_now(job_id, reason="manual")
-    return {"run": record.to_dict()}
+    try:
+        record = await _cron_service.run_job_now(job_id, reason="manual", background=True)
+        return {"run": record.to_dict()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to run chron job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/v1/cron/jobs/{job_id}/runs")

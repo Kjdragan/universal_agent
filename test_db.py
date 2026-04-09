@@ -1,19 +1,8 @@
-import sqlite3
-import json
+import sys
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
-def get_csi_data():
-    conn = sqlite3.connect('/var/lib/universal-agent/csi/csi.db')
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = [dict(row) for row in cur.fetchall()]
-        print(tables)
-        
-        if any(t['name'] == 'insight_reports' for t in tables):
-            cur.execute("SELECT * FROM insight_reports ORDER BY created_at DESC LIMIT 10")
-            print([dict(r) for r in cur.fetchall()])
-    finally:
-        conn.close()
-
-get_csi_data()
+try:
+    conn = connect_runtime_db(get_activity_db_path())
+    print("Success")
+except Exception as e:
+    print(e)

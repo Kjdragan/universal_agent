@@ -794,10 +794,26 @@ class CronService:
         job_id: str,
         reason: str = "manual",
         scheduled_at: Optional[float] = None,
+        background: bool = False,
     ) -> CronRunRecord:
         job = self.jobs[job_id]
+        if job.job_id in self.running_jobs:
+            raise ValueError(f"Job {job.job_id} is already running")
         self.running_jobs.add(job.job_id)
         dispatch_key = self._dispatch_key_for_job(job, reason=reason, scheduled_at=scheduled_at)
+        
+        if background:
+            asyncio.create_task(
+                self._run_job(job, scheduled_at=scheduled_at, reason=reason, dispatch_key=dispatch_key)
+            )
+            return CronRunRecord(
+                run_id=f"queued-{uuid.uuid4().hex[:8]}",
+                job_id=job.job_id,
+                status="queued",
+                scheduled_at=scheduled_at,
+                started_at=time.time(),
+            )
+        
         return await self._run_job(job, scheduled_at=scheduled_at, reason=reason, dispatch_key=dispatch_key)
 
     async def _scheduler_loop(self) -> None:
