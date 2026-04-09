@@ -1,6 +1,6 @@
 # Agent Skills Directory (`.agents/skills/`)
 
-Last updated: 2026-04-07
+Last updated: 2026-04-09
 
 ## Purpose
 
@@ -50,6 +50,10 @@ The `.agents/skills/` directory contains reusable agent skills that are separate
     │   ├── root-cause-tracing.md
     │   ├── defense-in-depth.md
     │   └── condition-based-waiting.md
+    ├── youtube-media/
+    │   ├── SKILL.md          # Native YouTube audio/video download via PoT bypass
+    │   └── scripts/
+    │       └── fetch_youtube_media.py
     └── vp-orchestration/
         ├── SKILL.md          # External VP agent mission control
         └── references/
@@ -66,7 +70,7 @@ The directory contains 50+ skills spanning categories:
 | **Communication** | `agentmail`, `gmail`, `discord`, `slack`, `telegram` |
 | **Development** | `clean-code`, `systematic-debugging`, `github`, `git-commit` |
 | **Research** | `arxiv-specialist`, `gemini-url-context-scraper`, `reddit-intel` |
-| **Creativity** | `banana-squad`, `image-generation`, `video-remotion` |
+| **Creativity** | `banana-squad`, `image-generation`, `video-remotion`, `youtube-media` |
 | **Integration** | `vp-orchestration`, `google_calendar`, `notion`, `trello` |
 | **Data** | `data-fusion`, `financial-extractor`, `pdf` |
 | **Obsidian** | `obsidian-cli`, `obsidian-bases`, `obsidian-markdown`, `obsidian-power-user` |
@@ -85,6 +89,7 @@ The directory contains 50+ skills spanning categories:
 | `image-generation` | AI-powered image generation and editing using Gemini |
 | `residential-proxy` | One-off rotating residential proxy via Webshare — bypass datacenter IP blocks on target sites |
 | `captcha-solver` | Automated CAPTCHA bypass using NopeCHA browser extension — supports Cloudflare Turnstile, reCAPTCHA, hCaptcha |
+| `youtube-media` | Native YouTube audio/video binary download via PoT (Proof-of-Origin) proxy bypass — avoids residential proxy billing for large media payloads |
 
 ## Usage
 
