@@ -3,7 +3,7 @@ import os
 import asyncio
 import logging
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 
 from .config import init_secrets, get_db_path

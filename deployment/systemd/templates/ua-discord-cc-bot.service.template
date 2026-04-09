@@ -1,0 +1,15 @@
+[Unit]
+Description=Universal Agent - Command and Control Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONPATH=/opt/universal_agent/src
+ExecStart=/usr/local/bin/uv run --with "discord.py>=2.3.0" python -m discord_intelligence.cc_bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
