@@ -13463,10 +13463,6 @@ async def lifespan(app: FastAPI):
             system_event_callback=_enqueue_system_event,
         )
         await _cron_service.start()
-        try:
-            _ensure_autonomous_daily_briefing_job()
-        except Exception:
-            logger.exception("Failed ensuring autonomous daily briefing chron job")
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
@@ -23409,33 +23405,8 @@ def _build_task_hub_execution_cron_command(*, task_id: str, content: str) -> str
     )
 
 
-def _build_autonomous_daily_briefing_command() -> str:
-    return "\n".join(
-        [
-            "Generate the daily autonomous operations briefing for the last 24 hours.",
-            "Focus only on work executed without direct user prompting (scheduled/proactive flows).",
-            "Include:",
-            "- tasks completed",
-            "- tasks attempted and failed",
-            "- links/paths to artifacts produced",
-            "- items requiring user decisions",
-            "Write a concise markdown report to UA_ARTIFACTS_DIR/autonomous-briefings/<today>/DAILY_BRIEFING.md.",
-            "Then provide a short summary suitable for dashboard notification text.",
-        ]
-    )
 
 
-def _autonomous_briefing_day_slug(now_ts: float) -> str:
-    tz_name = (
-        (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_TIMEZONE") or "").strip()
-        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE
-    )
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = timezone.utc
-    dt = datetime.fromtimestamp(now_ts, tz)
-    return dt.date().isoformat()
 
 
 def _collect_autonomous_runs_from_cron(
@@ -23710,209 +23681,6 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
     }
 
 
-def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = None) -> dict[str, Any]:
-    if now_ts is None:
-        now_ts = time.time()
-    rows = _collect_autonomous_activity_rows(now_ts=now_ts)
-    completed = list(rows.get("completed") or [])
-    failed = list(rows.get("failed") or [])
-    heartbeat_rows = list(rows.get("heartbeat") or [])
-    source_diagnostics = rows.get("source_diagnostics")
-    if not isinstance(source_diagnostics, dict):
-        source_diagnostics = {}
-    warnings = [str(item).strip() for item in (rows.get("warnings") or []) if str(item).strip()]
-    requires_decision = [row for row in failed if row.get("error")]
-    non_cron_artifact_links: list[dict[str, str]] = []
-    seen_artifact_refs: set[tuple[str, str]] = set()
-    for row in heartbeat_rows:
-        raw_links = row.get("heartbeat_artifacts")
-        if not isinstance(raw_links, list):
-            continue
-        for raw in raw_links:
-            if not isinstance(raw, dict):
-                continue
-            scope = str(raw.get("scope") or "").strip() or "workspaces"
-            rel = str(raw.get("relative_path") or "").strip()
-            href = str(raw.get("storage_href") or "").strip() or str(raw.get("api_url") or "").strip()
-            if not rel or not href:
-                continue
-            key = (scope, rel)
-            if key in seen_artifact_refs:
-                continue
-            seen_artifact_refs.add(key)
-            non_cron_artifact_links.append(
-                {
-                    "scope": scope,
-                    "relative_path": rel,
-                    "storage_href": href,
-                }
-            )
-
-    day_slug = _autonomous_briefing_day_slug(now_ts)
-    out_dir = ARTIFACTS_DIR / "autonomous-briefings" / day_slug
-    out_dir.mkdir(parents=True, exist_ok=True)
-    md_path = out_dir / "DAILY_BRIEFING.md"
-    json_path = out_dir / "briefing.json"
-
-    lines: list[str] = []
-    lines.append("# Daily Autonomous Briefing")
-    lines.append("")
-    lines.append(f"- Generated: {datetime.fromtimestamp(now_ts, timezone.utc).isoformat()}")
-    lines.append(f"- Window start (UTC): {rows.get('window_started_at')}")
-    lines.append(f"- Window end (UTC): {rows.get('window_ended_at')}")
-    lines.append(
-        f"- Totals: completed={len(completed)}, failed={len(failed)}, heartbeat_events={len(heartbeat_rows)}"
-    )
-    lines.append(
-        f"- Input health: notif_window={int(source_diagnostics.get('notification_events_in_window', 0) or 0)}, "
-        f"cron_window={int(source_diagnostics.get('cron_runs_in_window', 0) or 0)}, "
-        f"backfill_applied={'yes' if bool(source_diagnostics.get('cron_backfill_applied')) else 'no'}"
-    )
-    lines.append("")
-
-    lines.append("## Briefing Input Diagnostics")
-    lines.append(
-        f"- Notification buffer size: {int(source_diagnostics.get('notification_buffer_size', 0) or 0)}"
-    )
-    lines.append(
-        f"- Autonomous notifications in window: {int(source_diagnostics.get('notification_events_in_window', 0) or 0)}"
-    )
-    lines.append(f"- Persisted cron runs in window: {int(source_diagnostics.get('cron_runs_in_window', 0) or 0)}")
-    lines.append(
-        f"- Classified autonomous cron runs in window: {int(source_diagnostics.get('cron_autonomous_runs_in_window', 0) or 0)}"
-    )
-    lines.append(
-        f"- Daily briefing self-runs excluded: {int(source_diagnostics.get('cron_runs_daily_briefing_excluded', 0) or 0)}"
-    )
-    lines.append(
-        f"- CSI signals ingest enabled: {'yes' if bool(source_diagnostics.get('signals_ingest_enabled')) else 'no'}"
-    )
-
-    lines.append(
-        f"- Cron backfill applied: {'yes' if bool(source_diagnostics.get('cron_backfill_applied')) else 'no'}"
-    )
-    lines.append("")
-
-    lines.append("## Data Quality Warnings")
-    if warnings:
-        for warning in warnings:
-            lines.append(f"- {warning}")
-    else:
-        lines.append("- None.")
-    lines.append("")
-
-    lines.append("## Completed Autonomous Tasks")
-    if completed:
-        for row in completed:
-            task_text = str(row.get("message") or "").strip() or str(row.get("title") or "Autonomous task")
-            lines.append(f"- {task_text}")
-            job_id = str(row.get("job_id") or "")
-            if job_id:
-                links = _autonomous_job_artifact_links(job_id)
-                if links:
-                    for link in links:
-                        rel = str(link.get("relative_path") or "")
-                        api_url = str(link.get("api_url") or "")
-                        if rel and api_url:
-                            lines.append(f"  - [Artifact: {rel}]({api_url})")
-                else:
-                    lines.append(f"  - No persisted artifact files found for job `{job_id}`.")
-    else:
-        lines.append("- None in the last window.")
-    lines.append("")
-
-    lines.append("## Attempted / Failed Autonomous Tasks")
-    if failed:
-        for row in failed:
-            task_text = str(row.get("message") or "").strip() or str(row.get("title") or "Autonomous task")
-            lines.append(f"- {task_text}")
-            error_text = str(row.get("error") or "").strip()
-            if error_text:
-                lines.append(f"  - Error: `{error_text[:400]}`")
-            job_id = str(row.get("job_id") or "")
-            if job_id:
-                links = _autonomous_job_artifact_links(job_id)
-                for link in links:
-                    rel = str(link.get("relative_path") or "")
-                    api_url = str(link.get("api_url") or "")
-                    if rel and api_url:
-                        lines.append(f"  - [Artifact: {rel}]({api_url})")
-    else:
-        lines.append("- None in the last window.")
-    lines.append("")
-
-    lines.append("## Items Requiring User Decision")
-    if requires_decision:
-        for row in requires_decision:
-            task_id = str(row.get("task_id") or "").strip()
-            error_text = str(row.get("error") or "").strip()
-            message = str(row.get("message") or "").strip()
-            if task_id:
-                lines.append(f"- Task `{task_id}`: {message}")
-            else:
-                lines.append(f"- {message}")
-            if error_text:
-                lines.append(f"  - Reason: `{error_text[:400]}`")
-    else:
-        lines.append("- None.")
-    lines.append("")
-
-    lines.append("## Heartbeat Autonomous Activity")
-    if heartbeat_rows:
-        for row in heartbeat_rows:
-            lines.append(f"- {str(row.get('created_at') or '')}: {str(row.get('message') or '')}")
-    else:
-        lines.append("- None in the last window.")
-    lines.append("")
-
-    lines.append("## Non-Cron Autonomous Artifact Outputs")
-    if non_cron_artifact_links:
-        for link in non_cron_artifact_links:
-            scope = str(link.get("scope") or "workspaces")
-            rel = str(link.get("relative_path") or "")
-            href = str(link.get("storage_href") or "")
-            lines.append(f"- [{scope}: {rel}]({href})")
-    else:
-        lines.append("- None discovered from heartbeat/autonomous workspace outputs.")
-    lines.append("")
-
-    markdown = "\n".join(lines).strip() + "\n"
-    md_path.write_text(markdown, encoding="utf-8")
-
-    payload = {
-        "generated_at": datetime.fromtimestamp(now_ts, timezone.utc).isoformat(),
-        "window_seconds": rows.get("window_seconds"),
-        "window_started_at": rows.get("window_started_at"),
-        "window_ended_at": rows.get("window_ended_at"),
-        "source_diagnostics": source_diagnostics,
-        "warnings": warnings,
-        "counts": {
-            "completed": len(completed),
-            "failed": len(failed),
-            "heartbeat": len(heartbeat_rows),
-            "requires_decision": len(requires_decision),
-            "non_cron_artifacts": len(non_cron_artifact_links),
-        },
-        "completed": completed,
-        "failed": failed,
-        "heartbeat": heartbeat_rows,
-        "non_cron_artifacts": non_cron_artifact_links,
-    }
-    json_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
-
-    md_links = _artifact_links_for_path(md_path)
-    json_links = _artifact_links_for_path(json_path)
-    summary_line = (
-        f"Daily autonomous briefing ready: {len(completed)} completed, {len(failed)} failed, "
-        f"{len(requires_decision)} need decisions."
-    )
-    return {
-        "summary_line": summary_line,
-        "markdown": md_links,
-        "json": json_links,
-        "counts": payload.get("counts", {}),
-        "day_slug": day_slug,
-    }
 
 
 def _normalize_interval_from_text(text: str) -> Optional[str]:
@@ -24233,72 +24001,6 @@ async def _resolve_simplified_schedule_update_fields_with_agent(
         )
 
 
-def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
-    if not _cron_service:
-        return None
-    enabled = (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"})
-    cron_expr = (
-        (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_CRON") or "").strip()
-        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON
-    )
-    timezone_name = (
-        (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_TIMEZONE") or "").strip()
-        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE
-    )
-    command = _build_autonomous_daily_briefing_command()
-    metadata = {
-        "system_job": AUTONOMOUS_DAILY_BRIEFING_JOB_KEY,
-        "autonomous": True,
-        "briefing": True,
-        "source": "system",
-        "session_id": "autonomous_daily_briefing",
-    }
-
-    existing = None
-    for job in _cron_service.list_jobs():
-        job_metadata = getattr(job, "metadata", {}) or {}
-        if not isinstance(job_metadata, dict):
-            continue
-        if str(job_metadata.get("system_job") or "").strip() == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY:
-            existing = job
-            break
-
-    if existing is None:
-        job = _cron_service.add_job(
-            user_id="cron_system",
-            workspace_dir=str(WORKSPACES_DIR / "cron_autonomous_daily_briefing"),
-            command=command,
-            cron_expr=cron_expr,
-            timezone=timezone_name,
-            delete_after_run=False,
-            enabled=enabled,
-            metadata=metadata,
-        )
-        logger.info(
-            "⏰ Created autonomous daily briefing chron job id=%s cron=%s tz=%s enabled=%s",
-            job.job_id,
-            cron_expr,
-            timezone_name,
-            enabled,
-        )
-        return {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
-
-    updates: dict[str, Any] = {
-        "command": command,
-        "cron_expr": cron_expr,
-        "timezone": timezone_name,
-        "enabled": enabled,
-        "metadata": metadata,
-    }
-    updated = _cron_service.update_job(existing.job_id, updates)
-    logger.info(
-        "⏰ Updated autonomous daily briefing chron job id=%s cron=%s tz=%s enabled=%s",
-        updated.job_id,
-        cron_expr,
-        timezone_name,
-        enabled,
-    )
-    return {**updated.to_dict(), "running": updated.job_id in _cron_service.running_jobs}
 
 
 @app.get("/api/v1/cron/jobs")
@@ -24478,7 +24180,7 @@ class _AgentCronCommandInterpretation(BaseModel):
 
 def _build_cron_nl_command_prompt(*, text: str, timezone_name: str, jobs: list[dict]) -> str:
     """Build the prompt for the system-configuration-agent to interpret NL cron commands."""
-    now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc).isoformat()
     jobs_summary = json.dumps(jobs, indent=2, ensure_ascii=True) if jobs else "(no existing jobs)"
     return (
         "You are a cron job management assistant. The user has given a natural-language instruction "

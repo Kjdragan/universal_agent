@@ -2105,29 +2105,7 @@ class HeartbeatService:
                     logger.debug("Reflection engine unavailable: %s", ref_exc)
                     _reflection_ctx_text = ""
 
-            # Phase 2: Morning report — on each heartbeat tick, check if the
-            # 7 AM morning report email is due and fire-and-forget the send.
-            # Access _agentmail_service from gateway_server module (lazy import
-            # to avoid circular dependency at module load time).
-            try:
-                from universal_agent.services.morning_report_sender import (
-                    MorningReportSender,
-                )
-                import universal_agent.gateway_server as _gw_mod
-                _mr_agentmail = getattr(_gw_mod, "_agentmail_service", None)
-                _mr_sender = MorningReportSender(
-                    agentmail_service=_mr_agentmail,
-                    task_hub_db_path="",
-                )
-                _mr_result = await _mr_sender.send_if_due()
-                if _mr_result.get("sent"):
-                    logger.info(
-                        "☀️ Morning report sent during heartbeat tick: %s",
-                        _mr_result.get("recipient"),
-                    )
-                    metadata["morning_report_sent"] = True
-            except Exception as _mr_exc:
-                logger.debug("Morning report check skipped: %s", _mr_exc)
+
 
             # Compose heartbeat prompt only after Task Hub claims are known so the
             # model can explicitly disposition claimed items before completion.
