@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/opt/universal_agent
 # Loads .env or infisical automatically based on UA standards
 Environment="PYTHONPATH=/opt/universal_agent/src:/opt/universal_agent"
-ExecStart=/usr/local/bin/uv run python discord_intelligence/daemon.py
+ExecStart=/usr/local/bin/uv run python -m discord_intelligence.daemon
 Restart=always
 RestartSec=10
 
