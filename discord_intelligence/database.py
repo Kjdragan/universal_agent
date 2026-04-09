@@ -62,6 +62,7 @@ class DiscordIntelligenceDB:
                     rule_matched TEXT,
                     severity TEXT,
                     action_taken TEXT,
+                    notified BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (message_id) REFERENCES messages (id)
                 )
@@ -87,6 +88,7 @@ class DiscordIntelligenceDB:
                     urgency TEXT,
                     confidence FLOAT,
                     source_message_ids TEXT,
+                    notified BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (batch_id) REFERENCES triage_batches (id)
                 )
@@ -105,6 +107,21 @@ class DiscordIntelligenceDB:
                 )
             ''')
             conn.commit()
+            # Migrations for existing databases: add notified columns if missing
+            self._migrate_add_column(conn, 'signals', 'notified', 'BOOLEAN DEFAULT 0')
+            self._migrate_add_column(conn, 'insights', 'notified', 'BOOLEAN DEFAULT 0')
+
+    @staticmethod
+    def _migrate_add_column(conn, table: str, column: str, typedef: str):
+        """Safely add a column to an existing table if it doesn't exist."""
+        try:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            columns = [row[1] for row in cur.fetchall()]
+            if column not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
+                conn.commit()
+        except Exception:
+            pass  # Column already exists or table doesn't exist yet
 
     def upsert_server(self, server_id: str, name: str):
         with self._get_conn() as conn:
@@ -209,4 +226,52 @@ class DiscordIntelligenceDB:
     def mark_event_notified(self, event_id: str):
         with self._get_conn() as conn:
             conn.execute('UPDATE scheduled_events SET notified = 1 WHERE id = ?', (event_id,))
+            conn.commit()
+
+    def get_unnotified_signals(self, limit: int = 20):
+        """Get signals that haven't been posted to Discord yet."""
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT s.id, s.message_id, s.rule_matched, s.severity, s.created_at,
+                       m.content, m.author_name, m.channel_id,
+                       c.name as channel_name, srv.name as server_name
+                FROM signals s
+                JOIN messages m ON s.message_id = m.id
+                LEFT JOIN channels c ON m.channel_id = c.id
+                LEFT JOIN servers srv ON m.server_id = srv.id
+                WHERE s.notified = 0
+                ORDER BY s.created_at DESC LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
+    def mark_signals_notified(self, signal_ids: list):
+        if not signal_ids:
+            return
+        with self._get_conn() as conn:
+            placeholders = ','.join('?' * len(signal_ids))
+            conn.execute(f'UPDATE signals SET notified = 1 WHERE id IN ({placeholders})', signal_ids)
+            conn.commit()
+
+    def get_unnotified_insights(self, limit: int = 20):
+        """Get insights that haven't been posted to Discord yet."""
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT i.id, i.topic, i.summary, i.sentiment, i.urgency, i.confidence,
+                       i.created_at, tb.channel_id,
+                       c.name as channel_name, srv.name as server_name
+                FROM insights i
+                JOIN triage_batches tb ON i.batch_id = tb.id
+                LEFT JOIN channels c ON tb.channel_id = c.id
+                LEFT JOIN servers srv ON c.server_id = srv.id
+                WHERE i.notified = 0
+                ORDER BY i.created_at DESC LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
+    def mark_insights_notified(self, insight_ids: list):
+        if not insight_ids:
+            return
+        with self._get_conn() as conn:
+            placeholders = ','.join('?' * len(insight_ids))
+            conn.execute(f'UPDATE insights SET notified = 1 WHERE id IN ({placeholders})', insight_ids)
             conn.commit()

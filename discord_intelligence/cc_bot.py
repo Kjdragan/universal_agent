@@ -2,6 +2,7 @@
 import os
 import asyncio
 import logging
+from datetime import datetime
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -40,6 +41,15 @@ class CCBot(commands.Bot):
     async def on_ready(self):
         logger.info(f"Command & Control Bot logged in as {self.user.name} ({self.user.id})")
         self.poll_database.start()
+        self.poll_signals_feed.start()
+        self.poll_insights_feed.start()
+
+    def _get_intel_channel(self, guild, channel_name: str):
+        """Find a channel by name under the 🔬 INTELLIGENCE category."""
+        cat = discord.utils.get(guild.categories, name="🔬 INTELLIGENCE")
+        if cat:
+            return discord.utils.get(cat.channels, name=channel_name)
+        return None
 
     @tasks.loop(seconds=60)
     async def poll_database(self):
@@ -50,28 +60,113 @@ class CCBot(commands.Bot):
             events = cur.fetchall()
             if events:
                 for guild in self.guilds:
-                    cat = discord.utils.get(guild.categories, name="🔬 INTELLIGENCE")
-                    if cat:
-                        channel = discord.utils.get(cat.channels, name="event-calendar")
-                        if channel:
-                            for ev in events:
-                                embed = discord.Embed(title=f"New Event: {ev['name']}", description=ev['description'], color=discord.Color.blue())
-                                embed.add_field(name="Server ID", value=ev['server_id'])
-                                embed.add_field(name="Start", value=ev['start_time'])
-                                if 'end_time' in ev.keys() and ev['end_time']:
-                                    embed.add_field(name="End", value=ev['end_time'])
-                                if ev['location']:
-                                    embed.add_field(name="Location", value=ev['location'])
-                                
-                                msg = await channel.send(embed=embed)
-                                await msg.add_reaction("✅")
-                                await msg.add_reaction("🎙️")
-                                await msg.add_reaction("📋")
-                                await msg.add_reaction("❌")
-                                
-                                self.db.mark_event_notified(ev['id'])
+                    channel = self._get_intel_channel(guild, "event-calendar")
+                    if channel:
+                        for ev in events:
+                            embed = discord.Embed(title=f"New Event: {ev['name']}", description=ev['description'], color=discord.Color.blue())
+                            embed.add_field(name="Server ID", value=ev['server_id'])
+                            embed.add_field(name="Start", value=ev['start_time'])
+                            if 'end_time' in ev.keys() and ev['end_time']:
+                                embed.add_field(name="End", value=ev['end_time'])
+                            if ev['location']:
+                                embed.add_field(name="Location", value=ev['location'])
+                            
+                            msg = await channel.send(embed=embed)
+                            await msg.add_reaction("✅")
+                            await msg.add_reaction("🎙️")
+                            await msg.add_reaction("📋")
+                            await msg.add_reaction("❌")
+                            
+                            self.db.mark_event_notified(ev['id'])
         except Exception as e:
             logger.error(f"Polling error: {e}")
+
+    @tasks.loop(seconds=90)
+    async def poll_signals_feed(self):
+        """Post unnotified signals (keyword matches, release detections) to #signals-feed."""
+        try:
+            signals = self.db.get_unnotified_signals(limit=10)
+            if not signals:
+                return
+                
+            for guild in self.guilds:
+                channel = self._get_intel_channel(guild, "signals-feed")
+                if not channel:
+                    # Fallback to research-feed if signals-feed doesn't exist
+                    channel = self._get_intel_channel(guild, "research-feed")
+                if not channel:
+                    continue
+                    
+                for sig in signals:
+                    # Color code by severity
+                    color = discord.Color.red() if sig['severity'] == 'high' else discord.Color.gold()
+                    
+                    # Truncate content for embed
+                    content_preview = (sig.get('content') or '')[:300]
+                    if len(sig.get('content') or '') > 300:
+                        content_preview += "…"
+                    
+                    embed = discord.Embed(
+                        title=f"🔔 Signal: {sig['rule_matched']}",
+                        description=content_preview,
+                        color=color,
+                        timestamp=datetime.fromisoformat(sig['created_at']) if sig.get('created_at') else None
+                    )
+                    embed.add_field(name="Severity", value=sig['severity'].upper(), inline=True)
+                    embed.add_field(name="Server", value=sig.get('server_name') or 'Unknown', inline=True)
+                    embed.add_field(name="Channel", value=f"#{sig.get('channel_name') or 'unknown'}", inline=True)
+                    embed.add_field(name="Author", value=sig.get('author_name') or 'Unknown', inline=True)
+                    embed.set_footer(text=f"Signal ID: {sig['id']}")
+                    
+                    await channel.send(embed=embed)
+                    
+            self.db.mark_signals_notified([s['id'] for s in signals])
+        except Exception as e:
+            logger.error(f"Signal feed polling error: {e}")
+
+    @tasks.loop(seconds=120)
+    async def poll_insights_feed(self):
+        """Post unnotified triage insights to #announcements-feed."""
+        try:
+            insights = self.db.get_unnotified_insights(limit=10)
+            if not insights:
+                return
+                
+            for guild in self.guilds:
+                channel = self._get_intel_channel(guild, "announcements-feed")
+                if not channel:
+                    continue
+                    
+                for ins in insights:
+                    # Color by sentiment
+                    if ins['sentiment'] == 'positive':
+                        color = discord.Color.green()
+                    elif ins['sentiment'] == 'negative':
+                        color = discord.Color.red()
+                    else:
+                        color = discord.Color.greyple()
+                    
+                    # Urgency emoji
+                    urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(ins.get('urgency'), '⚪')
+                    
+                    embed = discord.Embed(
+                        title=f"📊 Insight: {ins['topic']}",
+                        description=ins['summary'][:1000],
+                        color=color,
+                        timestamp=datetime.fromisoformat(ins['created_at']) if ins.get('created_at') else None
+                    )
+                    embed.add_field(name="Urgency", value=f"{urgency_emoji} {ins.get('urgency', 'low').upper()}", inline=True)
+                    embed.add_field(name="Sentiment", value=ins['sentiment'].capitalize(), inline=True)
+                    embed.add_field(name="Confidence", value=f"{ins.get('confidence', 0):.0%}", inline=True)
+                    if ins.get('server_name'):
+                        embed.add_field(name="Source", value=f"{ins['server_name']} / #{ins.get('channel_name', '?')}", inline=True)
+                    embed.set_footer(text=f"Insight ID: {ins['id']}")
+                    
+                    await channel.send(embed=embed)
+                    
+            self.db.mark_insights_notified([i['id'] for i in insights])
+        except Exception as e:
+            logger.error(f"Insight feed polling error: {e}")
         
     async def on_message(self, message: discord.Message):
         if message.author == self.user:

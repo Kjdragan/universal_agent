@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import logging
 from datetime import datetime
 from anthropic import AsyncAnthropic
@@ -13,7 +14,7 @@ TRIAGE_SYSTEM_PROMPT = """\
 You are an expert developer relations engineer analyzing Discord community messages.
 Extract actionable insights, recurring issues, bugs, feature requests, or general community sentiment from this batch of messages.
 
-Output strictly as a JSON object:
+Output strictly as a JSON object with no additional commentary:
 {
   "insights": [
     {
@@ -26,7 +27,47 @@ Output strictly as a JSON object:
     }
   ]
 }
+
+IMPORTANT: Ensure all strings are properly escaped. Do not use unescaped backslashes or newlines inside JSON string values.
 """
+
+# Regex to extract JSON object from LLM response that may have markdown wrappers
+_JSON_EXTRACT = re.compile(r'\{[\s\S]*\}')
+
+
+def _parse_llm_json(raw_text: str) -> dict | None:
+    """Robustly parse JSON from an LLM response, handling common failure modes."""
+    # Strip markdown code fences
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'```\s*$', '', text)
+        text = text.strip()
+
+    # Try standard parsing first (strict=False handles unescaped control chars)
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting the first JSON object via regex
+    match = _JSON_EXTRACT.search(text)
+    if match:
+        try:
+            return json.loads(match.group(0), strict=False)
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: try to fix common escape issues
+    try:
+        # Replace unescaped backslashes that aren't valid escape sequences
+        fixed = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
+        return json.loads(fixed, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
 
 async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str):
     """
@@ -71,10 +112,14 @@ async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str):
             )
         
         raw_text = response.content[0].text.strip()
-        if raw_text.startswith("```json"):
-            raw_text = raw_text.replace("```json", "", 1).rstrip("```").strip()
-            
-        data = json.loads(raw_text)
+        data = _parse_llm_json(raw_text)
+
+        if data is None:
+            logger.error(f"Failed to parse JSON from triage LLM for {channel_id}. Raw (truncated): {raw_text[:200]}")
+            db.create_triage_batch(channel_id, start_time, end_time, len(unprocessed), 'failed')
+            # Still mark as processed so we don't re-attempt the same broken batch forever
+            db.mark_messages_processed([m["id"] for m in unprocessed])
+            return
         
         # Create a batch record
         batch_id = db.create_triage_batch(channel_id, start_time, end_time, len(unprocessed), 'success')
@@ -98,3 +143,4 @@ async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str):
 
     # Mark as processed
     db.mark_messages_processed([m["id"] for m in unprocessed])
+

@@ -39,7 +39,7 @@ async def setup_channels():
                         await guild.create_text_channel(ch, category=category)
             
             await create_category_and_channels("📋 OPERATIONS", ["simone-chat", "mission-status", "alerts", "task-queue"])
-            await create_category_and_channels("🔬 INTELLIGENCE", ["research-feed", "announcements-feed", "event-calendar", "knowledge-updates"])
+            await create_category_and_channels("🔬 INTELLIGENCE", ["research-feed", "announcements-feed", "event-calendar", "signals-feed", "release-tracker", "knowledge-updates"])
             await create_category_and_channels("📦 ARTIFACTS", ["briefings", "reports", "code-artifacts"])
             await create_category_and_channels("⚙️ SYSTEM", ["bot-logs", "config"])
             
