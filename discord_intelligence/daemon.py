@@ -122,7 +122,13 @@ def main():
     
     db = DiscordIntelligenceDB(db_path)
     
-    client = DiscordIntelligenceClient(db=db)
+    # Initialize Intents for bot
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.guild_messages = True
+    intents.guilds = True
+
+    client = DiscordIntelligenceClient(db=db, intents=intents)
     client.run(token)
 
 if __name__ == "__main__":
