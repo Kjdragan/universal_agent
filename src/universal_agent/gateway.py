@@ -242,7 +242,10 @@ class Gateway:
         raise NotImplementedError
 
     async def run_query(
-        self, session: GatewaySession, request: GatewayRequest
+        self, 
+        session: GatewaySession, 
+        request: GatewayRequest,
+        event_callback: Optional[Callable[[AgentEvent], Awaitable[None]]] = None,
     ) -> GatewayResult:
         raise NotImplementedError
 
@@ -1385,7 +1388,10 @@ class InProcessGateway(Gateway):
             yield event
 
     async def run_query(
-        self, session: GatewaySession, request: GatewayRequest
+        self, 
+        session: GatewaySession, 
+        request: GatewayRequest,
+        event_callback: Optional[Callable[[AgentEvent], Awaitable[None]]] = None,
     ) -> GatewayResult:
         def _env_true(name: str, default: bool) -> bool:
             raw = (os.getenv(name) or "").strip().lower()
@@ -1468,6 +1474,11 @@ class InProcessGateway(Gateway):
         errors: list[str] = []
         try:
             async for event in self.execute(session, request):
+                if event_callback:
+                    try:
+                        await event_callback(event)
+                    except Exception:
+                        pass
                 if event.type == EventType.TEXT:
                     if isinstance(event.data, dict) and event.data.get("final") is True:
                         response_text = event.data.get("text", "")
