@@ -72,8 +72,4 @@ i Simone. I want you to build out a system for us that will be helpful for us in
 
 the article i want you to add to our knowledge base to start is on the internet: "Harness Engineering: leveraging Codex in an agent-first world"
 
-# discord Bot Details
-
-At 7:00 AM every single day, wake up to generate and deliver my Morning Briefing via AgentMail.
-Instead of a rigid readout, I want you to actively investigate our operating state. Use your tools to check the Task Hub queue, review any completed tasks, interrogate your lossless memory, and look at any artifacts produced over the last 24 hours. Analyze what is interesting, what failed, and what decisions need my input.
-Compose a highly visual, friendly, and comprehensive Markdown digest. This is not meant to be just a health check. In fact, its main priority is to convey what's been going on over the last 24 hours in our project so we can take that information and better understand how to work in our ua system today, by understanding the past 24 hours activity so that I can see potential new opportunities, continuing work required, and to ensure that the system is being fully utilized and if not how we might improve that.Finally, dispatch this briefing directly to <kevinjdragan@gmail.com> using the AgentMail service.
+a process to run computer use tofigure out an event and record it when i cant be there on differtn patforms

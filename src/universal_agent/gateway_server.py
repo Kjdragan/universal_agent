@@ -26519,7 +26519,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             try:
                 msg = json.loads(data)
                 msg_type = msg.get("type", "")
-                logger.info("WS message received (session=%s): %s", session_id, msg_type)
+                if msg_type != "ping":
+                    logger.info("WS message received (session=%s): %s", session_id, msg_type)
 
                 if msg_type in {"execute", "query"}:
                     raw_data = msg.get("data", {}) or {}
@@ -26996,6 +26997,14 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                      }
                      # Broadcast to ALL connections for this session
                      await manager.broadcast(session_id, payload)
+
+                elif msg_type == "ping":
+                    # Respond with pong to keep the connection alive
+                    await manager.send_json(
+                        connection_id,
+                        {"type": "pong", "data": {}, "timestamp": datetime.now(timezone.utc).isoformat()},
+                        session_id=session_id,
+                    )
 
                 elif msg_type == "cancel":
                     # User requested to stop the current agent run
