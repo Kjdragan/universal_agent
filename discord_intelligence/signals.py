@@ -40,4 +40,16 @@ def detect_signals(message_content: str, channel_tier: str, author_id: str = Non
             "layer": "Layer2"
         })
 
+    # Rule 4: Text-based event detection
+    event_words = ["event", "ama", "townhall", "meeting", "webinar", "office hours", "call"]
+    time_indicators = ["today at", "tomorrow at", "monday", "tuesday", "wednesday", "thursday", "friday", "pm", "am", "utc", "est", "pst", "cet"]
+    
+    msg_lower = message_content.lower()
+    if any(w in msg_lower for w in event_words) and any(t in msg_lower for t in time_indicators):
+        signals.append({
+            "rule_matched": "text_event_detected",
+            "severity": "medium",
+            "layer": "Layer2"
+        })
+
     return signals

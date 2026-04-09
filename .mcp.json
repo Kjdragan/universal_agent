@@ -23,6 +23,15 @@
       "args": [
         "arxiv-mcp-server"
       ]
+    },
+    "discord": {
+      "command": "uvx",
+      "args": [
+        "mcp-discord"
+      ],
+      "env": {
+        "DISCORD_TOKEN": "${DISCORD_BOT_TOKEN}"
+      }
     }
   }
 }

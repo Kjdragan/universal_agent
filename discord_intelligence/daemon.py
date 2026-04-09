@@ -78,6 +78,10 @@ class DiscordIntelligenceClient(discord.Client):
         for sig in signals:
             self.db.store_signal(str(message.id), sig["layer"], sig["rule_matched"], sig["severity"])
             
+            # Use specific identifiers for text events to avoid collision with discord scheduled event IDs.
+            if sig["rule_matched"] == "text_event_detected":
+                self._upsert_event_from_text(message)
+
             # Immediately trigger UA workflow if high severity
             if sig["severity"] == "high":
                 logger.info(f"HIGH SEVERITY SIGNAL: {sig['rule_matched']} on MSG {message.id}")
@@ -96,6 +100,18 @@ class DiscordIntelligenceClient(discord.Client):
                         message=f"Signal: {sig['rule_matched']}\n\n{message.content}\n\n{message.jump_url}",
                         is_urgent=True
                     ))
+
+    def _upsert_event_from_text(self, message: discord.Message):
+        self.db.upsert_scheduled_event(
+            event_id=f"text_evt_{message.id}",
+            server_id=str(message.guild.id),
+            name="Textual Mention Event",
+            description=message.content[:200] + "...\n" + message.jump_url,
+            start_time=message.created_at,
+            end_time=None,
+            location=message.channel.name,
+            status="TEXT_DETECTED"
+        )
 
     async def on_scheduled_event_create(self, event: discord.ScheduledEvent):
         self._upsert_event(event)
@@ -122,13 +138,7 @@ def main():
     
     db = DiscordIntelligenceDB(db_path)
     
-    # Initialize Intents for bot
-    intents = discord.Intents.default()
-    intents.message_content = True
-    intents.guild_messages = True
-    intents.guilds = True
-
-    client = DiscordIntelligenceClient(db=db, intents=intents)
+    client = DiscordIntelligenceClient(db=db)
     client.run(token)
 
 if __name__ == "__main__":

@@ -51,21 +51,19 @@ Add to your Claude Code MCP configuration (`.mcp.json` in the UA repo root or `~
 {
   "mcpServers": {
     "discord": {
-      "command": "uv",
+      "command": "uvx",
       "args": [
-        "--directory", "/path/to/mcp-discord",
-        "run", "mcp-discord"
+        "mcp-discord"
       ],
       "env": {
-        "DISCORD_TOKEN": "your_discord_bot_token",
-        "DEFAULT_SERVER_ID": "your_server_id"
+        "DISCORD_TOKEN": "${DISCORD_BOT_TOKEN}"
       }
     }
   }
 }
 ```
 
-**For Infisical integration**: Instead of hardcoding the token, use the existing UA pattern for secret injection. The implementing agent should check how other MCP servers are configured in the UA's `.mcp.json`.
+**For Infisical integration**: The token naturally injects because Claude Code and agents load variables from Infisical on startup. We use the mapped environment variable `DISCORD_BOT_TOKEN`.
 
 ### Configuration for Claude Desktop
 
