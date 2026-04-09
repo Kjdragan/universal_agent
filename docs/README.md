@@ -47,6 +47,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
 - **[LLM Wiki System](02_Subsystems/LLM_Wiki_System.md)**: Canonical subsystem reference for the external knowledge vault and derived internal memory vault — architecture, vault contracts, runtime surfaces, provenance, and query/lint behavior.
+- **[Discord Intelligence System](02_Subsystems/Discord_Intelligence_System.md)**: Canonical architecture for the Discord intelligence and command-and-control operations.
 
 ### 3. [Flows](02_Flows)
 

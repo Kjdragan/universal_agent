@@ -22,6 +22,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Durable_Execution.md | Resilience features |
 | URW_Orchestration.md | Multi-phase tasks |
 | LLM_Wiki_System.md | **Canonical source of truth** — shared wiki engine, external knowledge vault, derived internal memory vault, runtime surfaces, provenance, and integrity/query workflows |
+| Discord_Intelligence_System.md | **Canonical source of truth** — architecture for the Discord intelligence and command-and-control operations |
 
 ## Architecture (01_Architecture/)
 
