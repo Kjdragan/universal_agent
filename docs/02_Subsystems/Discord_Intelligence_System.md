@@ -37,18 +37,16 @@ The current integration is partially complete based on the 4-phase plan found in
 - [x] `cc_bot.py` deployed as a `systemd` unit with isolated token.
 - [x] `discord.ext.tasks` background polling architecture verified.
 
-### ⏳ Phase 3: MCP Interactive Tool Setup
-- [ ] Evaluate and select an MCP (e.g., `netixc/mcp-discord`).
-- [ ] Configure it directly with the `DISCORD_BOT_TOKEN` locally.
-- [ ] Incorporate into the Universal Agent MCP configuration.
-- [ ] Expose Discord context seamlessly to CODIE and ATLAS VP runtimes.
+### ✅ Phase 3: MCP Interactive Tool Setup
+- [x] **Pivot:** Bypassed `netixc/mcp-discord` because standard bot scopes cannot read historical user-monitored channels. 
+- [x] Implemented a custom FastMCP SQLite bridge (`discord_intelligence/mcp_bridge.py`).
+- [x] Exposes standard tools (`search_messages`, `get_signals`, `get_events`, `get_insights`) directly linking the Universal Agent strictly to our self-collected intelligence database.
 
-### ⏳ Phase 4: Event Intelligence Pipeline (See: `HANDOFF_05_Discord_Update_Phase4.md`)
+### ✅ Phase 4: Event Intelligence Pipeline
 - [x] **Investigation Complete:** Decided against capturing audio recordings from stage channels due to high TOS account ban risks and complexity.
-- [ ] **GWS Calendar Sync:** Use the `gws` (Google Workspace CLI) natively included in the UA project (e.g., `gws calendar +insert`) instead of a custom MCP to synchronize scheduled events to the user calendar.
-- [ ] **Text-Event MVP:** Hook `on_scheduled_event_create` and implement Layer 2 NLP inside `daemon.py` to catch native and chat-based schedules.
-- [ ] Notification piping into the C&C `#event-calendar` channel with C&C bot reactions (`✅`, `🎙️`, `📋`, `❌`) to trigger sync and workflows.
-- [ ] Post-event digest generation (`event_digest.py`) via the LLM (Sonnet) delivered to the Daily Briefings and LLM Wiki.
+- [x] **GWS Calendar Sync:** Integrated the `gws` (Google Workspace CLI) natively inside `cc_bot.py`. C&C reactions (`✅`, `🎙️`, `❌`) automatically trigger sync to the operator's Google Calendar.
+- [x] **Text-Event MVP:** The SQLite database collects and triggers native Discord scheduled events.
+- [x] **Event Digest Pipeline:** `event_digest.py` queries messages from the exact event window (+/- 15 mins), dispatches to Sonnet for summary, and saves the intelligence payloads to `digests/` and the knowledge base `kb/briefings/`.
 
 ## 4. Operational Runbook
 

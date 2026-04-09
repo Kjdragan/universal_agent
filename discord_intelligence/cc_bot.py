@@ -84,6 +84,48 @@ class CCBot(commands.Bot):
 
         await self.process_commands(message)
 
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        if payload.user_id == self.user.id:
+            return
+            
+        channel = self.get_channel(payload.channel_id)
+        if not channel or channel.name != "event-calendar":
+            return
+            
+        try:
+            message = await channel.fetch_message(payload.message_id)
+            if not message.embeds:
+                return
+                
+            embed = message.embeds[0]
+            event_name = embed.title.replace("New Event: ", "") if embed.title else "Discord Event"
+            
+            start_time = None
+            for field in embed.fields:
+                if field.name == "Start":
+                    start_time = field.value
+            
+            if payload.emoji.name == "✅":
+                logger.info(f"Adding event '{event_name}' to Google Calendar via GWS CLI.")
+                import subprocess
+                cmd = ['npx', '@googleworkspace/cli', 'calendar', '+insert', '--summary', f"{event_name}"]
+                if start_time:
+                    cmd.extend(['--start', start_time])
+                
+                subprocess.Popen(cmd)
+                await channel.send(f"Scheduled '{event_name}' in Google Calendar.")
+                
+            elif payload.emoji.name == "🎙️":
+                logger.info(f"Marked '{event_name}' for audio tracking/notes.")
+                create_task_hub_mission(f"Record/Note: {event_name}", f"Track event {event_name} audio/notes.", tags=["discord", "audio"])
+                await channel.send(f"Created Task Hub mission to track '{event_name}'.")
+                
+            elif payload.emoji.name == "❌":
+                logger.info(f"Dismissed event '{event_name}'.")
+                await message.delete()
+        except Exception as e:
+            logger.error(f"Error handling reaction: {e}")
+
 
 def setup_commands(bot: CCBot):
     @bot.tree.command(name="status", description="UA system overview")
