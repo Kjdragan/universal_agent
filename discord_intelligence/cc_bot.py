@@ -60,9 +60,9 @@ class CCBot(commands.Bot):
     async def poll_database(self):
         # Poll for unnotified scheduled events
         try:
-            conn = self.db._get_conn()
-            cur = conn.execute("SELECT * FROM scheduled_events WHERE notified = 0")
-            events = cur.fetchall()
+            with self.db._get_conn() as conn:
+                cur = conn.execute("SELECT * FROM scheduled_events WHERE notified = 0")
+                events = cur.fetchall()
             if events:
                 for guild in self.guilds:
                     channel = self._get_intel_channel(guild, "event-calendar")
@@ -250,9 +250,9 @@ def setup_commands(bot: CCBot):
     @bot.tree.command(name="discord_search", description="Search ingested Discord messages")
     @app_commands.describe(query="Text to search")
     async def discord_search(interaction: discord.Interaction, query: str):
-        conn = bot.db._get_conn()
-        cur = conn.execute("SELECT author_name, content FROM messages WHERE content LIKE ? LIMIT 5", (f"%{query}%",))
-        results = cur.fetchall()
+        with bot.db._get_conn() as conn:
+            cur = conn.execute("SELECT author_name, content FROM messages WHERE content LIKE ? LIMIT 5", (f"%{query}%",))
+            results = cur.fetchall()
         if not results:
             await interaction.response.send_message(f"No results found for '{query}'")
             return
@@ -262,9 +262,9 @@ def setup_commands(bot: CCBot):
 
     @bot.tree.command(name="discord_signals", description="Show recent detected signals")
     async def discord_signals(interaction: discord.Interaction):
-        conn = bot.db._get_conn()
-        cur = conn.execute("SELECT rule_matched, severity, timestamp FROM signals ORDER BY timestamp DESC LIMIT 5")
-        results = cur.fetchall()
+        with bot.db._get_conn() as conn:
+            cur = conn.execute("SELECT rule_matched, severity, timestamp FROM signals ORDER BY timestamp DESC LIMIT 5")
+            results = cur.fetchall()
         if not results:
             await interaction.response.send_message("No recent signals found.")
             return

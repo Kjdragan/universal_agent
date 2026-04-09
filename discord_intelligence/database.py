@@ -1,16 +1,21 @@
 import sqlite3
 import json
 from datetime import datetime
+import contextlib
 
 class DiscordIntelligenceDB:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_db()
 
+    @contextlib.contextmanager
     def _get_conn(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_conn() as conn:

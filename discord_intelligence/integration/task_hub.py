@@ -15,8 +15,11 @@ def create_task_hub_mission(title: str, description: str, tags: list = None):
         task_id = str(uuid.uuid4())
         task_data = {
             "task_id": task_id,
-            "task_content": f"{title}\n\n{description}",
+            "title": title,
+            "description": description,
             "status": getattr(task_hub, 'TASK_STATUS_OPEN', 'open'),
+            "project_key": "immediate",
+            "agent_ready": 1,
             "metadata": {
                 "source": "discord_intelligence", 
                 "tags": tags or []

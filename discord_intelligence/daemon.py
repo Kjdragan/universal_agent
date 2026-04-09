@@ -57,8 +57,9 @@ class DiscordIntelligenceClient(discord.Client):
         
         # Determine channel tier
         # In reality, you'd fetch from DB. For now, assume a fast in-memory map or we do a quick DB hit.
-        cur = self.db._get_conn().execute("SELECT tier FROM channels WHERE id = ?", (channel_id_str,))
-        row = cur.fetchone()
+        with self.db._get_conn() as conn:
+            cur = conn.execute("SELECT tier FROM channels WHERE id = ?", (channel_id_str,))
+            row = cur.fetchone()
         tier = row['tier'] if row else 'C'
 
         self.db.store_message(
