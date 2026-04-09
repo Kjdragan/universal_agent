@@ -6,7 +6,15 @@
 
 ## 1. Overview
 
-The Discord Intelligence subsystem provides passive intelligence gathering and active operational command-and-control for the Universal Agent. It separates listening operations from interactive operations using a dual-token architecture to comply with user-account guidelines and API restrictions.
+The Discord Intelligence subsystem provides passive intelligence gathering and active operational command-and-control for the Universal Agent. It separates listening operations from interactive operations using a dual-token architecture.
+
+### Architectural Decision: Bot API vs. User Token Extractor
+Early designs attempted to use standard Discord Bot capabilities (e.g., `netixc/mcp-discord`) for full intelligence gathering. This approach failed because traditional Discord bots **cannot read historical messages or passively ingest data across hundreds of private servers** unless the bot is specifically invited with administrative scopes.
+
+To bypass these API restrictions safely without being flagged as an automated spam client:
+1. **The extraction layer** utilizes `discord.py-self` with a **User Token** to passively mirror read-only channels acting completely un-interactive.
+2. **The MCP interface** bypasses Discord infrastructure entirely by connecting the Universal Agent *directly* to the local SQLite database populated by the user token.
+3. **The command surface** is strictly delegated to a standard **Bot Token** restricted entirely to a private Ops Server.
 
 ## 2. Architecture & Components
 
