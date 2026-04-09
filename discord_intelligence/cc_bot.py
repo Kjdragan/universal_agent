@@ -40,9 +40,14 @@ class CCBot(commands.Bot):
 
     async def on_ready(self):
         logger.info(f"Command & Control Bot logged in as {self.user.name} ({self.user.id})")
-        self.poll_database.start()
-        self.poll_signals_feed.start()
-        self.poll_insights_feed.start()
+        if not self.poll_database.is_running():
+            self.poll_database.start()
+        if not self.poll_signals_feed.is_running():
+            self.poll_signals_feed.start()
+            logger.info("Started poll_signals_feed loop")
+        if not self.poll_insights_feed.is_running():
+            self.poll_insights_feed.start()
+            logger.info("Started poll_insights_feed loop")
 
     def _get_intel_channel(self, guild, channel_name: str):
         """Find a channel by name under the 🔬 INTELLIGENCE category."""
@@ -87,7 +92,9 @@ class CCBot(commands.Bot):
         try:
             signals = self.db.get_unnotified_signals(limit=10)
             if not signals:
+                logger.debug("No unnotified signals to post.")
                 return
+            logger.info(f"Posting {len(signals)} unnotified signals to #signals-feed")
                 
             for guild in self.guilds:
                 channel = self._get_intel_channel(guild, "signals-feed")
@@ -130,7 +137,9 @@ class CCBot(commands.Bot):
         try:
             insights = self.db.get_unnotified_insights(limit=10)
             if not insights:
+                logger.debug("No unnotified insights to post.")
                 return
+            logger.info(f"Posting {len(insights)} unnotified insights to #announcements-feed")
                 
             for guild in self.guilds:
                 channel = self._get_intel_channel(guild, "announcements-feed")
