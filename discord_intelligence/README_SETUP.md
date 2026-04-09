@@ -124,14 +124,16 @@ Build the Discord Intelligence Daemon as specified in HANDOFF_02. This is a disc
 
 ---
 
-### Step 5 (Later): MCP Tool Quick Win
+### Step 5: Custom MCP Integration (COMPLETE)
 
-This can be done independently at any time. See `HANDOFF_04_Discord_MCP_Tool_Setup.md`. It's a 15-minute setup that gives your coding agents the ability to query Discord channels interactively.
+We use a custom FastMCP bridge to directly connect our Intelligence Database to the Universal Agent, bypassing the limitations of standard Discord bots. This is ready out-of-the-box and provides tools like `search_messages`, `get_signals`, and `get_events`.
 
-### Step 6 (Later): Command & Control Server
+### Step 6: Command & Control Server (COMPLETE)
 
-After the daemon is stable, build out your Discord server as a command & control interface. See `HANDOFF_03_Discord_Command_Control.md`. This uses the **bot token** (UA Disc Agent), not the user token.
+The Discord server is fully built out as a command & control interface running as `ua-discord-cc-bot.service`. It uses the **bot token** (UA Disc Agent) to process slash commands (`/status`, `/discord_search`) and post event alerts to channels like `#event-calendar`.
 
-### Step 7 (Later): Event Pipeline
+### Step 7: Event Pipeline & Calendar Sync (COMPLETE)
 
-The ambitious autonomous event discovery and digestion system. See `PRD_Discord_Event_Pipeline.md`. This needs technical investigation before implementation.
+The autonomous event discovery system is active.
+- Clicking the `✅` reaction on an event in `#event-calendar` automatically schedules it directly to your Google Calendar using the Google Workspace CLI natively.
+- Pre- and Post-event chat digests are automatically generated within +/- 15 minute windows by `event_digest.py` and synced to the `kb/briefings/` system for agent context.

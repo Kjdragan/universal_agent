@@ -1,63 +1,53 @@
 # Discord Intelligence System: Status Update for AI Planner
 
 **Date:** 2026-04-09
-**Branch context:** All changes currently pushed to `develop` and `main` (Production)
+**Branch context:** All changes currently deployed to `main` (Production) and `develop` (Staging).
 
-This document provides a current state assessment of the Universal Agent Discord Integration based on the Phase 2, 3, & 4 roadmap. It is structured to help an AI Planner immediately understand what is finished and what needs to be planned next.
+This document provides a current state assessment of the Universal Agent Discord Integration. It is structured to help our AI Planner immediately understand what is finished and what new capabilities can be integrated into the Universal Agent.
 
 ---
 
-## 1. What We Just Completed (Phases 1 & 2)
+## 1. What We Completed (Phases 1-4 FINALIZED)
 
-We successfully established the dual-token architecture for the Discord subsystem, running as two decoupled `systemd` background services on the production VPS.
+We have successfully brought the Discord Intelligence subsystem entirely online, completing **all 4 phases** of the master roadmap.
 
 ### A. Intelligence Daemon (Phase 1)
-- **Component:** `daemon.py` (`ua-discord-intelligence.service`)
-- **Token:** `DISCORD_USER_TOKEN` (User Token loaded via Infisical)
+- **Component:** `daemon.py`
+- **Token:** `DISCORD_USER_TOKEN` (User Token loaded via Infisical, using `discord.py-self`)
 - **Status:** **COMPLETE & DEPLOYED**.
-- **Capabilities:** It actively monitors channels under the user's account passively (discord.py-self), saves messages to the local `discord_intelligence.db`, performs deterministic Layer 2 signal detection, and pipes Layer 3 analysis to the local Task Hub / AgentMail.
+- **Capabilities:** Silently mirrors all user-visible channels, pushes data to `discord_intelligence.db`, performs Layer 2 determinist signal detection, and feeds Layer 3 LLM analysis.
 
 ### B. Command & Control Server (Phase 2)
-- **Component:** `cc_bot.py` (`ua-discord-cc-bot.service`)
-- **Token:** `DISCORD_BOT_TOKEN` (Bot Token loaded via Infisical)
+- **Component:** `cc_bot.py`
+- **Token:** `DISCORD_BOT_TOKEN`
 - **Status:** **COMPLETE & DEPLOYED**.
 - **Capabilities:**
-  - Setup script (`cc_setup.py`) successfully constructed the operational channel topology (e.g., `#event-calendar`, `#announcements-feed`, `#alerts`, `#simone-chat`) in the owner's Discord server.
-  - Implements a background loop (`tasks.loop`) to poll SQLite database updates (queued events/signals) and dispatch them as rich embeds to the target channels.
-  - Registers interactive slash commands (e.g., `/status`, `/task add`) for operational observability directly from Discord.
+  - Operates the private `#event-calendar` and operational Discord server feed.
+  - Serves slash commands (`/status`, `/discord_search`, etc.).
 
-### C. Infrastructure & CI/CD
-- Fixed `.venv` permission issues via CI/CD templates (`install_vps_systemd_units.sh`).
-- Tokens are centrally managed by Infisical (`uv run scripts/infisical_upsert_secret.py`). There is NO `.env` file containing these tokens in the repo.
-- Canonical codebase documentation updated in `docs/02_Subsystems/Discord_Intelligence_System.md`.
+### C. Custom MCP Bridge (Phase 3)
+- **Component:** `mcp_bridge.py` (FastMCP)
+- **Status:** **COMPLETE & DEPLOYED**.
+- **Architectural Pivot:** We abandoned `netixc/mcp-discord` because standard bot scopes cannot read historical user-monitored channels. Instead, we built a custom FastMCP SQLite bridge that exposes our local `discord_intelligence.db` directly to the Universal Agent with tools like `search_messages`, `get_signals`, `get_insights`, and `get_events`.
+
+### D. Event Intelligence Pipeline (Phase 4)
+- **Component:** `event_digest.py` and `cc_bot.py`
+- **Status:** **COMPLETE & DEPLOYED**.
+- **Architectural Decisions:**
+  - **Investigation Result:** Audio tracking (🎙️) from stages was dropped due to severe TOS account ban risks with `discord.py-self`. 
+  - **GWS Calendar Sync:** Integrated Google Workspace CLI (`npx @googleworkspace/cli calendar +insert`). Clicking `✅` on event embeds automatically pushes Discord events to the operator's Google Calendar natively with precise ISO 8601 formatting.
+  - **Event Digest:** The `event_digest.py` script queries the DB for message metadata within `+/- 15 minutes` of an event window, dispatches the transcript to Sonnet, and constructs a briefing pushed directly to the `kb/briefings/` engine.
 
 ---
 
-## 2. What Needs to be Planned Next (Phases 3 & 4)
+## 2. Infrastructure Status & Security
+- **Auth Strategy:** Tokens are ONLY stored inside Infisical and mapped into the local environment upon run. The `gws` integration requires local OAuth `auth login` pre-requisite.
+- **Task Hub Bridge:** Fully implemented using `universal_agent.durable.db` `connect_runtime_db()` to pipe Discord task triggers into the Universal Agent's ToDo board.
 
-The planner should focus its efforts on the remaining tasks from the original prompt.
-
-### Task A: Phase 3 — MCP Tool Setup
-**Goal:** Enable our VP agents (ATLAS, CODIE) and local IDE to interactively query Discord channels.
-**Remaining Work:**
-1. Evaluate and install `netixc/mcp-discord` (or equivalent Node.js alternative).
-2. Wire it up with the `DISCORD_BOT_TOKEN` in `~/.mcp.json`.
-3. Test tool accessibility for reading channel metadata, listing categories, and querying recent messages across our servers.
-4. Update `discord_intelligence/HANDOFF_04_Discord_MCP_Tool_Setup.md`.
-
-### Task B: Phase 4 — Event Intelligence Pipeline 
-**Goal:** Automate live event discovery (Scheduled Events or text announcements) and post-event LLM digestion.
-**Remaining Work:**
-1. **Investigation:** Answer technical unknowns in `discord_intelligence/EVENT_PIPELINE_INVESTIGATION.md`:
-   - Can `discord.py-self` safely receive/record audio from stage channels?
-   - What are the TOS implications vs. reality for recording public stages?
-   - How should we integrate the Google Calendar API for automated scheduling?
-2. **Text-Based MVP Build:**
-   - Extend the daemon to capture `on_scheduled_event_create` and text mentions specifying event times.
-   - Send event cards to `#event-calendar` with RSVP reactions (✅, 🎙️, 📋, ❌).
-   - Build the post-event text digest workflow: automatically gather chat context from the event window, digest with an LLM, and push summary to the `latest_briefing.md` and LLM Wiki.
+---
 
 ## Planner Directives
+**All foundation intelligence pipelines are finished and in production.**
+The AI planner may now utilize the `Discord Intelligence Bridge` MCP tools within its workflows to retrieve historical context, search Discord history, or review intelligence briefings created by the Phase 4 Event Pipeline.
 
-1. **Start with Phase 3 (MCP Setup)** as it is an immediate force multiplier for other agent tooling and requires standard configurations.
-2. **Before touching code for Phase 4**, run the required investigation block to determine the boundaries of the `discord.py-self` library for audio streams. Do not guess; write a focused test script using our dependency standards first.
+Future integrations may involve expanding the `cc_bot.py` interaction commands, or tuning the LLM summary prompts in `event_digest.py`, but all operational plumbing is officially closed.
