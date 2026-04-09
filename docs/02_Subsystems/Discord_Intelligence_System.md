@@ -39,12 +39,15 @@ The current integration is partially complete based on the 4-phase plan found in
 
 ### ✅ Phase 3: MCP Interactive Tool Setup
 - [x] **Pivot:** Bypassed `netixc/mcp-discord` because standard bot scopes cannot read historical user-monitored channels. 
-- [x] Implemented a custom FastMCP SQLite bridge (`discord_intelligence/mcp_bridge.py`).
-- [x] Exposes standard tools (`search_messages`, `get_signals`, `get_events`, `get_insights`) directly linking the Universal Agent strictly to our self-collected intelligence database.
+- [x] Implemented a custom FastMCP SQLite bridge (`discord_intelligence/mcp_bridge.py`) that strictly links the Universal Agent to our local intelligence database.
+- [x] **Task Hub Integration:** Adjusted the deployment code to correctly use the durable database connection (`connect_runtime_db(get_activity_db_path())`) to support dynamic task assignments from incoming Discord intelligence.
 
 ### ✅ Phase 4: Event Intelligence Pipeline
 - [x] **Investigation Complete:** Decided against capturing audio recordings from stage channels due to high TOS account ban risks and complexity.
-- [x] **GWS Calendar Sync:** Integrated the `gws` (Google Workspace CLI) natively inside `cc_bot.py`. C&C reactions (`✅`, `🎙️`, `❌`) automatically trigger sync to the operator's Google Calendar.
+- [x] **GWS Calendar Sync:** Integrated the Google Workspace CLI via `npx @googleworkspace/cli calendar +insert` natively inside `cc_bot.py`.
+    - **Auth Discovery:** The CLI must first be authenticated locally with `npx @googleworkspace/cli auth login` to handle OAuth consent and cache credentials in the secure keyring.
+    - **Payload Discovery:** The Calendar API requires strict ISO 8601 formatting for `--start` and `--end` timestamps rather than natural language parsing.
+    - C&C reactions (`✅`, `🎙️`, `❌`) on Discord event alerts automatically trigger this sync to the operator's Google Calendar using those parameters.
 - [x] **Text-Event MVP:** The SQLite database collects and triggers native Discord scheduled events.
 - [x] **Event Digest Pipeline:** `event_digest.py` queries messages from the exact event window (+/- 15 mins), dispatches to Sonnet for summary, and saves the intelligence payloads to `digests/` and the knowledge base `kb/briefings/`.
 
