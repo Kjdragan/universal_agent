@@ -78,6 +78,3 @@ Application ID
 1491525297714237630
 Public Key
 fb3a0c54b7a171044e90c5b37aa8fa9cdfda1182d53a964506f00ef961aaf695
-
-reset token
-[REDACTED: Token should be managed via Infisical / environment variables]
