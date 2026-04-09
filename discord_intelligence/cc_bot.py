@@ -58,6 +58,8 @@ class CCBot(commands.Bot):
                                 embed = discord.Embed(title=f"New Event: {ev['name']}", description=ev['description'], color=discord.Color.blue())
                                 embed.add_field(name="Server ID", value=ev['server_id'])
                                 embed.add_field(name="Start", value=ev['start_time'])
+                                if 'end_time' in ev.keys() and ev['end_time']:
+                                    embed.add_field(name="End", value=ev['end_time'])
                                 if ev['location']:
                                     embed.add_field(name="Location", value=ev['location'])
                                 
@@ -101,16 +103,19 @@ class CCBot(commands.Bot):
             event_name = embed.title.replace("New Event: ", "") if embed.title else "Discord Event"
             
             start_time = None
+            end_time = None
             for field in embed.fields:
                 if field.name == "Start":
                     start_time = field.value
+                elif field.name == "End":
+                    end_time = field.value
             
             if payload.emoji.name == "✅":
                 logger.info(f"Adding event '{event_name}' to Google Calendar via GWS CLI.")
                 import subprocess
                 cmd = ['npx', '@googleworkspace/cli', 'calendar', '+insert', '--summary', f"{event_name}"]
                 if start_time:
-                    cmd.extend(['--start', start_time])
+                    cmd.extend(['--start', start_time, '--end', end_time or start_time])
                 
                 subprocess.Popen(cmd)
                 await channel.send(f"Scheduled '{event_name}' in Google Calendar.")
