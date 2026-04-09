@@ -13454,6 +13454,12 @@ async def lifespan(app: FastAPI):
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
     if CRON_ENABLED:
+        async def _cron_agent_event_sink(session_id: str, event: Any) -> None:
+            try:
+                await manager.broadcast(session_id, agent_event_to_wire(event))
+            except Exception as e:
+                logger.warning("Error broadcasting chron agent event: %s", e)
+
         logger.info("⏱️ Chron Service ENABLED")
         _cron_service = CronService(
             get_gateway(),
@@ -13461,6 +13467,7 @@ async def lifespan(app: FastAPI):
             event_sink=_emit_cron_event,
             wake_callback=_cron_wake_callback,
             system_event_callback=_enqueue_system_event,
+            agent_event_sink=_cron_agent_event_sink,
         )
         await _cron_service.start()
     else:

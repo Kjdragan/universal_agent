@@ -485,6 +485,7 @@ class CronService:
         event_sink: Optional[Callable[[dict[str, Any]], None]] = None,
         wake_callback: Optional[Callable[[str, str, str], None]] = None,
         system_event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
+        agent_event_sink: Optional[Callable[[str, Any], Any]] = None,
     ):
         self.gateway = gateway
         self.workspaces_dir = workspaces_dir
@@ -498,6 +499,7 @@ class CronService:
         self.event_sink = event_sink
         self.wake_callback = wake_callback
         self.system_event_callback = system_event_callback
+        self.agent_event_sink = agent_event_sink
 
         jobs_path = workspaces_dir / "cron_jobs.json"
         runs_path = workspaces_dir / "cron_runs.jsonl"
@@ -1061,7 +1063,18 @@ class CronService:
                                     force_complex=True,
                                     metadata=request_metadata,
                                 )
-                                run_coro = self.gateway.run_query(session, request)
+                                
+                                async def _fire_event(evt: Any) -> None:
+                                    if self.agent_event_sink:
+                                        try:
+                                            # Some event_sinks might expect awaitable
+                                            res = self.agent_event_sink(session.session_id, evt)
+                                            if hasattr(res, "__await__"):
+                                                await res
+                                        except Exception as e:
+                                            logger.warning("Error dispatching chron agent event to UI sink: %s", e)
+
+                                run_coro = self.gateway.run_query(session, request, event_callback=_fire_event)
                                 if timeout_seconds is not None:
                                     result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
                                 else:
@@ -1174,18 +1187,13 @@ class CronService:
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
 
-                # Close the gateway session created for this cron run so it is
-                # immediately released from the in-memory session registry.
-                # The reaper would catch it eventually, but explicit cleanup on
-                # completion is always preferred for admin/cron sessions.
-                if record.session_id:
-                    try:
-                        await self.gateway.close_session(record.session_id)
-                    except Exception as _close_exc:
-                        logger.warning(
-                            "Could not close cron session %s after job %s: %s",
-                            record.session_id, job.job_id, _close_exc,
-                        )
+                # Note: We intentionally do NOT explicitly close the gateway session here.
+                # Cron runs are assigned TTL classes (admin TTL default 10 minutes).
+                # Leaving them in memory allows the user to click "Open" in the UI
+                # and attach to the session (rehydrate) to view the transcript and logs.
+                # The gateway's session reaper will automatically clean up the session
+                # once its inactivity TTL expires.
+                pass
 
                 # Post-run memory capture: write a session rollover to shared memory
                 # so cron run context is available to future sessions (fix #6).

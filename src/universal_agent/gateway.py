@@ -2143,11 +2143,19 @@ class ExternalGateway(Gateway):
                     break
 
     async def run_query(
-        self, session: GatewaySession, request: GatewayRequest
+        self, 
+        session: GatewaySession, 
+        request: GatewayRequest,
+        event_callback: Optional[Callable[[AgentEvent], Awaitable[None]]] = None,
     ) -> GatewayResult:
         response_text = ""
         tool_calls = 0
         async for event in self.execute(session, request):
+            if event_callback:
+                try:
+                    await event_callback(event)
+                except Exception:
+                    pass
             if event.type == EventType.TEXT:
                 response_text += event.data.get("text", "")
             if event.type == EventType.TOOL_CALL:
