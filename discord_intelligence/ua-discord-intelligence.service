@@ -1,0 +1,16 @@
+[Unit]
+Description=Universal Agent - Discord Intelligence Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/universal_agent
+# Loads .env or infisical automatically based on UA standards
+Environment="PYTHONPATH=/opt/universal_agent/src:/opt/universal_agent"
+ExecStart=/opt/universal_agent/.venv/bin/uv run python discord_intelligence/daemon.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

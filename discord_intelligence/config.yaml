@@ -1,0 +1,21 @@
+database:
+  path: "discord_intelligence.db"
+
+models:
+  triage: "claude-haiku-4-5-20251001"    # ZAI proxy cheap model
+  insight: "claude-3-7-sonnet-20250219"  # Expensive model for deep extraction if needed
+
+keywords:
+  - "claude code"
+  - "agent sdk"
+  - "model context protocol"
+  - "mcp"
+  - "anthropic API"
+  - "universal agent"
+  - "bug"
+  - "crash"
+  - "loop"
+  
+scheduling:
+  triage_interval_minutes: 60
+  briefing_time: "08:00"
