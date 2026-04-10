@@ -132,6 +132,9 @@ class CCBot(commands.Bot):
                 if len(candidate) > 80:
                     candidate = candidate[:77] + "..."
                 event_name = candidate
+                
+        # Embed link back to the Discord event notice
+        description += f"\n\nDiscord Notice Link: {msg.jump_url}"
         
         import json
         event_json = {
