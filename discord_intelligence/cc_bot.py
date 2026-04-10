@@ -100,33 +100,40 @@ class CCBot(commands.Bot):
             logger.info(f"Posting {len(signals)} unnotified signals to #signals-feed")
                 
             for guild in self.guilds:
-                channel = self._get_intel_channel(guild, "signals-feed")
-                if not channel:
+                signals_channel = self._get_intel_channel(guild, "signals-feed")
+                if not signals_channel:
                     # Fallback to research-feed if signals-feed doesn't exist
-                    channel = self._get_intel_channel(guild, "research-feed")
-                if not channel:
-                    continue
+                    signals_channel = self._get_intel_channel(guild, "research-feed")
+                    
+                release_channel = self._get_intel_channel(guild, "release-tracker")
                     
                 for sig in signals:
+                    is_release = "release" in sig['rule_matched']
+                    channel = release_channel if is_release else signals_channel
+                    
+                    if not channel:
+                        continue
+                        
                     # Color code by severity
                     color = discord.Color.red() if sig['severity'] == 'high' else discord.Color.gold()
+                    if is_release:
+                        color = discord.Color.teal()
                     
                     # Truncate content for embed, respecting Discord limits while keeping most info
-                    content_preview = (sig.get('content') or '')[:2000]
-                    if len(sig.get('content') or '') > 2000:
-                        content_preview += "…"
+                    content_preview = (sig.get('content') or '')[:4000]
                     
                     embed = discord.Embed(
-                        title=f"🔔 Signal: {sig['rule_matched']}",
+                        title=f"🚀 New Release Detected" if is_release else f"🔔 Signal: {sig['rule_matched']}",
                         description=content_preview,
                         color=color,
                         timestamp=datetime.fromisoformat(sig['created_at']) if sig.get('created_at') else None
                     )
-                    embed.add_field(name="Severity", value=sig['severity'].upper(), inline=True)
+                    if not is_release:
+                        embed.add_field(name="Severity", value=sig['severity'].upper(), inline=True)
                     embed.add_field(name="Server", value=sig.get('server_name') or 'Unknown', inline=True)
                     embed.add_field(name="Channel", value=f"#{sig.get('channel_name') or 'unknown'}", inline=True)
                     embed.add_field(name="Author", value=sig.get('author_name') or 'Unknown', inline=True)
-                    embed.set_footer(text=f"Signal ID: {sig['id']}")
+                    embed.set_footer(text=f"Signal ID: {sig['id']} | Action: CODIE task created" if is_release else f"Signal ID: {sig['id']}")
                     
                     await channel.send(embed=embed)
                     
