@@ -131,8 +131,9 @@ async def run_pipeline():
                 except Exception as e:
                     logger.warning(f"Could not read transcript {transcript_path_val}: {e}")
             
-            if len(msgs) < 10 and not transcript_text:
-                logger.info(f"Skipping event '{event['name']}' due to low message count ({len(msgs)}) and no transcript.")
+            total_chars = sum(len(m['content']) for m in msgs if m.get('content'))
+            if len(msgs) < 10 and total_chars < 500 and not transcript_text:
+                logger.info(f"Skipping event '{event['name']}' due to low message count ({len(msgs)}) and low content length ({total_chars} chars), and no transcript.")
                 continue
 
             if msgs or transcript_text:
