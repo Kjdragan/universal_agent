@@ -1,0 +1,330 @@
+{
+  "report_date": "2026-04-10",
+  "openclaw_releases_analyzed": ["v2026.4.8", "v2026.4.9-beta.1", "v2026.4.9"],
+  "features_analyzed": [
+    {
+      "id": 1,
+      "name": "Grounded REM Backfill Lane",
+      "openclaw_component": "Memory & Search (Dreaming subsystem)",
+      "openclaw_references": ["rem-harness --path", "diary commit/reset flows", "Memory/dreaming module"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "src/universal_agent/memory/ (memory_store.py, memory_flush.py, orchestrator.py)",
+      "gap_analysis": "We have flat memory files + vector index + context window. No REM/dreaming subsystem or diary architecture.",
+      "implementation_notes": "N/A — prerequisite system doesn't exist. Our memory_flush.py handles pre-compact persistence.",
+      "effort": "XL",
+      "priority": null
+    },
+    {
+      "id": 2,
+      "name": "Grounded Backfill Hardening",
+      "openclaw_component": "Memory & Search (Dreaming — hardening)",
+      "openclaw_references": ["Dreaming module input validation", "diary heading normalization", "claim splitting"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "src/universal_agent/memory/ (memory_store.py input validation)",
+      "gap_analysis": "No diary or backfill system to harden.",
+      "implementation_notes": "N/A",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 3,
+      "name": "Heartbeat Trigger Token Tolerance",
+      "openclaw_component": "Memory & Search (Dreaming — heartbeat integration)",
+      "openclaw_references": ["Dreaming heartbeat trigger tokens"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "src/universal_agent/heartbeat_service.py",
+      "gap_analysis": "Our heartbeat is standalone health monitoring, not integrated into dreaming pipeline.",
+      "implementation_notes": "Different architecture entirely.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 4,
+      "name": "Structured Diary View UI",
+      "openclaw_component": "Control UI (web dashboard)",
+      "openclaw_references": ["#63395", "Control UI/dreaming"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "web-ui/ (Next.js dashboard)",
+      "gap_analysis": "No diary system to visualize.",
+      "implementation_notes": "Pattern relevant if we ever build memory exploration UI.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 5,
+      "name": "Character-Vibes QA Evaluation Reports",
+      "openclaw_component": "QA/lab testing infrastructure",
+      "openclaw_references": ["QA/lab module", "character-vibes eval"],
+      "relevance": "MEDIUM",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/execution_engine.py (evaluation patterns)",
+      "gap_analysis": "No formal agent behavior evaluation framework. No systematic personality consistency testing.",
+      "implementation_notes": "Lightweight eval script comparing agent outputs across models for tone/behavior consistency. Start with Python script scoring responses against configured personality.",
+      "effort": "M",
+      "priority": 4
+    },
+    {
+      "id": 6,
+      "name": "Slack Media Bearer Auth Fix",
+      "openclaw_component": "Slack integration (media handling)",
+      "openclaw_references": ["#62960"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "Slack via Composio MCP tools",
+      "gap_analysis": "Handled by Composio abstraction layer.",
+      "implementation_notes": "N/A",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 7,
+      "name": "SSRF Bypass Prevention After Browser Interactions",
+      "openclaw_component": "Security (browser automation)",
+      "openclaw_references": ["#63226", "Browser/security module"],
+      "relevance": "HIGH",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "agent-browser (Vercel headless browser CLI)",
+      "gap_analysis": "No SSRF quarantine or blocked-destination checks for browser navigations. Agent can navigate to arbitrary URLs including internal network resources.",
+      "implementation_notes": "Add URL blocklist middleware: (1) block internal/reserved IP ranges (10.x, 172.16-31.x, 192.168.x, 169.254.x, localhost), (2) validate before navigate, (3) re-check after redirects. May need wrapper script around agent-browser CLI.",
+      "effort": "M",
+      "priority": 3
+    },
+    {
+      "id": 8,
+      "name": "Dotenv Security: Block Runtime-Control Env Vars",
+      "openclaw_component": "Security (dotenv loading)",
+      "openclaw_references": ["#62660", "#62663", "Security/dotenv module"],
+      "relevance": "MEDIUM",
+      "recommendation": "INVESTIGATE",
+      "our_counterpart": "src/universal_agent/hooks.py, src/universal_agent/main.py (env loading)",
+      "gap_analysis": "No concept of trusted vs untrusted env sources. Infisical-first architecture mitigates this currently.",
+      "implementation_notes": "Define protected env var set (INFISICAL_*, DATABASE_URL, secrets) that can't be overridden by workspace-local .env files. Low risk currently given Infisical architecture.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "id": 9,
+      "name": "Dependency Audit: basic-ftp CRLF Fix",
+      "openclaw_component": "Security (dependency audit)",
+      "openclaw_references": ["basic-ftp 5.2.1", "Hono bump"],
+      "relevance": "NOT_APPLICABLE",
+      "recommendation": "SKIP",
+      "our_counterpart": null,
+      "gap_analysis": "Node.js/TypeScript dependency. We're Python. Good reminder to audit Python deps with pip-audit.",
+      "implementation_notes": "Run pip-audit or uv pip audit periodically.",
+      "effort": "S",
+      "priority": 5
+    },
+    {
+      "id": 10,
+      "name": "Gateway Node Exec Event Sanitization",
+      "openclaw_component": "Gateway (node execution)",
+      "openclaw_references": ["#62659", "Gateway/node exec events"],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/execution_engine.py, src/universal_agent/api/events.py, src/universal_agent/gateway.py",
+      "gap_analysis": "Subprocess output may enter conversation context without sanitization — prompt injection risk. Need to verify exec output is treated as untrusted.",
+      "implementation_notes": "(1) In execution_engine.py, mark subprocess output as untrusted content. (2) In gateway.py event handling, sanitize external text before conversation context. (3) Add <untrusted_output> markers around exec results. (4) Strip prompt injection patterns from exec output. Key: execution_engine.py:832, api/events.py.",
+      "effort": "M",
+      "priority": 2
+    },
+    {
+      "id": 11,
+      "name": "Matrix Gateway Crash Isolation",
+      "openclaw_component": "Gateway (Matrix channel)",
+      "openclaw_references": ["#62779"],
+      "relevance": "LOW",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/bot/ (Telegram integration)",
+      "gap_analysis": "We use Telegram not Matrix, but channel failure isolation pattern is universally applicable.",
+      "implementation_notes": "Review bot/main.py and bot/heartbeat_adapter.py for failure containment. Ensure Telegram connection failures don't crash agent runtime.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "id": 12,
+      "name": "Gateway Chat: Suppress Control Token Leaks",
+      "openclaw_component": "Gateway (chat/event pipeline)",
+      "openclaw_references": ["#51739", "Gateway/chat module"],
+      "relevance": "HIGH",
+      "recommendation": "ADOPT",
+      "our_counterpart": "src/universal_agent/gateway.py, src/universal_agent/gateway_server.py",
+      "gap_analysis": "Gateway uses x-ua-internal-token headers for auth (gateway.py:2035, gateway_server.py:13049). Need to audit whether internal control signals leak into user-facing surfaces.",
+      "implementation_notes": "(1) Define set of internal control tokens that must never appear in user output. (2) Add sanitization filter in gateway response pipeline. (3) Audit WebSocket and HTTP response paths in gateway.py for leakage.",
+      "effort": "S",
+      "priority": 2
+    },
+    {
+      "id": 13,
+      "name": "Gateway Sessions: Clear Auto-Fallback Model Overrides",
+      "openclaw_component": "Gateway (session management)",
+      "openclaw_references": ["#63155", "Gateway/sessions"],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/session/, src/universal_agent/memory/orchestrator.py",
+      "gap_analysis": "No per-session model override pinning. Pattern relevant when adding model selection to web-ui.",
+      "implementation_notes": "When adding model selection: track config value source (auto vs explicit), clear auto defaults on session reset while preserving explicit user choices.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "id": 14,
+      "name": "LLM Idle Timeout Inheritance",
+      "openclaw_component": "Agent Runtime (timeout management)",
+      "openclaw_references": ["agents.defaults.timeoutSeconds", "agents.defaults.llm.idleTimeoutSeconds"],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/timeout_policy.py, src/universal_agent/execution_engine.py, src/universal_agent/cron_service.py",
+      "gap_analysis": "Have timeout_policy.py with process_turn_timeout_seconds(). Need to verify cron/heartbeat cycles aren't subject to same timeouts as interactive sessions.",
+      "implementation_notes": "(1) Check if timeout_policy.py distinguishes interactive vs cron execution. (2) Ensure heartbeat_service.py has relaxed/disabled idle timeouts. (3) Make error messages point to specific config key.",
+      "effort": "S",
+      "priority": 3
+    },
+    {
+      "id": 15,
+      "name": "Vendor Error Classification for Failover",
+      "openclaw_component": "Agent Runtime (LLM failover)",
+      "openclaw_references": ["#49552"],
+      "relevance": "MEDIUM",
+      "recommendation": "WATCH",
+      "our_counterpart": "src/universal_agent/execution_engine.py (error handling)",
+      "gap_analysis": "Use Claude as primary model. No multi-model failover yet. Error classification needed before implementing Gemini/other fallback.",
+      "implementation_notes": "When adding multi-model failover: classify provider error codes. Billing (402, payment 429) and auth (401, 403) errors should NOT trigger failover — need operator intervention.",
+      "effort": "S",
+      "priority": 4
+    },
+    {
+      "id": 16,
+      "name": "Plugin SDK: Provider Auth Aliases",
+      "openclaw_component": "Plugin SDK (provider authentication)",
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "src/universal_agent/sdk/ (no plugin system)",
+      "gap_analysis": "No plugin architecture with third-party providers.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 17,
+      "name": "Plugin SDK: Auth Choice Trust Boundaries",
+      "openclaw_component": "Plugin SDK (security)",
+      "openclaw_references": ["#62368"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": null,
+      "gap_analysis": "No plugin system.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 18,
+      "name": "Plugin SDK: Contract Guardrails",
+      "openclaw_component": "Plugin SDK (build/packaging)",
+      "openclaw_references": ["#63311", "#63174"],
+      "relevance": "NOT_APPLICABLE",
+      "recommendation": "SKIP",
+      "our_counterpart": null,
+      "gap_analysis": "TypeScript/Node build tooling, not applicable to Python project.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 19,
+      "name": "iOS/Android Client Fixes",
+      "openclaw_component": "iOS/Android native clients",
+      "openclaw_references": ["#63001", "#63199", "#63134"],
+      "relevance": "NOT_APPLICABLE",
+      "recommendation": "SKIP",
+      "our_counterpart": null,
+      "gap_analysis": "No native mobile clients. UI is Next.js web dashboard.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 20,
+      "name": "Slack ACP Block Reply Dedup",
+      "openclaw_component": "Agent Communication Protocol (Slack)",
+      "openclaw_references": ["#62858"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": "Slack via Composio MCP",
+      "gap_analysis": "Don't use OpenClaw ACP.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 21,
+      "name": "Telegram/Bundled Channel Setup: Packaged Sidecars",
+      "openclaw_component": "Messaging channels (Node.js packaging)",
+      "openclaw_references": ["Telegram setup", "BlueBubbles", "Feishu", "Google Chat", "IRC", "Matrix", "Mattermost", "Teams", "Nextcloud Talk", "Slack", "Zalo"],
+      "relevance": "NOT_APPLICABLE",
+      "recommendation": "SKIP",
+      "our_counterpart": "src/universal_agent/bot/ (Python Telegram bot)",
+      "gap_analysis": "Node.js build issue, not applicable to Python Telegram bot.",
+      "effort": null,
+      "priority": null
+    },
+    {
+      "id": 22,
+      "name": "Platform-Specific Network/Agent Fixes",
+      "openclaw_component": "Slack proxy, DNS pinning, OpenAI progress, exec reporting",
+      "openclaw_references": ["#62878", "#59007", "#62097"],
+      "relevance": "LOW",
+      "recommendation": "SKIP",
+      "our_counterpart": null,
+      "gap_analysis": "Handled by Composio (Slack proxy), not applicable (Node.js), or irrelevant (OpenAI-specific).",
+      "effort": null,
+      "priority": null
+    }
+  ],
+  "summary": {
+    "total_features": 22,
+    "by_recommendation": {
+      "ADOPT": 2,
+      "INVESTIGATE": 3,
+      "WATCH": 3,
+      "SKIP": 14
+    },
+    "by_relevance": {
+      "HIGH": 3,
+      "MEDIUM": 5,
+      "LOW": 8,
+      "NOT_APPLICABLE": 6
+    },
+    "top_priorities": [
+      {
+        "rank": 1,
+        "feature": "Gateway Node Exec Event Sanitization",
+        "recommendation": "ADOPT",
+        "priority": 2,
+        "effort": "M"
+      },
+      {
+        "rank": 2,
+        "feature": "Gateway Chat: Suppress Control Token Leaks",
+        "recommendation": "ADOPT",
+        "priority": 2,
+        "effort": "S"
+      },
+      {
+        "rank": 3,
+        "feature": "SSRF Bypass Prevention After Browser Interactions",
+        "recommendation": "INVESTIGATE",
+        "priority": 3,
+        "effort": "M"
+      },
+      {
+        "rank": 4,
+        "feature": "LLM Idle Timeout Inheritance",
+        "recommendation": "WATCH",
+        "priority": 3,
+        "effort": "S"
+      }
+    ],
+    "recurring_gaps": []
+  }
+}
