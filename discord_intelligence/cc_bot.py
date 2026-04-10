@@ -125,6 +125,14 @@ class CCBot(commands.Bot):
         end_time = event["end_time"] or start_time
         description = event["description"] or ""
         
+        if event_name == "Textual Mention Event" and description:
+            lines = [line.strip() for line in description.split('\n') if line.strip()]
+            if lines:
+                candidate = lines[0]
+                if len(candidate) > 80:
+                    candidate = candidate[:77] + "..."
+                event_name = candidate
+        
         import json
         event_json = {
             "summary": event_name,
