@@ -143,6 +143,9 @@ class DiscordIntelligenceDB:
             self._migrate_add_column(conn, 'scheduled_events', 'channel_id', 'TEXT')
             self._migrate_add_column(conn, 'scheduled_events', 'creator_name', 'TEXT')
             self._migrate_add_column(conn, 'scheduled_events', 'user_count', 'INTEGER DEFAULT 0')
+            # Digest event columns
+            self._migrate_add_column(conn, 'scheduled_events', 'digest_generated', 'BOOLEAN DEFAULT 0')
+            self._migrate_add_column(conn, 'scheduled_events', 'digest_content', 'TEXT')
 
     @staticmethod
     def _migrate_add_column(conn, table: str, column: str, typedef: str):

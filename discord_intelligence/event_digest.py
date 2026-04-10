@@ -18,9 +18,18 @@ DIGESTS_DIR = BASE_DIR / "digests"
 DIGESTS_DIR.mkdir(exist_ok=True)
 
 SYSTEM_PROMPT = """You are an event intelligence analyst.
-Review the following Discord messages captured during a scheduled event.
-Extract a concise summary, key insights, links shared, and any action items.
-Format as Markdown with clear headings."""
+Review the following Discord messages and/or audio transcript captured during a scheduled event.
+Extract a concise summary, key insights, links shared, and any explicit action items or tasks assigned.
+Respond with ONLY a JSON object:
+{
+  "summary_markdown": "Formatted Markdown with ## Summary, ## Key Insights, and ## Links",
+  "action_items": [
+    {
+      "title": "Short action title",
+      "description": "Details of the task"
+    }
+  ]
+}"""
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(get_db_path())
@@ -51,8 +60,10 @@ async def generate_digest(event_name: str, messages: list[dict], additional_cont
     user_msg = f"Event: {event_name}\nMessages:\n{text_content}{transcript_section}"
     
     try:
-        response = await _call_llm(system=SYSTEM_PROMPT, user=user_msg, max_tokens=1024)
-        return response
+        response = await _call_llm(system=SYSTEM_PROMPT, user=user_msg, model="sonnet", max_tokens=2048)
+        from universal_agent.services.llm_classifier import _parse_json_response
+        parsed = _parse_json_response(response)
+        return parsed
     except Exception as e:
         logger.error(f"Failed to generate digest: {e}")
         return None
@@ -120,6 +131,10 @@ async def run_pipeline():
                 except Exception as e:
                     logger.warning(f"Could not read transcript {transcript_path_val}: {e}")
             
+            if len(msgs) < 10 and not transcript_text:
+                logger.info(f"Skipping event '{event['name']}' due to low message count ({len(msgs)}) and no transcript.")
+                continue
+
             if msgs or transcript_text:
                 content_parts = []
                 
@@ -132,14 +147,15 @@ async def run_pipeline():
                 
                 # Generate digest from all available content
                 combined_messages = [dict(m) for m in msgs] if msgs else []
-                digest = await generate_digest(
+                digest_data = await generate_digest(
                     event['name'],
                     combined_messages,
                     additional_context=transcript_text if transcript_text else None,
                 )
                 
-                if digest:
-                    digest_path.write_text(digest)
+                if digest_data:
+                    digest_md = digest_data.get('summary_markdown', str(digest_data))
+                    digest_path.write_text(digest_md)
                     logger.info(f"Saved local digest to {digest_path}")
                     
                     # Update LLM Wiki / Briefings integration
@@ -158,14 +174,32 @@ async def run_pipeline():
                         sources.append("audio transcript")
                     source_line = f"Sources: {', '.join(sources)}"
                     
-                    briefing_content = f"# Intelligence Briefing: {event['name']}\nDate: {start_dt.isoformat()}\n{source_line}\n\n{digest}"
+                    briefing_content = f"# Intelligence Briefing: {event['name']}\nDate: {start_dt.isoformat()}\n{source_line}\n\n{digest_md}"
                     briefing_file.write_text(briefing_content)
                     logger.info(f"Pushed to KB Briefings: {briefing_file}")
                     
                     db.execute('''
                         INSERT OR IGNORE INTO knowledge_updates (id, title, summary, file_path)
                         VALUES (?, ?, ?, ?)
-                    ''', (f"evt_{event['id']}", event['name'], digest[:2000], str(briefing_file)))
+                    ''', (f"evt_{event['id']}", event['name'], digest_md[:2000], str(briefing_file)))
+                    
+                    action_items = digest_data.get('action_items', [])
+                    if action_items:
+                        from discord_intelligence.integration.task_hub import create_task_hub_mission
+                        for action in action_items:
+                            create_task_hub_mission(
+                                title=f"Action Item: {action.get('title', 'Task')} (from {event['name']})",
+                                description=action.get('description', ''),
+                                tags=["event-action-item", "discord"]
+                            )
+                            logger.info(f"Created Task Hub mission for: {action.get('title', 'Task')}")
+
+                    db.execute('''
+                        UPDATE scheduled_events 
+                        SET digest_generated = 1, digest_content = ? 
+                        WHERE id = ?
+                    ''', (digest_md, event['id']))
+
                     db.commit()
                     
     finally:

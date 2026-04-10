@@ -53,6 +53,9 @@ class CCBot(commands.Bot):
         if not self.poll_knowledge_updates.is_running():
             self.poll_knowledge_updates.start()
             logger.info("Started poll_knowledge_updates loop")
+        if not self.poll_event_digest.is_running():
+            self.poll_event_digest.start()
+            logger.info("Started poll_event_digest loop")
 
     def _get_intel_channel(self, guild, channel_name: str):
         """Find a channel by name under the 🔬 INTELLIGENCE category."""
@@ -60,6 +63,95 @@ class CCBot(commands.Bot):
         if cat:
             return discord.utils.get(cat.channels, name=channel_name)
         return None
+
+    @tasks.loop(minutes=15)
+    async def poll_event_digest(self):
+        try:
+            from discord_intelligence.event_digest import run_pipeline
+            logger.info("Triggering background event digest pipeline...")
+            await run_pipeline()
+        except Exception as e:
+            logger.error(f"Event digest loop error: {e}")
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        if payload.user_id == self.user.id:
+            return
+            
+        channel = self.get_channel(payload.channel_id)
+        if not channel or channel.name != "event-calendar":
+            return
+            
+        emoji = str(payload.emoji.name if payload.emoji.is_custom_emoji() else payload.emoji.name)
+        if emoji not in ["✅", "🎙️", "❌"]:
+            return
+            
+        try:
+            msg = await channel.fetch_message(payload.message_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch message for reaction: {e}")
+            return
+            
+        if not msg.embeds:
+            return
+            
+        embed = msg.embeds[0]
+        title = embed.title
+        if not title or not title.startswith("New Event: "):
+            return
+            
+        event_name = title.replace("New Event: ", "")
+        
+        with self.db._get_conn() as conn:
+            cur = conn.execute("SELECT * FROM scheduled_events WHERE name = ?", (event_name,))
+            event = cur.fetchone()
+            
+        if not event:
+            return
+            
+        if emoji == "❌":
+            with self.db._get_conn() as conn:
+                conn.execute("UPDATE scheduled_events SET status = 'declined' WHERE id = ?", (event["id"],))
+                conn.commit()
+            await channel.send(f"❌ Declined event: `{event_name}`")
+            return
+            
+        if emoji == "🎙️":
+            with self.db._get_conn() as conn:
+                conn.execute("UPDATE scheduled_events SET persist_audio = 1 WHERE id = ?", (event["id"],))
+                conn.commit()
+            await channel.send(f"🎙️ Flagged event for audio recording: `{event_name}`")
+            
+        start_time = event["start_time"]
+        end_time = event["end_time"] or start_time
+        description = event["description"] or ""
+        
+        import json
+        event_json = {
+            "summary": event_name,
+            "description": description,
+            "start": {"dateTime": start_time},
+            "end": {"dateTime": end_time}
+        }
+        
+        if event["location"]:
+            event_json["location"] = event["location"]
+            
+        cmd = ["gws", "calendar", "+insert", "--json", json.dumps(event_json)]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                await channel.send(f"✅ Successfully synced `{event_name}` to Google Calendar.")
+            else:
+                logger.error(f"gws calendar error: {stderr.decode()}")
+                await channel.send(f"⚠️ Failed to sync `{event_name}` to Calendar. Check logs.")
+        except Exception as e:
+            logger.error(f"Error calling gws: {e}")
+            await channel.send(f"⚠️ Failed to execute gws for `{event_name}`.")
 
     @tasks.loop(seconds=60)
     async def poll_database(self):
