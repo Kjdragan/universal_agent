@@ -119,6 +119,12 @@ async def run_pipeline():
                     briefing_file.write_text(briefing_content)
                     logger.info(f"Pushed to KB Briefings: {briefing_file}")
                     
+                    db.execute('''
+                        INSERT OR IGNORE INTO knowledge_updates (id, title, summary, file_path)
+                        VALUES (?, ?, ?, ?)
+                    ''', (f"evt_{event['id']}", event['name'], digest[:2000], str(briefing_file)))
+                    db.commit()
+                    
     finally:
         db.close()
     

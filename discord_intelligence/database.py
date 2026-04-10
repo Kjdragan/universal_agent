@@ -111,6 +111,16 @@ class DiscordIntelligenceDB:
                     notified BOOLEAN DEFAULT 0
                 )
             ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS knowledge_updates (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    summary TEXT,
+                    file_path TEXT,
+                    notified BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             conn.commit()
             # Migrations for existing databases: add notified columns if missing
             self._migrate_add_column(conn, 'signals', 'notified', 'BOOLEAN DEFAULT 0')
@@ -279,4 +289,26 @@ class DiscordIntelligenceDB:
         with self._get_conn() as conn:
             placeholders = ','.join('?' * len(insight_ids))
             conn.execute(f'UPDATE insights SET notified = 1 WHERE id IN ({placeholders})', insight_ids)
+            conn.commit()
+
+    def store_knowledge_update(self, update_id: str, title: str, summary: str, file_path: str):
+        with self._get_conn() as conn:
+            conn.execute('''
+                INSERT OR IGNORE INTO knowledge_updates (id, title, summary, file_path)
+                VALUES (?, ?, ?, ?)
+            ''', (update_id, title, summary, file_path))
+            conn.commit()
+
+    def get_unnotified_knowledge_updates(self, limit: int = 10):
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT * FROM knowledge_updates WHERE notified = 0 ORDER BY created_at ASC LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
+    def mark_knowledge_updates_notified(self, ids: list[str]):
+        if not ids: return
+        with self._get_conn() as conn:
+            placeholders = ','.join('?' * len(ids))
+            conn.execute(f"UPDATE knowledge_updates SET notified = 1 WHERE id IN ({placeholders})", ids)
             conn.commit()

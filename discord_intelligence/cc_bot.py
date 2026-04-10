@@ -48,6 +48,9 @@ class CCBot(commands.Bot):
         if not self.poll_insights_feed.is_running():
             self.poll_insights_feed.start()
             logger.info("Started poll_insights_feed loop")
+        if not self.poll_knowledge_updates.is_running():
+            self.poll_knowledge_updates.start()
+            logger.info("Started poll_knowledge_updates loop")
 
     def _get_intel_channel(self, guild, channel_name: str):
         """Find a channel by name under the 🔬 INTELLIGENCE category."""
@@ -176,6 +179,34 @@ class CCBot(commands.Bot):
             self.db.mark_insights_notified([i['id'] for i in insights])
         except Exception as e:
             logger.error(f"Insight feed polling error: {e}")
+            
+    @tasks.loop(seconds=120)
+    async def poll_knowledge_updates(self):
+        """Post unnotified knowledge base updates to #knowledge-updates."""
+        try:
+            updates = self.db.get_unnotified_knowledge_updates(limit=5)
+            if not updates:
+                return
+            logger.info(f"Posting {len(updates)} unnotified KB updates to #knowledge-updates")
+            
+            for guild in self.guilds:
+                channel = self._get_intel_channel(guild, "knowledge-updates")
+                if not channel:
+                    continue
+                    
+                for up in updates:
+                    embed = discord.Embed(
+                        title=f"📚 KB Updated: {up['title']}",
+                        description=up['summary'],
+                        color=discord.Color.purple(),
+                        timestamp=datetime.fromisoformat(up['created_at']) if up.get('created_at') else None
+                    )
+                    embed.add_field(name="File Path", value=f"`{up['file_path']}`", inline=False)
+                    await channel.send(embed=embed)
+                    
+            self.db.mark_knowledge_updates_notified([u['id'] for u in updates])
+        except Exception as e:
+            logger.error(f"KB Updates polling error: {e}")
         
     async def on_message(self, message: discord.Message):
         if message.author == self.user:
