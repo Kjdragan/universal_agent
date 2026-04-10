@@ -34,3 +34,47 @@ def create_task_hub_mission(title: str, description: str, tags: list = None):
     finally:
         if conn:
             conn.close()
+
+def get_task_hub_items(status: str = None, limit: int = 10):
+    init_secrets()
+    conn = None
+    try:
+        conn = connect_runtime_db(get_activity_db_path())
+        task_hub.ensure_schema(conn)
+        
+        query = "SELECT task_id, title, status, priority FROM task_hub_items"
+        args = []
+        if status:
+            query += " WHERE status = ?"
+            args.append(status)
+        
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        args.append(limit)
+        
+        cur = conn.execute(query, tuple(args))
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch Task Hub items: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def get_mission_status(task_id: str):
+    init_secrets()
+    conn = None
+    try:
+        conn = connect_runtime_db(get_activity_db_path())
+        task_hub.ensure_schema(conn)
+        
+        row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ?", (task_id,)).fetchone()
+        if not row:
+            return None
+        return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to fetch mission {task_id}: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()

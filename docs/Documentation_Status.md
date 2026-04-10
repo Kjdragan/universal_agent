@@ -79,6 +79,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 109 | LLM Wiki Implementation Status — living tracker for subsystem progress, blockers, verified tests, and current implementation state |
 | 110 | LLM Wiki Smoke Test — first manual smoke-test results, runtime issues, and next hardening targets |
 | 108 | Gateway Test Hardening And Regression Follow-Up — operational handoff for the April gateway regression pass, including what was fixed, what remains, and how to continue pruning stale tests while development resumes |
+| 111 | Discord Operations And Usage Guide — **Canonical source of truth** for operational usage, slash commands, and proactive task generation workflows via the Discord CC Bot |
 
 ## CSI Subsystem (04_CSI/)
 

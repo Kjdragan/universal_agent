@@ -108,7 +108,15 @@ class DiscordIntelligenceDB:
                     end_time TIMESTAMP,
                     location TEXT,
                     status TEXT,
-                    notified BOOLEAN DEFAULT 0
+                    entity_type TEXT,
+                    channel_id TEXT,
+                    creator_name TEXT,
+                    user_count INTEGER DEFAULT 0,
+                    notified BOOLEAN DEFAULT 0,
+                    audio_path TEXT,
+                    transcript_path TEXT,
+                    transcript_status TEXT DEFAULT 'none',
+                    persist_audio BOOLEAN DEFAULT 0
                 )
             ''')
             conn.execute('''
@@ -125,6 +133,16 @@ class DiscordIntelligenceDB:
             # Migrations for existing databases: add notified columns if missing
             self._migrate_add_column(conn, 'signals', 'notified', 'BOOLEAN DEFAULT 0')
             self._migrate_add_column(conn, 'insights', 'notified', 'BOOLEAN DEFAULT 0')
+            # Audio recording column migrations
+            self._migrate_add_column(conn, 'scheduled_events', 'audio_path', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'transcript_path', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'transcript_status', "TEXT DEFAULT 'none'")
+            self._migrate_add_column(conn, 'scheduled_events', 'persist_audio', 'BOOLEAN DEFAULT 0')
+            # Structured event discovery columns (replaces regex-based event detection)
+            self._migrate_add_column(conn, 'scheduled_events', 'entity_type', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'channel_id', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'creator_name', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'user_count', 'INTEGER DEFAULT 0')
 
     @staticmethod
     def _migrate_add_column(conn, table: str, column: str, typedef: str):
@@ -225,17 +243,24 @@ class DiscordIntelligenceDB:
             conn.commit()
 
     def upsert_scheduled_event(self, event_id: str, server_id: str, name: str, description: str, 
-                               start_time: datetime, end_time: datetime, location: str, status: str):
+                               start_time: datetime, end_time: datetime, location: str, status: str,
+                               entity_type: str = None, channel_id: str = None,
+                               creator_name: str = None, user_count: int = 0):
         with self._get_conn() as conn:
             end_val = end_time.isoformat() if end_time else None
+            start_val = start_time.isoformat() if start_time else None
             conn.execute('''
-                INSERT INTO scheduled_events (id, server_id, name, description, start_time, end_time, location, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO scheduled_events (id, server_id, name, description, start_time, end_time,
+                                              location, status, entity_type, channel_id, creator_name, user_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET 
                     name=excluded.name, description=excluded.description,
                     start_time=excluded.start_time, end_time=excluded.end_time,
-                    location=excluded.location, status=excluded.status
-            ''', (event_id, server_id, name, description, start_time.isoformat(), end_val, location, status))
+                    location=excluded.location, status=excluded.status,
+                    entity_type=excluded.entity_type, channel_id=excluded.channel_id,
+                    creator_name=excluded.creator_name, user_count=excluded.user_count
+            ''', (event_id, server_id, name, description, start_val, end_val, location, status,
+                  entity_type, channel_id, creator_name, user_count))
             conn.commit()
 
     def mark_event_notified(self, event_id: str):
@@ -312,3 +337,66 @@ class DiscordIntelligenceDB:
             placeholders = ','.join('?' * len(ids))
             conn.execute(f"UPDATE knowledge_updates SET notified = 1 WHERE id IN ({placeholders})", ids)
             conn.commit()
+
+    # ── Audio Recording Management ──────────────────────────────────────
+
+    def update_event_audio_path(self, event_id: str, audio_path: str):
+        """Set the audio recording file path for an event."""
+        with self._get_conn() as conn:
+            conn.execute(
+                'UPDATE scheduled_events SET audio_path = ? WHERE id = ?',
+                (audio_path, event_id)
+            )
+            conn.commit()
+
+    def update_event_transcript(self, event_id: str, transcript_path: str, status: str = 'complete'):
+        """Set the transcript file path and status for an event."""
+        with self._get_conn() as conn:
+            conn.execute(
+                'UPDATE scheduled_events SET transcript_path = ?, transcript_status = ? WHERE id = ?',
+                (transcript_path, status, event_id)
+            )
+            conn.commit()
+
+    def set_event_persist_audio(self, event_id: str, persist: bool = True):
+        """Mark an event's audio for long-term retention (bypass 30-day cleanup)."""
+        with self._get_conn() as conn:
+            conn.execute(
+                'UPDATE scheduled_events SET persist_audio = ? WHERE id = ?',
+                (1 if persist else 0, event_id)
+            )
+            conn.commit()
+
+    def get_events_pending_transcription(self) -> list[dict]:
+        """Get events that have audio but no transcript yet."""
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT * FROM scheduled_events
+                WHERE audio_path IS NOT NULL
+                  AND (transcript_status IS NULL OR transcript_status = 'none')
+                ORDER BY start_time DESC
+            ''')
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_events_with_audio(self) -> list[dict]:
+        """Get all events that have audio recordings."""
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT * FROM scheduled_events
+                WHERE audio_path IS NOT NULL
+                ORDER BY start_time DESC
+            ''')
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_events_for_audio_cleanup(self, cutoff_iso: str) -> list[dict]:
+        """Get events with audio older than cutoff that are not marked for persistence."""
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT * FROM scheduled_events
+                WHERE audio_path IS NOT NULL
+                  AND persist_audio = 0
+                  AND start_time < ?
+                ORDER BY start_time ASC
+            ''', (cutoff_iso,))
+            return [dict(row) for row in cur.fetchall()]
+

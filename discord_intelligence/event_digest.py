@@ -27,18 +27,28 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
-async def generate_digest(event_name: str, messages: list[dict]) -> Optional[str]:
-    if not messages:
+async def generate_digest(event_name: str, messages: list[dict], additional_context: str = None) -> Optional[str]:
+    if not messages and not additional_context:
         return None
     
-    text_content = "\n".join([f"[{m['timestamp']}] {m['author_name']}: {m['content']}" for m in messages])
+    text_content = ""
+    if messages:
+        text_content = "\n".join([f"[{m['timestamp']}] {m['author_name']}: {m['content']}" for m in messages])
     
     # We truncate text_content if it's extremely long, to fit within LLM context window limits
     max_chars = 150000 
     if len(text_content) > max_chars:
         text_content = text_content[:max_chars] + "\n...[truncated due to length]"
+    
+    # Include audio transcript if available
+    transcript_section = ""
+    if additional_context:
+        max_transcript = 100000
+        if len(additional_context) > max_transcript:
+            additional_context = additional_context[:max_transcript] + "\n...[transcript truncated]"
+        transcript_section = f"\n\nAudio Transcript:\n{additional_context}"
         
-    user_msg = f"Event: {event_name}\nMessages:\n{text_content}"
+    user_msg = f"Event: {event_name}\nMessages:\n{text_content}{transcript_section}"
     
     try:
         response = await _call_llm(system=SYSTEM_PROMPT, user=user_msg, max_tokens=1024)
@@ -100,9 +110,34 @@ async def run_pipeline():
             args = (event['server_id'], window_start.isoformat(), window_end.isoformat())
             msgs = db.execute(sql, args).fetchall()
             
-            if msgs:
-                logger.info(f"Extracting digest for event '{event['name']}' with {len(msgs)} messages.")
-                digest = await generate_digest(event['name'], [dict(m) for m in msgs])
+            # Also check for audio transcript to incorporate
+            transcript_text = ""
+            transcript_path_val = event.get('transcript_path')
+            if transcript_path_val and Path(transcript_path_val).exists():
+                try:
+                    transcript_text = Path(transcript_path_val).read_text(encoding="utf-8")
+                    logger.info(f"Found transcript for event '{event['name']}', including in digest.")
+                except Exception as e:
+                    logger.warning(f"Could not read transcript {transcript_path_val}: {e}")
+            
+            if msgs or transcript_text:
+                content_parts = []
+                
+                if msgs:
+                    logger.info(f"Extracting digest for event '{event['name']}' with {len(msgs)} messages.")
+                    content_parts.append(f"## Text Channel Messages ({len(msgs)} messages)")
+                    
+                if transcript_text:
+                    content_parts.append(f"\n\n## Audio Transcript\n\n{transcript_text}")
+                
+                # Generate digest from all available content
+                combined_messages = [dict(m) for m in msgs] if msgs else []
+                digest = await generate_digest(
+                    event['name'],
+                    combined_messages,
+                    additional_context=transcript_text if transcript_text else None,
+                )
+                
                 if digest:
                     digest_path.write_text(digest)
                     logger.info(f"Saved local digest to {digest_path}")
@@ -115,7 +150,15 @@ async def run_pipeline():
                     safe_name = "".join(c for c in event['name'] if c.isalnum() or c in " _-").replace(' ', '_')
                     briefing_file = kb_path / f"Event_{safe_name}.md"
                     
-                    briefing_content = f"# Intelligence Briefing: {event['name']}\nDate: {start_dt.isoformat()}\n\n{digest}"
+                    # Include source indicator
+                    sources = []
+                    if msgs:
+                        sources.append(f"{len(msgs)} text messages")
+                    if transcript_text:
+                        sources.append("audio transcript")
+                    source_line = f"Sources: {', '.join(sources)}"
+                    
+                    briefing_content = f"# Intelligence Briefing: {event['name']}\nDate: {start_dt.isoformat()}\n{source_line}\n\n{digest}"
                     briefing_file.write_text(briefing_content)
                     logger.info(f"Pushed to KB Briefings: {briefing_file}")
                     
@@ -132,3 +175,4 @@ async def run_pipeline():
 
 if __name__ == "__main__":
     asyncio.run(run_pipeline())
+
