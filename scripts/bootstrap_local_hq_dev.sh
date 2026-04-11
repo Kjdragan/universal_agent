@@ -1,4 +1,37 @@
 #!/usr/bin/env bash
+# ==============================================================================
+# DEPRECATED — DO NOT USE
+# ------------------------------------------------------------------------------
+# This script writes Infisical credentials to a plaintext .env file, which
+# violates the project's "no secrets on disk" rule. It is retained only so
+# existing references do not 404; it will be removed in a future cleanup.
+#
+# Use instead:   scripts/dev_up.sh
+# Canonical doc: docs/development/LOCAL_DEV.md
+#
+# If you genuinely need to run this (e.g. to compare against the new flow),
+# set I_KNOW_THIS_IS_DEPRECATED=1 explicitly.
+# ==============================================================================
+if [[ "${I_KNOW_THIS_IS_DEPRECATED:-0}" != "1" ]]; then
+  cat >&2 <<'DEPRECATED'
+bootstrap_local_hq_dev.sh is DEPRECATED.
+
+It writes Infisical credentials to a plaintext .env file, which violates the
+project's "no secrets on disk" rule.
+
+Use the new local dev workflow instead:
+
+  ./scripts/dev_up.sh      # start local stack (infisical run, secrets in memory)
+  ./scripts/dev_status.sh  # read-only health check
+  ./scripts/dev_down.sh    # stop local stack, resume VPS
+
+Canonical guide: docs/development/LOCAL_DEV.md
+
+To bypass this hard stop anyway:  I_KNOW_THIS_IS_DEPRECATED=1 ./scripts/bootstrap_local_hq_dev.sh
+DEPRECATED
+  exit 2
+fi
+
 set -Eeuo pipefail
 
 APP_ROOT="${APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"

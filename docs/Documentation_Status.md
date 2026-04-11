@@ -96,6 +96,13 @@ These are the authoritative references for each subsystem. When any other docume
 | ci_cd_pipeline.md | Workflow details, timing, pipeline structure, and SHA-first post-release verification |
 | infisical_factories.md | Stage naming and machine bootstrap (superseded by secrets_and_environments.md) |
 
+## Local Development (development/)
+
+| Doc | Subject |
+|-----|---------|
+| LOCAL_DEV.md | **Canonical source of truth** — local dev workflow: one-time setup, `scripts/dev_up.sh` / `dev_down.sh` / `dev_status.sh` / `dev_reset.sh`, two-state model (NORMAL/DEV), VPS hot-swap coordination via SSH, pause-stamp file, auto-release reconciler timer, security model (no secrets on disk, `infisical run --env=local`), `local` Infisical env drift caveat, troubleshooting |
+| LOCAL_DEV_SLASH_COMMANDS.md | Claude Code slash-command reference (`/devup`, `/devdown`, `/devstatus`, `/devreset`) and agent enforcement rules for non-Claude-Code agents |
+
 ## Review & Decision Documents
 
 | # | Subject |

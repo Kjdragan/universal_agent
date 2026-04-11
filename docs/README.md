@@ -107,6 +107,11 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, pipeline structure, and SHA-first post-release verification guidance.
 - **[Infisical Factories](deployment/infisical_factories.md)**: Stage naming and machine bootstrap detail (superseded by Secrets and Environments).
 
+### 4D. [Local Development](development)
+
+- **[Local Development Guide](development/LOCAL_DEV.md)**: Canonical guide for running the full stack on a workstation against real Infisical secrets, with VPS hot-swap coordination. Covers one-time setup, daily workflow (`dev_up.sh` / `dev_down.sh` / `dev_status.sh` / `dev_reset.sh`), two-state model (NORMAL vs DEV), VPS pause stamp, auto-release reconciler, security model, and troubleshooting.
+- **[Local Development Slash Commands](development/LOCAL_DEV_SLASH_COMMANDS.md)**: Claude Code slash-command reference (`/devup`, `/devdown`, `/devstatus`, `/devreset`) and agent enforcement rules.
+
 ### 4C. [CSI Subsystem](04_CSI)
 
 - **[CSI Master Architecture & Design](04_CSI/CSI_Master_Architecture.md)**: Canonical living document for the Creator Signal Intelligence subsystem — domain taxonomy, source management (SQLite), quality scoring, adapter architecture, batch processing, delivery contracts, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference.

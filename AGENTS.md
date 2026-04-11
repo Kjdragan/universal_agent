@@ -50,6 +50,43 @@ This repository has exactly one supported application deployment path. Productio
 
 - `scripts/vpsctl.sh` is a break-glass diagnostics helper, not the normal deployment path.
 
+## Local Development Mode
+
+This repo has a dedicated local-dev workflow for running the full stack on Kevin's workstation against real Infisical secrets, without persistently modifying the VPS. This section applies to **every** agent working in this repo — Claude Code, Antigravity IDE, Codex, or any other harness.
+
+**Canonical guide:** `docs/development/LOCAL_DEV.md`. Read it before writing anything about local dev.
+
+### Two states
+
+The system is in exactly one of two states at any moment:
+
+- **State A (NORMAL):** VPS runs everything. Default. This is the production path. CI/CD deploys land here.
+- **State B (DEV):** `scripts/dev_up.sh` was run on Kevin's desktop. VPS conflict services are **paused** via SSH hot-swap, and an equivalent local stack runs on 8001/8002/3000 wrapped in `infisical run --env=local`. A pause-stamp file on the VPS (`/etc/universal-agent/dev_pause.stamp`) marks the window and is auto-released by a VPS-side reconciler timer if the user forgets to run `dev_down.sh`.
+
+### Entry points
+
+- `scripts/dev_up.sh` — enter State B.
+- `scripts/dev_down.sh` — exit State B. Always run this before `git push`.
+- `scripts/dev_status.sh` — read-only snapshot.
+- `scripts/dev_reset.sh` — destructive, wipes `~/lrepos/universal_agent_local_data/`. Gated by a confirmation phrase.
+- `scripts/install_vps_dev_pause_reconciler.sh` — one-time VPS-side safety-net timer installer.
+
+In Claude Code, these are also available as slash commands: `/devup`, `/devdown`, `/devstatus`, `/devreset` (see `.claude/commands/dev*.md`).
+
+### Rules every agent must enforce
+
+1. **Never push to `develop` or `main` while State B is active.** A deploy will restart the paused VPS services and collide with the local stack (Telegram long-poll, Discord bot, queue workers). If the user asks to push, first confirm they have run `scripts/dev_down.sh` (or suggest running it). Check `scripts/dev_status.sh` if unsure.
+
+2. **Never recommend writing Infisical credentials to `.env`, `.env.local`, or any other file on disk.** The only credentials on disk are the three bootstrap values in the user's `~/.bashrc` (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`). Every runtime secret is injected in-memory by `infisical run --env=local --projectId=$INFISICAL_PROJECT_ID --`. The legacy `scripts/bootstrap_local_hq_dev.sh` is deprecated precisely because it writes secrets to `.env`.
+
+3. **Treat the `local` Infisical env as production-adjacent.** It was seeded as a one-time copy of `production`, so local dev hits real Slack/Discord/Telegram/AgentMail/Redis/Postgres unless the user has explicitly overridden those env vars. Never suggest code that would spam a production channel, DB, or API from local dev without making the risk explicit.
+
+4. **Do not edit `.github/workflows/`** as part of the local-dev workflow. Local dev is a runtime concern, not a CI/CD concern. The deploy pipeline should have zero knowledge of State B.
+
+5. **Keep the VPS unit list in sync.** If you change the `VPS_CONFLICT_SERVICES` / `VPS_CONFLICT_TIMERS` arrays in any of `scripts/dev_up.sh`, `scripts/dev_down.sh`, `scripts/dev_status.sh`, or `scripts/install_vps_dev_pause_reconciler.sh`, update all four.
+
+6. **Before claiming the Web UI is fixed, verify it in a browser.** The standard browser-debugging rule applies: navigate to `http://localhost:3000`, reproduce, then edit. Do not claim a UI-visible bug is fixed on inspection of code alone.
+
 ## Documentation
 
 All documentation for this project MUST reside exclusively within the `docs/` directory. Creating any other documentation directories (such as `OFFICIAL_PROJECT_DOCUMENTATION/`) is strictly prohibited.
