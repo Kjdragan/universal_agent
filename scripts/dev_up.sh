@@ -70,6 +70,8 @@ VPS_PAUSE_STAMP_PATH="${UA_VPS_PAUSE_STAMP_PATH:-/etc/universal-agent/dev_pause.
 VPS_PAUSE_HOURS="${UA_VPS_PAUSE_HOURS:-8}"
 VPS_SKIP_PAUSE="${UA_VPS_SKIP_PAUSE:-0}"
 
+VPS_BANNER_STATE="unknown"
+
 INFISICAL_ENV_SLUG="${UA_INFISICAL_ENV:-local}"
 UA_API_PORT="${UA_API_PORT:-8001}"
 UA_GATEWAY_PORT="${UA_GATEWAY_PORT:-8002}"
@@ -114,7 +116,13 @@ These must live in your shell profile (~/.bashrc). See docs/development/LOCAL_DE
     fi
   fi
 
-  local need=(infisical uv node npm ssh curl)
+  local need=(infisical uv node npm curl)
+  # ssh is only required when we actually SSH to the VPS. If the user is
+  # running with UA_VPS_SKIP_PAUSE=1 (e.g. VPS is unreachable on purpose),
+  # don't demand ssh as a preflight precondition.
+  if [[ "$VPS_SKIP_PAUSE" != "1" ]]; then
+    need+=(ssh)
+  fi
   local bad=()
   for bin in "${need[@]}"; do
     command -v "$bin" >/dev/null 2>&1 || bad+=("$bin")
@@ -157,6 +165,7 @@ Run: cd $APP_ROOT && uv sync"
 vps_pause() {
   if [[ "$VPS_SKIP_PAUSE" == "1" ]]; then
     warn "UA_VPS_SKIP_PAUSE=1 — skipping VPS hot-swap. You are responsible for any conflicts."
+    VPS_BANNER_STATE="NOT touched (UA_VPS_SKIP_PAUSE=1) — you are responsible for any VPS/local conflicts"
     return 0
   fi
 
@@ -202,6 +211,7 @@ If you genuinely want to run locally without touching the VPS (e.g. VPS is alrea
   fi
 
   say "VPS services paused. Reconciler will auto-release after $(date -d "@$expire_ts" '+%Y-%m-%d %H:%M %Z')."
+  VPS_BANNER_STATE="paused (${VPS_PAUSE_HOURS}h window) via $VPS_SSH_HOST"
 }
 
 # ------------------------------------------------------------------------------
@@ -241,15 +251,42 @@ setup_local_env() {
 }
 
 # ------------------------------------------------------------------------------
-# Render web-ui/.env.local via the existing helper. This writes a file on disk
-# (required by Next.js dev mode), but it lives under .gitignore and contains
-# only non-secret runtime config — by the project's existing convention.
+# Render web-ui/.env.local directly via the Python renderer. We bypass
+# scripts/install_local_webui_env.sh because that wrapper requires $APP_ROOT/.env
+# to exist — a contract from the deprecated bootstrap_local_hq_dev.sh flow. In
+# the new flow we deliberately do NOT keep a .env on disk, so we call the
+# renderer directly. The renderer pulls secrets from Infisical into process
+# memory, writes only non-secret runtime config (identity, ports, tokens) to
+# the file, and the file itself is .gitignore'd.
 # ------------------------------------------------------------------------------
 render_webui_env() {
-  say "Rendering web-ui/.env.local via install_local_webui_env.sh"
-  APP_ROOT="$APP_ROOT" \
-  DEPLOY_PROFILE="$UA_DEPLOYMENT_PROFILE" \
-    bash "$APP_ROOT/scripts/install_local_webui_env.sh" >/dev/null
+  local webui_env="$APP_ROOT/web-ui/.env.local"
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ua-local-webui-env.XXXXXX")"
+  say "Rendering $webui_env from Infisical-backed runtime env"
+
+  # Run the renderer under infisical so secrets are injected into its memory
+  # only. The renderer calls initialize_runtime_secrets(force_reload=True),
+  # which also pulls via SDK, but wrapping in `infisical run` guarantees the
+  # child has everything it needs regardless of which path the loader takes.
+  if ! env PYTHONPATH="$APP_ROOT/src" \
+       infisical run \
+         --env="$INFISICAL_ENV_SLUG" \
+         --projectId="$INFISICAL_PROJECT_ID" \
+         -- "$APP_ROOT/.venv/bin/python" \
+              "$APP_ROOT/scripts/render_service_env_from_infisical.py" \
+              --profile "$UA_DEPLOYMENT_PROFILE" \
+              --include-runtime-identity \
+              --output "$tmp" \
+              --entry "UA_DASHBOARD_OPS_TOKEN=UA_DASHBOARD_OPS_TOKEN,UA_OPS_TOKEN" \
+       >/dev/null; then
+    rm -f "$tmp"
+    die "Failed to render $webui_env. Check that the 'local' Infisical env exists and your bootstrap creds are valid."
+  fi
+
+  mkdir -p "$(dirname "$webui_env")"
+  install -m 600 "$tmp" "$webui_env"
+  rm -f "$tmp"
 }
 
 # ------------------------------------------------------------------------------
@@ -325,7 +362,7 @@ ${C_GRN}${C_BLD}================================================================
  Logs dir:  $LOG_DIR
  PID file:  $PID_FILE
  Infisical: env=${INFISICAL_ENV_SLUG} project=${INFISICAL_PROJECT_ID}
- VPS:       paused (${VPS_PAUSE_HOURS}h window) via $VPS_SSH_HOST
+ VPS:       ${VPS_BANNER_STATE}
 
  Stop:      ${C_CYA}scripts/dev_down.sh${C_RST}
  Status:    ${C_CYA}scripts/dev_status.sh${C_RST}

@@ -50,6 +50,9 @@ fi
 say()  { printf '%s[dev_down]%s %s\n' "$C_CYA" "$C_RST" "$*"; }
 warn() { printf '%s[dev_down]%s %s\n' "$C_YEL" "$C_RST" "$*" >&2; }
 
+VPS_BANNER_STATE="unknown"
+SAFE_TO_PUSH=0
+
 # ------------------------------------------------------------------------------
 # Stop local services via PIDs recorded by dev_up.sh. If PID file is missing
 # or processes are already gone, continue to the VPS step anyway.
@@ -101,6 +104,8 @@ stop_local() {
 vps_resume() {
   if [[ "$VPS_SKIP_RESUME" == "1" ]]; then
     warn "UA_VPS_SKIP_RESUME=1 — not touching VPS. You will need to resume services manually."
+    VPS_BANNER_STATE="NOT touched (UA_VPS_SKIP_RESUME=1) — manual resume required"
+    SAFE_TO_PUSH=0
     return 0
   fi
 
@@ -133,21 +138,32 @@ REMOTE
       warn "  systemctl start $unit"
     done
     warn "Or wait for the dev-pause reconciler timer to expire."
+    VPS_BANNER_STATE="SSH resume FAILED — see warnings above"
+    SAFE_TO_PUSH=0
     return 1
   fi
 
   say "${C_GRN}VPS services resumed.${C_RST}"
+  VPS_BANNER_STATE="resumed on $VPS_SSH_HOST"
+  SAFE_TO_PUSH=1
 }
 
 print_banner() {
+  local push_line
+  if (( SAFE_TO_PUSH == 1 )); then
+    push_line="${C_GRN} You can now safely push to develop or main.${C_RST}"
+  else
+    push_line="${C_RED}${C_BLD} DO NOT push to develop or main — VPS is not in a known-good state.${C_RST}"
+  fi
+
   cat <<EOF
 
 ${C_GRN}${C_BLD}========================================================================
- Universal Agent — LOCAL DEV STOPPED (State A: NORMAL)
+ Universal Agent — LOCAL DEV STOPPED
 ========================================================================${C_RST}
  Local services:  stopped
- VPS services:    resumed on $VPS_SSH_HOST
- You can now safely push to develop or main.
+ VPS services:    $VPS_BANNER_STATE
+$push_line
 ${C_GRN}${C_BLD}========================================================================${C_RST}
 
 EOF
@@ -155,8 +171,13 @@ EOF
 
 main() {
   stop_local
-  vps_resume
+  # vps_resume can return non-zero on SSH failure; that's a reported outcome,
+  # not a reason to skip the banner. The banner itself communicates the result.
+  vps_resume || true
   print_banner
+  if (( SAFE_TO_PUSH == 0 )); then
+    return 1
+  fi
 }
 
 main "$@"
