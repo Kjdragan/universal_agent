@@ -67,6 +67,24 @@ function isDevModeStubsEnabled(): boolean {
  * Used for development and testing when the backend gateway is not running.
  */
 function getStubDataForPath(pathname: string): unknown | null {
+  if (pathname === "/api/v1/dashboard/summary") {
+    return {
+      status: "dev_stub",
+      active_agents: 3,
+      tasks_completed_today: 12,
+      error_rate: 0.05,
+      system_load: 0.45
+    };
+  }
+
+  if (pathname === "/api/v1/ops/sessions") {
+    return {
+      sessions: [
+        { session_id: "stub-session-1", workspace_dir: "/tmp/stub", status: "active", metadata: {} }
+      ]
+    };
+  }
+
   // CSI recent signals stub
   if (pathname === "/api/v1/csi/recent") {
     return {
@@ -570,9 +588,19 @@ async function fetchWithTransientRetry(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await fetch(upstreamUrl, init);
-    } catch (err) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s timeout protects nav UI
+      const res = await fetch(upstreamUrl, {
+        ...init,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      return res;
+    } catch (err: any) {
       lastError = err;
+      if (err.name === 'AbortError') {
+         lastError = new Error("Gateway timeout connecting to backend (3.5s).");
+      }
       if (attempt >= maxAttempts) break;
       // Transient gateway restarts can drop localhost:8002 briefly.
       await sleep(120 * attempt);
@@ -590,6 +618,16 @@ async function proxyRequest(request: NextRequest, path: string[]) {
 
   const safePath = path.map((segment) => encodeURIComponent(segment)).join("/");
   const upstreamPathname = `/${safePath}`;
+
+  // Fast-path: Return stubs immediately if enabled to prevent hanging the connection
+  // pool and blocking client-side transitions due to slow Python 404 responses.
+  if (isDevModeStubsEnabled()) {
+    const stubData = getStubDataForPath(upstreamPathname);
+    if (stubData) {
+      return NextResponse.json(stubData);
+    }
+  }
+
   const queryEntries = Array.from(request.nextUrl.searchParams.entries());
 
   const headers = buildUpstreamHeaders(request, session.ownerId);

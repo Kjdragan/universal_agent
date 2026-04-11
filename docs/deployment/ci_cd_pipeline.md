@@ -1,14 +1,14 @@
 # CI/CD Pipeline & Troubleshooting
 
-Our CI/CD pipeline is built on GitHub Actions and automates PR review, staging validation, and production deployment over Tailscale.
+Our CI/CD pipeline is built on GitHub Actions and automates PR review and production deployment over Tailscale.
 
 ## Canonical Rule
 
 This is the only supported app deployment path in this repository.
 
-- Open a pull request to `develop` to run Codex review on the proposed change.
-- Merge to `develop` to deploy to staging automatically.
-- Promote the exact validated `develop` SHA to `main` via the promotion workflow to deploy to production automatically.
+- `feature/latest2` is the active work branch.
+- Open a pull request to `develop` to run Devin automated review and CI checks. `develop` is for integration and review only.
+- Fast-forward `main` to the validated `develop` SHA to deploy to production automatically.
 - Do not treat `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, or manual SSH deploy steps as the primary deployment path.
 
 Release verification rule:
@@ -21,39 +21,37 @@ Release verification rule:
 
 | Name | Trigger | Target |
 |------|---------|--------|
-| `Codex Review Develop PR` | Pull request to `develop` | Automated PR review |
-| `Deploy Staging` | Push to `develop` | Staging Service |
-| `Promote Validated Develop To Main` | Manual workflow dispatch | Fast-forward `main` to validated `develop` SHA, then dispatch production deploy and fail if GitHub does not acknowledge the dispatch with HTTP `204` |
-| `Deploy Production` | Push to `main` | Production Service |
+| `Devin PR Review` | Pull request to `develop` | Automated PR review by Devin |
+| `Deploy` | Push to `main` | Production Service |
 
 ### Utility and Debug Workflows
 
 | Name | Trigger | Purpose |
 |------|---------|---------|
-| `Debug Production Services` | Manual workflow dispatch | Fetch logs and status from production services (gateway, API) for troubleshooting |
+| `Debug Production Services` | Manual workflow dispatch | Fetch logs and status from production services for troubleshooting |
 | `Fix Production Repo Directory` | Manual workflow dispatch | Reconstitute git repository in production checkout if `.git` directory is corrupted |
-| `Run Clear Agent Queue` | Manual workflow dispatch | Clear all pending tasks in the agent task hub (staging + production) |
-| `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift. Commits report to `develop` via auto-merged PR, then dispatches VP fix missions to VPS. |
+| `Run Clear Agent Queue` | Manual workflow dispatch | Clear all pending tasks in the agent task hub |
+| `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift via auto-merged PR |
+| `OpenClaw Release Sync` | Scheduled | Syncs OpenClaw updates |
 
 ## Current Targets
 
-| Area | Staging | Production |
-|------|---------|------------|
-| Git branch | `develop` | `main` |
-| VPS checkout | `/opt/universal-agent-staging` | `/opt/universal_agent` |
-| Gateway/API ports | `9002` / `9001` via `UA_GATEWAY_PORT`, `UA_API_PORT`, and `UA_GATEWAY_URL=http://127.0.0.1:9002` in staging `.env` | `8002` / `8001` |
-| Web UI port | `3001` | `3000` |
-| Web UI URL | `https://uaonvps:9443` (Tailnet) | `https://app.clearspringcg.com` (Public)<br>`https://uaonvps` (Tailnet) |
-| API URL | Proxied via Web UI | `https://api.clearspringcg.com` (Public)<br>`https://uaonvps:8443` (Tailnet) |
-| Legacy/fallback checkout | n/a | `/opt/universal_agent_repo` if `/opt/universal_agent` is occupied by a non-git legacy directory |
-| Runtime secrets | `staging` via explicit bootstrap `.env` plus stage secret validation | `production` via explicit bootstrap `.env` plus stage secret validation |
+| Area | Production |
+|------|------------|
+| Git branch | `main` |
+| VPS checkout | `/opt/universal_agent` |
+| Gateway/API ports | `8002` / `8001` |
+| Web UI port | `3000` |
+| Web UI URL | `https://app.clearspringcg.com` (Public)<br>`https://uaonvps` (Tailnet) |
+| API URL | `https://api.clearspringcg.com` (Public)<br>`https://uaonvps:8443` (Tailnet) |
+| Legacy/fallback checkout | `/opt/universal_agent_repo` if `/opt/universal_agent` is occupied by a non-git legacy directory |
+| Runtime secrets | `production` via explicit bootstrap `.env` plus stage secret validation |
 
 ## Infisical Runtime Lanes
 
 The runtime model is stage-based:
 
 - `development`
-- `staging`
 - `production`
 
 Machine identity is written locally during bootstrap and validated during deploy:
@@ -64,32 +62,31 @@ Machine identity is written locally during bootstrap and validated during deploy
 - `UA_MACHINE_SLUG`
 
 Deploy workflows must not provision machine-shaped Infisical environments during normal deploys.
-They also rewrite the checkout bootstrap `.env` from scratch on every deploy so
+They rewrite the checkout bootstrap `.env` from scratch on every deploy so
 stale historical lines cannot survive a lane migration.
 
 ## Canonical Systemd Units
 
-Deploy workflows now own both the application checkout and the base systemd units that run it.
+Deploy workflows own both the application checkout and the base systemd units that run it.
 
 - Canonical unit templates live under `deployment/systemd/templates/`.
 - `scripts/install_vps_systemd_units.sh` renders those templates against the active checkout path and installs them into `/etc/systemd/system/`.
-- Production deploy installs `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, and `universal-agent-telegram`.
-- Staging deploy installs `universal-agent-staging-gateway`, `universal-agent-staging-api`, and `universal-agent-staging-webui`.
+- Production deploy installs `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, and `universal-agent-telegram` along with VP workers.
 - Gateway/API stack-limit drop-ins are installed alongside the rendered base units during the same step.
 
 This is intentional: deploys must not rely on manually created host-only base units whose `WorkingDirectory`, `ExecStart`, or `EnvironmentFile` can drift from the checked-out release.
 
 ## Required GitHub Secrets
 
-- `OPENAI_API_KEY` (Codex PR review workflow)
+- `DEVIN_API_KEY` (Devin PR review workflow)
 - `TAILSCALE_OAUTH_CLIENT_ID` (Tailscale OAuth API client ID, tag identity `tag:ci-gha`)
 - `TAILSCALE_OAUTH_SECRET` (Tailscale OAuth API client secret)
 - `VPS_SSH_HOST`
 - `VPS_SSH_USER`
 - `VPS_SSH_KEY`
-- `INFISICAL_CLIENT_ID` (staging workflow)
-- `INFISICAL_CLIENT_SECRET` (staging workflow)
-- `INFISICAL_PROJECT_ID` (staging workflow)
+- `INFISICAL_CLIENT_ID`
+- `INFISICAL_CLIENT_SECRET`
+- `INFISICAL_PROJECT_ID`
 
 ## Required Tailscale Policy Model
 
@@ -114,17 +111,15 @@ CI runs must authenticate as a dedicated tagged principal and use non-interactiv
 
 Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model.
 
-## Pipeline Steps
+## Pipeline Steps (using `/ship` slash command)
 
-1. **Open PR to `develop`** from a `feature/...` branch.
-2. **Codex review** runs on that PR and comments directly on the diff.
-3. **Merge to `develop`** only after review and normal checks are acceptable.
-4. **Staging deploy** runs automatically on the merge result in `develop`.
-5. **Validate staging** against the exact merged `develop` SHA.
-6. **Promote validated SHA** using the `Promote Validated Develop To Main` workflow.
-7. **Production deploy** is dispatched explicitly by the promotion workflow after `main` is advanced.
-8. **Dispatch acknowledgement is mandatory**. The promotion workflow treats any non-`204` response from GitHub's workflow-dispatch API as a failed promotion so production cannot silently skip deployment after `main` moves.
-9. **Post-release verification should use the deployed checkout SHA**. If production appears to be missing a fix, confirm the VPS `HEAD` commit before reopening code investigation or assuming a deploy gap.
+1. **Commit & Push** on `feature/latest2`.
+2. **Open PR to `develop`**.
+3. **Devin PR Review** runs automated checks (does not block).
+4. **Merge to `develop`** once PR passes auto-merge limits.
+5. **Fast-forward `main`** to point to the new `develop` commit.
+6. **Production deploy** triggers automatically on push to `main` via Github Actions.
+7. **Post-release verification should use the deployed checkout SHA**. If production appears to be missing a fix, confirm the VPS `HEAD` commit before reopening code investigation or assuming a deploy gap.
 
 ## Lessons From The April 5 Dashboard Incident
 
@@ -142,17 +137,6 @@ Operational rule:
 
 ## Bootstrap Identity Written By Deploys
 
-### Staging VPS
-
-- `INFISICAL_ENVIRONMENT=staging`
-- `UA_RUNTIME_STAGE=staging`
-- `FACTORY_ROLE=HEADQUARTERS`
-- `UA_DEPLOYMENT_PROFILE=vps`
-- `UA_MACHINE_SLUG=vps-hq-staging`
-- `UA_GATEWAY_PORT=9002`
-- `UA_API_PORT=9001`
-- `UA_GATEWAY_URL=http://127.0.0.1:9002`
-
 ### Production VPS
 
 - `INFISICAL_ENVIRONMENT=production`
@@ -160,6 +144,9 @@ Operational rule:
 - `FACTORY_ROLE=HEADQUARTERS`
 - `UA_DEPLOYMENT_PROFILE=vps`
 - `UA_MACHINE_SLUG=vps-hq-production`
+- `UA_GATEWAY_PORT=8002`
+- `UA_API_PORT=8001`
+- `UA_GATEWAY_URL=http://127.0.0.1:8002`
 
 The bootstrap file written by deploys is intentionally minimal. Stage-shared
 runtime config and secrets are loaded from Infisical after bootstrap validation.
@@ -168,9 +155,9 @@ deploy rather than editing keys in place.
 
 ## Deployed Runtime Tooling
 
-- Staging and production deploys install project dependencies with `uv sync`.
-- Staging and production deploys run the shared helper `scripts/deploy_validate_runtime.sh` after writing the lane bootstrap `.env`.
-- That helper performs the same validation contract in both lanes:
+- Production deploy installs project dependencies with `uv sync`.
+- Deploy runs the shared helper `scripts/deploy_validate_runtime.sh` after writing the lane bootstrap `.env`.
+- That helper performs the validation contract:
   1. ensure Python 3.12 is available to `uv`
   2. run `uv sync`
   3. run `scripts/validate_runtime_bootstrap.py`
@@ -179,32 +166,27 @@ deploy rather than editing keys in place.
   6. if any of those checks fail, delete `.venv`, do one clean `uv sync`, and rerun the full validation sequence
   7. if validation still fails, abort deploy before any service restart
 - `scripts/verify_observability_runtime.py` is stricter than the runtime fail-open bootstrap: deploy success requires a real `logfire` import and a healthy OpenTelemetry context entry-point load, not just the ability to limp forward on the stub.
-- Staging and production deploys rebuild the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
-- Staging and production deploys rebuild the MkDocs documentation site via `mkdocs build`. The generated static site is served by the `universal-agent-docs` systemd unit on `localhost:8100`, exposed to the tailnet via `tailscale serve`. See `scripts/configure_docs_server.sh` for one-time setup.
-- Staging and production deploys install the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
+- Deploy rebuilds the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
+- Deploy rebuilds the MkDocs documentation site via `mkdocs build`. The generated static site is served by the `universal-agent-docs` systemd unit on `localhost:8100`, exposed to the tailnet via `tailscale serve`. See `scripts/configure_docs_server.sh` for one-time setup.
+- Deploy installs the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
-- The deployed runtime PATH must include `/home/ua/.local/bin` so those binaries are discoverable by gateway-executed Bash commands and MCP registration.
-- Staging deploy must execute `uv` tool installation under the real `ua` home directory (`sudo -H -u ua` / `HOME=$ua_home`) so NotebookLM tools land in the service user's tool path.
-- In the staging SSH deploy script, PATH must be quoted for remote expansion, not shipped as a literal `$PATH`, or basic commands like `getent`/`cut` can disappear from the remote shell.
-- Staging and production deploys install the `goplaces` CLI tool (v0.3.0) for the `ua` service user by downloading the release binary from GitHub to `/home/ua/.local/bin/goplaces`.
-- This tool provides fast local place search via the Google Places API (New) and is used by the `goplaces` and `local-places` skills.
-- Installation is idempotent — if `goplaces` is already present and executable, the download step is skipped.
+- Deploy installs the `goplaces` CLI tool (v0.3.0) for the `ua` service user by downloading the release binary from GitHub to `/home/ua/.local/bin/goplaces`.
+- Installation is idempotent.
 
 ## Expected Deploy Times
 
-| Scenario | Staging | Production |
-|----------|---------|------------|
-| First deploy on a fresh VPS (cold npm build) | ~20–25 min | ~20–25 min |
-| Normal deploy — no `package.json` change | ~8–12 min | ~8–12 min |
-| Deploy after `package.json` change (fresh npm install) | ~15–20 min | ~15–20 min |
+| Scenario | Production |
+|----------|------------|
+| First deploy on a fresh VPS (cold npm build) | ~20–25 min |
+| Normal deploy — no `package.json` change | ~8–12 min |
+| Deploy after `package.json` change (fresh npm install) | ~15–20 min |
 
-Both workflows have `timeout-minutes: 35` to accommodate the worst-case cold build. Normal deploys complete well within 15 minutes.
+The deploy workflow has `timeout-minutes: 35` to accommodate the worst-case cold build. Normal deploys complete well within 15 minutes.
 
-To force a full `npm install` on the next deploy (e.g. after a failed install left a corrupt `node_modules`), delete the sentinel on the VPS:
+To force a full `npm install` on the next deploy, delete the sentinel on the VPS:
 
 ```bash
-rm /opt/universal-agent-staging/web-ui/node_modules/.package-json-mtime  # staging
-rm /opt/universal_agent/web-ui/node_modules/.package-json-mtime           # production
+rm /opt/universal_agent/web-ui/node_modules/.package-json-mtime
 ```
 
 ## Service Restart on Deploy
@@ -213,31 +195,27 @@ Every deploy pulls code, syncs dependencies, rebuilds the web UI, and then **res
 
 ### Systemd Unit Names
 
-| Service | Staging Unit | Production Unit |
-|---------|-------------|------------------|
-| Gateway | `universal-agent-staging-gateway` | `universal-agent-gateway` |
-| API | `universal-agent-staging-api` | `universal-agent-api` |
-| Web UI | `universal-agent-staging-webui` | `universal-agent-webui` |
-| Docs | `universal-agent-docs` | `universal-agent-docs` |
-| Telegram | — (not running in staging) | `universal-agent-telegram` |
-| VP Worker (coder) | — | `universal-agent-vp-worker@vp.coder.primary` |
-| VP Worker (general) | — | `universal-agent-vp-worker@vp.general.primary` |
+| Service | Production Unit |
+|---------|------------------|
+| Gateway | `universal-agent-gateway` |
+| API | `universal-agent-api` |
+| Web UI | `universal-agent-webui` |
+| Docs | `universal-agent-docs` |
+| Telegram | `universal-agent-telegram` |
+| VP Worker (coder) | `universal-agent-vp-worker@vp.coder.primary` |
+| VP Worker (general) | `universal-agent-vp-worker@vp.general.primary` |
 
 ### Restart Order
 
-**Staging**: gateway + API restarted together, then webui.
-
 **Production**: gateway + API + webui + telegram restarted together, then each enabled VP worker is restarted individually.
 
-VP workers are only restarted if `systemctl is-enabled` reports them as active. This allows new VPS nodes to deploy without VP worker units installed.
+VP workers are only restarted if `systemctl is-enabled` reports them as active.
 
-Before those restarts, each deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files. Production deploy also refreshes the repo-managed VP worker unit template before restarting enabled VP workers.
-
-All managed Python service units set `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so the optional Logfire Pydantic plugin cannot crash gateway/API startup during model import. This remains a runtime backstop only; deploy success still requires `scripts/verify_observability_runtime.py` to prove that real Logfire/OpenTelemetry imports work in the target `.venv`.
+Before those restarts, the deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files.
 
 ### Deployment-Window Flag
 
-Both workflows set `/tmp/ua-deployment-window` before restarting services and clear it after. This flag exists so the CSI canary can suppress SLO alerts during the brief service restart window. A background cleanup process removes the flag after 25 minutes as a safety net if the deploy exits abnormally.
+The workflow sets `/tmp/ua-deployment-window` before restarting services and clears it after. This flag exists so the CSI canary can suppress SLO alerts during the brief service restart window.
 
 > [!IMPORTANT]
 > **Code changes only take effect after the service restarts.** If the deploy workflow completes but services are not restarted (e.g., `systemctl` is not available), the gateway will continue running the old code. The workflow logs a warning in this case.
@@ -251,9 +229,6 @@ After a deploy completes, verify the services are running correctly:
 ```bash
 # Production gateway health
 curl -s http://100.106.113.93:8002/api/v1/health
-
-# Staging gateway health
-curl -s http://100.106.113.93:9002/api/v1/health
 ```
 
 ### On the VPS
@@ -264,10 +239,6 @@ sudo systemctl status universal-agent-gateway universal-agent-api universal-agen
 
 # Tail gateway logs for errors
 sudo journalctl -u universal-agent-gateway -n 50 --no-pager
-
-# For staging:
-sudo systemctl status universal-agent-staging-gateway universal-agent-staging-api
-sudo journalctl -u universal-agent-staging-gateway -n 50 --no-pager
 ```
 
 ### Verify Latest Code Is Running
@@ -283,36 +254,22 @@ ps -eo pid,lstart,cmd | grep gateway_server | grep -v grep
 ## Local Development Restart Caveat
 
 > [!WARNING]
-> The CI/CD pipeline only restarts **systemd-managed services on the VPS**. If you are running the gateway, API, or dev server **locally** as a direct Python process (e.g., `python -m universal_agent.gateway_server` or `npm run dev`), deploying to `develop` or `main` does **not** restart your local process. You must restart it manually to pick up new code.
-
-This is the expected behavior — local development processes are owned by the developer, not by the CI/CD pipeline.
-
-Common scenario where this matters:
-
-1. You push a backend fix to `develop` and it deploys to the VPS staging.
-2. Your local gateway (started manually) is still running the old code.
-3. The local dashboard shows stale behavior because it's hitting the local gateway, not the VPS.
-
-**Fix:** Kill and restart the local gateway process, or point your local web UI at the VPS gateway instead.
+> The CI/CD pipeline only restarts **systemd-managed services on the VPS**. If you are running the gateway, API, or dev server **locally** as a direct process, deploying does **not** restart your local process. You must restart it manually to pick up new code.
 
 ## Review and Promotion Rule
 
-- There is exactly one Codex review gate: the PR into `develop`.
-- There is no second Codex review on `main`.
-- Production promotion should use the **full 40-character** validated `develop` SHA. The workflow will resolve short SHAs, but full SHAs are preferred to avoid ambiguity.
-- The promotion workflow refuses to run if `develop` has moved since the validated SHA.
-- The promotion workflow explicitly dispatches `Deploy Production`; it does not rely on workflow fan-out from the `main` fast-forward.
-- To make the review gate enforceable, configure GitHub branch protection on `develop` to require the `Codex Review Develop PR` check before merge.
+- There is exactly one review gate: the PR into `develop`.
+- Direct pushes to `main` without PR flow are restricted for safety.
+- The `Deploy` workflow triggers on push to `main` preventing the need for workflow dispatch APIs.
+- To make the review gate enforceable, configure GitHub branch protection on `develop` to require status checks before merge.
 
 ## Temporary Missing-Secret Behavior
 
-If `OPENAI_API_KEY` is not configured yet:
+If `DEVIN_API_KEY` is not configured yet:
+- the `Devin PR Review` workflow posts a warning or fails fast.
+- the PR can still merge to `develop` since Devin PR reviews are non-blocking.
 
-- the `Codex Review Develop PR` workflow posts a warning comment and exits successfully
-- the PR can still merge to `develop`
-- staging and production promotion can still proceed
-
-Once `OPENAI_API_KEY` is configured, the same workflow becomes the real blocking Codex review gate again.
+Once `DEVIN_API_KEY` is configured, Devin reviews provide helpful code advice.
 
 ## Recommended GitHub Branch Protection
 
@@ -321,65 +278,21 @@ Configure these settings in GitHub repository settings.
 ### `develop`
 
 - Require a pull request before merging
-- Require status checks to pass before merging
-- Required status check: `Codex Review Develop PR / codex-review`
-- Require branches to be up to date before merging
-- Restrict direct pushes if you want review to be mandatory in practice
-- If `OPENAI_API_KEY` is still missing, this required check will pass in "review skipped" mode rather than enforcing a real Codex review
-- The `Nightly Doc Drift Audit` workflow creates auto-merged PRs (`chore/drift-report-<date>`) using `gh pr merge --squash --admin`. These are automated report commits, not feature changes.
+- Optionally require Devin reviews to complete
+- The `Nightly Doc Drift Audit` workflow creates auto-merged PRs using `gh pr merge --squash --admin`.
 
 ### `main`
 
-- Optional: require a pull request before merging
-- Do not require the Codex review check on `main`
-- Restrict direct pushes except for trusted release operators if you want production promotion to happen only via the promotion workflow or explicit release action
-
-## Operational Meaning
-
-- While you code, `develop` is the automated VPS-backed dev/staging lane.
-- `main` is a separately deployable production lane and is currently deployable.
-- Production and staging both have passing workflow runs as of March 14, 2026.
+- Do not require PR reviews on `main`.
+- Restrict direct pushes except for trusted operators/workflow fast-forwards.
 
 ## Troubleshooting
 
 ### Deploy Job Times Out
 
-Both `deploy-staging.yml` and `deploy-prod.yml` have `timeout-minutes: 35`.
+`deploy.yml` has `timeout-minutes: 35`.
 
-If a deploy times out, the most common cause is a cold `npm run build` with no existing `.next` cache on the VPS. This happens on the very first deploy to a fresh server or after `node_modules` is wiped.
-
-Actions:
-1. Check whether `node_modules` and `.next` exist on the VPS under `web-ui/`.
-2. If not, simply re-run the workflow — the cold build just needs more time and will succeed within the 35-minute window.
-3. If the timeout keeps happening on subsequent runs, check if `package.json` changed (triggering a re-install) or if the VPS is under memory pressure during the build.
-
-### Promotion Workflow Refuses To Run
-
-If the promotion workflow fails before pushing `main`, inspect the validation step.
-
-#### Signature: develop moved
-
-If the workflow reports that `origin/develop` has moved, the staging-validated SHA is no longer the current `develop` head.
-
-Required action:
-
-1. decide whether the newer `develop` head should be staged and validated
-2. if yes, revalidate the newer SHA in staging
-3. run promotion again with the new validated SHA
-
-#### Signature: main cannot fast-forward
-
-If the workflow reports that `main` cannot fast-forward cleanly to the requested SHA, the branch history has diverged and requires manual investigation before release.
-
-#### Signature: promotion succeeded but production deploy did not start
-
-If `main` advances but no `Deploy Production` run appears, inspect the promotion workflow logs.
-
-Required checks:
-
-1. verify the promotion workflow has `actions: write` permission
-2. verify the `Dispatch production deploy workflow` step completed successfully
-3. verify `deploy-prod.yml` still supports `workflow_dispatch`
+If a deploy times out, the most common cause is a cold `npm run build` with no existing `.next` cache on the VPS. This happens on the very first deploy to a fresh server or after `node_modules` is wiped. Simply re-run the workflow.
 
 ### SSH Preflight Fails Fast
 
@@ -392,12 +305,7 @@ If stderr includes either:
 - `Tailscale SSH requires an additional check`
 - `https://login.tailscale.com/...`
 
-then CI identity is not matching the required non-interactive SSH policy. Verify:
-
-- GitHub Action uses `oauth-client-id`/`oauth-secret` with `tags: tag:ci-gha`.
-- Tailscale node(s) are tagged correctly (`tag:ci-gha` for runner identity, `tag:vps` on destination).
-- SSH rule is `action: "accept"` from `tag:ci-gha` to `tag:vps` for `root`/`ua`.
-- Network policy allows TCP/22 from `tag:ci-gha` to `tag:vps`.
+then CI identity is not matching the required non-interactive SSH policy. Verify permissions.
 
 ### SSH Key or VPS Authentication Fails
 
@@ -407,21 +315,20 @@ then CI identity is not matching the required non-interactive SSH policy. Verify
 
 ### Tailscale Connection Issues
 
-- Ensure `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` are valid and not expired/revoked in GitHub Secrets.
-- The OAuth client must have the writable `auth_keys` scope with `tag:ci-gha`.
-- Check the [Tailscale Admin Console](https://login.tailscale.com/admin/machines) to see if the GitHub Runner is joining properly.
+- Ensure `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` are valid.
 - Verify ACL/grants permit runner-to-VPS traffic on SSH.
+
 ### Service Startup Errors
 
 - Tailing logs on the VPS:
   ```bash
-  sudo journalctl -u universal-agent-staging-gateway -f
+  sudo journalctl -u universal-agent-gateway -f
   ```
 - Verify the `.env` file exists in the installation directory.
 
-### Staging Or Production `uv sync` Fails With Python Interpreter Permission Errors
+### Production `uv sync` Fails With Python Interpreter Permission Errors
 
-If staging or production deploy logs show either:
+If production deploy logs show either:
 
 - `failed to canonicalize path /opt/universal_agent/.venv/bin/python3: Permission denied`
 - `Failed to execute /opt/universal_agent/.venv/bin/python3: Permission denied`
@@ -429,26 +336,13 @@ If staging or production deploy logs show either:
 then the existing `.venv` was created against a Python interpreter path that the `ua` service user cannot traverse.
 
 Current deploy workflow behavior:
-
 1. chowns the repo to `ua`
 2. checks whether `ua` can resolve `.venv/bin/python3`
 3. removes `.venv` only if that check fails
 4. rebuilds dependencies as `ua` with `uv`
 
-This is intended to self-heal stale virtualenvs created against inaccessible Python cache paths.
-
 ### NotebookLM Preflight Fails With `FileNotFoundError` Or `nlm` Missing
 
 If NotebookLM auth preflight reports `auth_cli_missing:FileNotFoundError`, the runtime cannot find the external NotebookLM tool binaries.
 
-Current deploy workflow behavior:
-
-1. installs `notebooklm-mcp-cli` for the `ua` service user with `uv tool install --force notebooklm-mcp-cli`
-2. verifies both `nlm` and `notebooklm-mcp` resolve on PATH
-3. relies on `/home/ua/.local/bin` being present in the runtime PATH
-
-If this still fails on a node, verify:
-
-- `sudo -u ua env PATH=/home/ua/.local/bin:/usr/local/bin:$PATH command -v nlm`
-- `sudo -u ua env PATH=/home/ua/.local/bin:/usr/local/bin:$PATH command -v notebooklm-mcp`
-- the service process is running with `/home/ua/.local/bin` on PATH
+If this fails on a node, verify running `sudo -u ua env PATH=/home/ua/.local/bin:/usr/local/bin:$PATH command -v nlm`.

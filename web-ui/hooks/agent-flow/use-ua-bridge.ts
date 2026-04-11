@@ -282,7 +282,13 @@ export function useUABridge(): BridgeHookResult {
     try {
       const isSecure = window.location.protocol === 'https:'
       const wsProtocol = isSecure ? 'wss:' : 'ws:'
-      const wsUrl = `${wsProtocol}//${window.location.host}/ws/agent?session_id=global_agent_flow`
+      let wsHost = window.location.host
+      if (wsHost.startsWith('localhost:') || wsHost.startsWith('127.0.0.1:')) {
+        // In local development, Next.js Turbopack rewrites do not support WebSocket proxying properly
+        // Therefore connect directly to the API server hosting the WS endpoint
+        wsHost = 'localhost:8001'
+      }
+      const wsUrl = `${wsProtocol}//${wsHost}/ws/agent?session_id=global_agent_flow`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
