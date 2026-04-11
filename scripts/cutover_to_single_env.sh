@@ -30,7 +30,7 @@ for svc in "${STAGING_SERVICES[@]}"; do
 done
 
 # Assuming staging workers are also present
-STAGING_WORKERS=$(systemctl list-units --type=service | grep "universal-agent-staging-vp-worker" | awk '{print $1}')
+STAGING_WORKERS=$(systemctl list-units --type=service | grep "universal-agent-staging-vp-worker" | awk '{print $1}' || true)
 if [ -n "$STAGING_WORKERS" ]; then
     for worker in $STAGING_WORKERS; do
         echo "    Stopping and disabling staging worker: $worker"
