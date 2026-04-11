@@ -306,9 +306,9 @@ def upsert_infisical_secret(key: str, value: str) -> bool:
             ClientSettings,
             InfisicalClient,
             UniversalAuthMethod,
+            UpdateSecretOptions,
+            CreateSecretOptions,
         )
-        # Import the structs for creation/updating
-        from infisical_client.models.options import UpdateSecretOptions, CreateSecretOptions
 
         client = InfisicalClient(
             ClientSettings(
