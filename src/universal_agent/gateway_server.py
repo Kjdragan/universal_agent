@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from zoneinfo import ZoneInfo
 
 try:
@@ -216,6 +216,11 @@ ensure_runtime_path()
 HEARTBEAT_ENABLED = heartbeat_enabled()
 CRON_ENABLED = cron_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
+DEPLOYMENT_WINDOW_PATH = Path(os.getenv("UA_DEPLOYMENT_WINDOW_PATH", "/tmp/ua-deployment-window"))
+DEPLOYMENT_WINDOW_MAX_WAIT_SECONDS = max(
+    0,
+    int(os.getenv("UA_DEPLOYMENT_WINDOW_MAX_WAIT_SECONDS", "300") or 300),
+)
 CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS = max(
     3600,
     int(os.getenv("UA_CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS", str(72 * 3600)) or (72 * 3600)),
@@ -13246,6 +13251,43 @@ def _refresh_runtime_feature_flags_from_env() -> None:
     MEMORY_INDEX_ENABLED = memory_index_enabled()
 
 
+def _deployment_window_active() -> bool:
+    try:
+        return DEPLOYMENT_WINDOW_PATH.exists()
+    except Exception:
+        return False
+
+
+async def _wait_for_deployment_window_to_close(component: str) -> None:
+    if not _deployment_window_active():
+        return
+    logger.info(
+        "⏸️ Delaying %s startup while deployment window is active at %s",
+        component,
+        DEPLOYMENT_WINDOW_PATH,
+    )
+    start = time.monotonic()
+    while _deployment_window_active():
+        elapsed = time.monotonic() - start
+        if DEPLOYMENT_WINDOW_MAX_WAIT_SECONDS and elapsed >= DEPLOYMENT_WINDOW_MAX_WAIT_SECONDS:
+            logger.warning(
+                "Deployment window still active after %.1fs; starting %s anyway",
+                elapsed,
+                component,
+            )
+            return
+        await asyncio.sleep(2.0)
+    logger.info("▶️ Deployment window closed; starting %s", component)
+
+
+async def _run_after_deployment_window(
+    component: str,
+    coro_factory: Callable[[], Awaitable[Any]],
+) -> Any:
+    await _wait_for_deployment_window_to_close(component)
+    return await coro_factory()
+
+
 # =============================================================================
 # Lifespan
 # =============================================================================
@@ -13383,17 +13425,27 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed creating daemon sessions")
 
-        await _heartbeat_service.start()
-        try:
-            seeded = 0
-            for existing_session in _gateway_live_session_summaries():
-                if _should_register_with_heartbeat(existing_session):
-                    _register_session_with_runtime_services(existing_session)
-                    seeded += 1
-            if seeded > 0:
-                logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
-        except Exception as exc:
-            logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
+        async def _start_heartbeat_service() -> None:
+            if _heartbeat_service is None:
+                return
+            await _heartbeat_service.start()
+            try:
+                seeded = 0
+                for existing_session in _gateway_live_session_summaries():
+                    if _should_register_with_heartbeat(existing_session):
+                        _register_session_with_runtime_services(existing_session)
+                        seeded += 1
+                if seeded > 0:
+                    logger.info("💓 Heartbeat session seed complete (%s sessions)", seeded)
+            except Exception as exc:
+                logger.warning("Failed to seed heartbeat sessions at startup: %s", exc)
+
+        if _deployment_window_active():
+            _spawn_background_task(
+                _run_after_deployment_window("heartbeat_service", _start_heartbeat_service)
+            )
+        else:
+            await _start_heartbeat_service()
 
         from universal_agent.services.todo_dispatch_service import ToDoDispatchService
         _todo_dispatch_service = ToDoDispatchService(
@@ -13404,13 +13456,23 @@ async def lifespan(app: FastAPI):
             ),
             event_callback=_emit_heartbeat_event,
         )
-        await _todo_dispatch_service.start()
-        try:
-            for existing_session in _gateway_live_session_summaries():
-                if _should_register_with_todo_dispatch(existing_session):
-                    _register_session_with_runtime_services(existing_session)
-        except Exception as exc:
-            logger.warning("Failed to seed tododispatch sessions at startup: %s", exc)
+        async def _start_todo_dispatch_service() -> None:
+            if _todo_dispatch_service is None:
+                return
+            await _todo_dispatch_service.start()
+            try:
+                for existing_session in _gateway_live_session_summaries():
+                    if _should_register_with_todo_dispatch(existing_session):
+                        _register_session_with_runtime_services(existing_session)
+            except Exception as exc:
+                logger.warning("Failed to seed tododispatch sessions at startup: %s", exc)
+
+        if _deployment_window_active():
+            _spawn_background_task(
+                _run_after_deployment_window("todo_dispatch_service", _start_todo_dispatch_service)
+            )
+        else:
+            await _start_todo_dispatch_service()
 
         # ── Startup Recovery: Release orphaned task assignments ──────────
         # When the gateway crashes, in-progress tasks with seized assignments
@@ -13469,7 +13531,10 @@ async def lifespan(app: FastAPI):
             system_event_callback=_enqueue_system_event,
             agent_event_sink=_cron_agent_event_sink,
         )
-        await _cron_service.start()
+        if _deployment_window_active():
+            _spawn_background_task(_run_after_deployment_window("cron_service", _cron_service.start))
+        else:
+            await _cron_service.start()
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
@@ -13531,7 +13596,12 @@ async def lifespan(app: FastAPI):
         dispatch_fn=_yt_watcher_dispatch_fn,
         notification_sink=_hook_notification_sink,
     )
-    _spawn_background_task(_startup_start_youtube_playlist_watcher())
+    _spawn_background_task(
+        _run_after_deployment_window(
+            "youtube_playlist_watcher",
+            _startup_start_youtube_playlist_watcher,
+        )
+    )
 
     # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
     async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
@@ -13545,7 +13615,9 @@ async def lifespan(app: FastAPI):
         dispatch_fn=_gws_event_dispatch_fn,
         notification_sink=_hook_notification_sink,
     )
-    _spawn_background_task(_startup_start_gws_event_listener())
+    _spawn_background_task(
+        _run_after_deployment_window("gws_event_listener", _startup_start_gws_event_listener)
+    )
 
     # --- AgentMail Service (Simone's native inbox) ---
     global _agentmail_service
@@ -13720,9 +13792,16 @@ async def lifespan(app: FastAPI):
         trusted_ingress_fn=_maybe_trigger_heartbeat_from_agentmail_action,
         priority_dispatch_fn=_priority_dispatch_for_email,
     )
-    _spawn_background_task(_startup_start_agentmail_service())
+    _spawn_background_task(
+        _run_after_deployment_window("agentmail_service", _startup_start_agentmail_service)
+    )
 
-    _spawn_background_task(_startup_recover_interrupted_youtube_sessions(WORKSPACES_DIR))
+    _spawn_background_task(
+        _run_after_deployment_window(
+            "interrupted_youtube_recovery",
+            lambda: _startup_recover_interrupted_youtube_sessions(WORKSPACES_DIR),
+        )
+    )
 
     if _scheduling_projection.enabled:
         _scheduling_projection.seed_from_runtime()
@@ -13732,15 +13811,18 @@ async def lifespan(app: FastAPI):
     try:
         from universal_agent.services.idle_dispatch_loop import idle_dispatch_loop as _idle_loop
         _spawn_background_task(
-            _idle_loop(
-                heartbeat_service=_heartbeat_service,
-                get_sessions_fn=lambda: dict(_sessions),
-                notification_sink=_hook_notification_sink,
-                get_heartbeat_sessions_fn=(
-                    (lambda: dict(_heartbeat_service.active_sessions))
-                    if _heartbeat_service else None
+            _run_after_deployment_window(
+                "idle_dispatch_loop",
+                lambda: _idle_loop(
+                    heartbeat_service=_heartbeat_service,
+                    get_sessions_fn=lambda: dict(_sessions),
+                    notification_sink=_hook_notification_sink,
+                    get_heartbeat_sessions_fn=(
+                        (lambda: dict(_heartbeat_service.active_sessions))
+                        if _heartbeat_service else None
+                    ),
+                    todo_dispatch_service=_todo_dispatch_service,
                 ),
-                todo_dispatch_service=_todo_dispatch_service,
             )
         )
         logger.info("🔄 Idle dispatch loop background task started")
@@ -13767,7 +13849,12 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Scheduled dispatch loop error")
 
-    asyncio.create_task(_scheduled_dispatch_loop(_scheduled_dispatch_stop))
+    asyncio.create_task(
+        _run_after_deployment_window(
+            "scheduled_dispatch_loop",
+            lambda: _scheduled_dispatch_loop(_scheduled_dispatch_stop),
+        )
+    )
     logger.info("⏰ Scheduled dispatch timer enabled (interval=60s)")
 
     if _vp_event_bridge_enabled:

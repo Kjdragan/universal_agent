@@ -211,6 +211,16 @@ VP workers are only restarted if `systemctl is-enabled` reports them as active.
 
 Before those restarts, the deploy re-renders and installs the canonical base units from the repository so the restart always targets the current checkout path and env files.
 
+After restart, Python services are checked against the current virtualenv interpreter. If `universal-agent-gateway` or `universal-agent-api` is still running an older interpreter than `/opt/universal_agent/.venv/bin/python`, the deploy restarts that service again before health checks.
+
+After restart, the deploy workflow verifies local service health for:
+
+- `http://127.0.0.1:8002/api/v1/health` (`universal-agent-gateway`)
+- `http://127.0.0.1:8001/api/health` (`universal-agent-api`)
+- `http://127.0.0.1:3000/dashboard` (`universal-agent-webui`)
+
+If any of these checks fail, the workflow prints `systemctl status` and recent journal excerpts for the managed services, then fails the deploy. A green deploy therefore means the repo sync/restart completed and the local service health gates passed.
+
 ### Deployment-Window Flag
 
 The workflow sets `/tmp/ua-deployment-window` before restarting services and clears it after. This flag exists so the CSI canary can suppress SLO alerts during the brief service restart window.

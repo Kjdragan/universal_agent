@@ -203,6 +203,70 @@ jobs:
               echo "WARNING: No supported service manager found (systemctl/service); skipping restart."
             fi
 
+            echo "--> Verifying Python services use current venv interpreter..."
+            ensure_current_venv_interpreter() {
+              service_name="$1"
+              expected_python="$(readlink -f "$PROD_DIR/.venv/bin/python")"
+              pid="$(systemctl show -p ExecMainPID --value "$service_name" 2>/dev/null || true)"
+              if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+                echo "    $service_name has no active main PID yet; skipping interpreter comparison."
+                return 0
+              fi
+              actual_python="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+              echo "    $service_name pid=$pid actual=$actual_python expected=$expected_python"
+              if [ -n "$actual_python" ] && [ "$actual_python" != "$expected_python" ]; then
+                echo "    Restarting $service_name because it is running an old interpreter."
+                sudo systemctl restart "$service_name"
+              fi
+            }
+            if command -v systemctl >/dev/null 2>&1; then
+              ensure_current_venv_interpreter universal-agent-gateway
+              ensure_current_venv_interpreter universal-agent-api
+            fi
+
+            echo "--> Verifying production service health..."
+            check_local_health() {
+              name="$1"
+              url="$2"
+              max_attempts="${3:-36}"
+              sleep_seconds="${4:-5}"
+              attempt=1
+              while [ "$attempt" -le "$max_attempts" ]; do
+                if curl -fsS -m 4 "$url" >/tmp/ua-health-${name}.json 2>/tmp/ua-health-${name}.err; then
+                  echo "    [OK] $name health responded at $url"
+                  cat /tmp/ua-health-${name}.json | head -c 500 || true
+                  echo ""
+                  rm -f /tmp/ua-health-${name}.json /tmp/ua-health-${name}.err
+                  return 0
+                fi
+                if [ "$attempt" -eq 1 ] || [ $((attempt % 6)) -eq 0 ]; then
+                  echo "    Waiting for $name health at $url (attempt $attempt/$max_attempts)..."
+                  cat /tmp/ua-health-${name}.err || true
+                fi
+                attempt=$((attempt + 1))
+                sleep "$sleep_seconds"
+              done
+              echo "::error::$name did not become healthy at $url"
+              cat /tmp/ua-health-${name}.err || true
+              return 1
+            }
+
+            health_ok=true
+            check_local_health gateway "http://127.0.0.1:8002/api/v1/health" 48 5 || health_ok=false
+            check_local_health api "http://127.0.0.1:8001/api/health" 24 5 || health_ok=false
+            check_local_health webui "http://127.0.0.1:3000/dashboard" 24 5 || health_ok=false
+
+            if [ "$health_ok" != "true" ]; then
+              echo "--> Production service health check failed; collecting diagnostics..."
+              if command -v systemctl >/dev/null 2>&1; then
+                sudo systemctl status universal-agent-gateway universal-agent-api universal-agent-webui --no-pager || true
+                sudo journalctl -u universal-agent-gateway -n 120 --no-pager || true
+                sudo journalctl -u universal-agent-api -n 120 --no-pager || true
+                sudo journalctl -u universal-agent-webui -n 80 --no-pager || true
+              fi
+              exit 1
+            fi
+
             # Clear the deployment-window flag once services have restarted
             echo "--> Clearing deployment-window flag..."
             rm -f /tmp/ua-deployment-window
