@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-_DEPLOY_PROD_WORKFLOW = Path(".github/workflows/deploy-prod.yml")
-_DEPLOY_STAGING_WORKFLOW = Path(".github/workflows/deploy-staging.yml")
+_DEPLOY_WORKFLOW = Path(".github/workflows/deploy.yml")
 _RUNTIME_HELPER = Path("scripts/deploy_validate_runtime.sh")
 
 
@@ -25,19 +24,10 @@ def test_runtime_helper_repairs_unreadable_stale_venv_before_uv_sync() -> None:
     assert 'scripts/verify_service_imports.py' in content
 
 
-def test_deploy_prod_workflow_uses_centralized_runtime_helper() -> None:
-    content = _DEPLOY_PROD_WORKFLOW.read_text(encoding="utf-8")
+def test_deploy_workflow_uses_centralized_runtime_helper() -> None:
+    content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'bash "$PROD_DIR/scripts/deploy_validate_runtime.sh"' in content
     assert '--expect-environment production' in content
     assert '--expect-runtime-stage production' in content
     assert '--expect-machine-slug vps-hq-production' in content
-
-
-def test_deploy_staging_workflow_uses_centralized_runtime_helper() -> None:
-    content = _DEPLOY_STAGING_WORKFLOW.read_text(encoding="utf-8")
-
-    assert 'bash "\\$STAGING_DIR/scripts/deploy_validate_runtime.sh"' in content
-    assert '--expect-environment staging' in content
-    assert '--expect-runtime-stage staging' in content
-    assert '--expect-machine-slug vps-hq-staging' in content

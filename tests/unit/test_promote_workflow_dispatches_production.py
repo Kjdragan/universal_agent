@@ -3,15 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 
-_PROMOTE_WORKFLOW = Path(".github/workflows/promote-develop-to-main.yml")
+_DEPLOY_WORKFLOW = Path(".github/workflows/deploy.yml")
 
 
-def test_promote_workflow_dispatches_deploy_prod_after_advancing_main() -> None:
-    content = _PROMOTE_WORKFLOW.read_text(encoding="utf-8")
+def test_deploy_workflow_supports_push_and_manual_production_deploy() -> None:
+    content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "actions: write" in content
-    assert 'git push origin "${TARGET_SHA}:refs/heads/main"' in content
-    assert 'name: Dispatch production deploy workflow' in content
-    assert "/actions/workflows/deploy-prod.yml/dispatches" in content
-    assert '-d \'{"ref":"main"}\'' in content
-    assert 'echo "Triggered Deploy Production workflow for main."' in content
+    assert "name: Deploy" in content
+    assert "workflow_dispatch:" in content
+    assert "push:" in content
+    assert "branches:" in content
+    assert "- main" in content
+    assert "deploy-production:" in content

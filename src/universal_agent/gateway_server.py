@@ -15587,16 +15587,25 @@ async def list_runs_public(
     _require_session_api_auth(request)
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
+    has_filter = any(
+        str(value or "all").strip().lower() != "all"
+        for value in (status, run_kind, trigger_source)
+    )
+    catalog_limit = 1000 if has_filter else bounded_offset + bounded_limit
     summaries = _ops_service.list_runs(
         status_filter=status,
         run_kind_filter=run_kind,
         trigger_source_filter=trigger_source,
+        limit=catalog_limit,
+        include_workspace_summary=False,
     )
     return {
-        "runs": summaries[offset : offset + limit],
+        "runs": summaries[bounded_offset : bounded_offset + bounded_limit],
         "total": len(summaries),
-        "limit": limit,
-        "offset": offset,
+        "limit": bounded_limit,
+        "offset": bounded_offset,
     }
 
 
@@ -24732,16 +24741,25 @@ async def ops_list_runs(
     try:
         if not _ops_service:
             raise HTTPException(status_code=503, detail="Ops service not initialized")
+        bounded_limit = max(1, min(int(limit), 500))
+        bounded_offset = max(0, int(offset))
+        has_filter = any(
+            str(value or "all").strip().lower() != "all"
+            for value in (status, run_kind, trigger_source)
+        )
+        catalog_limit = 1000 if has_filter else bounded_offset + bounded_limit
         summaries = _ops_service.list_runs(
             status_filter=status,
             run_kind_filter=run_kind,
             trigger_source_filter=trigger_source,
+            limit=catalog_limit,
+            include_workspace_summary=False,
         )
         return {
-            "runs": summaries[offset : offset + limit],
+            "runs": summaries[bounded_offset : bounded_offset + bounded_limit],
             "total": len(summaries),
-            "limit": limit,
-            "offset": offset,
+            "limit": bounded_limit,
+            "offset": bounded_offset,
         }
     except HTTPException:
         raise

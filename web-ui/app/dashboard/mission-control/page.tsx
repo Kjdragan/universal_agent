@@ -130,7 +130,13 @@ function ActiveTasksPanel() {
   }, [statusFilter]);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey]);
 
   if (loading) {
@@ -299,7 +305,13 @@ function SystemStatusPanel() {
   }, []);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey]);
 
   if (loading) {
@@ -484,7 +496,13 @@ function RecentEventsPanel() {
   }, [showFocusMode]);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey, showFocusMode]);
 
   const handleClearAll = () => {
@@ -673,7 +691,13 @@ function CSISignalsPanel() {
   }, []);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey]);
 
   if (loading) {
@@ -837,7 +861,13 @@ function SystemResourcesPanel() {
   }, []);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey]);
 
   if (loading) {
@@ -989,7 +1019,13 @@ function HeartbeatChip() {
   }, []);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey]);
 
   if (sessions === 0) return null;
@@ -1068,7 +1104,13 @@ function FreelancePipelinePanel() {
   }, []);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, refreshKey]);
 
   if (loading) {

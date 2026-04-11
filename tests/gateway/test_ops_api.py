@@ -409,7 +409,7 @@ def test_ops_list_runs_and_get_run(client, tmp_path):
     assert run_row["attempt_count"] == 1
     assert run_row["latest_attempt_id"] == attempt_id
     assert run_row["workspace_exists"] is True
-    assert run_row["workspace_summary"]["session_id"] == "session_run_details"
+    assert "workspace_summary" not in run_row
 
     detail_resp = client.get("/api/v1/ops/runs/run_ops_1")
     assert detail_resp.status_code == 200

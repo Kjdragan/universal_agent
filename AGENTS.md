@@ -28,8 +28,8 @@ When answering questions about how this system works — architecture, data flow
 
 This repository has exactly one supported application deployment path. Production is branch-driven and automated; **do not recommend or use ad hoc `ssh`, `rsync`, `git pull`, or manual VPS deployment flows**.
 
-1. **Staging:** Merge reviewed feature work into `develop`. This deploys automatically to staging on the VPS checkout at `/opt/universal-agent-staging` via GitHub Actions. (Pull requests into `develop` constitute the single Codex review gate).
-2. **Production:** Promote the validated `develop` SHA to `main` via the manual GitHub Actions promotion workflow. This is a direct, exact-SHA fast-forward; there is no second PR review on `main`. This deploys to production on the VPS checkout at `/opt/universal_agent` (or `/opt/universal_agent_repo` as a fallback).
+1. **Integration:** Open reviewed feature work against `develop`. Pull requests into `develop` are the single Codex review gate, and `develop` itself does not deploy.
+2. **Production:** Fast-forward the validated `develop` SHA to `main`. The push to `main` triggers the single automated deploy workflow and updates production on the VPS checkout at `/opt/universal_agent` (or `/opt/universal_agent_repo` as a fallback).
 
 **Canonical deployment docs:**
 
@@ -37,10 +37,9 @@ This repository has exactly one supported application deployment path. Productio
 - `docs/deployment/ci_cd_pipeline.md`
 - `docs/deployment/infisical_factories.md`
 
-**Canonical CI/CD workflow files:**
+**Canonical CI/CD workflow file:**
 
-- `.github/workflows/deploy-staging.yml`
-- `.github/workflows/deploy-prod.yml`
+- `.github/workflows/deploy.yml`
 
 **CI/CD Access:**
 
@@ -70,7 +69,7 @@ These guidelines apply when Codex reviews pull requests targeting `develop`.
 - Flag blocking I/O (database calls, HTTP requests) that runs inside an async event loop without `await` or proper executor offloading.
 - Verify that background tasks and service loops handle exceptions so they don't silently die.
 - Flag Python code that imports secrets or API keys from environment variables directly instead of using the Infisical secret service (our canonical secrets provider — never `.env` files or `os.getenv` for secrets).
-- Flag changes that touch `.github/workflows/deploy-staging.yml` or `.github/workflows/deploy-prod.yml` if the corresponding canonical docs in `docs/deployment/` were not updated in the same PR.
+- Flag changes that touch `.github/workflows/deploy.yml` if the corresponding canonical docs in `docs/deployment/` were not updated in the same PR.
 - Do not flag formatting-only issues (whitespace, line length) unless they break a linter gate.
 - Treat typos in user-facing strings or documentation as P1.
 

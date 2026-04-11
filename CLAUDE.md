@@ -24,4 +24,4 @@ It includes:
 
 ## Caveats
 - _(Living section — add caveats as we discover them.)_
-- Deployment is automated via GitHub Actions: merge to `develop` for staging, and promote from `develop` to `main` for production. Do not use ad hoc scripts, `ssh`, `rsync`, or `git pull`.
+- Deployment is automated via GitHub Actions: `develop` is integration/review only, and a push to `main` triggers the single production deploy workflow. Do not use ad hoc scripts, `ssh`, `rsync`, or `git pull`.

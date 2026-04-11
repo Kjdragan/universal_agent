@@ -8,6 +8,7 @@ describe('AgentWebSocket reconnect backoff logic', () => {
   
   beforeEach(() => {
     vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(1)
     webSocketInstances = [];
     
     // Mock the global WebSocket

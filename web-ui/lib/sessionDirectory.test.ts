@@ -61,6 +61,12 @@ describe("fetchSessionDirectory", () => {
 
     const rows = await fetchSessionDirectory(25);
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dashboard/gateway/api/v1/ops/sessions?limit=25&offset=0&status=all&source=all&memory_mode=all",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dashboard/gateway/api/v1/runs?limit=25&offset=0",
+    );
     expect(rows).toEqual([
       expect.objectContaining({
         session_id: "SESSION_ALPHA",

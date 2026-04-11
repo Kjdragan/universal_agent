@@ -46,7 +46,6 @@ export function useCanvasInteraction({
   const [isDragging, setIsDragging] = useState(false)
   const isDraggingRef = useRef(false)
   const dragTargetRef = useRef<{ type: 'canvas' | 'agent'; id?: string; startX: number; startY: number } | null>(null)
-  isDraggingRef.current = isDragging
 
   // Floaty agent drag
   const dragLerpRef = useRef<{ targetX: number; targetY: number; agentId: string } | null>(null)
@@ -80,6 +79,7 @@ export function useCanvasInteraction({
     const agentId = findAgentAt(pos.x, pos.y)
     if (e.button === 0) {
       panVelocityRef.current = { vx: 0, vy: 0, active: false }
+      isDraggingRef.current = true
       setIsDragging(true)
       if (agentId) {
         dragTargetRef.current = { type: 'agent', id: agentId, startX: e.clientX, startY: e.clientY }
@@ -126,6 +126,7 @@ export function useCanvasInteraction({
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
+      isDraggingRef.current = false
       setIsDragging(false)
       dragTargetRef.current = null
       return
@@ -171,13 +172,13 @@ export function useCanvasInteraction({
       drawPropsRef.current.onAgentDrag(dragLerpRef.current.agentId, dragLerpRef.current.targetX, dragLerpRef.current.targetY)
       dragLerpRef.current = null
     }
+    isDraggingRef.current = false
     setIsDragging(false)
     dragTargetRef.current = null
   }, [screenToCanvas, findAgentAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, drawPropsRef, panVelocityRef])
 
   // Wheel handler attached as native event (passive: false) to allow preventDefault
-  const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {})
-  handleWheelRef.current = (e: WheelEvent) => {
+  const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault()
     userHasNavigatedRef.current = true
     if (e.ctrlKey || e.metaKey) {
@@ -193,14 +194,14 @@ export function useCanvasInteraction({
       const prev = transformRef.current
       transformRef.current = { ...prev, x: prev.x - e.deltaX, y: prev.y - e.deltaY }
     }
-  }
+  }, [mainCanvasRef, transformRef, userHasNavigatedRef])
+
   useEffect(() => {
     const canvas = mainCanvasRef.current
     if (!canvas) return
-    const handler = (e: WheelEvent) => handleWheelRef.current(e)
-    canvas.addEventListener('wheel', handler, { passive: false })
-    return () => canvas.removeEventListener('wheel', handler)
-  }, [mainCanvasRef])
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', handleWheel)
+  }, [handleWheel, mainCanvasRef])
 
   const handleDoubleClick = useCallback(() => {
     doZoomToFit()
@@ -214,6 +215,7 @@ export function useCanvasInteraction({
   }, [screenToCanvas, findAgentAt, drawPropsRef])
 
   const handleMouseLeave = useCallback(() => {
+    isDraggingRef.current = false
     setIsDragging(false)
     dragTargetRef.current = null
     dragLerpRef.current = null

@@ -10,7 +10,7 @@ This document defines the current supported deployment model for Universal Agent
 > | **Local Dev** | `http://localhost:3000` | Localheadquarters Next.js server |
 > | **Production** | `https://app.clearspringcg.com/dashboard` | Public — no VPN needed |
 >
-> Production deploys via manual automated push to `main`. `develop` is for integration and review only.
+> Production deploys automatically when `main` is pushed. `develop` is for integration and review only.
 
 > [!IMPORTANT]
 > Release verification is SHA-based. The authoritative proof of what is deployed on VPS is the checkout `HEAD` commit, not the branch name reported by the checkout alone.

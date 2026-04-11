@@ -24,13 +24,11 @@ Release verification rule:
 | `Devin PR Review` | Pull request to `develop` | Automated PR review by Devin |
 | `Deploy` | Push to `main` | Production Service |
 
-### Utility and Debug Workflows
+### Utility Workflows
 
 | Name | Trigger | Purpose |
 |------|---------|---------|
-| `Debug Production Services` | Manual workflow dispatch | Fetch logs and status from production services for troubleshooting |
-| `Fix Production Repo Directory` | Manual workflow dispatch | Reconstitute git repository in production checkout if `.git` directory is corrupted |
-| `Run Clear Agent Queue` | Manual workflow dispatch | Clear all pending tasks in the agent task hub |
+
 | `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift via auto-merged PR |
 | `OpenClaw Release Sync` | Scheduled | Syncs OpenClaw updates |
 

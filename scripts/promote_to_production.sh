@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# promote_to_production.sh — safely trigger the Promote Validated Develop To Main workflow.
+# promote_to_production.sh — safely fast-forward production to the latest validated develop SHA.
 #
-# Always fetches the latest origin/develop SHA immediately before dispatching so the
-# workflow never rejects due to a stale SHA (which fails if develop moved between
-# your local fetch and the gh workflow run call).
+# Always fetches the latest origin/develop SHA immediately before pushing so
+# production release uses the exact current integration commit.
 #
 # Usage:
 #   ./scripts/promote_to_production.sh
@@ -12,19 +11,26 @@
 
 set -euo pipefail
 
-WORKFLOW_NAME="Promote Validated Develop To Main"
+WORKFLOW_FILE="deploy.yml"
 
-echo "--> Fetching latest origin/develop..."
-git fetch --no-tags origin develop
+echo "--> Fetching latest origin/develop and origin/main..."
+git fetch --no-tags origin develop main
 
 DEVELOP_SHA=$(git rev-parse origin/develop)
+MAIN_SHA=$(git rev-parse origin/main)
 echo "--> Current origin/develop SHA: ${DEVELOP_SHA}"
-echo "--> Dispatching '${WORKFLOW_NAME}' with develop_sha=${DEVELOP_SHA}..."
+echo "--> Current origin/main SHA: ${MAIN_SHA}"
+echo "--> Fast-forwarding main to ${DEVELOP_SHA}..."
 
-gh workflow run "${WORKFLOW_NAME}" --field develop_sha="${DEVELOP_SHA}"
+git merge-base --is-ancestor "${MAIN_SHA}" "${DEVELOP_SHA}" || {
+  echo "ERROR: origin/main is not an ancestor of origin/develop; refusing non-fast-forward production promotion." >&2
+  exit 1
+}
 
-echo "--> Workflow dispatched! Watching for completion..."
+git push origin "${DEVELOP_SHA}:refs/heads/main"
+
+echo "--> Main updated. Watching Deploy workflow..."
 sleep 5
-RUN_ID=$(gh run list --workflow="promote-develop-to-main.yml" --limit 1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=$(gh run list --workflow="${WORKFLOW_FILE}" --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
 echo "--> Run ID: ${RUN_ID}"
 gh run watch "${RUN_ID}" --exit-status
