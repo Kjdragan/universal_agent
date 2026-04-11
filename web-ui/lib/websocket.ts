@@ -116,7 +116,7 @@ export class AgentWebSocket {
       // The Next.js server or API server is responsible for forwarding this
       // to the authenticated session bridge.
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = window.location.host;
+      const host = window.location.hostname === "localhost" ? "localhost:8001" : window.location.host;
       this.url = `${protocol}//${host}/ws/agent`;
       return;
     }

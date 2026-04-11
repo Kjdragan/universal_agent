@@ -55,11 +55,17 @@ banner
 # 1. Source nvm if node is not on PATH
 # --------------------------------------------------------------------------
 if ! command -v node &>/dev/null; then
-  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-  if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-    echo "Sourcing nvm from ${NVM_DIR}/nvm.sh ..."
-    # shellcheck disable=SC1091
-    source "$NVM_DIR/nvm.sh"
+  if [[ -d "$HOME/.local/share/fnm" ]]; then
+    export PATH="$HOME/.local/share/fnm:$PATH"
+    eval "`fnm env`"
+  fi
+  if ! command -v node &>/dev/null; then
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+      echo "Sourcing nvm from ${NVM_DIR}/nvm.sh ..."
+      # shellcheck disable=SC1091
+      source "$NVM_DIR/nvm.sh"
+    fi
   fi
 fi
 
@@ -154,7 +160,7 @@ echo "Rendering web-ui/.env.local from Infisical 'local' environment..."
 # 'infisical run' so all secrets from the local environment are in the env,
 # then the script picks out the ones the web-ui needs.
 infisical run --env=local --projectId="${INFISICAL_PROJECT_ID}" -- \
-    "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/scripts/render_service_env_from_infisical.py" \
+    env PYTHONPATH="${REPO_ROOT}/src" "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/scripts/render_service_env_from_infisical.py" \
     --output "${REPO_ROOT}/web-ui/.env.local" \
     --allow-missing \
     --include-runtime-identity \
@@ -193,12 +199,12 @@ start_service() {
 # Gateway
 start_service "gateway" \
   infisical run --env=local --projectId="${INFISICAL_PROJECT_ID}" -- \
-  "${REPO_ROOT}/.venv/bin/python" -m universal_agent.gateway_server
+  env PYTHONPATH="${REPO_ROOT}/src" "${REPO_ROOT}/.venv/bin/python" -m universal_agent.gateway_server
 
 # API
 start_service "api" \
   infisical run --env=local --projectId="${INFISICAL_PROJECT_ID}" -- \
-  "${REPO_ROOT}/.venv/bin/python" -m universal_agent.api.server
+  env PYTHONPATH="${REPO_ROOT}/src" "${REPO_ROOT}/.venv/bin/python" -m universal_agent.api.server
 
 # Web UI (Next.js dev server)
 start_service "webui" \
