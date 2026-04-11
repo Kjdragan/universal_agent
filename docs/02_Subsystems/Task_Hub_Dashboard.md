@@ -122,6 +122,9 @@ The ToDo dashboard includes a dedicated dispatcher-health strip for the separate
 - Whether a successful VP dispatch was auto-linked into Task Hub delegation by the server because the model omitted the explicit lifecycle tool call
 - The latest final execution result rather than just dispatch admission, so repeated retries and reopened tasks do not masquerade as healthy accepted executions
 
+Operational guardrail:
+- `UA_TODO_DISPATCH_MAX_PER_SWEEP` controls how many tasks the dedicated ToDo dispatcher claims into one execution prompt. The production default is `1` to avoid large multi-task prompts starving the gateway event loop; raise only during controlled batch-processing windows.
+
 ### 4.4 Embedded Agent Flow Mini Widget
 
 The dashboard landing page renders an embedded mini Agent Flow panel so operators can see current spotlight activity without leaving `/dashboard`.

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -9,6 +10,11 @@ from universal_agent.gateway import GatewaySession, GatewayRequest
 from universal_agent.codebase_policy import approved_codebase_roots_from_env
 
 logger = logging.getLogger(__name__)
+
+TODO_DISPATCH_MAX_PER_SWEEP = max(
+    1,
+    min(5, int(os.getenv("UA_TODO_DISPATCH_MAX_PER_SWEEP", "1") or 1)),
+)
 
 
 def _event_timestamp() -> str:
@@ -384,12 +390,12 @@ class ToDoDispatchService:
                 )
                 return
 
-            # ── Run-per-task: claim up to 5 tasks, each with its own workspace ──
+            # ── Run-per-task: claim a bounded number of tasks, each with its own workspace ──
             from universal_agent.services.execution_run_service import (
                 allocate_execution_run,
             )
             all_claimed: list[dict] = []
-            max_per_sweep = 5
+            max_per_sweep = TODO_DISPATCH_MAX_PER_SWEEP
             with connect_runtime_db(activity_db_path) as conn:
                 for _ in range(max_per_sweep):
                     # Claim one task at a time with deferred workspace
