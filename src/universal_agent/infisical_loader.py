@@ -12,7 +12,7 @@ from universal_agent.runtime_role import resolve_machine_slug, resolve_runtime_s
 logger = logging.getLogger(__name__)
 
 _VALID_DEPLOYMENT_PROFILES = {"local_workstation", "standalone_node", "vps"}
-_VALID_RUNTIME_STAGES = {"development", "staging", "production"}
+_VALID_RUNTIME_STAGES = {"development", "staging", "local", "production"}
 _LEGACY_INFISICAL_ENV_ALIASES = {
     "dev": "development",
     "prod": "production",

@@ -17,7 +17,7 @@ class FactoryRole(str, Enum):
 
 
 _ALLOWED_LLM_PROVIDER_OVERRIDES = {"ZAI", "ANTHROPIC", "OPENAI", "OLLAMA"}
-_VALID_RUNTIME_STAGES = {"development", "staging", "production"}
+_VALID_RUNTIME_STAGES = {"development", "staging", "local", "production"}
 
 
 @dataclass(frozen=True)
