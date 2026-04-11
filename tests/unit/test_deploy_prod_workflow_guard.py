@@ -54,3 +54,4 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
     assert 'echo "::error::$name did not become healthy at $url"' in content
     assert "sudo journalctl -u universal-agent-gateway -n 120 --no-pager" in content
     assert 'exit 1' in content
+
