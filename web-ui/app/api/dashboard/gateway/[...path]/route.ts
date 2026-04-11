@@ -668,6 +668,15 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   const safePath = path.map((segment) => encodeURIComponent(segment)).join("/");
   const upstreamPathname = `/${safePath}`;
 
+  // Fast-path: Return stubs immediately if enabled to prevent hanging the connection
+  // pool and blocking client-side transitions due to slow Python 404 responses.
+  if (isDevModeStubsEnabled()) {
+    const stubData = getStubDataForPath(upstreamPathname);
+    if (stubData) {
+      return NextResponse.json(stubData);
+    }
+  }
+
   const queryEntries = Array.from(request.nextUrl.searchParams.entries());
 
   const headers = buildUpstreamHeaders(request, session.ownerId);

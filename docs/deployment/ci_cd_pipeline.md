@@ -28,6 +28,7 @@ Release verification rule:
 
 | Name | Trigger | Purpose |
 |------|---------|---------|
+
 | `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift via auto-merged PR |
 | `OpenClaw Release Sync` | Scheduled | Syncs OpenClaw updates |
 
