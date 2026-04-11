@@ -101,7 +101,7 @@ jobs:
 
             echo '--> Writing clean staging bootstrap .env...'
             export STAGING_DIR
-            python3 -c \"from pathlib import Path; import json, os; env_path = Path(os.environ['STAGING_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'staging', 'UA_RUNTIME_STAGE': 'staging', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_MACHINE_SLUG': 'vps-hq-staging', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '9002', 'UA_API_PORT': '9001', 'UA_GATEWAY_URL': 'http://127.0.0.1:9002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\\n' for key, value in bootstrap.items()), encoding='utf-8')\"
+            python3 -c \"from pathlib import Path; import json, os; env_path = Path(os.environ['STAGING_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'local', 'UA_RUNTIME_STAGE': 'local', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_MACHINE_SLUG': 'vps-hq-staging', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '9002', 'UA_API_PORT': '9001', 'UA_GATEWAY_URL': 'http://127.0.0.1:9002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\\n' for key, value in bootstrap.items()), encoding='utf-8')\"
             if command -v sudo >/dev/null 2>&1; then
               sudo chown ua:ua "\$STAGING_DIR/.env"
               sudo chmod 600 "\$STAGING_DIR/.env"
@@ -114,8 +114,8 @@ jobs:
             bash "\$STAGING_DIR/scripts/deploy_validate_runtime.sh" \
               --app-root "\$STAGING_DIR" \
               --profile vps \
-              --expect-environment staging \
-              --expect-runtime-stage staging \
+              --expect-environment local \
+              --expect-runtime-stage local \
               --expect-factory-role HEADQUARTERS \
               --expect-deployment-profile vps \
               --expect-machine-slug vps-hq-staging \
