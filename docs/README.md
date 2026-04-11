@@ -19,6 +19,10 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - `docs/deployment/infisical_factories.md`
 - `docs/deployment/secrets_and_environments.md` — **Canonical guide for Infisical secrets and environment management**
 
+## Development
+
+- **[Local Development Guide](development/LOCAL_DEV.md)**: How to run Universal Agent on your desktop at `http://localhost:3000` — prerequisites, one-time setup, daily workflow, architecture, troubleshooting.
+
 ## 📚 Table of Contents
 
 ### 1. [Architecture](01_Architecture)

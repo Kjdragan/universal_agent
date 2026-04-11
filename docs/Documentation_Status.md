@@ -1,6 +1,12 @@
 # Documentation Status
 
-**Last updated:** 2026-04-05
+**Last updated:** 2026-04-11
+
+## Development (development/)
+
+| Doc | Subject |
+|-----|---------| 
+| LOCAL_DEV.md | Local development guide — prerequisites, one-time Infisical setup, daily workflow scripts, architecture, troubleshooting, and security notes |
 
 ## ⚠️ MANDATORY: Documentation Rules
 
