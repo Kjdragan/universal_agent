@@ -165,6 +165,9 @@ tail -50 /tmp/ua-local-logs/webui.log
 ### Stale PID file
 If `dev_status.sh` shows "dead (stale PID)" entries, run `dev_down.sh` to clean up.
 
+### "ECONNRESET" loops during Next.js local dev
+If your dashboard shows continuous connection reset errors on websocket connections during local development with Turbopack, ensure the `NEXT_PUBLIC_API_URL` or equivalent setting targets the actual backend port (e.g. `localhost:8001`) directly. Turbopack HMR bypasses standard Next.js path routing (`rewrites`) for WebSocket connections, meaning the client must know the direct backend port.
+
 ---
 
 ## Security notes

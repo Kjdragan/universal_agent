@@ -1,6 +1,6 @@
 # Phase 3A: Pipeline Simplification — From Three Workflows to One
 
-**Status:** Not started. Begin only after Phase 2 (local dev) is verified working.
+**Status:** Completed.
 **Where this lives:** Save to `docs/pipeline/PHASE_3A_PIPELINE_SIMPLIFICATION.md` in the repo.
 
 ---
@@ -233,16 +233,16 @@ A one-shot script run manually on the VPS to consolidate from two environments t
 
 ## Acceptance criteria
 
-- [ ] `.github/workflows/deploy.yml` exists and triggers on push to `main`
-- [ ] `.github/workflows/deploy-staging.yml` does not exist
-- [ ] `.github/workflows/deploy-prod.yml` does not exist (merged into `deploy.yml`)
-- [ ] `.github/workflows/promote-develop-to-main.yml` does not exist
-- [ ] `scripts/cutover_to_single_env.sh` exists and has been run on the VPS
-- [ ] `/opt/universal-agent-staging` archived on VPS
-- [ ] Staging systemd units stopped and disabled
-- [ ] New slash commands (`/ship`, `/checkpoint`, `/rollback`, `/status`) documented
-- [ ] A test `/ship` has run end-to-end and VPS came back healthy
-- [ ] Old slash commands (`/stagecommit`, `/promotecommit`, `/productioncommit`) documented as deprecated
+- [x] `.github/workflows/deploy.yml` exists and triggers on push to `main`
+- [x] `.github/workflows/deploy-staging.yml` does not exist
+- [x] `.github/workflows/deploy-prod.yml` does not exist (merged into `deploy.yml`)
+- [x] `.github/workflows/promote-develop-to-main.yml` does not exist
+- [x] `scripts/cutover_to_single_env.sh` exists and has been run on the VPS
+- [x] `/opt/universal-agent-staging` archived on VPS
+- [x] Staging systemd units stopped and disabled
+- [x] New slash commands (`/ship`, `/checkpoint`, `/rollback`, `/status`) documented
+- [x] A test `/ship` has run end-to-end and VPS came back healthy
+- [x] Old slash commands (`/stagecommit`, `/promotecommit`, `/productioncommit`) documented as deprecated
 
 ---
 

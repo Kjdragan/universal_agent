@@ -10,7 +10,6 @@ Universal Agent now treats Infisical environments as **stage environments**, not
 The intended long-term Infisical environments are:
 
 - `development`
-- `staging`
 - `production`
 
 These environments hold shared stage secrets and integration credentials.
@@ -58,14 +57,6 @@ Validation helpers added for this model:
 - `scripts/validate_runtime_bootstrap.py`
 - `scripts/infisical_manage_stage_env.py`
 
-### Staging VPS bootstrap
-
-- `INFISICAL_ENVIRONMENT=staging`
-- `UA_RUNTIME_STAGE=staging`
-- `FACTORY_ROLE=HEADQUARTERS`
-- `UA_DEPLOYMENT_PROFILE=vps`
-- `UA_MACHINE_SLUG=vps-hq-staging`
-
 ### Production VPS bootstrap
 
 - `INFISICAL_ENVIRONMENT=production`
@@ -94,8 +85,8 @@ Use [bootstrap_local_worker_stage.sh](../../scripts/bootstrap_local_worker_stage
 
 This writes:
 
-- `INFISICAL_ENVIRONMENT=staging` or `production`
-- `UA_RUNTIME_STAGE=staging` or `production`
+- `INFISICAL_ENVIRONMENT=production`
+- `UA_RUNTIME_STAGE=production`
 - `FACTORY_ROLE=LOCAL_WORKER`
 - `UA_DEPLOYMENT_PROFILE=local_workstation`
 - `UA_MACHINE_SLUG=kevins-desktop`
@@ -106,7 +97,6 @@ During migration, the runtime normalizes these old environment aliases:
 
 - `dev` -> `development`
 - `prod` -> `production`
-- `staging-hq` -> `staging`
 - `kevins-desktop-hq-dev` -> `development`
 
 Legacy machine-shaped Infisical environments should be retired after rollout completes.

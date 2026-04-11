@@ -480,6 +480,30 @@ Reusable rule:
 
 ---
 
+## 2026-04-11: Next.js Turbopack HMR WebSocket Proxy Bypassing
+
+### Incident Summary
+
+During local development with Next.js App Router and Turbopack, the dashboard experienced continuous `ECONNRESET` loops. 
+The issue originated from Next.js Client WebSockets failing to establish stable connections through standard proxy setups or path-based routing.
+
+### Lesson 1: Turbopack HMR Websockets Ignore Standard Path Routing
+
+Turbopack fundamentally changes how Next.js handles Hot Module Replacement (HMR) websocket connections. 
+Standard proxy configs (like rewriting `/api` to a backend) do not reliably intercept the HMR websocket upgrade requests.
+
+Reusable rule:
+- Do not rely on path routing or Next.js `rewrites` to handle backend websocket connections during local development with Turbopack.
+
+### Lesson 2: Direct Target Assignment Prevent `ECONNRESET` Loops
+
+To prevent connection resets and ensure stable websocket connections during local dev, the client must directly target the backend service port.
+
+Reusable rule:
+- Configure local environment variables (like `UA_API_PORT` or `NEXT_PUBLIC_API_URL`) to explicitly point Next.js client websocket connections to the direct backend target (e.g., `localhost:8001`), bypassing the Next.js proxy layer entirely.
+
+---
+
 ## Seed Questions For Future Entries
 
 When adding a new lesson, answer these:
