@@ -50,8 +50,13 @@ echo "--> Processing staging directory archive..."
 if [ -d "$STAGING_DIR" ]; then
   if [ -d "$ARCHIVE_DIR" ]; then
     echo "    Archive directory $ARCHIVE_DIR already exists. Moving existing contents inside..."
-    mv "$STAGING_DIR"/* "$ARCHIVE_DIR"/ 2>/dev/null || true
-    rmdir "$STAGING_DIR" 2>/dev/null || true
+    shopt -s dotglob nullglob
+    staging_contents=("$STAGING_DIR"/*)
+    if [ "${#staging_contents[@]}" -gt 0 ]; then
+      mv "${staging_contents[@]}" "$ARCHIVE_DIR"/
+    fi
+    shopt -u dotglob nullglob
+    rmdir "$STAGING_DIR" 2>/dev/null || rm -rf "$STAGING_DIR"
   else
     echo "    Moving $STAGING_DIR to $ARCHIVE_DIR..."
     mv "$STAGING_DIR" "$ARCHIVE_DIR"

@@ -10,7 +10,6 @@
 | Environment | Infisical Env | VPS Checkout | Gateway Port | Web UI Port | Web UI URL |
 |---|---|---|---|---|---|
 | Development | `development` | (desktop) | `8002` | `3000` | `http://localhost:3000` |
-| Staging | `staging` | `/opt/universal-agent-staging` | `9002` | `3001` | `https://uaonvps:9443` |
 | Production | `production` | `/opt/universal_agent` | `8002` | `3000` | `https://app.clearspringcg.com` |
 
 ### Key Infisical Commands
@@ -23,7 +22,7 @@ infisical secrets --env=development
 infisical secrets get UA_OPS_TOKEN --env=production --plain --silent
 
 # Set a secret
-infisical secrets set MY_KEY=value --env=staging
+infisical secrets set MY_KEY=value --env=production
 
 # Run a command with all secrets injected
 infisical run --env=development -- python3 my_script.py
@@ -70,9 +69,9 @@ Next.js has no Infisical SDK integration, so the deploy workflow extracts the ne
 - Owned by `ua:ua` with permissions `640`
 - Never committed to git
 
-## The Three Environments
+## The Two Supported Environments
 
-All three environments use the **same pattern**. Only the values differ.
+Both supported environments use the **same pattern**. Only the values differ.
 
 ### Bootstrap `.env` Shape (identical key set across all)
 
@@ -83,19 +82,19 @@ INFISICAL_CLIENT_SECRET="..."
 INFISICAL_PROJECT_ID="9970e5b7-d48a-4ed8-a8af-43e923e67572"
 
 # Stage identity
-INFISICAL_ENVIRONMENT="staging"       # or "development" / "production"
-UA_RUNTIME_STAGE="staging"
+INFISICAL_ENVIRONMENT="production"    # or "development"
+UA_RUNTIME_STAGE="production"
 UA_INFISICAL_ENABLED="1"
 
 # Machine identity
 FACTORY_ROLE="HEADQUARTERS"           # or "LOCAL_WORKER"
 UA_DEPLOYMENT_PROFILE="vps"           # or "local_workstation"
-UA_MACHINE_SLUG="vps-hq-staging"
+UA_MACHINE_SLUG="vps-hq-production"
 
 # Service ports (VPS only)
-UA_GATEWAY_PORT="9002"
-UA_API_PORT="9001"
-UA_GATEWAY_URL="http://127.0.0.1:9002"
+UA_GATEWAY_PORT="8002"
+UA_API_PORT="8001"
+UA_GATEWAY_URL="http://127.0.0.1:8002"
 ```
 
 ### Development (Desktop)
@@ -105,17 +104,9 @@ UA_GATEWAY_URL="http://127.0.0.1:9002"
 - **Strict mode:** Off by default (allows dotenv fallback)
 - **Machine slug:** `kevins-desktop`
 
-### Staging (VPS)
-
-- **Bootstrap:** Written by `deploy-staging.yml` on every push to `develop`
-- **Webui env:** Rendered by `render_service_env_from_infisical.py` during deploy
-- **Strict mode:** On (fails closed if Infisical unavailable)
-- **Machine slug:** `vps-hq-staging`
-- **Heartbeat/Cron:** Disabled (`UA_ENABLE_HEARTBEAT=0`, `UA_ENABLE_CRON=0` in Infisical) to prevent LLM inference consumption
-
 ### Production (VPS)
 
-- **Bootstrap:** Written by `deploy-prod.yml` on every push to `main`
+- **Bootstrap:** Written by `deploy.yml` on every push to `main`
 - **Webui env:** Rendered by `render_service_env_from_infisical.py` during deploy
 - **Strict mode:** On (fails closed if Infisical unavailable)
 - **Machine slug:** `vps-hq-production`
@@ -123,7 +114,7 @@ UA_GATEWAY_URL="http://127.0.0.1:9002"
 
 ## Deploy Workflow Contract
 
-Both `deploy-staging.yml` and `deploy-prod.yml` follow the same sequence:
+The single production workflow, `.github/workflows/deploy.yml`, follows this sequence:
 
 1. **Write bootstrap `.env`** — from GitHub Secrets (Infisical machine identity credentials)
 2. **Sync dependencies** — `uv sync`
@@ -139,7 +130,7 @@ The deploy creates/overwrites the bootstrap `.env` and `web-ui/.env.local` on ev
 | Script | Purpose |
 |---|---|
 | `scripts/bootstrap_local_hq_dev.sh` | Desktop: writes `.env`, renders webui env, validates |
-| `scripts/bootstrap_local_worker_stage.sh` | Desktop: configures as local worker for staging/production |
+| `scripts/bootstrap_local_worker_stage.sh` | Desktop: configures as local worker for deployed-stage worker testing |
 | `scripts/install_local_webui_env.sh` | Renders webui `.env.local` from Infisical |
 | `scripts/render_service_env_from_infisical.py` | Generic: fetches secrets from Infisical, writes service env files |
 | `scripts/validate_runtime_bootstrap.py` | Validates Infisical connectivity and expected identity |
@@ -174,8 +165,7 @@ Control-plane credentials (e.g., `TAILSCALE_ADMIN_API_TOKEN`) are stored in Infi
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Staging dashboard shows 401 on ops endpoints | `web-ui/.env.local` missing `UA_DASHBOARD_OPS_TOKEN` | Re-deploy (auto-creates from Infisical) |
-| Staging consuming LLM inference | `UA_ENABLE_HEARTBEAT` or `UA_ENABLE_CRON` set to `1` in Infisical staging | Set to `0` in Infisical staging |
+| Production dashboard shows 401 on ops endpoints | `web-ui/.env.local` missing `UA_DASHBOARD_OPS_TOKEN` | Re-deploy (auto-creates from Infisical) |
 | Gateway fails to start on VPS | Infisical unreachable + strict mode | Check Infisical status, verify bootstrap `.env` credentials |
 | Local dev can't reach Infisical | CLI token expired | Run `infisical login` again |
 | Secrets not updating after Infisical change | Process reads secrets at startup only | Restart the service (`systemctl restart ...`) |

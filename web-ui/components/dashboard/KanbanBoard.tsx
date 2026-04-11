@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useSyncExternalStore } from "react";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
 import { CopyPlus, Clock, Zap, User, Trash2, Pencil, X } from "lucide-react";
 
@@ -213,6 +213,9 @@ function EditModal({
 /* ── Board ──────────────────────────────────────────────────────────── */
 
 const STORAGE_KEY = "ua.kanban_tasks.v1";
+const subscribeToHydration = () => () => {};
+const clientHydratedSnapshot = () => true;
+const serverHydratedSnapshot = () => false;
 
 export default function KanbanBoard() {
   const [tasks, setTasks] = useState<Task[]>(() => {
@@ -226,12 +229,12 @@ export default function KanbanBoard() {
     } catch { /* ignore corrupt data */ }
     return INITIAL_TASKS;
   });
-  const [isMounted, setIsMounted] = useState(false);
+  const isMounted = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydratedSnapshot,
+    serverHydratedSnapshot,
+  );
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   // Persist tasks to localStorage on every change
   useEffect(() => {

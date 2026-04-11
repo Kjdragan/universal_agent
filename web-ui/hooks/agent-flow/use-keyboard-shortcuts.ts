@@ -19,7 +19,10 @@ type KeyboardActions = {
 
 export function useKeyboardShortcuts(actions: KeyboardActions | null): void {
   const actionsRef = useRef(actions)
-  actionsRef.current = actions
+
+  useEffect(() => {
+    actionsRef.current = actions
+  }, [actions])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

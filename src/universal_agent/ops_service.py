@@ -459,8 +459,10 @@ class OpsService:
         status_filter: str = "all",
         run_kind_filter: str = "all",
         trigger_source_filter: str = "all",
+        limit: int = 1000,
+        include_workspace_summary: bool = True,
     ) -> List[Dict[str, Any]]:
-        runs = self.run_catalog.list_runs(limit=1000)
+        runs = self.run_catalog.list_runs(limit=max(1, int(limit)))
 
         if status_filter != "all":
             status_norm = status_filter.strip().lower()
@@ -495,7 +497,7 @@ class OpsService:
                 workspace_path and workspace_path.exists() and workspace_path.is_dir()
             )
             enriched["workspace_exists"] = workspace_exists
-            if workspace_exists and workspace_path is not None:
+            if include_workspace_summary and workspace_exists and workspace_path is not None:
                 try:
                     enriched["workspace_summary"] = self._build_session_summary(workspace_path)
                 except Exception:

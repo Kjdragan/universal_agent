@@ -17,6 +17,31 @@ const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
+const DEFAULT_GATEWAY_PROXY_TOTAL_TIMEOUT_MS = 8000;
+const DEFAULT_GATEWAY_PROXY_ATTEMPT_TIMEOUT_MS = 3500;
+
+function boundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function gatewayProxyTotalTimeoutMs(): number {
+  return boundedPositiveInt(
+    process.env.UA_DASHBOARD_GATEWAY_PROXY_TOTAL_TIMEOUT_MS,
+    DEFAULT_GATEWAY_PROXY_TOTAL_TIMEOUT_MS,
+    30_000,
+  );
+}
+
+function gatewayProxyAttemptTimeoutMs(): number {
+  return boundedPositiveInt(
+    process.env.UA_DASHBOARD_GATEWAY_PROXY_ATTEMPT_TIMEOUT_MS,
+    DEFAULT_GATEWAY_PROXY_ATTEMPT_TIMEOUT_MS,
+    gatewayProxyTotalTimeoutMs(),
+  );
+}
+
 function gatewayBaseCandidates(): string[] {
   const configured = [
     (process.env.UA_DASHBOARD_GATEWAY_URL || "").trim(),
@@ -80,8 +105,20 @@ function getStubDataForPath(pathname: string): unknown | null {
   if (pathname === "/api/v1/ops/sessions") {
     return {
       sessions: [
-        { session_id: "stub-session-1", workspace_dir: "/tmp/stub", status: "active", metadata: {} }
-      ]
+        {
+          session_id: "stub-session-1",
+          workspace_dir: "/tmp/stub",
+          status: "active",
+          source: "local",
+          channel: "local",
+          owner: "owner_primary",
+          memory_mode: "direct_only",
+          metadata: {},
+        },
+      ],
+      total: 1,
+      limit: 1,
+      offset: 0,
     };
   }
 
@@ -580,30 +617,42 @@ async function fetchWithTransientRetry(
   upstreamUrl: URL,
   init: RequestInit,
   method: string,
+  deadlineMs: number,
 ): Promise<Response> {
   const upperMethod = method.toUpperCase();
   const retryable = upperMethod === "GET" || upperMethod === "HEAD";
-  const maxAttempts = retryable ? 3 : 1;
+  const maxAttempts = retryable ? 2 : 1;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) break;
+
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s timeout protects nav UI
-      const res = await fetch(upstreamUrl, {
-        ...init,
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      return res;
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        Math.min(gatewayProxyAttemptTimeoutMs(), remainingMs),
+      );
+      try {
+        const res = await fetch(upstreamUrl, {
+          ...init,
+          signal: controller.signal,
+        });
+        return res;
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch (err: any) {
       lastError = err;
       if (err.name === 'AbortError') {
-         lastError = new Error("Gateway timeout connecting to backend (3.5s).");
+         lastError = new Error("Gateway timeout connecting to backend.");
       }
       if (attempt >= maxAttempts) break;
       // Transient gateway restarts can drop localhost:8002 briefly.
-      await sleep(120 * attempt);
+      const retryDelayMs = Math.min(120 * attempt, Math.max(0, deadlineMs - Date.now()));
+      if (retryDelayMs <= 0) break;
+      await sleep(retryDelayMs);
     }
   }
 
@@ -619,15 +668,6 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   const safePath = path.map((segment) => encodeURIComponent(segment)).join("/");
   const upstreamPathname = `/${safePath}`;
 
-  // Fast-path: Return stubs immediately if enabled to prevent hanging the connection
-  // pool and blocking client-side transitions due to slow Python 404 responses.
-  if (isDevModeStubsEnabled()) {
-    const stubData = getStubDataForPath(upstreamPathname);
-    if (stubData) {
-      return NextResponse.json(stubData);
-    }
-  }
-
   const queryEntries = Array.from(request.nextUrl.searchParams.entries());
 
   const headers = buildUpstreamHeaders(request, session.ownerId);
@@ -635,10 +675,12 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
 
   const candidates = gatewayBaseCandidates();
+  const deadlineMs = Date.now() + gatewayProxyTotalTimeoutMs();
   let upstreamResponse: Response | null = null;
   let upstreamUrl: URL | null = null;
   let lastFetchError: unknown = null;
   for (const base of candidates) {
+    if (Date.now() >= deadlineMs) break;
     const candidateUrl = new URL(`${base}${upstreamPathname}`);
     for (const [key, value] of queryEntries) {
       candidateUrl.searchParams.set(key, value);
@@ -655,6 +697,7 @@ async function proxyRequest(request: NextRequest, path: string[]) {
           redirect: "manual",
         },
         method,
+        deadlineMs,
       );
       const contentType = (response.headers.get("content-type") || "").toLowerCase();
       const shouldTryNext =

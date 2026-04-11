@@ -10,7 +10,14 @@ export function useAudioEffects(
   isReviewing: boolean,
 ) {
   const audioRef = useRef<AudioEngine | null>(null)
-  const [isMuted, setIsMuted] = useState(true)
+  const [isMuted, setIsMuted] = useState(() => {
+    try {
+      return localStorage.getItem(SOUND_PREF_KEY) !== 'on'
+    } catch {
+      return true
+    }
+  })
+  const initialMutedRef = useRef(isMuted)
   const seekingRef = useRef(false)
   const prevToolStatesRef = useRef<Map<string, string>>(new Map())
   const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
@@ -18,13 +25,7 @@ export function useAudioEffects(
   // Audio engine lifecycle + restore persisted mute preference
   useEffect(() => {
     const engine = new AudioEngine()
-    try {
-      const savedOn = localStorage.getItem(SOUND_PREF_KEY) === 'on'
-      if (savedOn) {
-        engine.setMuted(false)
-        setIsMuted(false)
-      }
-    } catch { /* localStorage unavailable (private browsing, etc.) */ }
+    engine.setMuted(initialMutedRef.current)
     audioRef.current = engine
     return () => { audioRef.current?.dispose(); audioRef.current = null }
   }, [])

@@ -123,8 +123,9 @@ function mergeRunMetadata(
 }
 
 export async function fetchSessionDirectory(limit = 200): Promise<SessionDirectoryItem[]> {
-  const opsUrl = `${API_BASE}/api/v1/ops/sessions?limit=${Math.max(1, limit)}&offset=0&status=all&source=all&memory_mode=all`;
-  const runsUrl = `${API_BASE}/api/v1/runs`;
+  const boundedLimit = Math.max(1, limit);
+  const opsUrl = `${API_BASE}/api/v1/ops/sessions?limit=${boundedLimit}&offset=0&status=all&source=all&memory_mode=all`;
+  const runsUrl = `${API_BASE}/api/v1/runs?limit=${boundedLimit}&offset=0`;
   try {
     const [opsRes, runsRes] = await Promise.all([
       fetch(opsUrl),

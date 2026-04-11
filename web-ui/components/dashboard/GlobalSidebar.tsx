@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Activity,
   LayoutDashboard,
@@ -92,72 +92,19 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-type DashboardAuthSession = {
-  authenticated: boolean;
-  auth_required: boolean;
-  owner_id: string;
-  expires_at?: number | null;
+type GlobalSidebarProps = {
+  ownerId?: string;
+  showCorporationNav?: boolean;
 };
 
-type FactoryCapabilitiesResponse = {
-  factory?: {
-    factory_role?: string;
-    gateway_mode?: string;
-  };
-};
-
-export function GlobalSidebar() {
+export function GlobalSidebar({
+  ownerId = "owner_primary",
+  showCorporationNav = false,
+}: GlobalSidebarProps) {
   const pathname = usePathname();
-  const [session, setSession] = useState<DashboardAuthSession | null>(null);
-  const [showCorporationNav, setShowCorporationNav] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const sidebarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const loadAuthSession = useCallback(async () => {
-    let authenticated = false;
-    try {
-      const response = await fetch("/api/dashboard/auth/session", { cache: "no-store" });
-      const data = (await response.json()) as DashboardAuthSession;
-      if (response.ok || response.status === 401) {
-        setSession(data);
-        authenticated = Boolean(data.authenticated);
-      }
-    } catch (error) {
-      setSession(null);
-      setShowCorporationNav(false);
-    }
-
-    if (authenticated) {
-      try {
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), 5000);
-        const capsRes = await fetch("/api/dashboard/gateway/api/v1/factory/capabilities", {
-          cache: "no-store",
-          signal: ac.signal,
-        });
-        clearTimeout(timer);
-        if (capsRes.ok) {
-          const capsData = (await capsRes.json()) as FactoryCapabilitiesResponse;
-          const role = String(capsData?.factory?.factory_role || "").trim().toUpperCase();
-          const gatewayMode = String(capsData?.factory?.gateway_mode || "").trim().toLowerCase();
-          setShowCorporationNav(role === "HEADQUARTERS" && gatewayMode === "full");
-        } else {
-          setShowCorporationNav(false);
-        }
-      } catch {
-        setShowCorporationNav(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadAuthSession();
-  }, [loadAuthSession]);
-
-  useEffect(() => {
-    setIsMobileSidebarOpen(false);
-  }, [pathname]);
 
   return (
     <>
@@ -226,6 +173,7 @@ export function GlobalSidebar() {
                           href={item.href}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={() => setIsMobileSidebarOpen(false)}
                           className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition overflow-hidden hover:bg-card/20 hover:text-foreground"
                         >
                           <Icon className="h-5 w-5 shrink-0 opacity-60" />
@@ -245,6 +193,8 @@ export function GlobalSidebar() {
                       <Link
                         key={item.href}
                         href={item.href}
+                        prefetch={false}
+                        onClick={() => setIsMobileSidebarOpen(false)}
                         className={[
                           "flex items-center w-full gap-2.5 rounded-lg px-3 py-2 text-[13px] transition overflow-hidden",
                           active
@@ -280,7 +230,7 @@ export function GlobalSidebar() {
             "text-[11px] text-muted-foreground font-mono transition-opacity duration-300",
              sidebarHovered || isMobileSidebarOpen ? "opacity-100" : "md:opacity-0"
           ].join(" ")}>
-            {session?.owner_id || "..."}
+            {ownerId || "..."}
           </p>
         </div>
       </aside>

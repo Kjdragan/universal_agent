@@ -15,13 +15,21 @@ export function GlassCard({ children, className = '', style, visible }: GlassCar
   const [animating, setAnimating] = useState(false)
 
   useEffect(() => {
-    if (visible) {
-      setMounted(true)
-      requestAnimationFrame(() => setAnimating(true))
-    } else {
-      setAnimating(false)
-      const timer = setTimeout(() => setMounted(false), TIMING.glassAnimMs)
-      return () => clearTimeout(timer)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let nestedFrame: number | null = null
+    const frame = requestAnimationFrame(() => {
+      if (visible) {
+        setMounted(true)
+        nestedFrame = requestAnimationFrame(() => setAnimating(true))
+      } else {
+        setAnimating(false)
+        timer = setTimeout(() => setMounted(false), TIMING.glassAnimMs)
+      }
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      if (nestedFrame !== null) cancelAnimationFrame(nestedFrame)
+      if (timer) clearTimeout(timer)
     }
   }, [visible])
 

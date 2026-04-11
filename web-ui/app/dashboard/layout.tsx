@@ -1,37 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  Activity,
-  LayoutDashboard,
-  Building2,
-  ShieldCheck,
-  CheckCircle,
-  ListTodo,
-  MessageSquare,
-  Send,
-  CalendarDays,
-  Bell,
-  Radio,
-  GraduationCap,
-  Clock,
-  HeartPulse,
-  Settings,
-  Wrench,
-  FolderOpen,
-  Clipboard,
-  Menu,
-  X,
-  LogOut,
-  ChevronDown,
-  Mail,
-  Kanban,
-  Orbit,
-  type LucideIcon,
-} from "lucide-react";
+import { LayoutDashboard } from "lucide-react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
 import { GlobalSidebar } from "@/components/dashboard/GlobalSidebar";
 
@@ -64,9 +36,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [ownerId, setOwnerId] = useState("owner_primary");
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [sidebarHovered, setSidebarHovered] = useState(false);
-  const sidebarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCorporationNav, setShowCorporationNav] = useState(false);
   const [commandBarVisible, setCommandBarVisible] = useState(false);
   const commandBarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,10 +87,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     void loadAuthSession();
   }, [loadAuthSession]);
-
-  useEffect(() => {
-    setIsMobileSidebarOpen(false);
-  }, [pathname]);
 
   const handleLogin = useCallback(
     async (event: FormEvent) => {
@@ -242,7 +207,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       )}
 
       <div className="flex flex-1 overflow-hidden relative">
-        <GlobalSidebar />
+        <GlobalSidebar ownerId={session.owner_id || ownerId} showCorporationNav={showCorporationNav} />
 
         {/* Main Content */}
         <main className="relative flex flex-1 flex-col overflow-hidden md:ml-20">
