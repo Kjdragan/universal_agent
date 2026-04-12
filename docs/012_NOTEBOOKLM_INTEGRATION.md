@@ -31,7 +31,7 @@ flowchart TD
 
 ### Trigger Phrases
 
-The skill activates on any mention of: `NotebookLM`, `notebooklm`, `nlm`, notebooks, source ingestion, NotebookLM research, podcast/audio overview, report/quiz creation, flashcards, slide decks, infographics, downloads, sharing, or NotebookLM automation workflows.
+The skill activates on any mentions of: `NotebookLM`, `notebooklm`, `nlm`, notebooks, source ingestion, NotebookLM research, podcast/audio overview, report/quiz creation, flashcards, slide decks, infographics, downloads, sharing, or NotebookLM automation workflows.
 
 ### Routing Contract
 
@@ -277,6 +277,6 @@ nlm login --check --profile vps
 
 ### Trigger via Simone
 
-> _"Create a NotebookLM notebook called 'Project Alpha Research', add this article as a source: https://example.com/article, and generate an audio overview."_
+> _"Create a NotebookLM notebook called 'Project Alpha Research', add this article as a source: <https://example.com/article>, and generate an audio overview."_
 
 Simone will: detect NotebookLM intent → delegate to `notebooklm-operator` → run auth preflight → create notebook → add source → generate audio → return structured results.
