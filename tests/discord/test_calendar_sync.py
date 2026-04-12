@@ -1,3 +1,6 @@
+import base64
+import json
+
 from discord_intelligence import calendar_sync
 
 
@@ -63,3 +66,21 @@ def test_gws_subprocess_env_removes_blank_credential_overrides(monkeypatch):
     assert "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE" not in env
     assert "GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER" not in env
     assert env["GOOGLE_WORKSPACE_CLI_TOKEN"] == "token-value"
+
+
+def test_gws_subprocess_env_materializes_infisical_credential_json(monkeypatch, tmp_path):
+    target = tmp_path / "gws" / "credentials.json"
+    payload = {"token": "secret-token"}
+    monkeypatch.setenv("UA_GWS_MATERIALIZED_CREDENTIALS_FILE", str(target))
+    monkeypatch.setenv(
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON_B64",
+        base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii"),
+    )
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE", "")
+
+    env = calendar_sync.gws_subprocess_env()
+
+    assert env["GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE"] == str(target)
+    assert json.loads(target.read_text(encoding="utf-8")) == payload
+    assert oct(target.stat().st_mode & 0o777) == "0o600"
+    assert "GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON_B64" not in env

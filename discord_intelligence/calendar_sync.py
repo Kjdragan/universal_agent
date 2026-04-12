@@ -1,10 +1,12 @@
 import asyncio
+import base64
 import json
 import os
 import re
 import shlex
 import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .database import DiscordIntelligenceDB
 
@@ -96,6 +98,21 @@ def calendar_insert_command(payload: dict) -> list[str]:
 
 def gws_subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
+    credentials_json = env.get("GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON", "").strip()
+    credentials_b64 = env.get("GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON_B64", "").strip()
+    if not env.get("GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE", "").strip() and (credentials_json or credentials_b64):
+        if credentials_b64:
+            credentials_json = base64.b64decode(credentials_b64).decode("utf-8")
+        credentials_path = Path(
+            env.get("UA_GWS_MATERIALIZED_CREDENTIALS_FILE", "~/.config/gws/credentials.from-infisical.json")
+        ).expanduser()
+        credentials_path.parent.mkdir(parents=True, exist_ok=True)
+        if not credentials_path.exists() or credentials_path.read_text(encoding="utf-8") != credentials_json:
+            credentials_path.write_text(credentials_json, encoding="utf-8")
+            credentials_path.chmod(0o600)
+        env["GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE"] = str(credentials_path)
+    env.pop("GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON", None)
+    env.pop("GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON_B64", None)
     for key in (
         "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE",
         "GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER",
