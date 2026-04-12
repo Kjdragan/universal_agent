@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -14,6 +15,8 @@ from .database import DiscordIntelligenceDB
 from .integration.task_hub import create_task_hub_mission, get_task_hub_items, get_mission_status
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] CC_BOT: %(message)s")
 logger = logging.getLogger("cc_bot")
+BASE_DIR = Path(__file__).resolve().parent
+APP_ROOT = BASE_DIR.parent
 
 AUTO_SYNC_CALENDAR_EVENTS = str(os.getenv("UA_DISCORD_AUTO_SYNC_CALENDAR_EVENTS", "1")).strip().lower() in {
     "1", "true", "yes", "on",
@@ -441,7 +444,7 @@ class CCBot(commands.Bot):
     async def poll_briefings(self):
         try:
             import os, glob, json
-            briefings_dir = "/home/kjdragan/lrepos/universal_agent/kb/briefings"
+            briefings_dir = os.getenv("UA_DISCORD_BRIEFINGS_DIR", str(APP_ROOT / "kb" / "briefings"))
             cache_file = os.path.join(briefings_dir, ".posted_cache.json")
             
             if not os.path.exists(briefings_dir):

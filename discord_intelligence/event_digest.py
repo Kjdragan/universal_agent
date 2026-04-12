@@ -14,8 +14,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] EVEN
 logger = logging.getLogger("event_digest")
 
 BASE_DIR = Path(__file__).resolve().parent
+APP_ROOT = BASE_DIR.parent
 DIGESTS_DIR = BASE_DIR / "digests"
 DIGESTS_DIR.mkdir(exist_ok=True)
+BRIEFINGS_DIR = Path(os.getenv("UA_DISCORD_BRIEFINGS_DIR", str(APP_ROOT / "kb" / "briefings")))
 
 SYSTEM_PROMPT = """You are an event intelligence analyst.
 Review the following Discord messages and/or audio transcript captured during a scheduled event.
@@ -76,7 +78,8 @@ async def run_pipeline():
         now = datetime.now(timezone.utc)
         events = db.execute("SELECT * FROM scheduled_events").fetchall()
         
-        for event in events:
+        for event_row in events:
+            event = dict(event_row)
             digest_path = DIGESTS_DIR / f"{event['id']}_digest.md"
             if digest_path.exists():
                 continue
@@ -120,6 +123,7 @@ async def run_pipeline():
             '''
             args = (event['server_id'], window_start.isoformat(), window_end.isoformat())
             msgs = db.execute(sql, args).fetchall()
+            msg_rows = [dict(m) for m in msgs]
             
             # Also check for audio transcript to incorporate
             transcript_text = ""
@@ -131,26 +135,25 @@ async def run_pipeline():
                 except Exception as e:
                     logger.warning(f"Could not read transcript {transcript_path_val}: {e}")
             
-            total_chars = sum(len(m['content']) for m in msgs if m.get('content'))
-            if len(msgs) < 10 and total_chars < 500 and not transcript_text:
-                logger.info(f"Skipping event '{event['name']}' due to low message count ({len(msgs)}) and low content length ({total_chars} chars), and no transcript.")
+            total_chars = sum(len(str(m.get('content') or "")) for m in msg_rows)
+            if len(msg_rows) < 10 and total_chars < 500 and not transcript_text:
+                logger.info(f"Skipping event '{event['name']}' due to low message count ({len(msg_rows)}), low content length ({total_chars} chars), and no transcript.")
                 continue
 
-            if msgs or transcript_text:
+            if msg_rows or transcript_text:
                 content_parts = []
                 
-                if msgs:
-                    logger.info(f"Extracting digest for event '{event['name']}' with {len(msgs)} messages.")
-                    content_parts.append(f"## Text Channel Messages ({len(msgs)} messages)")
+                if msg_rows:
+                    logger.info(f"Extracting digest for event '{event['name']}' with {len(msg_rows)} messages.")
+                    content_parts.append(f"## Text Channel Messages ({len(msg_rows)} messages)")
                     
                 if transcript_text:
                     content_parts.append(f"\n\n## Audio Transcript\n\n{transcript_text}")
                 
                 # Generate digest from all available content
-                combined_messages = [dict(m) for m in msgs] if msgs else []
                 digest_data = await generate_digest(
                     event['name'],
-                    combined_messages,
+                    msg_rows,
                     additional_context=transcript_text if transcript_text else None,
                 )
                 
@@ -160,7 +163,7 @@ async def run_pipeline():
                     logger.info(f"Saved local digest to {digest_path}")
                     
                     # Update LLM Wiki / Briefings integration
-                    kb_path = Path("/home/kjdragan/lrepos/universal_agent/kb/briefings")
+                    kb_path = BRIEFINGS_DIR
                     if not kb_path.exists():
                         kb_path.mkdir(parents=True, exist_ok=True)
                         
@@ -210,4 +213,3 @@ async def run_pipeline():
 
 if __name__ == "__main__":
     asyncio.run(run_pipeline())
-
