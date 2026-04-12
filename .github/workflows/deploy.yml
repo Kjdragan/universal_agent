@@ -256,10 +256,31 @@ jobs:
               return 1
             }
 
+            health_status_dir="$(mktemp -d)"
+            run_health_check() {
+              name="$1"
+              url="$2"
+              max_attempts="$3"
+              sleep_seconds="$4"
+              (
+                if check_local_health "$name" "$url" "$max_attempts" "$sleep_seconds"; then
+                  echo 0 >"$health_status_dir/$name.status"
+                else
+                  echo 1 >"$health_status_dir/$name.status"
+                fi
+              ) &
+            }
             health_ok=true
-            check_local_health gateway "http://127.0.0.1:8002/api/v1/health" 48 5 || health_ok=false
-            check_local_health api "http://127.0.0.1:8001/api/health" 24 5 || health_ok=false
-            check_local_health webui "http://127.0.0.1:3000/dashboard" 24 5 || health_ok=false
+            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 48 5
+            run_health_check api "http://127.0.0.1:8001/api/health" 24 5
+            run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5
+            wait
+            for health_name in gateway api webui; do
+              if [ "$(cat "$health_status_dir/$health_name.status" 2>/dev/null || echo 1)" != "0" ]; then
+                health_ok=false
+              fi
+            done
+            rm -rf "$health_status_dir"
             if command -v systemctl >/dev/null 2>&1; then
               systemctl is-active --quiet ua-discord-cc-bot || health_ok=false
               systemctl is-active --quiet ua-discord-intelligence || health_ok=false

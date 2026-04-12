@@ -52,9 +52,10 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
 
     assert "trap cleanup_deployment_window EXIT" in content
     assert 'echo "--> Verifying production service health..."' in content
-    assert 'check_local_health gateway "http://127.0.0.1:8002/api/v1/health"' in content
-    assert 'check_local_health api "http://127.0.0.1:8001/api/health"' in content
-    assert 'check_local_health webui "http://127.0.0.1:3000/dashboard"' in content
+    assert 'run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 48 5' in content
+    assert 'run_health_check api "http://127.0.0.1:8001/api/health" 24 5' in content
+    assert 'run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5' in content
+    assert 'wait' in content
     assert 'echo "::error::$name did not become healthy at $url"' in content
     assert "sudo journalctl -u universal-agent-gateway -n 120 --no-pager" in content
     assert 'exit 1' in content
