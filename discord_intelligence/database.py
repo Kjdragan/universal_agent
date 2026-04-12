@@ -150,6 +150,7 @@ class DiscordIntelligenceDB:
             self._migrate_add_column(conn, 'scheduled_events', 'calendar_sync_status', "TEXT DEFAULT 'pending'")
             self._migrate_add_column(conn, 'scheduled_events', 'calendar_event_id', 'TEXT')
             self._migrate_add_column(conn, 'scheduled_events', 'calendar_synced_at', 'TIMESTAMP')
+            self._migrate_add_column(conn, 'scheduled_events', 'calendar_last_attempt_at', 'TIMESTAMP')
             self._migrate_add_column(conn, 'scheduled_events', 'calendar_sync_error', 'TEXT')
             self._migrate_add_column(conn, 'scheduled_events', 'discord_event_url', 'TEXT')
 
@@ -280,23 +281,48 @@ class DiscordIntelligenceDB:
             conn.execute('UPDATE scheduled_events SET notified = 1 WHERE id = ?', (event_id,))
             conn.commit()
 
-    def get_calendar_sync_candidates(self, limit: int = 10) -> list[dict]:
+    def get_calendar_sync_candidates(self, limit: int = 10, retry_failed_after_hours: int = 6) -> list[dict]:
         """Return upcoming structured events that should be synced to calendar."""
+        retry_hours = max(1, int(retry_failed_after_hours))
+        retry_modifier = f"-{retry_hours} hours"
         with self._get_conn() as conn:
             cur = conn.execute('''
                 SELECT ev.*, srv.name AS server_name, ch.name AS channel_name
                 FROM scheduled_events ev
                 LEFT JOIN servers srv ON srv.id = ev.server_id
                 LEFT JOIN channels ch ON ch.id = ev.channel_id
-                WHERE COALESCE(ev.calendar_sync_status, 'pending') IN ('pending', '')
+                WHERE (
+                    COALESCE(ev.calendar_sync_status, 'pending') IN ('pending', '')
+                    OR (
+                        ev.calendar_sync_status = 'failed'
+                        AND (
+                            ev.calendar_last_attempt_at IS NULL
+                            OR ev.calendar_last_attempt_at <= datetime('now', ?)
+                        )
+                    )
+                  )
                   AND LOWER(COALESCE(ev.status, '')) = 'scheduled'
                   AND COALESCE(ev.entity_type, '') IN ('stage_instance', 'voice', 'external')
                   AND ev.start_time IS NOT NULL
                   AND ev.start_time >= datetime('now', '-1 hour')
                 ORDER BY ev.start_time ASC
                 LIMIT ?
-            ''', (max(1, int(limit)),))
+            ''', (retry_modifier, max(1, int(limit)),))
             return [dict(row) for row in cur.fetchall()]
+
+    def count_calendar_synced_today(self) -> int:
+        """Return calendar entries successfully synced today in UTC."""
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                '''
+                SELECT COUNT(*)
+                FROM scheduled_events
+                WHERE calendar_sync_status = 'synced'
+                  AND calendar_synced_at IS NOT NULL
+                  AND date(calendar_synced_at) = date('now')
+                '''
+            )
+            return int(cur.fetchone()[0] or 0)
 
     def mark_event_calendar_synced(self, event_id: str, calendar_event_id: str, synced_at: str):
         with self._get_conn() as conn:
@@ -306,10 +332,11 @@ class DiscordIntelligenceDB:
                 SET calendar_sync_status = 'synced',
                     calendar_event_id = ?,
                     calendar_synced_at = ?,
+                    calendar_last_attempt_at = ?,
                     calendar_sync_error = NULL
                 WHERE id = ?
                 ''',
-                (calendar_event_id, synced_at, event_id),
+                (calendar_event_id, synced_at, synced_at, event_id),
             )
             conn.commit()
 
@@ -319,6 +346,7 @@ class DiscordIntelligenceDB:
                 '''
                 UPDATE scheduled_events
                 SET calendar_sync_status = 'failed',
+                    calendar_last_attempt_at = datetime('now'),
                     calendar_sync_error = ?
                 WHERE id = ?
                 ''',

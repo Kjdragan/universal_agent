@@ -52,7 +52,7 @@ The current integration is partially complete based on the 4-phase plan found in
 
 ### ✅ Phase 4: Event Intelligence Pipeline
 - [x] **Investigation Complete:** Decided against capturing audio recordings from stage channels due to high TOS account ban risks and complexity.
-- [x] **GWS Calendar Sync:** Integrated the Google Workspace CLI via `npx @googleworkspace/cli calendar +insert` natively inside `cc_bot.py`.
+- [x] **GWS Calendar Sync:** Integrated the Google Workspace CLI via `gws calendar events insert` / `npx @googleworkspace/cli calendar events insert` natively inside `cc_bot.py`.
     - **Auth Discovery:** The CLI must first be authenticated locally with `npx @googleworkspace/cli auth login` to handle OAuth consent and cache credentials in the secure keyring.
     - **Payload Discovery:** The Calendar API requires strict ISO 8601 formatting for `--start` and `--end` timestamps rather than natural language parsing.
     - C&C reactions (`✅`, `🎙️`, `❌`) on Discord event alerts automatically trigger this sync to the operator's Google Calendar using those parameters.
@@ -62,6 +62,7 @@ The current integration is partially complete based on the 4-phase plan found in
 - [x] **Reliable Upstream Task Dispatch:** Discord intelligence tasks now unpack root-level `title` and `description` properties and default to `agent_ready: 1`, solving the `-2.0` scoring penalty during central Task Hub queue insertion.
 - [x] **Passive signal containment:** Passive release signals remain in the Discord intelligence database/feed by default instead of auto-flooding Task Hub. Set `UA_DISCORD_AUTO_CREATE_RELEASE_TASKS=1` only for controlled windows where every release signal should become a Simone/Task Hub work item.
 - [x] **Structured-event calendar automation:** Discord Scheduled Events and structured stage/voice/external events are the primary event source. Text-derived event fallback is disabled by default (`UA_DISCORD_TEXT_EVENT_FALLBACK_ENABLED=0`). The CC bot can auto-sync up to 10 upcoming structured Discord events to Google Calendar with event metadata and Discord event links (`UA_DISCORD_CALENDAR_SYNC_DAILY_LIMIT=10`).
+    - Production calendar sync runs as the `ua` system user. If `gws` is not installed on PATH, the bot falls back to `npx -y @googleworkspace/cli`; OAuth credentials still must exist under that service user's GWS config (`sudo -u ua -H npx -y @googleworkspace/cli auth status`). Failed calendar rows are retried after a bounded cooldown (`UA_DISCORD_CALENDAR_SYNC_RETRY_FAILED_AFTER_HOURS`, default 6) so prior infrastructure failures recover after credentials are repaired.
 - [x] **Digest action containment:** Event digests can still extract action items, but they do not create Task Hub work by default. Set `UA_DISCORD_DIGEST_CREATE_TASKS=1` only during controlled windows where digest action items should become Simone/Task Hub work items.
 - [x] **Dashboard tuning surface:** The dashboard exposes Discord intelligence overview, top structured events, and expandable server/category channel controls for tiering or muting noisy channels.
 - [x] **LLM Proxy Optimization:** Hardcoded `config.yaml` model endpoints to directly utilize explicit Z.AI emulation proxies (`glm-4.5-air` for triage parsing and `glm-5-turbo` for deep insight extraction).

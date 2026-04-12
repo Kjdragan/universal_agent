@@ -1,10 +1,7 @@
 # cc_bot.py
 import os
-import asyncio
-import json
 import logging
-import re
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import discord
 from discord.ext import commands, tasks
@@ -12,6 +9,7 @@ from discord import app_commands
 
 from .config import init_secrets, get_db_path
 from .database import DiscordIntelligenceDB
+from .calendar_sync import sync_event_to_calendar
 from .integration.task_hub import create_task_hub_mission, get_task_hub_items, get_mission_status
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] CC_BOT: %(message)s")
 logger = logging.getLogger("cc_bot")
@@ -22,92 +20,10 @@ AUTO_SYNC_CALENDAR_EVENTS = str(os.getenv("UA_DISCORD_AUTO_SYNC_CALENDAR_EVENTS"
     "1", "true", "yes", "on",
 }
 CALENDAR_SYNC_DAILY_LIMIT = max(1, int(os.getenv("UA_DISCORD_CALENDAR_SYNC_DAILY_LIMIT", "10") or 10))
-
-
-def _calendar_event_id(discord_event_id: str) -> str:
-    # Google Calendar event ids allow lowercase letters a-v and digits; keep deterministic for dedupe.
-    cleaned = re.sub(r"[^a-v0-9]", "", f"discord{discord_event_id}".lower())
-    return cleaned[:512] or f"discord{abs(hash(discord_event_id))}"
-
-
-def _discord_event_url(event: dict) -> str:
-    if event.get("discord_event_url"):
-        return str(event["discord_event_url"])
-    server_id = str(event.get("server_id") or "").strip()
-    event_id = str(event.get("id") or "").strip()
-    if server_id and event_id and not event_id.startswith("text_evt_"):
-        return f"https://discord.com/events/{server_id}/{event_id}"
-    return ""
-
-
-def _calendar_event_payload(event: dict) -> dict:
-    event_id = _calendar_event_id(str(event.get("id") or ""))
-    discord_url = _discord_event_url(event)
-    description_parts = [
-        str(event.get("description") or "").strip(),
-        "",
-        f"Discord event: {discord_url}" if discord_url else "",
-        f"Discord server: {event.get('server_name') or event.get('server_id') or 'unknown'}",
-        f"Discord channel/location: {event.get('channel_name') or event.get('location') or event.get('channel_id') or 'unknown'}",
-        f"Discord event id: {event.get('id')}",
-        "Source: discord_structured_event",
-    ]
-    payload = {
-        "id": event_id,
-        "summary": str(event.get("name") or "Discord Event").strip() or "Discord Event",
-        "description": "\n".join(part for part in description_parts if part is not None).strip(),
-        "start": {"dateTime": event["start_time"]},
-        "end": {"dateTime": event.get("end_time") or event["start_time"]},
-        "extendedProperties": {
-            "private": {
-                "source": "discord_structured_event",
-                "discord_event_id": str(event.get("id") or ""),
-                "discord_server_id": str(event.get("server_id") or ""),
-                "discord_channel_id": str(event.get("channel_id") or ""),
-            },
-        },
-    }
-    if event.get("location"):
-        payload["location"] = event["location"]
-    elif discord_url:
-        payload["location"] = discord_url
-    return payload
-
-
-async def sync_event_to_calendar(db: DiscordIntelligenceDB, event: dict) -> tuple[bool, str]:
-    event_id = str(event.get("id") or "").strip()
-    if not event_id:
-        return False, "missing_event_id"
-    payload = _calendar_event_payload(event)
-    cmd = ["gws", "calendar", "+insert", "--json", json.dumps(payload)]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-    except Exception as exc:
-        db.mark_event_calendar_failed(event_id, str(exc))
-        return False, str(exc)
-    if proc.returncode == 0:
-        db.mark_event_calendar_synced(
-            event_id,
-            str(payload["id"]),
-            datetime.now(timezone.utc).isoformat(),
-        )
-        return True, stdout.decode(errors="ignore")[:500]
-    error = stderr.decode(errors="ignore") or stdout.decode(errors="ignore")
-    # Duplicate inserts may be reported as failure by the CLI even though the target event exists.
-    if "already exists" in error.lower() or "duplicate" in error.lower() or "409" in error:
-        db.mark_event_calendar_synced(
-            event_id,
-            str(payload["id"]),
-            datetime.now(timezone.utc).isoformat(),
-        )
-        return True, "already_exists"
-    db.mark_event_calendar_failed(event_id, error)
-    return False, error[:500]
+CALENDAR_SYNC_RETRY_FAILED_AFTER_HOURS = max(
+    1,
+    int(os.getenv("UA_DISCORD_CALENDAR_SYNC_RETRY_FAILED_AFTER_HOURS", "6") or 6),
+)
 
 class CCBot(commands.Bot):
     def __init__(self, db: DiscordIntelligenceDB):
@@ -175,7 +91,13 @@ class CCBot(commands.Bot):
     @tasks.loop(minutes=15)
     async def auto_sync_calendar_events(self):
         try:
-            candidates = self.db.get_calendar_sync_candidates(limit=CALENDAR_SYNC_DAILY_LIMIT)
+            remaining = CALENDAR_SYNC_DAILY_LIMIT - self.db.count_calendar_synced_today()
+            if remaining <= 0:
+                return
+            candidates = self.db.get_calendar_sync_candidates(
+                limit=remaining,
+                retry_failed_after_hours=CALENDAR_SYNC_RETRY_FAILED_AFTER_HOURS,
+            )
             if not candidates:
                 return
             logger.info("Auto-syncing %d Discord structured event(s) to Google Calendar", len(candidates))

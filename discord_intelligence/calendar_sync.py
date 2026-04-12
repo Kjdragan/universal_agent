@@ -1,0 +1,130 @@
+import asyncio
+import json
+import os
+import re
+import shlex
+import shutil
+from datetime import datetime, timezone
+
+from .database import DiscordIntelligenceDB
+
+
+def _truthy_env(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def calendar_event_id(discord_event_id: str) -> str:
+    # Google Calendar event ids allow lowercase letters a-v and digits; keep deterministic for dedupe.
+    cleaned = re.sub(r"[^a-v0-9]", "", f"discord{discord_event_id}".lower())
+    return cleaned[:512] or f"discord{abs(hash(discord_event_id))}"
+
+
+def discord_event_url(event: dict) -> str:
+    if event.get("discord_event_url"):
+        return str(event["discord_event_url"])
+    server_id = str(event.get("server_id") or "").strip()
+    event_id = str(event.get("id") or "").strip()
+    if server_id and event_id and not event_id.startswith("text_evt_"):
+        return f"https://discord.com/events/{server_id}/{event_id}"
+    return ""
+
+
+def calendar_event_payload(event: dict) -> dict:
+    event_id = calendar_event_id(str(event.get("id") or ""))
+    discord_url = discord_event_url(event)
+    description_parts = [
+        str(event.get("description") or "").strip(),
+        "",
+        f"Discord event: {discord_url}" if discord_url else "",
+        f"Discord server: {event.get('server_name') or event.get('server_id') or 'unknown'}",
+        f"Discord channel/location: {event.get('channel_name') or event.get('location') or event.get('channel_id') or 'unknown'}",
+        f"Discord event id: {event.get('id')}",
+        "Source: discord_structured_event",
+    ]
+    payload = {
+        "id": event_id,
+        "summary": str(event.get("name") or "Discord Event").strip() or "Discord Event",
+        "description": "\n".join(part for part in description_parts if part is not None).strip(),
+        "start": {"dateTime": event["start_time"]},
+        "end": {"dateTime": event.get("end_time") or event["start_time"]},
+        "extendedProperties": {
+            "private": {
+                "source": "discord_structured_event",
+                "discord_event_id": str(event.get("id") or ""),
+                "discord_server_id": str(event.get("server_id") or ""),
+                "discord_channel_id": str(event.get("channel_id") or ""),
+            },
+        },
+    }
+    if event.get("location"):
+        payload["location"] = event["location"]
+    elif discord_url:
+        payload["location"] = discord_url
+    return payload
+
+
+def gws_command_prefix() -> list[str]:
+    raw_command = os.getenv("UA_GWS_COMMAND", "").strip()
+    if raw_command:
+        return shlex.split(raw_command)
+
+    configured_binary = os.getenv("UA_GWS_BINARY_PATH", "gws").strip() or "gws"
+    if shutil.which(configured_binary):
+        return [configured_binary]
+
+    allow_npx = _truthy_env("UA_GWS_ALLOW_NPX_FALLBACK", "1")
+    package_name = os.getenv("UA_GWS_NPX_PACKAGE", "@googleworkspace/cli").strip() or "@googleworkspace/cli"
+    if configured_binary == "gws" and allow_npx and shutil.which("npx"):
+        return ["npx", "-y", package_name]
+
+    return [configured_binary]
+
+
+def calendar_insert_command(payload: dict) -> list[str]:
+    calendar_id = os.getenv("UA_DISCORD_CALENDAR_ID", "primary").strip() or "primary"
+    return [
+        *gws_command_prefix(),
+        "calendar",
+        "events",
+        "insert",
+        "--params",
+        json.dumps({"calendarId": calendar_id}),
+        "--json",
+        json.dumps(payload),
+    ]
+
+
+async def sync_event_to_calendar(db: DiscordIntelligenceDB, event: dict) -> tuple[bool, str]:
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        return False, "missing_event_id"
+    payload = calendar_event_payload(event)
+    cmd = calendar_insert_command(payload)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+    except Exception as exc:
+        db.mark_event_calendar_failed(event_id, str(exc))
+        return False, str(exc)
+    if proc.returncode == 0:
+        db.mark_event_calendar_synced(
+            event_id,
+            str(payload["id"]),
+            datetime.now(timezone.utc).isoformat(),
+        )
+        return True, stdout.decode(errors="ignore")[:500]
+    error = stderr.decode(errors="ignore") or stdout.decode(errors="ignore")
+    # Duplicate inserts may be reported as failure by the CLI even though the target event exists.
+    if "already exists" in error.lower() or "duplicate" in error.lower() or "409" in error:
+        db.mark_event_calendar_synced(
+            event_id,
+            str(payload["id"]),
+            datetime.now(timezone.utc).isoformat(),
+        )
+        return True, "already_exists"
+    db.mark_event_calendar_failed(event_id, error)
+    return False, error[:500]

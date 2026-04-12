@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 
 from discord_intelligence.database import DiscordIntelligenceDB
 from discord_intelligence.integration import task_hub as discord_task_hub
@@ -60,8 +60,19 @@ def test_discord_db_tracks_calendar_sync_and_channel_tuning(tmp_path):
     candidates = db.get_calendar_sync_candidates(limit=10)
     assert [row["id"] for row in candidates] == ["event-1"]
 
-    db.mark_event_calendar_synced("event-1", "discordevent1", "2026-04-12T00:00:00+00:00")
+    db.mark_event_calendar_synced("event-1", "discordevent1", "2026-04-10T00:00:00+00:00")
     assert db.get_calendar_sync_candidates(limit=10) == []
+    assert db.count_calendar_synced_today() == 0
+
+    db.mark_event_calendar_failed("event-1", "temporary calendar auth failure")
+    assert db.get_calendar_sync_candidates(limit=10) == []
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE scheduled_events SET calendar_last_attempt_at = NULL WHERE id = ?", ("event-1",))
+        conn.commit()
+    assert [row["id"] for row in db.get_calendar_sync_candidates(limit=10)] == ["event-1"]
+
+    db.mark_event_calendar_synced("event-1", "discordevent1", datetime.now(UTC).isoformat())
+    assert db.count_calendar_synced_today() == 1
 
     db.update_channel_config("channel-1", tier="A", is_active=False)
     overview = db.channel_overview(limit=10)
