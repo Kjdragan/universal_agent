@@ -269,12 +269,16 @@ jobs:
                   echo 1 >"$health_status_dir/$name.status"
                 fi
               ) &
+              health_pids="$health_pids $!"
             }
             health_ok=true
+            health_pids=""
             run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 48 5
             run_health_check api "http://127.0.0.1:8001/api/health" 24 5
             run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5
-            wait
+            for health_pid in $health_pids; do
+              wait "$health_pid" || true
+            done
             for health_name in gateway api webui; do
               if [ "$(cat "$health_status_dir/$health_name.status" 2>/dev/null || echo 1)" != "0" ]; then
                 health_ok=false
