@@ -174,7 +174,7 @@ jobs:
             echo "--> Restarting production services..."
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
-                sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+                sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
                 # Restart VP workers so they pick up new code (graceful: systemd sends SIGTERM)
                 for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
                   if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
@@ -183,7 +183,7 @@ jobs:
                   fi
                 done
               else
-                systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+                systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
                 for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
                   if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
                     echo "--> Restarting VP worker: $vp_svc"
@@ -226,6 +226,8 @@ jobs:
             if command -v systemctl >/dev/null 2>&1; then
               ensure_current_venv_interpreter universal-agent-gateway
               ensure_current_venv_interpreter universal-agent-api
+              ensure_current_venv_interpreter ua-discord-cc-bot
+              ensure_current_venv_interpreter ua-discord-intelligence
             fi
 
             echo "--> Verifying production service health..."
