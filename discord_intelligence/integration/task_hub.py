@@ -1,3 +1,9 @@
+"""Task Hub integration for Discord intelligence.
+
+Provides both direct-DB functions (for task creation) and gateway-backed
+async functions (for approval/rejection actions that need concurrency safety).
+"""
+
 import logging
 import uuid
 from typing import Any
@@ -6,6 +12,7 @@ from universal_agent import task_hub
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
 from ..config import init_secrets
+from . import gateway_client
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +91,7 @@ def get_mission_status(task_id: str):
     try:
         conn = connect_runtime_db(get_activity_db_path())
         task_hub.ensure_schema(conn)
-        
+
         row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ?", (task_id,)).fetchone()
         if not row:
             return None
@@ -95,3 +102,28 @@ def get_mission_status(task_id: str):
     finally:
         if conn:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Gateway-backed async functions (for approval/rejection actions)
+# ---------------------------------------------------------------------------
+
+async def approve_task_via_gateway(
+    task_id: str, agent_id: str = "discord_operator"
+) -> dict[str, Any]:
+    """Approve a task through the gateway REST API."""
+    return await gateway_client.approve_task(task_id)
+
+
+async def reject_task_via_gateway(
+    task_id: str, reason: str = "", agent_id: str = "discord_operator"
+) -> dict[str, Any]:
+    """Reject (park) a task through the gateway REST API."""
+    return await gateway_client.task_action(
+        task_id, "park", reason=reason, agent_id=agent_id,
+    )
+
+
+async def get_review_tasks_via_gateway() -> list[dict[str, Any]]:
+    """Fetch tasks needing human review through the gateway REST API."""
+    return await gateway_client.get_review_tasks()
