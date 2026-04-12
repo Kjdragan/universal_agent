@@ -40,8 +40,8 @@ def test_deploy_workflow_restarts_python_services_on_stale_interpreter() -> None
     assert 'echo "--> Verifying Python services use current venv interpreter..."' in content
     assert 'ensure_current_venv_interpreter universal-agent-gateway' in content
     assert 'ensure_current_venv_interpreter universal-agent-api' in content
-    assert 'ensure_current_venv_interpreter ua-discord-cc-bot' in content
     assert 'ensure_current_venv_interpreter ua-discord-intelligence' in content
+    assert 'ensure_current_venv_interpreter ua-discord-cc-bot' not in content
     assert 'actual_python="$(readlink -f "/proc/$pid/exe"' in content
     assert 'expected_python="$(readlink -f "$PROD_DIR/.venv/bin/python")"' in content
     assert 'sudo systemctl restart "$service_name"' in content
@@ -69,3 +69,4 @@ def test_production_systemd_installer_manages_discord_services() -> None:
     assert '"ua-discord-intelligence.service"' in content
     deploy_content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     assert "ua-discord-cc-bot ua-discord-intelligence" in deploy_content
+    assert "systemctl is-active --quiet ua-discord-cc-bot" in deploy_content

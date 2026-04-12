@@ -12,7 +12,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=__APP_ROOT__/src:__APP_ROOT__
 Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
 EnvironmentFile=-__APP_ROOT__/.env
-ExecStart=__APP_ROOT__/.venv/bin/python -m discord_intelligence.cc_bot
+ExecStart=/usr/local/bin/uv run --with "discord.py>=2.3.0" python -m discord_intelligence.cc_bot
 Restart=always
 RestartSec=5
 

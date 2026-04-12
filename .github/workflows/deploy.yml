@@ -226,7 +226,6 @@ jobs:
             if command -v systemctl >/dev/null 2>&1; then
               ensure_current_venv_interpreter universal-agent-gateway
               ensure_current_venv_interpreter universal-agent-api
-              ensure_current_venv_interpreter ua-discord-cc-bot
               ensure_current_venv_interpreter ua-discord-intelligence
             fi
 
@@ -261,6 +260,10 @@ jobs:
             check_local_health gateway "http://127.0.0.1:8002/api/v1/health" 48 5 || health_ok=false
             check_local_health api "http://127.0.0.1:8001/api/health" 24 5 || health_ok=false
             check_local_health webui "http://127.0.0.1:3000/dashboard" 24 5 || health_ok=false
+            if command -v systemctl >/dev/null 2>&1; then
+              systemctl is-active --quiet ua-discord-cc-bot || health_ok=false
+              systemctl is-active --quiet ua-discord-intelligence || health_ok=false
+            fi
 
             if [ "$health_ok" != "true" ]; then
               echo "--> Production service health check failed; collecting diagnostics..."
