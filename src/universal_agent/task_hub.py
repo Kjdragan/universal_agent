@@ -307,6 +307,23 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ALTER TABLE task_hub_items ADD COLUMN refinement_history_json TEXT NOT NULL DEFAULT '{}'",
         # Idempotency token: prevents re-claim of completed tasks until explicitly cleared
         "ALTER TABLE task_hub_items ADD COLUMN completion_token TEXT DEFAULT NULL",
+        "ALTER TABLE task_hub_items ADD COLUMN agent_ready INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE task_hub_items ADD COLUMN score REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE task_hub_items ADD COLUMN score_confidence REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE task_hub_items ADD COLUMN stale_state TEXT NOT NULL DEFAULT 'fresh'",
+        "ALTER TABLE task_hub_items ADD COLUMN seizure_state TEXT NOT NULL DEFAULT 'unseized'",
+        "ALTER TABLE task_hub_items ADD COLUMN mirror_status TEXT NOT NULL DEFAULT 'internal'",
+        "ALTER TABLE task_hub_items ADD COLUMN incident_key TEXT",
+        "ALTER TABLE task_hub_items ADD COLUMN workstream_id TEXT",
+        "ALTER TABLE task_hub_items ADD COLUMN subtask_role TEXT",
+        "ALTER TABLE task_hub_items ADD COLUMN parent_task_id TEXT",
+        "ALTER TABLE task_hub_items ADD COLUMN must_complete INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE task_hub_items ADD COLUMN priority INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE task_hub_evaluations ADD COLUMN score REAL",
+        "ALTER TABLE task_hub_evaluations ADD COLUMN score_confidence REAL",
+        "ALTER TABLE task_hub_evaluations ADD COLUMN judge_payload_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE task_hub_dispatch_queue ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE task_hub_dispatch_queue ADD COLUMN skip_reason TEXT",
     ):
         try:
             conn.execute(ddl)
