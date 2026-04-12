@@ -18,6 +18,9 @@ APP_ROOT = BASE_DIR.parent
 DIGESTS_DIR = BASE_DIR / "digests"
 DIGESTS_DIR.mkdir(exist_ok=True)
 BRIEFINGS_DIR = Path(os.getenv("UA_DISCORD_BRIEFINGS_DIR", str(APP_ROOT / "kb" / "briefings")))
+AUTO_CREATE_DIGEST_ACTION_TASKS = str(os.getenv("UA_DISCORD_DIGEST_CREATE_TASKS", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 SYSTEM_PROMPT = """You are an event intelligence analyst.
 Review the following Discord messages and/or audio transcript captured during a scheduled event.
@@ -188,7 +191,7 @@ async def run_pipeline():
                     ''', (f"evt_{event['id']}", event['name'], digest_md[:2000], str(briefing_file)))
                     
                     action_items = digest_data.get('action_items', [])
-                    if action_items:
+                    if action_items and AUTO_CREATE_DIGEST_ACTION_TASKS:
                         from discord_intelligence.integration.task_hub import create_task_hub_mission
                         for action in action_items:
                             create_task_hub_mission(
@@ -197,6 +200,12 @@ async def run_pipeline():
                                 tags=["event-action-item", "discord"]
                             )
                             logger.info(f"Created Task Hub mission for: {action.get('title', 'Task')}")
+                    elif action_items:
+                        logger.info(
+                            "Digest generated %d action item(s) without Task Hub promotion "
+                            "(set UA_DISCORD_DIGEST_CREATE_TASKS=1 to enable).",
+                            len(action_items),
+                        )
 
                     db.execute('''
                         UPDATE scheduled_events 
