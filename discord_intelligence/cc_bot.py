@@ -11,6 +11,8 @@ from .config import init_secrets, get_db_path
 from .database import DiscordIntelligenceDB
 from .calendar_sync import sync_event_to_calendar
 from .integration.task_hub import create_task_hub_mission, get_task_hub_items, get_mission_status
+from .integration import gateway_client
+from .views.review_queue import ReviewActionView, build_review_embed
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] CC_BOT: %(message)s")
 logger = logging.getLogger("cc_bot")
 BASE_DIR = Path(__file__).resolve().parent
@@ -39,9 +41,14 @@ class CCBot(commands.Bot):
         self.db = db
 
     async def setup_hook(self):
+        # Register persistent views so buttons survive bot restarts.
+        # An empty ReviewActionView() matches any custom_id starting with "review:".
+        self.add_view(ReviewActionView())
+
+        # Track which task_ids have been posted to #review-queue to avoid duplicates.
+        self._posted_review_task_ids: set[str] = set()
+
         # Sync slash commands with Discord
-        # For a rapid iteration, it is best to sync with a specific guild but here we sync globally or locally based on usage.
-        # We will try a global sync (takes ~1 hour to appear) or manual sync command.
         try:
             logger.info("Syncing slash commands...")
             synced = await self.tree.sync()
@@ -71,6 +78,9 @@ class CCBot(commands.Bot):
         if AUTO_SYNC_CALENDAR_EVENTS and not self.auto_sync_calendar_events.is_running():
             self.auto_sync_calendar_events.start()
             logger.info("Started auto_sync_calendar_events loop")
+        if not self.poll_review_queue.is_running():
+            self.poll_review_queue.start()
+            logger.info("Started poll_review_queue loop")
 
     def _get_intel_channel(self, guild, channel_name: str):
         """Find a channel by name under the 🔬 INTELLIGENCE category."""
@@ -78,6 +88,14 @@ class CCBot(commands.Bot):
         if cat:
             return discord.utils.get(cat.channels, name=channel_name)
         return None
+
+    def _get_ops_channel(self, guild, channel_name: str):
+        """Find a channel by name under the 📋 OPERATIONS category."""
+        cat = discord.utils.get(guild.categories, name="📋 OPERATIONS")
+        if cat:
+            return discord.utils.get(cat.channels, name=channel_name)
+        # Fallback: search all channels by name
+        return discord.utils.get(guild.channels, name=channel_name)
 
     @tasks.loop(minutes=15)
     async def poll_event_digest(self):
@@ -87,6 +105,40 @@ class CCBot(commands.Bot):
             await run_pipeline()
         except Exception as e:
             logger.error(f"Event digest loop error: {e}")
+
+    @tasks.loop(seconds=90)
+    async def poll_review_queue(self):
+        """Poll Task Hub for tasks needing human review and post digest cards to #review-queue."""
+        try:
+            review_tasks = await gateway_client.get_review_tasks()
+            if not review_tasks:
+                return
+
+            new_tasks = [
+                t for t in review_tasks
+                if str(t.get("task_id") or "") not in self._posted_review_task_ids
+            ]
+            if not new_tasks:
+                return
+
+            logger.info("Posting %d new review task(s) to #review-queue", len(new_tasks))
+            for guild in self.guilds:
+                channel = self._get_ops_channel(guild, "review-queue")
+                if not channel:
+                    logger.debug("No #review-queue channel found in guild %s", guild.name)
+                    continue
+
+                for task in new_tasks:
+                    task_id = str(task.get("task_id") or "")
+                    if not task_id:
+                        continue
+                    embed = build_review_embed(task)
+                    view = ReviewActionView(task_id=task_id, task_data=task)
+                    await channel.send(embed=embed, view=view)
+                    self._posted_review_task_ids.add(task_id)
+
+        except Exception as e:
+            logger.error(f"Review queue polling error: {e}")
 
     @tasks.loop(minutes=15)
     async def auto_sync_calendar_events(self):
@@ -440,7 +492,68 @@ class CCBot(commands.Bot):
 def setup_commands(bot: CCBot):
     @bot.tree.command(name="status", description="UA system overview")
     async def status(interaction: discord.Interaction):
-        await interaction.response.send_message("System Status: All clear. Heartbeats ok.", ephemeral=False)
+        await interaction.response.defer()
+        try:
+            approvals = await gateway_client.get_approvals_highlight()
+            queue_data = await gateway_client.get_dispatch_queue(limit=5)
+
+            pending_count = approvals.get("pending_count", 0)
+            queue_items = queue_data.get("items", [])
+            queue_total = queue_data.get("total", len(queue_items))
+
+            color = discord.Color.green()
+            if pending_count > 3:
+                color = discord.Color.orange()
+            if pending_count > 10:
+                color = discord.Color.red()
+
+            embed = discord.Embed(
+                title="\U0001f3d7\ufe0f UA System Status",
+                color=color,
+                timestamp=datetime.utcnow(),
+            )
+            embed.add_field(
+                name="Pending Reviews",
+                value=f"{pending_count} task{'s' if pending_count != 1 else ''} awaiting approval",
+                inline=True,
+            )
+            embed.add_field(
+                name="Dispatch Queue",
+                value=f"{queue_total} task{'s' if queue_total != 1 else ''} queued",
+                inline=True,
+            )
+            embed.set_footer(text="Universal Agent")
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            logger.error(f"/status command error: {e}")
+            await interaction.followup.send(f"Failed to fetch status: {e}")
+
+    @bot.tree.command(name="queue", description="Show tasks pending human review")
+    @app_commands.describe(limit="Max items to show")
+    async def queue(interaction: discord.Interaction, limit: int = 10):
+        await interaction.response.defer()
+        try:
+            review_tasks = await gateway_client.get_review_tasks()
+            if not review_tasks:
+                await interaction.followup.send("No tasks pending review.")
+                return
+            review_tasks = review_tasks[:limit]
+            lines = []
+            for t in review_tasks:
+                tid = str(t.get("task_id") or "?")[:12]
+                title = str(t.get("title") or "Untitled")[:60]
+                status = str(t.get("status") or "?")
+                lines.append(f"`{tid}` [{status}] {title}")
+            reply = "\n".join(lines)
+            embed = discord.Embed(
+                title=f"\U0001f4cb Pending Review ({len(review_tasks)})",
+                description=reply,
+                color=discord.Color.orange(),
+            )
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            logger.error(f"/queue command error: {e}")
+            await interaction.followup.send(f"Failed to fetch review queue: {e}")
 
     @bot.tree.command(name="task_add", description="Create Task Hub item")
     @app_commands.describe(description="Task text", priority="Priority 1-5")
