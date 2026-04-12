@@ -18,4 +18,5 @@ keywords:
   
 scheduling:
   triage_interval_minutes: 60
+  event_poll_interval_minutes: 30
   briefing_time: "08:00"

@@ -159,6 +159,10 @@ jobs:
             # Set deployment-window flag so CSI canary suppresses SLO alerts during restart
             echo "--> Setting deployment-window flag..."
             touch /tmp/ua-deployment-window
+            cleanup_deployment_window() {
+              rm -f /tmp/ua-deployment-window
+            }
+            trap cleanup_deployment_window EXIT
             # Schedule automatic cleanup of the flag after 25 minutes (covers worst-case startup)
             (sleep 1500 && rm -f /tmp/ua-deployment-window) </dev/null >/dev/null 2>&1 &
 
@@ -269,7 +273,8 @@ jobs:
 
             # Clear the deployment-window flag once services have restarted
             echo "--> Clearing deployment-window flag..."
-            rm -f /tmp/ua-deployment-window
+            cleanup_deployment_window
+            trap - EXIT
             
             echo "Deployment to Production complete!"
           EOF

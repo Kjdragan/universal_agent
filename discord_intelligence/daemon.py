@@ -20,6 +20,18 @@ logger = logging.getLogger("discord_daemon")
 AUTO_CREATE_RELEASE_TASKS = str(os.getenv("UA_DISCORD_AUTO_CREATE_RELEASE_TASKS", "0")).strip().lower() in {
     "1", "true", "yes", "on",
 }
+TEXT_EVENT_FALLBACK_ENABLED = str(os.getenv("UA_DISCORD_TEXT_EVENT_FALLBACK_ENABLED", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
+TRIAGE_TIERS = {
+    tier.strip().upper()
+    for tier in os.getenv("UA_DISCORD_TRIAGE_TIERS", "A").split(",")
+    if tier.strip()
+}
+TRIAGE_BATCH_LIMIT = max(1, int(os.getenv("UA_DISCORD_TRIAGE_BATCH_LIMIT", "50") or 50))
+SEND_SIMONE_ALERTS = str(os.getenv("UA_DISCORD_SEND_SIMONE_ALERTS", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Base recordings directory (relative to discord_intelligence package)
 import pathlib
@@ -45,11 +57,12 @@ class DiscordIntelligenceClient(discord.Client):
     @tasks.loop(minutes=CONFIG.get("scheduling", {}).get("triage_interval_minutes", 60))
     async def run_triage_jobs(self):
         logger.info("Running periodic LLM triage batches...")
-        # Get all channels we monitor
-        channels = self.db.get_tier_channels("C") + self.db.get_tier_channels("B")
+        channels = []
+        for tier in sorted(TRIAGE_TIERS):
+            channels.extend(self.db.get_tier_channels(tier))
         for ch in channels:
             try:
-                await run_triage_batch(self.db, ch["id"])
+                await run_triage_batch(self.db, ch["id"], limit=TRIAGE_BATCH_LIMIT)
             except Exception as e:
                 logger.error(f"Failed triage for {ch['name']}: {e}")
 
@@ -194,7 +207,7 @@ class DiscordIntelligenceClient(discord.Client):
             # Primary event discovery comes from the structured API (poll + gateway).
             # We still store text-derived events as a fallback for announcements that
             # reference events without creating a Discord Scheduled Event.
-            if sig["rule_matched"] == "text_event_detected":
+            if sig["rule_matched"] == "text_event_detected" and TEXT_EVENT_FALLBACK_ENABLED:
                 self._upsert_event_from_text(message)
 
             # Immediately trigger UA workflow if high severity
@@ -224,13 +237,20 @@ class DiscordIntelligenceClient(discord.Client):
                             message.id,
                         )
                 else:
-                    # Alert Simone
-                    # Dispatched softly via asyncio.create_task to not block discord event loop
-                    asyncio.create_task(send_simone_alert(
-                        subject=f"Discord Alert - {message.guild.name}",
-                        message=f"Signal: {sig['rule_matched']}\n\n{message.content}\n\n{message.jump_url}",
-                        is_urgent=True
-                    ))
+                    if SEND_SIMONE_ALERTS:
+                        asyncio.create_task(send_simone_alert(
+                            subject=f"Discord Alert - {message.guild.name}",
+                            message=f"Signal: {sig['rule_matched']}\n\n{message.content}\n\n{message.jump_url}",
+                            is_urgent=True
+                        ))
+                    else:
+                        logger.info(
+                            "Passive Discord high-severity signal stored without Simone alert "
+                            "(set UA_DISCORD_SEND_SIMONE_ALERTS=1 to enable): rule=%s guild=%s message=%s",
+                            sig["rule_matched"],
+                            message.guild.name,
+                            message.id,
+                        )
 
     def _upsert_event_from_text(self, message: discord.Message):
         """

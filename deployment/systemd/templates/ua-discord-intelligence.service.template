@@ -1,5 +1,5 @@
 [Unit]
-Description=Universal Agent - Command and Control Discord Bot
+Description=Universal Agent - Discord Intelligence Daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -11,10 +11,11 @@ WorkingDirectory=__APP_ROOT__
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=__APP_ROOT__/src:__APP_ROOT__
 Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+Environment=UA_DISCORD_AUTO_CREATE_RELEASE_TASKS=0
 EnvironmentFile=-__APP_ROOT__/.env
-ExecStart=__APP_ROOT__/.venv/bin/python -m discord_intelligence.cc_bot
+ExecStart=__APP_ROOT__/.venv/bin/python -m discord_intelligence.daemon
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

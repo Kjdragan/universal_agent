@@ -5,6 +5,7 @@ from pathlib import Path
 
 _DEPLOY_WORKFLOW = Path(".github/workflows/deploy.yml")
 _RUNTIME_HELPER = Path("scripts/deploy_validate_runtime.sh")
+_SYSTEMD_INSTALLER = Path("scripts/install_vps_systemd_units.sh")
 
 
 def test_runtime_helper_repairs_unreadable_stale_venv_before_uv_sync() -> None:
@@ -47,6 +48,7 @@ def test_deploy_workflow_restarts_python_services_on_stale_interpreter() -> None
 def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
     content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
+    assert "trap cleanup_deployment_window EXIT" in content
     assert 'echo "--> Verifying production service health..."' in content
     assert 'check_local_health gateway "http://127.0.0.1:8002/api/v1/health"' in content
     assert 'check_local_health api "http://127.0.0.1:8001/api/health"' in content
@@ -54,3 +56,12 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
     assert 'echo "::error::$name did not become healthy at $url"' in content
     assert "sudo journalctl -u universal-agent-gateway -n 120 --no-pager" in content
     assert 'exit 1' in content
+
+
+def test_production_systemd_installer_manages_discord_services() -> None:
+    content = _SYSTEMD_INSTALLER.read_text(encoding="utf-8")
+
+    assert "ua-discord-cc-bot.service.template" in content
+    assert "ua-discord-intelligence.service.template" in content
+    assert '"ua-discord-cc-bot.service"' in content
+    assert '"ua-discord-intelligence.service"' in content

@@ -146,6 +146,12 @@ class DiscordIntelligenceDB:
             # Digest event columns
             self._migrate_add_column(conn, 'scheduled_events', 'digest_generated', 'BOOLEAN DEFAULT 0')
             self._migrate_add_column(conn, 'scheduled_events', 'digest_content', 'TEXT')
+            # Calendar automation columns
+            self._migrate_add_column(conn, 'scheduled_events', 'calendar_sync_status', "TEXT DEFAULT 'pending'")
+            self._migrate_add_column(conn, 'scheduled_events', 'calendar_event_id', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'calendar_synced_at', 'TIMESTAMP')
+            self._migrate_add_column(conn, 'scheduled_events', 'calendar_sync_error', 'TEXT')
+            self._migrate_add_column(conn, 'scheduled_events', 'discord_event_url', 'TEXT')
 
     @staticmethod
     def _migrate_add_column(conn, table: str, column: str, typedef: str):
@@ -248,28 +254,121 @@ class DiscordIntelligenceDB:
     def upsert_scheduled_event(self, event_id: str, server_id: str, name: str, description: str, 
                                start_time: datetime, end_time: datetime, location: str, status: str,
                                entity_type: str = None, channel_id: str = None,
-                               creator_name: str = None, user_count: int = 0):
+                               creator_name: str = None, user_count: int = 0,
+                               discord_event_url: str = None):
         with self._get_conn() as conn:
             end_val = end_time.isoformat() if end_time else None
             start_val = start_time.isoformat() if start_time else None
             conn.execute('''
                 INSERT INTO scheduled_events (id, server_id, name, description, start_time, end_time,
-                                              location, status, entity_type, channel_id, creator_name, user_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                              location, status, entity_type, channel_id, creator_name, user_count,
+                                              discord_event_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET 
                     name=excluded.name, description=excluded.description,
                     start_time=excluded.start_time, end_time=excluded.end_time,
                     location=excluded.location, status=excluded.status,
                     entity_type=excluded.entity_type, channel_id=excluded.channel_id,
-                    creator_name=excluded.creator_name, user_count=excluded.user_count
+                    creator_name=excluded.creator_name, user_count=excluded.user_count,
+                    discord_event_url=COALESCE(excluded.discord_event_url, scheduled_events.discord_event_url)
             ''', (event_id, server_id, name, description, start_val, end_val, location, status,
-                  entity_type, channel_id, creator_name, user_count))
+                  entity_type, channel_id, creator_name, user_count, discord_event_url))
             conn.commit()
 
     def mark_event_notified(self, event_id: str):
         with self._get_conn() as conn:
             conn.execute('UPDATE scheduled_events SET notified = 1 WHERE id = ?', (event_id,))
             conn.commit()
+
+    def get_calendar_sync_candidates(self, limit: int = 10) -> list[dict]:
+        """Return upcoming structured events that should be synced to calendar."""
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT ev.*, srv.name AS server_name, ch.name AS channel_name
+                FROM scheduled_events ev
+                LEFT JOIN servers srv ON srv.id = ev.server_id
+                LEFT JOIN channels ch ON ch.id = ev.channel_id
+                WHERE COALESCE(ev.calendar_sync_status, 'pending') IN ('pending', '')
+                  AND LOWER(COALESCE(ev.status, '')) = 'scheduled'
+                  AND COALESCE(ev.entity_type, '') IN ('stage_instance', 'voice', 'external')
+                  AND ev.start_time IS NOT NULL
+                  AND ev.start_time >= datetime('now', '-1 hour')
+                ORDER BY ev.start_time ASC
+                LIMIT ?
+            ''', (max(1, int(limit)),))
+            return [dict(row) for row in cur.fetchall()]
+
+    def mark_event_calendar_synced(self, event_id: str, calendar_event_id: str, synced_at: str):
+        with self._get_conn() as conn:
+            conn.execute(
+                '''
+                UPDATE scheduled_events
+                SET calendar_sync_status = 'synced',
+                    calendar_event_id = ?,
+                    calendar_synced_at = ?,
+                    calendar_sync_error = NULL
+                WHERE id = ?
+                ''',
+                (calendar_event_id, synced_at, event_id),
+            )
+            conn.commit()
+
+    def mark_event_calendar_failed(self, event_id: str, error: str):
+        with self._get_conn() as conn:
+            conn.execute(
+                '''
+                UPDATE scheduled_events
+                SET calendar_sync_status = 'failed',
+                    calendar_sync_error = ?
+                WHERE id = ?
+                ''',
+                (str(error or '')[:1000], event_id),
+            )
+            conn.commit()
+
+    def update_channel_config(self, channel_id: str, *, tier: str = None, is_active: bool | None = None):
+        updates = []
+        params = []
+        if tier is not None:
+            normalized = str(tier or '').strip().upper()
+            if normalized not in {'A', 'B', 'C', 'D', 'MUTED'}:
+                raise ValueError(f"Unsupported channel tier: {tier}")
+            updates.append('tier = ?')
+            params.append(normalized)
+        if is_active is not None:
+            updates.append('is_active = ?')
+            params.append(1 if is_active else 0)
+        if not updates:
+            return
+        params.append(str(channel_id))
+        with self._get_conn() as conn:
+            conn.execute(f"UPDATE channels SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+
+    def channel_overview(self, limit: int = 500) -> list[dict]:
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT
+                    ch.id,
+                    ch.server_id,
+                    srv.name AS server_name,
+                    ch.name,
+                    ch.category,
+                    ch.tier,
+                    ch.is_active,
+                    COUNT(DISTINCT m.id) AS messages_total,
+                    SUM(CASE WHEN COALESCE(m.processed_by_triage, 0) = 0 THEN 1 ELSE 0 END) AS unprocessed_total,
+                    COUNT(DISTINCT s.id) AS signals_total,
+                    MAX(m.timestamp) AS last_message_at
+                FROM channels ch
+                LEFT JOIN servers srv ON srv.id = ch.server_id
+                LEFT JOIN messages m ON m.channel_id = ch.id
+                LEFT JOIN signals s ON s.message_id = m.id
+                GROUP BY ch.id
+                ORDER BY srv.name COLLATE NOCASE, ch.category COLLATE NOCASE, ch.name COLLATE NOCASE
+                LIMIT ?
+            ''', (max(1, int(limit)),))
+            return [dict(row) for row in cur.fetchall()]
 
     def get_unnotified_signals(self, limit: int = 20):
         """Get signals that haven't been posted to Discord yet."""
@@ -402,4 +501,3 @@ class DiscordIntelligenceDB:
                 ORDER BY start_time ASC
             ''', (cutoff_iso,))
             return [dict(row) for row in cur.fetchall()]
-

@@ -36,7 +36,7 @@ The `deploy.yml` workflow applies to our single environment.
 | Web UI Port | `3000` |
 | Web UI URL | `https://app.clearspringcg.com` (Public) <br> `https://uaonvps` (Tailnet) |
 | API URL | `https://api.clearspringcg.com` (Public) <br> `https://uaonvps:8443` (Tailnet) |
-| Service Restart Strategy | Deploy installs repo-managed production systemd units plus the VP worker unit template, runs centralized runtime preflight, performs one clean `.venv` rebuild if preflight fails after the first sync, then restarts gateway/api/webui/telegram plus VP workers |
+| Service Restart Strategy | Deploy installs repo-managed production systemd units plus Discord and VP worker unit templates, runs centralized runtime preflight, performs one clean `.venv` rebuild if preflight fails after the first sync, then restarts gateway/api/webui/telegram plus VP workers |
 | Post-Deploy Health | See `ci_cd_pipeline.md` > Post-Deploy Health Verification |
 | Secrets Behavior | Bootstrap `.env` for stage `production`; webui `.env.local` rendered from Infisical by deploy |
 
@@ -75,7 +75,7 @@ The deployed VPS lane is also the default runtime for the YouTube tutorial pipel
 
 The base systemd units for deployed application services are part of the repository and are installed on every deploy from templates under `deployment/systemd/templates/`.
 
-- Production deploy renders the canonical units for `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, `universal-agent-telegram`, and the VP worker template against the active checkout path (`/opt/universal_agent` or fallback `/opt/universal_agent_repo`).
+- Production deploy renders the canonical units for `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, `universal-agent-telegram`, Discord services, and the VP worker template against the active checkout path (`/opt/universal_agent` or fallback `/opt/universal_agent_repo`).
 - This prevents host-local systemd drift from silently pinning a service to an old checkout, stale working directory, or missing `EnvironmentFile`.
 - The managed Python service units pin `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so Logfire's optional Pydantic plugin cannot auto-load during startup and turn observability into a hard startup dependency.
 - Runtime availability and tracing integrity are now separate concerns by design:

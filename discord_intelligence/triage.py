@@ -69,11 +69,11 @@ def _parse_llm_json(raw_text: str) -> dict | None:
     return None
 
 
-async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str):
+async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str, limit: int = 50):
     """
     Looks for unprocessed messages in a channel, runs LLM analysis to extract insights.
     """
-    unprocessed = db.get_unprocessed_messages(channel_id, limit=200)
+    unprocessed = db.get_unprocessed_messages(channel_id, limit=max(1, int(limit)))
     if not unprocessed:
         return
         
@@ -143,4 +143,3 @@ async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str):
 
     # Mark as processed
     db.mark_messages_processed([m["id"] for m in unprocessed])
-

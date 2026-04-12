@@ -15762,6 +15762,164 @@ async def dashboard_summary():
     }
 
 
+def _discord_intelligence_db_path() -> Path:
+    return BASE_DIR / "discord_intelligence" / "discord_intelligence.db"
+
+
+def _discord_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_discord_intelligence_db_path()))
+    conn.row_factory = sqlite3.Row
+    try:
+        from discord_intelligence.database import DiscordIntelligenceDB
+
+        DiscordIntelligenceDB(str(_discord_intelligence_db_path()))
+    except Exception as exc:
+        logger.warning("Discord intelligence schema init failed: %s", exc)
+    return conn
+
+
+def _discord_row(row: sqlite3.Row | None) -> dict[str, Any]:
+    return dict(row) if row is not None else {}
+
+
+@app.get("/api/v1/dashboard/discord/overview")
+async def dashboard_discord_overview(request: Request):
+    _require_ops_auth(request)
+    db_path = _discord_intelligence_db_path()
+    if not db_path.exists():
+        return {"status": "unavailable", "detail": "Discord intelligence database not found"}
+    conn = _discord_connect()
+    try:
+        def count(table: str, where: str = "", params: tuple[Any, ...] = ()) -> int:
+            sql = f"SELECT COUNT(*) AS c FROM {table} {where}"
+            try:
+                return int(conn.execute(sql, params).fetchone()["c"] or 0)
+            except Exception:
+                return 0
+
+        signal_rows = conn.execute(
+            """
+            SELECT severity, rule_matched, COUNT(*) AS count
+            FROM signals
+            WHERE created_at >= datetime('now', '-24 hours')
+            GROUP BY severity, rule_matched
+            ORDER BY count DESC
+            LIMIT 12
+            """
+        ).fetchall()
+        insight_rows = conn.execute(
+            """
+            SELECT urgency, sentiment, notified, COUNT(*) AS count
+            FROM insights
+            WHERE created_at >= datetime('now', '-24 hours')
+            GROUP BY urgency, sentiment, notified
+            ORDER BY count DESC
+            LIMIT 12
+            """
+        ).fetchall()
+        upcoming_events = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM scheduled_events
+            WHERE start_time >= datetime('now', '-1 hour')
+              AND LOWER(COALESCE(status, '')) = 'scheduled'
+              AND COALESCE(entity_type, '') IN ('stage_instance', 'voice', 'external')
+            """
+        ).fetchone()
+        return {
+            "status": "ok",
+            "db_path": str(db_path),
+            "counts": {
+                "servers": count("servers"),
+                "channels": count("channels"),
+                "active_channels": count("channels", "WHERE is_active = 1"),
+                "messages_24h": count("messages", "WHERE timestamp >= datetime('now', '-24 hours')"),
+                "unprocessed_messages": count("messages", "WHERE COALESCE(processed_by_triage, 0) = 0"),
+                "signals_24h": count("signals", "WHERE created_at >= datetime('now', '-24 hours')"),
+                "unhandled_signals": count("signals", "WHERE action_taken IS NULL OR action_taken = ''"),
+                "insights_24h": count("insights", "WHERE created_at >= datetime('now', '-24 hours')"),
+                "unnotified_insights": count("insights", "WHERE COALESCE(notified, 0) = 0"),
+                "upcoming_structured_events": int(upcoming_events["c"] if upcoming_events is not None else 0),
+            },
+            "signal_breakdown_24h": [_discord_row(row) for row in signal_rows],
+            "insight_breakdown_24h": [_discord_row(row) for row in insight_rows],
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/dashboard/discord/events")
+async def dashboard_discord_events(
+    request: Request,
+    limit: int = 10,
+    include_text_candidates: bool = False,
+):
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        entity_filter = "('stage_instance', 'voice', 'external')"
+        extra = "" if include_text_candidates else f"AND COALESCE(ev.entity_type, '') IN {entity_filter}"
+        rows = conn.execute(
+            f"""
+            SELECT
+                ev.*,
+                srv.name AS server_name,
+                ch.name AS channel_name
+            FROM scheduled_events ev
+            LEFT JOIN servers srv ON srv.id = ev.server_id
+            LEFT JOIN channels ch ON ch.id = ev.channel_id
+            WHERE ev.start_time IS NOT NULL
+              AND ev.start_time >= datetime('now', '-1 day')
+              {extra}
+            ORDER BY ev.start_time ASC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        ).fetchall()
+        return {"status": "ok", "events": [_discord_row(row) for row in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/v1/dashboard/discord/channels")
+async def dashboard_discord_channels(request: Request, limit: int = 1000):
+    _require_ops_auth(request)
+    try:
+        from discord_intelligence.database import DiscordIntelligenceDB
+
+        db = DiscordIntelligenceDB(str(_discord_intelligence_db_path()))
+        rows = db.channel_overview(limit=max(1, min(int(limit), 5000)))
+    except Exception as exc:
+        logger.exception("Failed loading Discord channel overview")
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "ok", "channels": rows}
+
+
+class DiscordChannelUpdateRequest(BaseModel):
+    tier: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@app.patch("/api/v1/dashboard/discord/channels/{channel_id}")
+async def dashboard_discord_update_channel(
+    request: Request,
+    channel_id: str,
+    payload: DiscordChannelUpdateRequest,
+):
+    _require_ops_auth(request)
+    try:
+        from discord_intelligence.database import DiscordIntelligenceDB
+
+        db = DiscordIntelligenceDB(str(_discord_intelligence_db_path()))
+        db.update_channel_config(channel_id, tier=payload.tier, is_active=payload.is_active)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Failed updating Discord channel config")
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "ok", "channel_id": channel_id}
+
+
 @app.get("/api/v1/dashboard/csi/reports")
 async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = False):
     def _reports_from_notifications(max_items: int) -> list[dict[str, Any]]:

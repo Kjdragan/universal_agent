@@ -77,6 +77,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: "Intelligence",
     items: [
       { href: "/dashboard/events", label: "Events", icon: Bell },
+      { href: "/dashboard/discord", label: "Discord Intel", icon: Radio },
       { href: "/dashboard/csi", label: "CSI Feed", icon: Radio },
       { href: "/dashboard/tutorials", label: "Tutorials", icon: GraduationCap },
     ],

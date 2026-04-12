@@ -69,7 +69,7 @@ Deploy workflows own both the application checkout and the base systemd units th
 
 - Canonical unit templates live under `deployment/systemd/templates/`.
 - `scripts/install_vps_systemd_units.sh` renders those templates against the active checkout path and installs them into `/etc/systemd/system/`.
-- Production deploy installs `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, and `universal-agent-telegram` along with VP workers.
+- Production deploy installs `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, `universal-agent-telegram`, `ua-discord-cc-bot`, and `ua-discord-intelligence` along with VP workers.
 - Gateway/API stack-limit drop-ins are installed alongside the rendered base units during the same step.
 
 This is intentional: deploys must not rely on manually created host-only base units whose `WorkingDirectory`, `ExecStart`, or `EnvironmentFile` can drift from the checked-out release.
