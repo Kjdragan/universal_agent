@@ -5874,6 +5874,8 @@ class HooksService:
                 "Create required baseline artifacts first (manifest.json, README.md, CONCEPT.md).",
                 "Only create runnable implementation artifacts when transcript+metadata confirm software/coding content.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
+                "CRITICAL FORMATTING INSTRUCTION: Format README.md and CONCEPT.md beautifully for the UI.",
+                "Use well-structured markdown (clear headings, bullet lists, bold emphasis), provide generous breathing room/spacing between paragraphs, and prioritize a visually calm, premium typography structure that is easy on the eyes to read.",
             ]
             if payload_video_id or payload_video_url:
                 extra_lines.extend(
