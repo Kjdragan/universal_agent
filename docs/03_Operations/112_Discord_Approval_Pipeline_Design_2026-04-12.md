@@ -29,7 +29,7 @@ A comprehensive codebase investigation (April 2026) revealed the Discord infrast
 ### 2.1 Deployed Components (No Work Needed)
 
 | Component | File | Service |
-|-----------|------|---------|
+|-----------|------|--------|
 | Intelligence Daemon (45+ servers, Layer 1-3) | `discord_intelligence/daemon.py` | `ua-discord-intelligence.service` |
 | CC Bot (15+ slash commands, feed channels) | `discord_intelligence/cc_bot.py` | `ua-discord-cc-bot.service` |
 | SQLite DB (messages, signals, insights, events) | `discord_intelligence/database.py` | — |
@@ -299,7 +299,7 @@ Existing direct-DB functions (`create_task_hub_mission`, `get_task_hub_items`, `
 ### New Environment Variables
 
 | Variable | Purpose | Default |
-|----------|---------|---------|
+|----------|---------|--------|
 | `UA_GATEWAY_URL` | Gateway base URL for REST API calls | (required, already set for Telegram) |
 | `UA_INTERNAL_API_TOKEN` | Service-to-service auth | (required, already set) |
 | `UA_DISCORD_REVIEW_POLL_SECONDS` | Review queue poll interval | `90` |
