@@ -42,5 +42,21 @@ git push origin main
 # 4. Cleanup
 echo "🧹 Returning to original branch ($CURRENT_BRANCH)..."
 git checkout $CURRENT_BRANCH
-echo "✅ Deployment triggered! You can check the progress in the GitHub Actions tab."
+
+# 5. Verify deployment completion
+echo "👀 Waiting for GitHub Actions deployment to finish..."
+sleep 5 # Give GHA a moment to start the workflow
+
+# Prevent interactive prompts or colors from mangling output inside the script
+export NO_COLOR=1
+export GH_NO_UPDATE_NOTIFIER=1
+
+LATEST_RUN=$(gh run list --branch main --limit 1 --json databaseId -q ".[0].databaseId" | tr -dc '0-9')
+if [ -n "$LATEST_RUN" ]; then
+    echo "Watching pipeline run: $LATEST_RUN"
+    gh run watch $LATEST_RUN --exit-status
+    echo "🎯 Deployment successfully completed and verified!"
+else
+    echo "⚠️ Could not find a running GHA deployment. Please manually verify."
+fi
 ```
