@@ -51,3 +51,15 @@ def test_calendar_insert_command_uses_events_insert_json(monkeypatch):
     assert "--params" in cmd
     assert "--json" in cmd
     assert cmd[cmd.index("--json") + 1] == '{"summary": "Office Hours"}'
+
+
+def test_gws_subprocess_env_removes_blank_credential_overrides(monkeypatch):
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE", "")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER", "   ")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_TOKEN", "token-value")
+
+    env = calendar_sync.gws_subprocess_env()
+
+    assert "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE" not in env
+    assert "GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER" not in env
+    assert env["GOOGLE_WORKSPACE_CLI_TOKEN"] == "token-value"

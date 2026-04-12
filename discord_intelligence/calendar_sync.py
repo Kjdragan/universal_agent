@@ -94,6 +94,18 @@ def calendar_insert_command(payload: dict) -> list[str]:
     ]
 
 
+def gws_subprocess_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for key in (
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE",
+        "GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER",
+        "GOOGLE_WORKSPACE_CLI_TOKEN",
+    ):
+        if not env.get(key, "").strip():
+            env.pop(key, None)
+    return env
+
+
 async def sync_event_to_calendar(db: DiscordIntelligenceDB, event: dict) -> tuple[bool, str]:
     event_id = str(event.get("id") or "").strip()
     if not event_id:
@@ -105,6 +117,7 @@ async def sync_event_to_calendar(db: DiscordIntelligenceDB, event: dict) -> tupl
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=gws_subprocess_env(),
         )
         stdout, stderr = await proc.communicate()
     except Exception as exc:
