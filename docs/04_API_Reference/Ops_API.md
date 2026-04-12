@@ -8,13 +8,16 @@ It runs on **port 8002** by default (configurable via `UA_GATEWAY_PORT`).
 
 The gateway server provides:
 
-- **Live Session Management**: Create, resume, and manage live agent sessions
+- **Live Session Management**: Create, resume, preview, and manage live agent sessions with policy and budget controls
 - **Durable Run Management**: Inspect run workspaces, run state, and attempts
 - **Real-time Streaming**: WebSocket endpoints for live event streaming
-- **Ops Administration**: Factory registration, VP mission control, cron jobs, hooks
-- **Dashboard APIs**: CSI digests, notifications, events, approvals, activity, tutorials
-- **Health & Readiness**: Liveness probes for orchestration
-- **Integration Endpoints**: YouTube ingest, signals ingest, Telegram ops, AgentMail
+- **Ops Administration**: Factory registration, VP mission control, cron jobs, hooks, skills, and models
+- **Dashboard APIs**: CSI (digests, reports, briefings, health, SLO, specialist loops), notifications, events, approvals, activity, tutorials, Task Hub, pipeline metrics, Discord, supervisors, freelance pipeline
+- **AgentMail Operations**: Full inbox management, thread browsing, draft creation, inbox queue control
+- **Calendar and Scheduling**: Event management, change requests, nudge-overdue, SSE streaming
+- **Health & Readiness**: Liveness probes, heartbeat wake, system health, telemetry briefings
+- **Integration Endpoints**: YouTube ingest, signals ingest, Telegram ops, vision describe
+- **File and Artifact Browsing**: Session file browsing, artifact directory, file upload
 
 ```mermaid
 graph LR
@@ -23,6 +26,9 @@ graph LR
     API --> Service[HeartbeatService]
     API --> Service[CronService]
     API --> Service[HooksService]
+    API --> AMail[AgentMail Service]
+    API --> Cal[Calendar Service]
+    API --> CSI[CSI Supervisor]
     API --> Disk[Workspaces & Logs]
     API --> Redis[Mission Bus]
     API --> SQLite[State DB]
@@ -364,7 +370,196 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/sessions/{id}/archive` | POST | Archive session |
 | `/api/v1/ops/sessions/{id}/cancel` | POST | Cancel running session |
 
-## 15. Environment Variables
+## 15. Session Lifecycle Extensions
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/sessions/{id}/resume` | POST | Resume a paused or disconnected session |
+| `/api/v1/sessions/{id}/policy` | GET | Get session execution policy (timeout, budget) |
+| `/api/v1/sessions/{id}/pending` | GET | Check for pending approval or input on session |
+| `/api/v1/ops/sessions/{id}/preview` | GET | Preview session workspace contents without full load |
+| `/api/v1/ops/sessions/cancel` | POST | Cancel a running session by query params |
+| `/api/v1/ops/sessions/purge-stale` | POST | Bulk purge stale sessions past TTL |
+| `/api/v1/ops/sessions/csi/purge` | POST | Purge CSI-related session artifacts |
+
+## 16. Runs and Attempts
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/runs` | GET | List durable runs |
+| `/api/v1/runs/{id}` | GET | Get durable run details |
+| `/api/v1/runs/{id}/attempts` | GET | List attempts for a run |
+
+## 17. Dashboard Task Hub (ToDo)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/todolist/overview` | GET | Task Hub overview (counts by lane) |
+| `/api/v1/dashboard/todolist/personal-queue` | GET | Personal task queue for authenticated owner |
+| `/api/v1/dashboard/todolist/agent-queue` | GET | Agent-visible dispatch queue |
+| `/api/v1/dashboard/todolist/agent-activity` | GET | Agent activity feed |
+| `/api/v1/dashboard/todolist/morning-report` | GET | Morning report summary |
+| `/api/v1/dashboard/todolist/email-tasks` | GET | Email-sourced tasks |
+| `/api/v1/dashboard/todolist/completed` | GET | Completed tasks |
+| `/api/v1/dashboard/todolist/completed/{id}` | DELETE | Delete completed task |
+| `/api/v1/dashboard/todolist/tasks` | POST | Create new task |
+| `/api/v1/dashboard/todolist/tasks/{id}/action` | POST | Execute task action |
+| `/api/v1/dashboard/todolist/tasks/{id}/dispatch` | POST | Dispatch task to agent |
+| `/api/v1/dashboard/todolist/tasks/{id}/approve` | POST | Approve task |
+| `/api/v1/dashboard/todolist/tasks/{id}/decompose` | POST | Decompose task into subtasks |
+| `/api/v1/dashboard/todolist/tasks/{id}/refine` | POST | Trigger brainstorm refinement |
+| `/api/v1/dashboard/todolist/tasks/{id}/subtasks` | GET | List subtasks |
+| `/api/v1/dashboard/todolist/tasks/{id}/complete-subtask` | POST | Complete a subtask |
+| `/api/v1/dashboard/todolist/tasks/{id}/questions` | GET | Get refinement questions |
+| `/api/v1/dashboard/todolist/tasks/{id}/answer-question` | POST | Answer refinement question |
+| `/api/v1/dashboard/todolist/tasks/{id}/refinement-state` | GET | Get refinement pipeline state |
+| `/api/v1/dashboard/todolist/tasks/{id}/history` | GET | Task execution history |
+| `/api/v1/dashboard/todolist/dispatch-queue` | GET | Dispatch queue state |
+| `/api/v1/dashboard/todolist/dispatch-queue/rebuild` | POST | Rebuild dispatch queue |
+
+## 18. Dashboard Pipeline and Agent Metrics
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/summary` | GET | High-level system summary |
+| `/api/v1/dashboard/capacity` | GET | Agent capacity governor state |
+| `/api/v1/dashboard/pipeline-stats` | GET | Pipeline throughput statistics |
+| `/api/v1/dashboard/proactive-pipeline` | GET | Proactive pipeline phases and status |
+| `/api/v1/dashboard/agent-assignments` | GET | Current agent-to-task assignments |
+| `/api/v1/dashboard/agent-metrics` | GET | Per-agent performance metrics |
+| `/api/v1/dashboard/human-actions/highlight` | GET | Highlighted human action items |
+| `/api/v1/dashboard/metrics/coder-vp` | GET | Coder VP mission metrics |
+| `/api/v1/dashboard/freelance/pipeline` | GET | Freelance pipeline status and jobs |
+
+## 19. Dashboard CSI Extended
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/csi/reports` | GET | List CSI reports |
+| `/api/v1/dashboard/csi/briefings` | GET | List CSI briefings |
+| `/api/v1/dashboard/csi/health` | GET | CSI source health overview |
+| `/api/v1/dashboard/csi/delivery-health` | GET | CSI delivery reliability metrics |
+| `/api/v1/dashboard/csi/reliability-slo` | GET | CSI reliability SLO tracking |
+| `/api/v1/dashboard/csi/opportunities` | GET | CSI opportunity signals |
+| `/api/v1/dashboard/csi/specialist-loops` | GET | CSI specialist loop status |
+| `/api/v1/dashboard/csi/specialist-loops/{key}/action` | POST | Execute specialist loop action |
+| `/api/v1/dashboard/csi/specialist-loops/triage` | POST | Triage specialist loop topics |
+| `/api/v1/dashboard/csi/specialist-loops/cleanup` | POST | Cleanup stale specialist loops |
+| `/api/v1/dashboard/csi/digests/{id}` | DELETE | Delete individual digest |
+| `/api/v1/dashboard/csi/digests` | DELETE | Bulk delete all digests |
+
+## 20. Dashboard Discord
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/discord/overview` | GET | Discord bot overview and status |
+| `/api/v1/dashboard/discord/events` | GET | Discord event log |
+| `/api/v1/dashboard/discord/channels` | GET | List Discord channels |
+| `/api/v1/dashboard/discord/channels/{id}` | PATCH | Update Discord channel config |
+
+## 21. Dashboard Supervisors
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/supervisors/registry` | GET | List registered supervisors |
+| `/api/v1/dashboard/supervisors/{id}/snapshot` | GET | Get supervisor state snapshot |
+| `/api/v1/dashboard/supervisors/{id}/run` | POST | Trigger supervisor run |
+| `/api/v1/dashboard/supervisors/{id}/runs` | GET | List supervisor run history |
+
+## 22. AgentMail Extended Ops
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/agentmail/send` | POST | Send email via AgentMail |
+| `/api/v1/ops/agentmail/threads` | GET | List AgentMail threads |
+| `/api/v1/ops/agentmail/threads/{id}` | GET | Get thread details |
+| `/api/v1/ops/agentmail/threads/{id}/messages` | GET | Get thread messages |
+| `/api/v1/ops/agentmail/threads/bulk_delete` | DELETE | Bulk delete threads |
+| `/api/v1/ops/agentmail/drafts` | GET | List drafts |
+| `/api/v1/ops/agentmail/drafts/{id}` | GET | Get draft details |
+| `/api/v1/ops/agentmail/drafts/{id}/send` | POST | Send a draft |
+| `/api/v1/ops/agentmail/inbox-queue` | GET | List inbox queue entries |
+| `/api/v1/ops/agentmail/inbox-queue/{id}/cancel` | POST | Cancel queued inbox item |
+| `/api/v1/ops/agentmail/inbox-queue/{id}/retry-now` | POST | Retry a queued inbox item |
+| `/api/v1/ops/agentmail/messages` | GET | List AgentMail messages |
+
+## 23. Calendar and Scheduling
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/calendar/events` | GET | List calendar events |
+| `/api/v1/ops/calendar/events/{id}/action` | POST | Execute calendar event action |
+| `/api/v1/ops/calendar/events/{id}/change-request` | POST | Submit change request for event |
+| `/api/v1/ops/calendar/events/{id}/change-request/confirm` | POST | Confirm a change request |
+| `/api/v1/ops/calendar/nudge-overdue` | POST | Nudge overdue calendar events |
+| `/api/v1/ops/scheduling/events` | GET | List scheduling events |
+| `/api/v1/ops/scheduling/stream` | GET | Stream scheduling events (SSE) |
+
+## 24. Skills and Models
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/skills` | GET | List available skills |
+| `/api/v1/ops/skills/{key}` | PATCH | Update skill configuration |
+| `/api/v1/ops/skills/{key}/doc` | GET | Get skill documentation |
+| `/api/v1/ops/models` | GET | List available models |
+
+## 25. Channels, Presence, and System Events
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/channels` | GET | List active channels |
+| `/api/v1/ops/channels/{id}/probe` | POST | Probe channel connectivity |
+| `/api/v1/ops/channels/{id}/logout` | POST | Logout from channel |
+| `/api/v1/system/presence` | GET | Get agent presence/availability state |
+| `/api/v1/system/events` | GET | Get system events |
+| `/api/v1/system/event` | POST | Post system event |
+
+## 26. Additional Metrics and Budget
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/metrics/scheduling-runtime` | GET | Scheduling runtime performance metrics |
+| `/api/v1/ops/metrics/activity-events` | GET | Activity event metrics |
+| `/api/v1/ops/metrics/vp` | GET | VP mission metrics |
+| `/api/v1/ops/metrics/vp-bridge` | GET | VP bridge cursor/latency metrics |
+| `/api/v1/ops/metrics/coder-vp` | GET | Coder VP specific metrics |
+| `/api/v1/ops/session-budget/status` | GET | Current session token budget status |
+| `/api/v1/ops/session-budget/heavy-mode` | POST | Toggle heavy execution mode |
+
+## 27. Factory Live Chrome
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/factory/live-chrome/status` | GET | Live Chrome tunnel status |
+| `/api/v1/factory/live-chrome/status` | POST | Start/stop Live Chrome tunnel |
+
+## 28. Heartbeat and Telemetry
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/heartbeat/last` | GET | Get last heartbeat run metadata |
+| `/api/v1/heartbeat/wake` | POST | Trigger immediate heartbeat wake |
+| `/api/v1/ops/telemetry/briefing` | POST | Generate telemetry briefing |
+| `/api/v1/ops/system-health` | GET | System health overview |
+
+## 29. Artifacts and File Browsing
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/artifacts` | GET | Browse artifact directory |
+| `/api/artifacts/files/{path}` | GET | Get artifact file contents |
+| `/api/files` | GET | Browse session file directories |
+| `/api/files/{session_id}/{path}` | GET | Get file contents from a session |
+| `/api/v1/sessions/{id}/upload` | POST | Upload file to session workspace |
+
+## 30. Vision
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/vision/describe` | POST | Describe an image using vision model |
+
+## 31. Environment Variables
 
 Key environment variables controlling gateway behavior:
 
@@ -377,7 +572,7 @@ Key environment variables controlling gateway behavior:
 | `UA_OPS_AUTH_ENABLED` | `true` | Enable ops auth |
 | `UA_OPS_AUTH_PASSWORD` | - | Password for ops token issuance |
 
-## 16. Error Responses
+## 32. Error Responses
 
 All endpoints return standard HTTP status codes:
 
@@ -398,7 +593,7 @@ Error response body:
 }
 ```
 
-## 17. Source Files
+## 33. Source Files
 
 Primary implementation:
 - `src/universal_agent/gateway_server.py` — Main FastAPI application
@@ -410,7 +605,7 @@ Related services:
 - `src/universal_agent/hooks_service.py` — Hooks processing
 - `src/universal_agent/timeout_policy.py` — WebSocket timeouts
 
-## 18. Related Documentation
+## 34. Related Documentation
 
 - `docs/02_Flows/07_WebSocket_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` — WebSocket details
 - `docs/02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md` — Auth flows
