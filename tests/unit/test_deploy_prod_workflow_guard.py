@@ -19,7 +19,7 @@ def test_runtime_helper_repairs_unreadable_stale_venv_before_uv_sync() -> None:
         in content
     )
     assert 'remove_runtime_venv' in content
-    assert 'uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango' in content
+    assert 'uv sync --python 3.13 --no-install-package manim --no-install-package pycairo --no-install-package manimpango' in content
     assert 'scripts/verify_observability_runtime.py --json' in content
     assert 'scripts/verify_service_imports.py' in content
 
@@ -54,4 +54,3 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
     assert 'echo "::error::$name did not become healthy at $url"' in content
     assert "sudo journalctl -u universal-agent-gateway -n 120 --no-pager" in content
     assert 'exit 1' in content
-

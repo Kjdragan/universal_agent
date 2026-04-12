@@ -1,4 +1,5 @@
 import asyncio
+import os
 import logging
 from datetime import datetime
 import discord
@@ -16,6 +17,9 @@ from .audio_cleanup import AudioCleanup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("discord_daemon")
+AUTO_CREATE_RELEASE_TASKS = str(os.getenv("UA_DISCORD_AUTO_CREATE_RELEASE_TASKS", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Base recordings directory (relative to discord_intelligence package)
 import pathlib
@@ -197,12 +201,28 @@ class DiscordIntelligenceClient(discord.Client):
             if sig["severity"] == "high":
                 logger.info(f"HIGH SEVERITY SIGNAL: {sig['rule_matched']} on MSG {message.id}")
                 if "release" in sig["rule_matched"]:
-                    # Create task for CODIE
-                    create_task_hub_mission(
-                        title=f"New Release Detected: {message.guild.name}",
-                        description=f"Message: {message.content}\n\nLink: {message.jump_url}",
-                        tags=["release", "discord"]
-                    )
+                    if AUTO_CREATE_RELEASE_TASKS:
+                        create_task_hub_mission(
+                            title=f"New Release Detected: {message.guild.name}",
+                            description=f"Message: {message.content}\n\nLink: {message.jump_url}",
+                            tags=["release", "discord"],
+                            source_kind="discord_intelligence",
+                            metadata={
+                                "server_name": message.guild.name,
+                                "channel_id": str(message.channel.id),
+                                "message_id": str(message.id),
+                                "jump_url": message.jump_url,
+                                "rule_matched": sig["rule_matched"],
+                                "auto_created_from_passive_signal": True,
+                            },
+                        )
+                    else:
+                        logger.info(
+                            "Passive Discord release signal stored without Task Hub mission "
+                            "(set UA_DISCORD_AUTO_CREATE_RELEASE_TASKS=1 to enable): guild=%s message=%s",
+                            message.guild.name,
+                            message.id,
+                        )
                 else:
                     # Alert Simone
                     # Dispatched softly via asyncio.create_task to not block discord event loop

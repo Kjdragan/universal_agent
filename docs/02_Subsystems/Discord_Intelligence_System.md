@@ -60,6 +60,7 @@ The current integration is partially complete based on the 4-phase plan found in
 - [x] **Event Digest Pipeline:** `event_digest.py` queries messages from the exact event window (+/- 15 mins), dispatches to Sonnet for summary, and saves the intelligence payloads to `digests/` and the knowledge base `kb/briefings/`.
 - [x] **Database Hardening:** Plugged SQLite descriptor leaks across the daemon and C&C bot feeds by strictly wrapping `_get_conn` as a python Context Manager.
 - [x] **Reliable Upstream Task Dispatch:** Discord intelligence tasks now unpack root-level `title` and `description` properties and default to `agent_ready: 1`, solving the `-2.0` scoring penalty during central Task Hub queue insertion.
+- [x] **Passive signal containment:** Passive release signals remain in the Discord intelligence database/feed by default instead of auto-flooding Task Hub. Set `UA_DISCORD_AUTO_CREATE_RELEASE_TASKS=1` only for controlled windows where every release signal should become a Simone/Task Hub work item.
 - [x] **LLM Proxy Optimization:** Hardcoded `config.yaml` model endpoints to directly utilize explicit Z.AI emulation proxies (`glm-4.5-air` for triage parsing and `glm-5-turbo` for deep insight extraction).
 
 ## 4. Operational Runbook

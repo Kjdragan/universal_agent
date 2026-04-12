@@ -1,15 +1,13 @@
 {
   "version": 1,
   "active": true,
-  "skill": "cancel",
-  "keyword": "stop",
+  "skill": "analyze",
+  "keyword": "investigate",
   "phase": "planning",
-  "activated_at": "2026-04-11T23:33:25.404Z",
-  "updated_at": "2026-04-11T23:33:25.404Z",
+  "activated_at": "2026-04-12T00:07:25.641Z",
+  "updated_at": "2026-04-12T00:07:25.641Z",
   "source": "keyword-detector",
   "session_id": "",
   "thread_id": "019d7eb8-7204-77f2-a605-30ce40cd60b1",
-  "turn_id": "019d7ece-d487-7b80-bf16-c99ffbb643c7",
-  "iteration": 1,
-  "last_turn_at": "2026-04-11T23:52:41.296Z"
+  "turn_id": "019d7f02-6498-7c63-8787-8245ae9fd925"
 }
