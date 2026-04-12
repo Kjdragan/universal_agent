@@ -117,13 +117,13 @@ ensure_existing_venv_is_usable() {
 }
 
 ensure_python_runtime() {
-  echo "--> Ensuring Python 3.12 runtime for uv..."
-  run_as_service_user "export PATH=\"$PATH_PREFIX:\$PATH\"; uv python install 3.12"
+  echo "--> Ensuring Python 3.13 runtime for uv..."
+  run_as_service_user "export PATH=\"$PATH_PREFIX:\$PATH\"; uv python install 3.13"
 }
 
 sync_dependencies() {
   echo "--> Syncing dependencies with uv..."
-  run_as_service_user "export PATH=\"$PATH_PREFIX:\$PATH\"; cd \"$APP_ROOT\" && uv sync --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
+  run_as_service_user "export PATH=\"$PATH_PREFIX:\$PATH\"; cd \"$APP_ROOT\" && uv sync --python 3.13 --no-install-package manim --no-install-package pycairo --no-install-package manimpango"
 }
 
 ensure_venv_python_executable() {

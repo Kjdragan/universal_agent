@@ -156,7 +156,7 @@ deploy rather than editing keys in place.
 - Production deploy installs project dependencies with `uv sync`.
 - Deploy runs the shared helper `scripts/deploy_validate_runtime.sh` after writing the lane bootstrap `.env`.
 - That helper performs the validation contract:
-  1. ensure Python 3.12 is available to `uv`
+  1. ensure Python 3.13 is available to `uv`
   2. run `uv sync`
   3. run `scripts/validate_runtime_bootstrap.py`
   4. run `scripts/verify_observability_runtime.py`
