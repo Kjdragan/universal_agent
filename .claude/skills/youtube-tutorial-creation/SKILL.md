@@ -217,6 +217,7 @@ Write each artifact to the run directory. Quality bar for each:
 - Video title, channel, URL, duration, upload date (from metadata)
 - 2–3 sentence summary of what the video covers
 - Links to `CONCEPT.md` and `IMPLEMENTATION.md`
+- **Markdown Formatting**: Ensure a highly readable, premium layout. Use clear headings, ample spacing, bullet points, and a clean visual hierarchy so it is easy on the eyes when rendered in the UI. Specify visually calm typography elements where possible.
 
 **`CONCEPT.md`** — standalone tutorial, no video required
 
@@ -225,6 +226,7 @@ Write each artifact to the run directory. Quality bar for each:
 - Diagrams or references to `visuals/` when available
 - Code snippets with provenance comments linking to source timestamps or `visuals/code-extractions/`
 - Must be readable by someone who has never seen the video
+- **Markdown Formatting**: Format beautifully for the UI panel. Provide breathing room (blank lines between blocks), use blockquotes for key takeaways, well-structured headers, and a calm, readable typographic flow.
 
 **`IMPLEMENTATION.md`** — practical runbook (or procedural guide for concept-only)
 

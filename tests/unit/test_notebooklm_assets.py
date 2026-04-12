@@ -33,7 +33,8 @@ def test_notebooklm_agent_exists_and_has_output_contract():
     assert "name: notebooklm-operator" in frontmatter
     assert "tools:" in frontmatter
     assert "## Output Contract" in text
-    assert "path_used" in text
+    assert "notebook_url" in text
+    assert "artifacts" in text
 
 
 def test_notebooklm_skill_is_discoverable():

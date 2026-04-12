@@ -192,17 +192,36 @@ async def run_pipeline():
                     
                     action_items = digest_data.get('action_items', [])
                     if action_items and AUTO_CREATE_DIGEST_ACTION_TASKS:
-                        from discord_intelligence.integration.task_hub import create_task_hub_mission
-                        for action in action_items:
-                            create_task_hub_mission(
-                                title=f"Action Item: {action.get('title', 'Task')} (from {event['name']})",
-                                description=action.get('description', ''),
-                                tags=["event-action-item", "discord"]
-                            )
-                            logger.info(f"Created Task Hub mission for: {action.get('title', 'Task')}")
+                        logger.info(f"Formulating AgentMail notice for {len(action_items)} action items rather than direct Tasks.")
+                        body_lines = [f"Simone detected the following interesting action items in Discord (Event: {event['name']}):\n"]
+                        for i, action in enumerate(action_items, 1):
+                            body_lines.append(f"{i}. {action.get('title', 'Task')}")
+                            body_lines.append(f"   {action.get('description', '')}\n")
+                        
+                        body_lines.append("\nShould I move forward with any of these? Reply to this email to let me know.")
+                        body_content = "\n".join(body_lines)
+                        
+                        try:
+                            from universal_agent.services.agentmail_service import AgentMailService
+                            svc = AgentMailService()
+                            await svc.startup()
+                            if svc._started:
+                                target_email = os.getenv("UA_USER_EMAIL", "kevin.dragan@outlook.com")
+                                await svc.send_email(
+                                    to=target_email,
+                                    subject=f"Discord Insight: Action Items from {event['name']}",
+                                    text=body_content,
+                                    require_approval=False  # Actually send the email to the user so they can reply
+                                )
+                                logger.info(f"Sent email notice to {target_email}")
+                            else:
+                                logger.warning("AgentMailService failed to start, cannot send email notice.")
+                            await svc.shutdown()
+                        except Exception as e:
+                            logger.error(f"Failed to send AgentMail notice: {e}")
                     elif action_items:
                         logger.info(
-                            "Digest generated %d action item(s) without Task Hub promotion "
+                            "Digest generated %d action item(s) without AgentMail promotion "
                             "(set UA_DISCORD_DIGEST_CREATE_TASKS=1 to enable).",
                             len(action_items),
                         )

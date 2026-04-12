@@ -18,6 +18,11 @@ from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.workspace_catalog import list_workspace_summaries
 
+from universal_agent.wiki.llm import extract_entities, extract_concepts, generate_summary
+
+def _candidate_lines(body: str) -> list[str]:
+    return [line.strip() for line in body.splitlines() if line.strip()]
+
 REQUIRED_FRONTMATTER_FIELDS = (
     "title",
     "kind",
@@ -231,7 +236,7 @@ def _relative(path: Path, root: Path) -> str:
 
 def resolve_vault_path(vault_kind: str, vault_slug: str, *, root_override: str | None = None) -> Path:
     kind = str(vault_kind or "").strip().lower()
-    if kind != "internal":
+    if kind not in {"internal", "external"}:
         raise ValueError(f"Unsupported vault kind: {vault_kind}")
     slug = _slugify(vault_slug, fallback="default")
     if root_override:
@@ -276,13 +281,14 @@ def _write_page(path: Path, meta: dict[str, Any], body: str) -> None:
 
 def ensure_vault(vault_kind: str, vault_slug: str, *, title: str | None = None, root_override: str | None = None) -> VaultContext:
     kind = str(vault_kind or "").strip().lower()
-    if kind != "internal":
+    if kind not in {"internal", "external"}:
         raise ValueError(f"Unsupported vault kind: {kind}")
     slug = _slugify(vault_slug, fallback="default")
-    resolved_title = str(title or "").strip() or _titleize_slug("internal-memory-vault")
+    resolved_title = str(title or "").strip() or _titleize_slug(f"{kind}-vault")
     vault_path = resolve_vault_path(kind, slug, root_override=root_override)
     vault_path.mkdir(parents=True, exist_ok=True)
-    for rel_dir in INTERNAL_DIRS:
+    dirs_to_create = INTERNAL_DIRS if kind == "internal" else EXTERNAL_DIRS
+    for rel_dir in dirs_to_create:
         (vault_path / rel_dir).mkdir(parents=True, exist_ok=True)
 
     manifest_path = vault_path / "vault_manifest.json"
@@ -332,7 +338,7 @@ def _scan_page_records(vault_path: Path) -> list[dict[str, Any]]:
             continue
         meta, body = _frontmatter_and_body(path)
         category = Path(rel).parts[0]
-        summary = str(meta.get("summary") or "").strip() or _extract_summary(body)
+        summary = str(meta.get("summary") or "").strip() or generate_summary(body)
         records.append(
             {
                 "path": rel,
@@ -439,7 +445,7 @@ def _best_snippet(body: str, terms: list[str]) -> str:
     best = next((line for score, line in scored if score > 0), "")
     if best:
         return best[:240]
-    return _extract_summary(body)[:240]
+    return generate_summary(body)[:240]
 
 
 def _ensure_section_link(path: Path, section_title: str, link_line: str) -> None:
@@ -693,6 +699,48 @@ def _extract_matching_lines(text: str, keywords: tuple[str, ...], *, limit: int 
         if len(hits) >= limit:
             break
     return hits
+
+
+def wiki_ingest_external_source(
+    *,
+    vault_slug: str,
+    source_title: str,
+    source_content: str,
+    source_id: str | None = None,
+    root_override: str | None = None,
+) -> dict[str, Any]:
+    """Ingest external content, enriching it via LLM semantic extraction."""
+    context = ensure_vault("external", vault_slug, root_override=root_override)
+    
+    slug = _slugify(source_title[:50], fallback="source")
+    source_id = source_id or f"ext_{_timestamp_slug()}"
+    
+    entities = extract_entities(source_content)
+    concepts = extract_concepts(source_content)
+    summary = generate_summary(source_content)
+    
+    meta = _default_page_meta(
+        source_title,
+        "source",
+        provenance_kind="external_ingest",
+        tags=["external", *entities, *concepts],
+        source_ids=[source_id]
+    )
+    meta["summary"] = summary
+    
+    dest = context.path / "sources" / f"{slug}.md"
+    _write_page(dest, meta, source_content)
+    
+    update_index(context.path)
+    refresh_overview(context.path)
+    
+    return {
+        "status": "success",
+        "path": _relative(dest, context.path),
+        "entities": entities,
+        "concepts": concepts,
+        "summary": summary
+    }
 
 
 def sync_internal_memory_vault(

@@ -213,7 +213,7 @@ export function ExplorerPanel({
   };
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,2fr)_3fr]">
+    <div className="grid h-full min-h-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(280px,1.5fr)_3.5fr]">
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* LEFT PANEL — FILE TREE                                        */}
       {/* ═══════════════════════════════════════════════════════════════ */}

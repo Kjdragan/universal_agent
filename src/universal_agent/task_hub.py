@@ -3112,11 +3112,11 @@ def find_delegated_task_by_mission_id(
 
 
 def get_pending_review_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Return all tasks in pending_review status for Simone's sign-off prompt."""
+    """Return all tasks in pending_review or needs_review status for Simone's sign-off prompt."""
     ensure_schema(conn)
     rows = conn.execute(
-        "SELECT * FROM task_hub_items WHERE status = ? ORDER BY updated_at DESC",
-        (TASK_STATUS_PENDING_REVIEW,),
+        "SELECT * FROM task_hub_items WHERE status IN (?, ?) ORDER BY updated_at DESC",
+        (TASK_STATUS_PENDING_REVIEW, TASK_STATUS_REVIEW),
     ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
