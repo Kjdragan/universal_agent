@@ -4,6 +4,8 @@
 
 ## Current Phase
 
+**Update (2026-04-13):** NotebookLM migration completed. External knowledge base management moved to NotebookLM via `notebooklm-operator` agent and `kb_registry.json`. Local `wiki_ingest_external_source` function retained for programmatic use but not registered as an MCP tool. LLM semantic layer (`wiki/llm.py`) simplified and re-added.
+
 Phase 1 complete: core scaffolding, runtime surfaces, initial projection/query/lint plumbing, and targeted verification are in place.
 
 Phase 2 in progress: runtime smoke validation has been completed, and hardening is underway based on real usage.
@@ -13,7 +15,7 @@ Phase 2 in progress: runtime smoke validation has been completed, and hardening 
 - Created the shared wiki engine under `src/universal_agent/wiki/`
 - Added internal wiki MCP tools:
   - `wiki_init_vault`
-  - `wiki_ingest_external_source`
+  - `kb_register`, `kb_get`, `kb_update` (KB registry tools — manage local notebook UUID mappings)
   - `wiki_sync_internal_memory`
   - `wiki_query`
   - `wiki_lint`
@@ -45,7 +47,7 @@ Phase 2 in progress: runtime smoke validation has been completed, and hardening 
 ## Last Verified Tests
 
 - `uv run pytest -q tests/unit/test_llm_wiki_assets.py tests/unit/test_internal_registry_wiki_tools.py tests/unit/test_llm_wiki_engine.py tests/unit/test_llm_wiki_docs.py tests/unit/test_prompt_assets_capabilities.py`
-- `uv run python -m compileall src/universal_agent/wiki src/universal_agent/tools/wiki_bridge.py src/universal_agent/memory/memory_store.py src/universal_agent/memory/orchestrator.py src/universal_agent/session_checkpoint.py`
+- `uv run python -m compileall src/universal_agent/wiki src/universal_agent/tools/kb_bridge.py src/universal_agent/memory/memory_store.py src/universal_agent/memory/orchestrator.py src/universal_agent/session_checkpoint.py`
 - `uv run pytest -q tests/unit/test_llm_wiki_engine.py tests/unit/test_llm_wiki_assets.py tests/unit/test_internal_registry_wiki_tools.py tests/unit/test_llm_wiki_docs.py`
 - smoke reruns:
   - external vault lint findings reduced from `9` -> `1` -> `0`
@@ -97,7 +99,7 @@ Reason:
 - `src/universal_agent/wiki/__init__.py`
 - `src/universal_agent/wiki/core.py`
 - `src/universal_agent/wiki/projection.py`
-- `src/universal_agent/tools/wiki_bridge.py`
+- `src/universal_agent/tools/kb_bridge.py`
 - `.claude/skills/llm-wiki-orchestration/SKILL.md`
 - `.claude/agents/wiki-maintainer.md`
 - `.claude/knowledge/llm_wiki_runtime.md`

@@ -127,12 +127,21 @@ Deterministic checks include:
 ### Internal Tools
 
 - `wiki_init_vault`
-- `wiki_ingest_external_source`
 - `wiki_sync_internal_memory`
 - `wiki_query`
 - `wiki_lint`
-- `wiki_health` — observability: vault integrity, page counts, LLM availability
-- `wiki_rebuild_page` — targeted re-ingestion and semantic enrichment of a source page
+
+### KB Registry Tools
+
+Added in the NotebookLM migration (April 2026). These tools manage the local `kb_registry.json` mapping wiki vault slugs to NotebookLM notebook UUIDs.
+
+- `kb_register` — register a new NotebookLM notebook as a knowledge base
+- `kb_get` — retrieve a knowledge base entry by slug
+- `kb_update` — update KB metadata (source count, last queried, tags)
+
+### External Ingest (Code-Level)
+
+`wiki_ingest_external_source` exists as a Python function in `wiki/core.py` for programmatic external vault ingestion with LLM semantic extraction. It is not currently registered as an MCP tool — external knowledge bases are primarily managed through NotebookLM via the `notebooklm-operator` agent.
 
 ## NotebookLM Role
 
@@ -168,15 +177,11 @@ The subsystem requires:
 
 Since April 2026, the wiki engine uses a semantic LLM layer (`wiki/llm.py`) for:
 
-- **Entity extraction** — named entities worth creating wiki pages for
-- **Concept extraction** — abstract concepts and techniques
-- **Summary generation** — 2-3 sentence semantic summaries for index pages
-- **Description generation** — entity/concept page content synthesis
-- **Ledger synthesis** — structuring raw memory evidence into markdown
+- **Entity extraction** — named entities (people, organizations, tools) extracted via LLM, with heuristic fallback
+- **Concept extraction** — abstract concepts and themes extracted via LLM, with heuristic fallback
+- **Summary generation** — 1-3 sentence semantic summaries via LLM, with first-sentence heuristic fallback
 
-### Provider
-
-The LLM layer uses the project's standard **Z.AI Anthropic emulation** (same pattern as `llm_classifier.py`). API key chain: `ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `ZAI_API_KEY`. Model resolved via `resolve_model('sonnet')` which currently maps to GLM-4.7.
+The LLM layer uses the project's standard **Z.AI Anthropic emulation** (same pattern as `llm_classifier.py`). API key chain: `ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `ZAI_API_KEY`. Model resolved via `resolve_sonnet()`.
 
 ### Graceful Degradation
 
@@ -189,14 +194,13 @@ This keeps the wiki engine functional in CI, tests, and offline environments.
 
 ## TDD Test Suite
 
-- `tests/unit/test_wiki_llm.py` — 18 unit tests (mocked LLM responses)
-- `tests/unit/test_wiki_semantic_ingest.py` — 5 semantic ingest pipeline tests
-- `tests/integration/test_wiki_integration_real_workspace.py` — 9 integration tests against real shared-memory workspace
-- `tests/unit/test_llm_wiki_engine.py` — 3 existing engine tests
+- `tests/unit/test_kb_registry.py` — KB registry unit tests
+- `tests/unit/test_wiki_semantic_ingest.py` — semantic ingest pipeline tests
+- `tests/unit/test_internal_registry_wiki_tools.py` — wiki tool registration tests
 
 ## Next Steps
 
-1. **Monitor semantic quality** — use `wiki_health` to track vault integrity as usage scales
+1. **Monitor semantic quality** — use `wiki_lint` to track vault integrity as usage scales
 2. **Tune prompts** — adjust extraction prompts in `wiki/llm.py` if semantic quality needs refinement
 3. **Expand recall integration** — connect wiki query into agent recall paths once quality is validated
 4. **Keep internal sync observable** — preserve timing telemetry; if warm-run timing regresses, inspect phase timing output first
@@ -214,7 +218,7 @@ PYTHONPATH=src uv run python - <<'PY'
 import json
 import tempfile
 from pathlib import Path
-from universal_agent.wiki.core import ensure_vault, ingest_external_source, query_vault, lint_vault
+from universal_agent.wiki.core import ensure_vault, wiki_ingest_external_source, query_vault, lint_vault
 
 work_dir = Path(tempfile.mkdtemp(prefix='llm_wiki_try_external_'))
 external_root = work_dir / 'external_roots'
@@ -227,10 +231,10 @@ source_path.write_text(
 )
 
 ctx = ensure_vault('external', 'try-vault', root_override=str(external_root))
-ingest = ingest_external_source(
+ingest = wiki_ingest_external_source(
     vault_slug='try-vault',
-    source_path=str(source_path),
-    title='Sample Source',
+    source_title='Sample Source',
+    source_content=source_path.read_text(encoding='utf-8'),
     root_override=str(external_root),
 )
 query = query_vault(
@@ -308,7 +312,7 @@ What to look for:
 ## Related Files
 
 - `src/universal_agent/wiki/`
-- `src/universal_agent/tools/wiki_bridge.py`
+- `src/universal_agent/tools/kb_bridge.py`
 - `src/universal_agent/tools/internal_registry.py`
 - `src/universal_agent/scripts/doc_drift_auditor.py`
 - `docs/03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md`
