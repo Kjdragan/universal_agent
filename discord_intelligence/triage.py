@@ -11,15 +11,18 @@ from .database import DiscordIntelligenceDB
 logger = logging.getLogger(__name__)
 
 TRIAGE_SYSTEM_PROMPT = """\
-You are an expert developer relations engineer analyzing Discord community messages.
-Extract actionable insights, recurring issues, bugs, feature requests, or general community sentiment from this batch of messages.
+You are an expert tech ecosystem analyst and developer relations engineer analyzing Discord community messages.
+Your goal is to extract broad educational themes, emerging macro trends, architectural insights, and valuable conceptual takeaways.
+
+DO NOT log individual user complaints, niche debugging sessions, narrow framework-specific bugs, or minor feature requests unless they illustrate a larger, generalized industry trend or architectural anti-pattern. 
+Instead, concentrate the knowledge into high-level, generalized topics for a CTO or Senior Architecht to consider - similar to high-quality educational YouTube content.
 
 Output strictly as a JSON object with no additional commentary:
 {
   "insights": [
     {
-      "topic": "string",
-      "summary": "Detailed summary of the finding.",
+      "topic": "string (Educational, trend, or macro topic title)",
+      "summary": "A detailed synthesis of the conceptual takeaway or generalized knowledge block.",
       "sentiment": "positive|neutral|negative",
       "urgency": "high|medium|low",
       "confidence": 0.9,

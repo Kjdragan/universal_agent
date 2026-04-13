@@ -685,7 +685,7 @@ export default function CSIDashboard() {
                                         </div>
                                     ) : selectedDigest.summary ? (
                                         <div
-                                            className="prose prose-invert prose-sm max-w-none"
+                                            className="markdown-preview max-w-none"
                                             style={{ fontFamily: T.fontUi, color: T.textSecondary, fontSize: 13, lineHeight: 1.7 }}
                                         >
                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>

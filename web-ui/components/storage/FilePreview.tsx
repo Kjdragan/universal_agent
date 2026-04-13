@@ -268,10 +268,10 @@ export function FilePreview({
                         />
                     </div>
                 ) : fileType === "markdown" && content ? (
-                    <div className="h-full overflow-auto rounded-lg border border-border/50 bg-background/80 p-4 text-[13px] leading-7 text-foreground">
+                    <div className="h-full overflow-auto rounded-lg border border-border/50 bg-[#0d1117] p-8">
                         <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
-                            className="prose prose-sm max-w-none prose-invert prose-headings:text-primary prose-a:text-primary prose-code:text-primary prose-pre:bg-[#22272e] prose-pre:border prose-pre:border-border/50"
+                            className="markdown-preview"
                         >
                             {content}
                         </ReactMarkdown>
