@@ -136,6 +136,37 @@ export default function ProactiveSignalsPage() {
     }
   }, [load]);
 
+  const deleteVisibleCards = useCallback(async () => {
+    if (!cards.length) return;
+    if (!confirm(`Are you sure you want to silently delete all ${cards.length} currently visible cards? This will not record any feedback signals.`)) return;
+    
+    setLoading(true);
+    setError("");
+    let hasError = false;
+    
+    try {
+      // Delete in parallel to be fast, since they are independent operations.
+      await Promise.all(
+        cards.map(async (card) => {
+          const res = await fetch(`${API_BASE}/api/v1/dashboard/proactive-signals/${encodeURIComponent(card.card_id)}`, {
+            method: "DELETE",
+          });
+          if (!res.ok) {
+             hasError = true;
+          }
+        })
+      );
+      
+      if (hasError) throw new Error("Some items failed to delete.");
+      setFeedbackOpenId("");
+      await load();
+    } catch (err) {
+      setError((err as Error).message || "Bulk delete failed.");
+    } finally {
+      setLoading(false);
+    }
+  }, [cards, load]);
+
   const selectAction = useCallback(async (cardId: string, actionId: string) => {
     setBusyId(cardId);
     setError("");
@@ -168,14 +199,26 @@ export default function ProactiveSignalsPage() {
           <h1 className="text-xl font-semibold tracking-tight">Proactive Signals</h1>
           <p className="text-sm text-muted-foreground">Cheap discovery cards from YouTube and Discord with action and feedback loops.</p>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          className="rounded-md border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card disabled:opacity-60"
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {cards.length > 0 && (
+            <button
+              type="button"
+              onClick={deleteVisibleCards}
+              disabled={loading || Boolean(busyId)}
+              className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+            >
+              Delete All {cards.length}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="rounded-md border border-border bg-card/60 px-3 py-1.5 text-sm hover:bg-card disabled:opacity-60"
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2 text-xs">
