@@ -1280,7 +1280,7 @@ function ChatMessage({ message }: { message: any }) {
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
-              className="prose prose-sm dark:prose-invert max-w-none"
+              className="markdown-preview max-w-none"
             >
               {message.content}
             </ReactMarkdown>
@@ -1301,7 +1301,7 @@ function ChatMessage({ message }: { message: any }) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={markdownComponents}
-            className="prose prose-sm dark:prose-invert max-w-none"
+            className="markdown-preview max-w-none"
           >
             {message.content}
           </ReactMarkdown>
@@ -1343,7 +1343,7 @@ function ChatMessage({ message }: { message: any }) {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
-                className="prose prose-sm dark:prose-invert max-w-none"
+                className="markdown-preview max-w-none"
               >
                 {message.content}
               </ReactMarkdown>

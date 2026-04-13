@@ -1700,7 +1700,7 @@ export function SkillsSection({ variant = "compact" }: { variant?: SectionVarian
           {loadingDoc ? (
             <div className="h-full flex items-center justify-center text-muted-foreground text-xs italic">Loading documentation...</div>
           ) : docContent ? (
-            <article className="prose prose-invert prose-sm max-w-none">
+            <article className="markdown-preview max-w-none">
               <div className="mb-4 flex items-center justify-between border-b border-border pb-2">
                 <h3 className="text-lg font-bold text-foreground m-0">{selectedSkill?.name} Documentation</h3>
                 <span className="text-[10px] text-muted-foreground font-mono">SKILL.md</span>
