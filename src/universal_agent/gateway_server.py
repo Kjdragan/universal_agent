@@ -132,6 +132,7 @@ from universal_agent.proactive_signals import (
     list_cards as list_proactive_signal_cards,
     record_feedback as record_proactive_signal_feedback,
     sync_generated_cards as sync_proactive_signal_cards,
+    distill_feedback_to_rules,
 )
 from universal_agent.work_threads import (
     append_work_thread_decision,
@@ -15975,6 +15976,7 @@ async def dashboard_proactive_signal_feedback(
     request: Request,
     card_id: str,
     payload: ProactiveSignalFeedbackRequest,
+    background_tasks: BackgroundTasks,
 ):
     _require_ops_auth(request)
     actor = _activity_actor_from_request(request)
@@ -15996,6 +15998,11 @@ async def dashboard_proactive_signal_feedback(
                 raise HTTPException(status_code=400, detail=str(exc))
         finally:
             conn.close()
+
+    # Trigger background rule distillation if there was text feedback or tags
+    if (payload.feedback_text and str(payload.feedback_text).strip()) or payload.feedback_tags:
+        background_tasks.add_task(distill_feedback_to_rules, card, str(payload.feedback_text or ""), payload.feedback_tags)
+
     return {"status": "ok", "card": card}
 
 
@@ -16004,6 +16011,7 @@ async def dashboard_proactive_signal_action(
     request: Request,
     card_id: str,
     payload: ProactiveSignalActionRequest,
+    background_tasks: BackgroundTasks,
 ):
     _require_ops_auth(request)
     actor = _activity_actor_from_request(request)
@@ -16025,6 +16033,11 @@ async def dashboard_proactive_signal_action(
                 raise HTTPException(status_code=400, detail=str(exc))
         finally:
             conn.close()
+
+    # Trigger background rule distillation if there was text feedback or tags
+    if (payload.feedback_text and str(payload.feedback_text).strip()) or payload.feedback_tags:
+        background_tasks.add_task(distill_feedback_to_rules, card, str(payload.feedback_text or ""), payload.feedback_tags)
+
     return {"status": "ok", "card": card, "task_id": (card.get("selected_action") or {}).get("task_id")}
 
 

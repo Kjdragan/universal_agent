@@ -16,12 +16,14 @@ CARD_STATUS_APPROVED = "approved"
 CARD_STATUS_REJECTED = "rejected"
 CARD_STATUS_TRACKING = "tracking"
 CARD_STATUS_ACTIONED = "actioned"
+CARD_STATUS_DELETED = "deleted"
 VALID_CARD_STATUSES = {
     CARD_STATUS_PENDING,
     CARD_STATUS_APPROVED,
     CARD_STATUS_REJECTED,
     CARD_STATUS_TRACKING,
     CARD_STATUS_ACTIONED,
+    CARD_STATUS_DELETED,
 }
 
 YOUTUBE_INTEREST_TERMS = {
@@ -98,6 +100,9 @@ def list_cards(
     if status and status.strip().lower() != "all":
         clauses.append("status = ?")
         params.append(status.strip().lower())
+    else:
+        clauses.append("status != ?")
+        params.append(CARD_STATUS_DELETED)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
         f"""
@@ -176,15 +181,15 @@ def get_card(conn: sqlite3.Connection, card_id: str) -> Optional[dict[str, Any]]
 
 
 def delete_card(conn: sqlite3.Connection, card_id: str) -> bool:
-    """Silently delete a card without recording feedback.
+    """Silently delete a card (soft delete) without recording feedback.
 
     Used to declutter the signal queue — this is NOT a reject and should
     not be treated as a preference signal.
     """
     ensure_schema(conn)
     cursor = conn.execute(
-        "DELETE FROM proactive_signal_cards WHERE card_id = ?",
-        (card_id,),
+        "UPDATE proactive_signal_cards SET status = ?, updated_at = ? WHERE card_id = ?",
+        (CARD_STATUS_DELETED, _now_iso(), card_id,),
     )
     conn.commit()
     return cursor.rowcount > 0
@@ -698,3 +703,71 @@ def _is_short_subject(subject: dict[str, Any]) -> bool:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def distill_feedback_to_rules(card_dict: dict[str, Any], feedback_text: str, feedback_tags: list[str] = None) -> None:
+    """Asynchronously evaluate raw feedback and update proactive generation rules."""
+    import litellm
+    import logging
+    from universal_agent.utils.model_resolution import resolve_sonnet
+
+    feedback_tags = feedback_tags or []
+    logger = logging.getLogger(__name__)
+    if not feedback_text.strip() and not feedback_tags:
+        return
+
+    # Find the repository doc path
+    repo_root = Path(__file__).parent.parent.parent.parent
+    docs_dir = repo_root / "docs" / "proactive_signals"
+    rules_path = docs_dir / "generation_rules.md"
+    
+    current_rules = ""
+    if rules_path.exists():
+        current_rules = rules_path.read_text(encoding="utf-8")
+        
+    prompt = f"""You are the Universal Agent Rule Distiller.
+The user just provided feedback on a Proactive Signal card (either by clicking an icon tag or writing text).
+Your job is to read the current rules, interpret the feedback against the card context, and rewrite the rules document to cleanly incorporate the user's preference constraints without destroying the underlying rules!
+If they give a general instruction, place it under General Guidelines. If it involves a specific platform or topic keyword, create or update the appropriate section (e.g. Source Constraints -> YouTube, or Topic Constraints -> [Topic]).
+
+Current Generation Rules:
+-------------------------------------
+{current_rules}
+-------------------------------------
+
+Original Card Details:
+Source: {card_dict.get('source')}
+Title: {card_dict.get('title')}
+Summary: {card_dict.get('summary')}
+
+User's Icon Feedback Tags: {', '.join(feedback_tags) if feedback_tags else 'None'}
+User's Raw Feedback Text:
+-------------------------------------
+{feedback_text}
+-------------------------------------
+
+Respond with ONLY the markdown content for the updated rules file. Do not include introductory or concluding conversation. Maintain the existing markdown headers.
+"""
+    model = resolve_sonnet()
+    try:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=2500,
+        )
+        new_rules = response.choices[0].message.content.strip()
+        if new_rules.startswith("```md"):
+            new_rules = new_rules[5:]
+        if new_rules.startswith("```markdown"):
+            new_rules = new_rules[11:]
+        if new_rules.startswith("```"):
+            new_rules = new_rules[3:]
+        if new_rules.endswith("```"):
+            new_rules = new_rules[:-3]
+        
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        rules_path.write_text(new_rules.strip(), encoding="utf-8")
+        logger.info("Successfully distilled feedback into generation_rules.md")
+    except Exception as exc:
+        logger.error(f"Failed to distill feedback: {exc}", exc_info=True)
