@@ -119,6 +119,23 @@ export default function ProactiveSignalsPage() {
     }
   }, [feedbackTags, feedbackText, load]);
 
+  const deleteCard = useCallback(async (cardId: string) => {
+    setBusyId(cardId);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/proactive-signals/${encodeURIComponent(cardId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+      setFeedbackOpenId((prev) => prev === cardId ? "" : prev);
+      await load();
+    } catch (err) {
+      setError((err as Error).message || "Delete failed.");
+    } finally {
+      setBusyId("");
+    }
+  }, [load]);
+
   const selectAction = useCallback(async (cardId: string, actionId: string) => {
     setBusyId(cardId);
     setError("");
@@ -248,14 +265,25 @@ export default function ProactiveSignalsPage() {
                   Feedback
                 </button>
                 {card.status === "pending" && (
-                  <button
-                    type="button"
-                    onClick={() => submitFeedback(card.card_id, "rejected")}
-                    disabled={busyId === card.card_id}
-                    className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-400/20 disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => submitFeedback(card.card_id, "rejected")}
+                      disabled={busyId === card.card_id}
+                      className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-400/20 disabled:opacity-50"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteCard(card.card_id)}
+                      disabled={busyId === card.card_id}
+                      title="Silently delete this card without recording feedback"
+                      className="rounded-md border border-border bg-card/60 px-3 py-1.5 text-xs hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </>
                 )}
               </div>
 
