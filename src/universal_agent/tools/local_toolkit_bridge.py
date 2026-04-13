@@ -365,25 +365,6 @@ async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -
         return {"content": [{"type": "text", "text": f"error: {str(e)}"}]}
 
 
-LOCAL_TOOLS: dict[str, Any] = {
-    "upload_to_composio": upload_to_composio_wrapper,
-    "list_directory": list_directory_wrapper,
-    "inspect_session_workspace": inspect_session_workspace_wrapper,
-    "list_agent_sessions": list_agent_sessions_wrapper,
-    "read_vps_file": read_vps_file_wrapper,
-    "append_to_file": append_to_file_wrapper,
-    "write_text_file": write_text_file_wrapper,
-    "prepare_agentmail_attachment": prepare_agentmail_attachment_wrapper,
-    "agentmail_send_with_local_attachments": agentmail_send_with_local_attachments_wrapper,
-    "agentmail_reply_with_local_attachments": agentmail_reply_with_local_attachments_wrapper,
-    "finalize_research": finalize_research_wrapper,
-    "generate_image": generate_image_wrapper,
-    "generate_image_with_review": generate_image_with_review_wrapper,
-    "describe_image": describe_image_wrapper,
-    "preview_image": preview_image_wrapper,
-    "ask_user_questions": ask_user_questions_wrapper,
-    "batch_tool_execute": batch_tool_execute_wrapper,
-}
 
 
 @tool(
@@ -508,3 +489,23 @@ async def batch_tool_execute_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result = batch_tool_execute_core(args.get("tool_calls", []))
     return {"content": [{"type": "text", "text": str(result)}]}
+
+LOCAL_TOOLS: dict[str, Any] = {
+    "upload_to_composio": upload_to_composio_wrapper,
+    "list_directory": list_directory_wrapper,
+    "inspect_session_workspace": inspect_session_workspace_wrapper,
+    "list_agent_sessions": list_agent_sessions_wrapper,
+    "read_vps_file": read_vps_file_wrapper,
+    "append_to_file": append_to_file_wrapper,
+    "write_text_file": write_text_file_wrapper,
+    "prepare_agentmail_attachment": prepare_agentmail_attachment_wrapper,
+    "agentmail_send_with_local_attachments": agentmail_send_with_local_attachments_wrapper,
+    "agentmail_reply_with_local_attachments": agentmail_reply_with_local_attachments_wrapper,
+    "finalize_research": finalize_research_wrapper,
+    "generate_image": generate_image_wrapper,
+    "generate_image_with_review": generate_image_with_review_wrapper,
+    "describe_image": describe_image_wrapper,
+    "preview_image": preview_image_wrapper,
+    "ask_user_questions": ask_user_questions_wrapper,
+    "batch_tool_execute": batch_tool_execute_wrapper,
+}
