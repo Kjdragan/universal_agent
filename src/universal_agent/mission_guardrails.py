@@ -19,8 +19,22 @@ _FINAL_PATTERNS = (
     re.compile(r"\bfinal\s+report\b", re.IGNORECASE),
     re.compile(r"\bgmail\s+me\s+the\s+final\b", re.IGNORECASE),
 )
-_EMAIL_REQUIRED_PATTERN = re.compile(r"\b(gmail|e-?mail)\b", re.IGNORECASE)
-_EMAIL_NEGATION_PATTERN = re.compile(r"\b(do\s*not|don['’]t|no)\s+(gmail|e-?mail)\b", re.IGNORECASE)
+# Action-oriented email patterns — only match when the user explicitly requests
+# email *delivery*, not when email is merely mentioned in context.
+# e.g. "email me the report" ✓  |  "attached to the email" ✗
+_EMAIL_ACTION_PATTERNS = (
+    # "email me", "gmail me", "e-mail me"
+    re.compile(r"\b(gmail|e-?mail)\s+me\b", re.IGNORECASE),
+    # "send (me)? (a|the|this)? email/gmail"
+    re.compile(r"\b(send|deliver|forward)\b.{0,20}\b(gmail|e-?mail)\b", re.IGNORECASE),
+    # "via email", "by email", "over email"
+    re.compile(r"\b(via|by|over)\s+(gmail|e-?mail)\b", re.IGNORECASE),
+    # "gmail/email the report", "email the summary" — delivery-object nouns only
+    re.compile(r"\b(gmail|e-?mail)\s+(the|a|this|my)\s+(report|summary|analysis|results?|brief|briefing|document|update|findings|output|deliverable|draft|status)\b", re.IGNORECASE),
+    # "one per gmail" (existing interim pattern dependency)
+    re.compile(r"\bone\s+per\s+gmail\b", re.IGNORECASE),
+)
+_EMAIL_NEGATION_PATTERN = re.compile(r"\b(do\s*not|don['']t|no)\s+(gmail|e-?mail)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -228,8 +242,9 @@ def build_mission_contract(user_input: str) -> MissionContract:
     text = str(user_input or "")
     text_l = text.lower()
 
-    email_required = bool(_EMAIL_REQUIRED_PATTERN.search(text)) and not bool(
-        _EMAIL_NEGATION_PATTERN.search(text)
+    email_required = (
+        any(p.search(text) for p in _EMAIL_ACTION_PATTERNS)
+        and not bool(_EMAIL_NEGATION_PATTERN.search(text))
     )
     interim_required = any(pattern.search(text) for pattern in _INTERIM_PATTERNS)
     final_required = any(pattern.search(text) for pattern in _FINAL_PATTERNS)

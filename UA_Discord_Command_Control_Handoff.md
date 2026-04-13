@@ -16,6 +16,7 @@ This document has two parts:
 **Claude Code: Read Part 1 fully first. Then execute the investigations in Part 2 before proposing any implementation plans. The investigations will ground the strategy in the actual code reality.**
 
 ---
+ut their is
 
 ## PART 1: STRATEGIC CONTEXT
 
@@ -110,6 +111,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand exactly what Discord code exists today, what works, what's stubbed out.
 
 **Look at:**
+
 - Search the entire repo for Discord-related code: `grep -r "discord" --include="*.py" --include="*.js" --include="*.ts" --include="*.json" --include="*.md" -l`
 - Check for a Discord bot file, cog structure, or slash command definitions
 - Check for Discord webhook endpoints in the gateway (`gateway_server.py` or hooks service)
@@ -119,6 +121,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 - Check `config/` for Discord configuration
 
 **Questions to answer:**
+
 1. Is there already a Discord bot running? What library (discord.py, interactions.py, etc.)?
 2. Are there any slash commands already defined? What do they do?
 3. How does the current Discord integration connect to the UA system — via webhook, direct bot, or CSI adapter?
@@ -131,6 +134,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand the exact task lifecycle states and whether we need new states for human-in-the-loop approval via Discord.
 
 **Look at:**
+
 - `src/**/task_hub.py` — the state machine definition, all valid state transitions
 - The `needs_review` state — what triggers it, what actions are available from it, who is expected to act on it
 - The `pending_review` state — how it differs from `needs_review`
@@ -138,6 +142,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 - The `task_hub_task_action` tool — what actions does it expose (review, complete, block, park, unblock, delegate, approve)
 
 **Questions to answer:**
+
 1. Can the existing `needs_review` state serve as our "awaiting Kevin's human approval" state, or is it currently used for something else that would create ambiguity?
 2. What happens when a task in `needs_review` is approved vs. rejected? What state transitions exist?
 3. Is there an `approve` action that could be triggered externally (from Discord), or would we need to add one?
@@ -149,6 +154,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand how external events currently enter the system, so we can design Discord interactions to use the same patterns.
 
 **Look at:**
+
 - `hooks_service.py` — how webhooks are received, authenticated, and dispatched
 - `webhook_transforms/` — how external payloads get transformed into Task Hub items
 - The AgentMail email ingress path — how emails become tasks (in `email_task_bridge.py`)
@@ -156,6 +162,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 - The CSI delivery contract — how CSI signals get delivered to the UA
 
 **Questions to answer:**
+
 1. Is there a standardized "external event → Task Hub item" pipeline we should plug Discord interactions into?
 2. How are webhooks authenticated? Will Discord interactions need to go through the same auth?
 3. What's the pattern for a new ingress channel? Is there a template/interface we should follow?
@@ -166,6 +173,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand the existing Telegram bot implementation so we can learn from its patterns (and its gaps).
 
 **Look at:**
+
 - The Telegram bot code — likely polling-based per doc 91
 - How Telegram messages trigger agent actions
 - The Telegram → gateway execution path
@@ -173,6 +181,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 - Any allowlist or authentication mechanism
 
 **Questions to answer:**
+
 1. What is the Telegram bot's execution model — does it run inside the gateway process or separately?
 2. What commands/actions does it support?
 3. How does it authenticate that messages are from Kevin?
@@ -183,12 +192,14 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand what's planned for CSI's Discord integration so we build the command & control layer to be compatible.
 
 **Look at:**
+
 - CSI architecture docs: `docs/04_CSI/CSI_Master_Architecture.md`
 - CSI source adapters — is there a Discord adapter in progress?
 - The CSI rebuild docs: `docs/csi-rebuild/`
 - Any design docs mentioning Discord in `FUTURE_DEVELOPMENT_DESIGNS/`
 
 **Questions to answer:**
+
 1. Is CSI planning to ingest Discord messages as signals (like it does YouTube)?
 2. If so, how do we keep the CSI ingestion path separate from the command & control path? (We don't want Kevin's `/approve` slash command being treated as a CSI signal.)
 3. Are there Discord channels designated for CSI intelligence vs. human interaction?
@@ -198,6 +209,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand the current briefing implementation so we can plan how to deliver richer briefings via Discord.
 
 **Look at:**
+
 - `proactive_advisor.py` — what context it assembles
 - The morning report snapshot builder
 - How the briefing gets injected into heartbeat prompts
@@ -205,6 +217,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 - `docs/03_Operations/78_Daily_Autonomous_Briefing_Reliability_And_Input_Diagnostics_2026-02-26.md`
 
 **Questions to answer:**
+
 1. What data sources feed the current morning briefing?
 2. Is it delivered anywhere Kevin can read it directly, or is it only used internally as prompt context?
 3. What would it take to format and push the briefing to a Discord `#briefing` channel?
@@ -215,6 +228,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand whether the memory system and LLM Wiki can support the preference learning loop.
 
 **Look at:**
+
 - `Memory_System/` and `memory/` directories
 - The memory orchestrator (`orchestrator.py`)
 - LLM Wiki implementation: `docs/02_Subsystems/LLM_Wiki_System.md` and `docs/03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md`
@@ -222,6 +236,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 - The smoke test results in doc 110
 
 **Questions to answer:**
+
 1. Can the memory system currently accept structured preference entries (key-value or tagged)?
 2. Can the LLM Wiki internal vault be written to programmatically during task completion?
 3. What are the current blockers on the internal vault (doc 109 mentions timeout issues)?
@@ -232,12 +247,14 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 **Goal:** Understand how Discord bot interactions would authenticate and integrate with the gateway.
 
 **Look at:**
+
 - `gateway_server.py` — all exposed endpoints, auth mechanisms
 - `docs/02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md`
 - How the web dashboard authenticates and sends commands (dispatch_immediate, dispatch_on_approval)
 - Whether there's an internal API that bypasses web auth for trusted services
 
 **Questions to answer:**
+
 1. Is there an internal service-to-service auth mechanism that the Discord bot could use?
 2. Can the existing `dispatch_immediate` and `dispatch_on_approval` actions be triggered programmatically from a bot?
 3. Does the gateway have a REST API layer that non-browser clients can use, or is everything WebSocket/session-based?
@@ -249,6 +266,7 @@ The web dashboard (screenshot shows Task Hub at `app.clearspringcg.com/dashboard
 After completing the investigations, the recommended implementation order is:
 
 ### Phase 1: Discord Bot Foundation + Approval Pipeline
+
 1. Establish the Discord bot with proper auth and connection to the UA gateway
 2. Implement `#review-queue` channel with interactive embed buttons
 3. Wire button interactions to Task Hub state transitions (approve → completed, reject → feedback capture, revise → new task, later → no-op/snooze)
@@ -256,11 +274,13 @@ After completing the investigations, the recommended implementation order is:
 5. Test the full loop: autonomous task completes → digest card appears in Discord → Kevin taps approve → task completes in Task Hub → visible on dashboard
 
 ### Phase 2: Discord Intelligence Channels
+
 1. Wire morning briefing delivery to `#briefing` channel
 2. Wire CSI signals to `#signals` channel (if not already done)
 3. Add `#agent-log` for activity stream (optional)
 
 ### Phase 3: Slash Commands for Direct Control
+
 1. `/status` — Current Task Hub summary (dispatch eligible, active, pending review counts)
 2. `/queue` — Show pending review items
 3. `/task <description>` — Quick-add a task to Task Hub
@@ -268,6 +288,7 @@ After completing the investigations, the recommended implementation order is:
 5. `/brief` — Request an on-demand briefing
 
 ### Phase 4: Preference Learning Loop
+
 1. On approve/reject, trigger lightweight preference extraction
 2. Store preference entries in LLM Wiki internal vault (or memory system if wiki isn't ready)
 3. Inject relevant preferences into Simone's delegation briefings
