@@ -20,7 +20,11 @@ from csi_ingester.store.source_manager import (
     seed_youtube_channels,
 )
 
-ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
+ATOM_NS = {
+    "a": "http://www.w3.org/2005/Atom",
+    "media": "http://search.yahoo.com/mrss/",
+    "yt": "http://www.youtube.com/xml/schemas/2015",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -279,14 +283,25 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
                 continue
             link = entry.find("a:link", ATOM_NS)
             href = link.attrib.get("href", "").strip() if link is not None else ""
+            if _is_youtube_short_url(href):
+                continue
             published_at = _safe_text(entry.find("a:published", ATOM_NS)) or _iso_now()
+            media_group = entry.find("media:group", ATOM_NS)
+            thumbnail = media_group.find("media:thumbnail", ATOM_NS) if media_group is not None else None
+            author = entry.find("a:author", ATOM_NS)
             entries.append(
                 {
                     "video_id": video_id,
                     "channel_id": channel_id,
                     "url": href or f"https://www.youtube.com/watch?v={video_id}",
                     "title": _safe_text(entry.find("a:title", ATOM_NS)),
+                    "description": _safe_text(media_group.find("media:description", ATOM_NS)) if media_group is not None else "",
+                    "thumbnail_url": thumbnail.attrib.get("url", "").strip() if thumbnail is not None else "",
+                    "media_title": _safe_text(media_group.find("media:title", ATOM_NS)) if media_group is not None else "",
+                    "author_name": _safe_text(author.find("a:name", ATOM_NS)) if author is not None else "",
+                    "author_uri": _safe_text(author.find("a:uri", ATOM_NS)) if author is not None else "",
                     "published_at": published_at,
+                    "updated_at": _safe_text(entry.find("a:updated", ATOM_NS)),
                     "occurred_at": published_at,
                 }
             )
@@ -302,7 +317,13 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             "channel_name": str(payload.get("channel_name") or ""),
             "url": str(payload.get("url") or ""),
             "title": str(payload.get("title") or ""),
+            "description": str(payload.get("description") or ""),
+            "thumbnail_url": str(payload.get("thumbnail_url") or ""),
+            "media_title": str(payload.get("media_title") or ""),
+            "author_name": str(payload.get("author_name") or ""),
+            "author_uri": str(payload.get("author_uri") or ""),
             "published_at": str(payload.get("published_at") or now),
+            "updated_at": str(payload.get("updated_at") or ""),
         }
         event = CreatorSignalEvent(
             event_id=str(payload.get("event_id") or f"yt:rss:{subject['video_id']}:{int(datetime.now(timezone.utc).timestamp())}"),
@@ -357,6 +378,10 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
 
 def _safe_text(node: ET.Element | None) -> str:
     return (node.text or "").strip() if node is not None else ""
+
+
+def _is_youtube_short_url(url: str) -> bool:
+    return "/shorts/" in str(url or "").lower()
 
 
 def _iso_now() -> str:

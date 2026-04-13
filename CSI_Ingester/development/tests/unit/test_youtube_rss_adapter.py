@@ -197,3 +197,52 @@ def test_rss_adapter_warns_when_no_watchlist_channels(tmp_path: Path, caplog):
 
     assert resolved == []
     assert "resolved to zero channels" in caplog.text
+
+
+async def test_rss_adapter_extracts_media_metadata_and_filters_shorts():
+    adapter = YouTubeChannelRSSAdapter({"watchlist": [{"channel_id": "UC_TEST"}], "seed_on_first_run": False})
+
+    class _Response:
+        status_code = 200
+        headers = {}
+        text = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom"
+              xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+              xmlns:media="http://search.yahoo.com/mrss/">
+          <entry>
+            <yt:videoId>good_video_1</yt:videoId>
+            <yt:channelId>UC_TEST</yt:channelId>
+            <title>Deep agent workflow</title>
+            <link rel="alternate" href="https://www.youtube.com/watch?v=good_video_1" />
+            <author><name>Creator One</name><uri>https://www.youtube.com/channel/UC_TEST</uri></author>
+            <published>2026-04-13T00:00:00+00:00</published>
+            <updated>2026-04-13T01:00:00+00:00</updated>
+            <media:group>
+              <media:title>Deep agent workflow</media:title>
+              <media:thumbnail url="https://img.youtube.com/vi/good_video_1/hqdefault.jpg" />
+              <media:description>Practical agent orchestration walkthrough.</media:description>
+            </media:group>
+          </entry>
+          <entry>
+            <yt:videoId>short_vid_1</yt:videoId>
+            <title>Short</title>
+            <link rel="alternate" href="https://www.youtube.com/shorts/short_vid_1" />
+            <published>2026-04-13T00:05:00+00:00</published>
+          </entry>
+        </feed>
+        """
+
+    class _Client:
+        async def get(self, *args, **kwargs):
+            return _Response()
+
+    entries = await adapter._fetch_channel_entries(_Client(), channel_id="UC_TEST")
+    assert [entry["video_id"] for entry in entries] == ["good_video_1"]
+    assert entries[0]["description"] == "Practical agent orchestration walkthrough."
+    assert entries[0]["thumbnail_url"].endswith("/hqdefault.jpg")
+    assert entries[0]["author_name"] == "Creator One"
+    assert entries[0]["updated_at"] == "2026-04-13T01:00:00+00:00"
+
+    event = adapter.normalize(type("Raw", (), {"payload": entries[0], "occurred_at": entries[0]["occurred_at"]})())
+    assert event.subject["description"] == "Practical agent orchestration walkthrough."
+    assert event.subject["thumbnail_url"].endswith("/hqdefault.jpg")

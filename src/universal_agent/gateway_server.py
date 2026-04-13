@@ -126,6 +126,12 @@ from universal_agent.ops_config import (
 )
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.approvals import list_approvals, update_approval, upsert_approval, clear_approvals
+from universal_agent.proactive_signals import (
+    apply_card_action,
+    list_cards as list_proactive_signal_cards,
+    record_feedback as record_proactive_signal_feedback,
+    sync_generated_cards as sync_proactive_signal_cards,
+)
 from universal_agent.work_threads import (
     append_work_thread_decision,
     list_work_threads,
@@ -2137,6 +2143,18 @@ class CSISpecialistLoopCleanupRequest(BaseModel):
     older_than_days: int = 7
     max_items: int = 200
     note: Optional[str] = None
+
+
+class ProactiveSignalFeedbackRequest(BaseModel):
+    status: Optional[str] = None
+    feedback_tags: list[str] = Field(default_factory=list)
+    feedback_text: Optional[str] = None
+
+
+class ProactiveSignalActionRequest(BaseModel):
+    action_id: str
+    feedback_tags: list[str] = Field(default_factory=list)
+    feedback_text: Optional[str] = None
 
 
 class DashboardEventPresetCreateRequest(BaseModel):
@@ -15766,6 +15784,10 @@ def _discord_intelligence_db_path() -> Path:
     return BASE_DIR / "discord_intelligence" / "discord_intelligence.db"
 
 
+def _csi_default_db_path() -> Path:
+    return Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
+
+
 def _discord_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_discord_intelligence_db_path()))
     conn.row_factory = sqlite3.Row
@@ -15918,6 +15940,91 @@ async def dashboard_discord_update_channel(
         logger.exception("Failed updating Discord channel config")
         raise HTTPException(status_code=500, detail=str(exc))
     return {"status": "ok", "channel_id": channel_id}
+
+
+@app.get("/api/v1/dashboard/proactive-signals")
+async def dashboard_proactive_signals(
+    request: Request,
+    source: str = "all",
+    status: str = "pending",
+    limit: int = 80,
+):
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            sync_counts = sync_proactive_signal_cards(
+                conn,
+                csi_db_path=_csi_default_db_path(),
+                discord_db_path=_discord_intelligence_db_path(),
+            )
+            cards = list_proactive_signal_cards(
+                conn,
+                source=source,
+                status=status,
+                limit=limit,
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", "cards": cards, "sync": sync_counts}
+
+
+@app.patch("/api/v1/dashboard/proactive-signals/{card_id}/feedback")
+async def dashboard_proactive_signal_feedback(
+    request: Request,
+    card_id: str,
+    payload: ProactiveSignalFeedbackRequest,
+):
+    _require_ops_auth(request)
+    actor = _activity_actor_from_request(request)
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                card = record_proactive_signal_feedback(
+                    conn,
+                    card_id=card_id,
+                    tags=payload.feedback_tags,
+                    text=str(payload.feedback_text or ""),
+                    status=payload.status,
+                    actor=actor,
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Signal card not found")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+    return {"status": "ok", "card": card}
+
+
+@app.post("/api/v1/dashboard/proactive-signals/{card_id}/action")
+async def dashboard_proactive_signal_action(
+    request: Request,
+    card_id: str,
+    payload: ProactiveSignalActionRequest,
+):
+    _require_ops_auth(request)
+    actor = _activity_actor_from_request(request)
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                card = apply_card_action(
+                    conn,
+                    card_id=card_id,
+                    action_id=payload.action_id,
+                    actor=actor,
+                    feedback_tags=payload.feedback_tags,
+                    feedback_text=str(payload.feedback_text or ""),
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Signal card not found")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+    return {"status": "ok", "card": card, "task_id": (card.get("selected_action") or {}).get("task_id")}
 
 
 @app.get("/api/v1/dashboard/csi/reports")
