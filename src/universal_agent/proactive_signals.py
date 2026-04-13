@@ -175,6 +175,21 @@ def get_card(conn: sqlite3.Connection, card_id: str) -> Optional[dict[str, Any]]
     return _hydrate_card(dict(row)) if row else None
 
 
+def delete_card(conn: sqlite3.Connection, card_id: str) -> bool:
+    """Silently delete a card without recording feedback.
+
+    Used to declutter the signal queue — this is NOT a reject and should
+    not be treated as a preference signal.
+    """
+    ensure_schema(conn)
+    cursor = conn.execute(
+        "DELETE FROM proactive_signal_cards WHERE card_id = ?",
+        (card_id,),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 def record_feedback(
     conn: sqlite3.Connection,
     *,

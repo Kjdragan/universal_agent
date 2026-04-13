@@ -128,6 +128,7 @@ from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.approvals import list_approvals, update_approval, upsert_approval, clear_approvals
 from universal_agent.proactive_signals import (
     apply_card_action,
+    delete_card as delete_proactive_signal_card,
     list_cards as list_proactive_signal_cards,
     record_feedback as record_proactive_signal_feedback,
     sync_generated_cards as sync_proactive_signal_cards,
@@ -16025,6 +16026,27 @@ async def dashboard_proactive_signal_action(
         finally:
             conn.close()
     return {"status": "ok", "card": card, "task_id": (card.get("selected_action") or {}).get("task_id")}
+
+
+@app.delete("/api/v1/dashboard/proactive-signals/{card_id}")
+async def dashboard_proactive_signal_delete(
+    request: Request,
+    card_id: str,
+):
+    """Silently delete a signal card to declutter the queue.
+
+    Unlike reject, this is NOT treated as preference feedback.
+    """
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            deleted = delete_proactive_signal_card(conn, card_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Signal card not found")
+        finally:
+            conn.close()
+    return {"status": "ok", "card_id": card_id}
 
 
 @app.get("/api/v1/dashboard/csi/reports")
