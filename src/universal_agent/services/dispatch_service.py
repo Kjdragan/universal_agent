@@ -124,6 +124,7 @@ def dispatch_on_approval(
         "task_id": task_id,
         "status": task_hub.TASK_STATUS_OPEN,
         "trigger_type": "human_approved",
+        "agent_ready": True,  # Human approval makes the task agent-ready
     })
 
     claimed = task_hub.claim_next_dispatch_tasks(

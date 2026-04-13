@@ -224,11 +224,20 @@ class ReviewActionView(discord.ui.View):
             await interaction.response.send_message("Could not determine task ID.", ephemeral=True)
             return
         try:
-            await gateway_client.approve_task(task_id)
-            await interaction.response.send_message(
-                f"Task `{task_id[:12]}` approved and dispatched.",
-                ephemeral=True,
-            )
+            # Try dispatch-based approval first (sets agent_ready + claims)
+            try:
+                await gateway_client.approve_task(task_id)
+                status_msg = f"Task `{task_id[:12]}` approved and dispatched."
+            except Exception:
+                # Fall back to action-based approval (state transition only)
+                await gateway_client.task_action(
+                    task_id,
+                    "approve",
+                    reason="approved_via_discord",
+                    agent_id="discord_kevin",
+                )
+                status_msg = f"Task `{task_id[:12]}` approved."
+            await interaction.response.send_message(status_msg, ephemeral=True)
             await _update_embed_after_action(
                 interaction,
                 color=discord.Color.green(),
