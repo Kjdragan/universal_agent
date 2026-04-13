@@ -401,6 +401,38 @@ function getStubDataForPath(pathname: string): unknown | null {
       },
     };
   }
+  if (pathname === "/api/v1/dashboard/proactive-signals") {
+    return {
+      status: "ok",
+      sync: { youtube: 2, discord: 1 },
+      cards: [
+        {
+          card_id: "stub-youtube-cluster",
+          source: "youtube",
+          card_type: "cluster",
+          title: "YouTube topic cluster: agentic coding",
+          summary: "Several non-Short videos are converging on agentic coding workflows. One transcript-backed sample is available and two metadata-only candidates look useful.",
+          status: "pending",
+          priority: 3,
+          confidence_score: 0.74,
+          novelty_score: 0.68,
+          evidence: [
+            { title: "Building agentic coding workflows", channel: "Small Educator", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", transcript_status: "ok" },
+            { title: "Claude Code production patterns", channel: "Tool Builder", url: "https://www.youtube.com/watch?v=ysz5S6PUM-U", transcript_status: "missing" },
+          ],
+          actions: [
+            { id: "research_further", label: "Research Further", description: "Create a follow-up research task." },
+            { id: "fetch_transcripts", label: "Fetch More Transcripts", description: "Fetch representative transcripts." },
+            { id: "add_to_knowledge", label: "Add To Knowledge", description: "Create a knowledge-note task." },
+          ],
+          feedback: { tag_counts: {}, history: [] },
+          selected_action: {},
+          created_at: new Date(Date.now() - 1800000).toISOString(),
+          updated_at: new Date(Date.now() - 1800000).toISOString(),
+        },
+      ],
+    };
+  }
   // Agent Queue stub (used by Active Tasks panel in Mission Control)
   if (pathname === "/api/v1/dashboard/todolist/agent-queue") {
     return {

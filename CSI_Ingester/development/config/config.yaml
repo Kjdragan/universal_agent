@@ -12,7 +12,7 @@ sources:
     playlists:
       - id: "${YT_TUTORIALS_PLAYLIST_ID}"
   youtube_channel_rss:
-    enabled: false
+    enabled: true
     poll_interval_seconds: 300
     watchlist_file: "channels_watchlist.json"
     watchlist: []
@@ -183,4 +183,3 @@ source_quality:
     lookback_days: 30
     min_items_for_assessment: 10
     auto_demote_after_days: 60  # Auto-demote if consistently low quality
-
