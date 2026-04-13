@@ -40,37 +40,30 @@ Notes:
 
 ## Sending attachments
 
-The official AgentMail MCP tools expect attachment payloads, not raw local paths.
+When an attachment is required, the LLM context limit often blocks generating massive base64 payloads (e.g. for PDFs or large PNGs).
 
-1. Call:
+**To bypass this limitation:**
+Instead of using the standard MCP tool, you are EXPLICITLY AUTHORIZED to use the specialized Python wrappers:
+- `agentmail_send_with_local_attachments`
+- `agentmail_reply_with_local_attachments`
 
-```json
-prepare_agentmail_attachment({
-  "path": "/absolute/path/to/file.pdf"
-})
-```
-
-2. Parse the returned JSON object.
-3. Pass that object in the official AgentMail MCP `attachments` array.
+These tools accept an `attachment_paths` array containing the absolute paths to the local files. The Python backend reads the files and sends them directly to the AgentMail API, bypassing the LLM text limit.
 
 ```json
-mcp__agentmail__send_message({
+agentmail_send_with_local_attachments({
   "inboxId": "oddcity216@agentmail.to",
   "to": ["recipient@example.com"],
   "subject": "Attached report",
   "text": "Please see attached.",
-  "attachments": [
-    {
-      "filename": "report.pdf",
-      "content": "<base64>"
-    }
+  "attachment_paths": [
+    "/absolute/path/to/file.pdf"
   ]
 })
 ```
 
 ## Replies
 
-When replying in an existing thread, use the official reply tool instead of inventing your own thread logic.
+When replying in an existing thread without attachments, use the official reply tool:
 
 ```json
 mcp__agentmail__reply_to_message({
@@ -81,7 +74,7 @@ mcp__agentmail__reply_to_message({
 })
 ```
 
-Use `list_threads` / `get_thread` first if you need to inspect the thread or recover the latest message ID.
+If attaching files to a reply, use `agentmail_reply_with_local_attachments` and pass the `attachment_paths` array.
 
 ## Human approval drafts
 
@@ -93,11 +86,11 @@ If a message genuinely requires human approval, use the official draft flow inst
 
 ## Anti-patterns
 
-1. Never use bash, curl, or ad hoc Python scripts to send AgentMail.
+1. Never use bash, curl, or ad hoc Python scripts to send AgentMail (EXCEPTION: You MAY use the `agentmail_send_with_local_attachments` internal python tool for heavy file attachments).
 2. Never invent a fake `send_agentmail` tool call when the official MCP tools are available.
 3. Never shell out to `agentmail-cli` from an agent run. The CLI is operator tooling, not the in-session delivery path.
 4. Never use the backend ops API directly from an agent run for normal email delivery.
-5. Never assume a local file path can be passed straight into AgentMail attachments. Convert it with `prepare_agentmail_attachment`.
+5. Never assume a local file path can be passed straight into official AgentMail MCP attachment schema. Convert it with `prepare_agentmail_attachment`, or use `agentmail_send_with_local_attachments`.
 
 ## Quick routing
 
@@ -105,5 +98,5 @@ If a message genuinely requires human approval, use the official draft flow inst
 |---------|--------|
 | "Email this to Kevin" | `mcp__agentmail__send_message` to `kevinjdragan@gmail.com` |
 | "Reply to this email" | `mcp__agentmail__reply_to_message` |
-| "Send this report with PDF attached" | `prepare_agentmail_attachment` then `mcp__agentmail__send_message` |
+| "Send this report with PDF attached" | `agentmail_send_with_local_attachments` with the PDF path |
 | "Send from my Gmail" | Use the `gmail` skill instead |

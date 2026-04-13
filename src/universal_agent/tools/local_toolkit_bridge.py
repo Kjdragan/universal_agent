@@ -227,6 +227,166 @@ async def prepare_agentmail_attachment_wrapper(args: dict[str, Any]) -> dict[str
 
 
 @tool(
+    name="agentmail_send_with_local_attachments",
+    description=(
+        "Sends an email natively via the AgentMail API, automatically processing local file paths "
+        "into base64 to avoid LLM context-token limits. USE EXCEPTION: You are authorized to use this Python tool "
+        "INSTEAD of the official AgentMail MCP tools ONLY when sending files (like PDFs or PNGs)."
+    ),
+    input_schema={
+        "inboxId": str,
+        "to": list,
+        "subject": str,
+        "text": str,
+        "html": str,
+        "attachment_paths": list,
+    }
+)
+async def agentmail_send_with_local_attachments_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    inboxId = str(args.get("inboxId") or "").strip()
+    to = args.get("to") or []
+    if isinstance(to, str):
+        to = [to]
+    if not inboxId or not to:
+        return {"content": [{"type": "text", "text": "error: inboxId and to are required"}]}
+
+    subject = str(args.get("subject") or "").strip()
+    text = str(args.get("text") or "").strip()
+    html = str(args.get("html") or "").strip()
+    attachment_paths = args.get("attachment_paths") or []
+
+    attachments = []
+    for path_str in attachment_paths:
+        p = Path(path_str).expanduser()
+        if p.is_file():
+            b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+            attachments.append({
+                "filename": p.name,
+                "content": b64
+            })
+        else:
+            return {"content": [{"type": "text", "text": f"error: attachment not found: {path_str}"}]}
+
+    payload = {
+        "to": to,
+        "subject": subject,
+        "text": text,
+        "html": html,
+        "attachments": attachments
+    }
+
+    import urllib.request
+    import urllib.error
+
+    api_key = os.getenv("AGENTMAIL_API_KEY", "").strip()
+    if not api_key:
+        return {"content": [{"type": "text", "text": "error: AGENTMAIL_API_KEY is not set"}]}
+
+    url = f"https://api.agentmail.to/v0/inboxes/{inboxId}/messages/send"
+    req = urllib.request.Request(url, method="POST")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        with urllib.request.urlopen(req, data=data, timeout=60.0) as resp:
+            resp_body = resp.read().decode("utf-8")
+            return {"content": [{"type": "text", "text": f"Email successfully sent.\n{resp_body}"}]}
+    except urllib.error.HTTPError as e:
+        return {"content": [{"type": "text", "text": f"error: {e.code} API Error - {e.read().decode('utf-8')}"}]}
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"error: {str(e)}"}]}
+
+
+@tool(
+    name="agentmail_reply_with_local_attachments",
+    description=(
+        "Replies to an email natively via the AgentMail API, automatically processing local file paths "
+        "into base64 to avoid LLM context-token limits. USE EXCEPTION: You are authorized to use this Python tool "
+        "INSTEAD of the official AgentMail MCP tools ONLY when replying with files (like PDFs or PNGs)."
+    ),
+    input_schema={
+        "inboxId": str,
+        "messageId": str,
+        "text": str,
+        "html": str,
+        "attachment_paths": list,
+    }
+)
+async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    inboxId = str(args.get("inboxId") or "").strip()
+    messageId = str(args.get("messageId") or "").strip()
+    
+    if not inboxId or not messageId:
+        return {"content": [{"type": "text", "text": "error: inboxId and messageId are required"}]}
+
+    text = str(args.get("text") or "").strip()
+    html = str(args.get("html") or "").strip()
+    attachment_paths = args.get("attachment_paths") or []
+
+    attachments = []
+    for path_str in attachment_paths:
+        p = Path(path_str).expanduser()
+        if p.is_file():
+            b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+            attachments.append({
+                "filename": p.name,
+                "content": b64
+            })
+        else:
+            return {"content": [{"type": "text", "text": f"error: attachment not found: {path_str}"}]}
+
+    payload = {
+        "text": text,
+        "html": html,
+        "attachments": attachments
+    }
+
+    import urllib.request
+    import urllib.error
+
+    api_key = os.getenv("AGENTMAIL_API_KEY", "").strip()
+    if not api_key:
+        return {"content": [{"type": "text", "text": "error: AGENTMAIL_API_KEY is not set"}]}
+
+    url = f"https://api.agentmail.to/v0/inboxes/{inboxId}/messages/{messageId}/reply"
+    req = urllib.request.Request(url, method="POST")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        with urllib.request.urlopen(req, data=data, timeout=60.0) as resp:
+            resp_body = resp.read().decode("utf-8")
+            return {"content": [{"type": "text", "text": f"Reply successfully sent.\n{resp_body}"}]}
+    except urllib.error.HTTPError as e:
+        return {"content": [{"type": "text", "text": f"error: {e.code} API Error - {e.read().decode('utf-8')}"}]}
+    except Exception as e:
+        return {"content": [{"type": "text", "text": f"error: {str(e)}"}]}
+
+
+LOCAL_TOOLS: dict[str, Any] = {
+    "upload_to_composio": upload_to_composio_wrapper,
+    "list_directory": list_directory_wrapper,
+    "inspect_session_workspace": inspect_session_workspace_wrapper,
+    "list_agent_sessions": list_agent_sessions_wrapper,
+    "read_vps_file": read_vps_file_wrapper,
+    "append_to_file": append_to_file_wrapper,
+    "write_text_file": write_text_file_wrapper,
+    "prepare_agentmail_attachment": prepare_agentmail_attachment_wrapper,
+    "agentmail_send_with_local_attachments": agentmail_send_with_local_attachments_wrapper,
+    "agentmail_reply_with_local_attachments": agentmail_reply_with_local_attachments_wrapper,
+    "finalize_research": finalize_research_wrapper,
+    "generate_image": generate_image_wrapper,
+    "generate_image_with_review": generate_image_with_review_wrapper,
+    "describe_image": describe_image_wrapper,
+    "preview_image": preview_image_wrapper,
+    "ask_user_questions": ask_user_questions_wrapper,
+    "batch_tool_execute": batch_tool_execute_wrapper,
+}
+
+
+@tool(
     name="finalize_research",
     description="Run the inbox research pipeline: crawl, filter, and create refined corpus (in-process).",
     input_schema={
