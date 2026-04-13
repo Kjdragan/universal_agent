@@ -320,6 +320,15 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 - Kevin sees the message as coming from Simone
 - Avoids Kevin appearing to email himself
 
+### Large Attachments & Payload Context Limits
+
+When dealing with large binary attachments (PDFs, large PNGs, etc.), LLM context limits prevent generating massive Base64 payloads directly in the JSON response logic. 
+To bypass this limitation, we provide specialized Python wrappers in the local toolkit:
+- `agentmail_send_with_local_attachments`
+- `agentmail_reply_with_local_attachments`
+
+These bridge tools accept an `attachment_paths` array containing absolute paths to the local files instead of requiring Base64 conversion via `prepare_agentmail_attachment`. The backend securely loads the files into memory and sends them directly to the programmatic AgentMail HTTP API.
+
 ---
 
 ## Internal MCP Tool: `mcp__internal__send_agentmail`

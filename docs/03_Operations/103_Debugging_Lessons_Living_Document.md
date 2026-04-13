@@ -504,6 +504,33 @@ Reusable rule:
 
 ---
 
+## 2026-04-13: Python Execution Scope and Dictionary Initialization
+
+### Incident Summary
+
+During the deployment of a new feature involving large attachment bypassing for AgentMail, the pipeline's integration tests (like `py_compile`) passed successfully, but the actual VPS `gateway` service crashed immediately on restart.
+
+The Github Action pipeline showed a `NameError: name 'finalize_research_wrapper' is not defined` traceback originating from `gateway_server.py`. The root cause was located in `local_toolkit_bridge.py`: a dictionary (`LOCAL_TOOLS`) was initialized at the top of the file grouping all the tool wrapper functions *before* those `__wrapper` functions were actually defined later in the file. 
+
+Because `py_compile` only checks for *SyntaxErrors* and not runtime *NameErrors* relating to variable scope binding during module load, the invalid initialization order successfully compiled.
+
+### Lesson 1: Scope Initialization Matters in Python Module Loading
+
+Variables and dictionary references in the main body of a module are evaluated immediately when the module is imported.
+
+Reusable rule:
+- Ensure all functions mapping to a dictionary or registry declared at the global sequence level are defined *before* the mapping dictionary itself is declared.
+- Place registry/mapping dictionaries at the bottom of the file to ensure all references exist.
+
+### Lesson 2: py_compile is Insufficient for Runtime Load Checking
+
+`python -m py_compile` checks for syntax errors, but does not capture execution-order scope binding errors. 
+
+Reusable rule:
+- Don't overly rely on compilation tools as a golden metric of correctness. For simple scripts or files acting as modules, explicitly load the file natively using `uv run python file.py` or a linter (like `mypy` or `ruff`) set to strict mode to identify scope or unresolved variable references before pushing to `main` for deployment.
+
+---
+
 ## Seed Questions For Future Entries
 
 When adding a new lesson, answer these:
