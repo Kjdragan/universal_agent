@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -568,6 +569,33 @@ class ToDoDispatchService:
                     })
                 if decision != "accepted":
                     raise RuntimeError(f"todo_dispatch_not_admitted:{decision}")
+
+                # Ensure completed tasks get the proper active workspace links persisted
+                if task_ids and task_hub_claimed:
+                    try:
+                        run_id = str(task_hub_claimed[0].get("workflow_run_id") or "")
+                        wdir = str(task_hub_claimed[0].get("workspace_dir") or "")
+                        if wdir:
+                            with connect_runtime_db(activity_db_path) as conn:
+                                for t_id in task_ids:
+                                    item = task_hub.get_item(conn, t_id)
+                                    if item and str(item.get("status") or "") == task_hub.TASK_STATUS_COMPLETED:
+                                        metadata = dict(item.get("metadata") or {})
+                                        dispatch_meta = dict(metadata.get("dispatch") or {})
+                                        
+                                        # If it exists, ensure the completion lineage holds it.
+                                        if not dispatch_meta.get("last_workspace_dir"):
+                                            dispatch_meta["last_workspace_dir"] = wdir
+                                            if run_id:
+                                                dispatch_meta["last_workflow_run_id"] = run_id
+                                            metadata["dispatch"] = dispatch_meta
+                                            conn.execute(
+                                                "UPDATE task_hub_items SET metadata_json = ? WHERE task_id = ?",
+                                                (json.dumps(metadata), t_id)
+                                            )
+                                            conn.commit()
+                    except Exception as attach_e:
+                        logger.error("Failed to attach completed workspace link for %s: %s", session.session_id, attach_e)
             else:
                 raise RuntimeError("todo dispatch execution callback is not configured")
                 
