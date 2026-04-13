@@ -1,13 +1,17 @@
 # Discord Intelligence Subsystem - Requirements
 # Part of Universal Agent
 
-# User token support (selfbot fork of discord.py)
-# Standard discord.py blocks user tokens; this fork allows them
-discord.py-self>=2.0
+# Standard discord.py for the bot-token Command & Control server
+# Provides discord.ui (buttons, modals, views), app_commands (slash commands),
+# discord.Intents, and all interactive bot features.
+discord.py>=2.4.0
 
-# Standard discord.py for the bot-token Command & Control server (Phase 2)
-# NOTE: discord.py and discord.py-self conflict if installed in the same env.
-# For Phase 1 (inventory + daemon), only discord.py-self is needed.
-# For Phase 2 (CC server with slash commands), you may need a separate venv
-# or use discord.py-self for both (it supports bot tokens too).
-# discord.py>=2.7.0
+# NOTE: The Intelligence Daemon (daemon.py) uses user tokens and requires
+# discord.py-self (a fork that allows user token auth). Since discord.py and
+# discord.py-self conflict (both install to the 'discord' namespace), the daemon
+# runs in a SEPARATE virtualenv on the VPS via its own systemd service
+# (ua-discord-intelligence.service).
+#
+# To set up the daemon venv:
+#   python -m venv /opt/discord-daemon-venv
+#   /opt/discord-daemon-venv/bin/pip install discord.py-self>=2.1.0
