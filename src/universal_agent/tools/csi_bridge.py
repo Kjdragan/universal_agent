@@ -18,7 +18,7 @@ from universal_agent.utils.session_workspace import (
 )
 
 _DEFAULT_CSI_DB_PATH = "/var/lib/universal-agent/csi/csi.db"
-_DEFAULT_YT_WATCHLIST = "/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json"
+_DEFAULT_YT_WATCHLIST = "/var/lib/universal-agent/csi/channels_watchlist.json"
 _DEFAULT_REDDIT_WATCHLIST = "/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
 
 

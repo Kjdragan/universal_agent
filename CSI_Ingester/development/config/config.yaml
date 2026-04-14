@@ -14,7 +14,7 @@ sources:
   youtube_channel_rss:
     enabled: true
     poll_interval_seconds: 300
-    watchlist_file: "channels_watchlist.json"
+    watchlist_file: "/var/lib/universal-agent/csi/channels_watchlist.json"
     watchlist: []
   reddit_discovery:
     enabled: true
