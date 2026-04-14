@@ -3457,10 +3457,22 @@ def generate_image(
         import base64
         from io import BytesIO
 
-        # Initialize Gemini client
-        api_key = os.environ.get("GEMINI_API_KEY")
+        # Initialize Gemini client.
+        # Prefer GEMINI_IMAGE_API_KEY (Google AI Studio key) because the org-level GCP
+        # policy on this project blocks plain API keys from accessing the Generative
+        # Language API (error: API_KEY_SERVICE_BLOCKED). AI Studio keys are not subject
+        # to org policies and work directly with generativelanguage.googleapis.com.
+        api_key = os.environ.get("GEMINI_IMAGE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         if not api_key:
-            return json.dumps({"error": "GEMINI_API_KEY not set in environment"})
+            return json.dumps(
+                {
+                    "error": (
+                        "No Gemini API key found. Set GEMINI_IMAGE_API_KEY (preferred, "
+                        "Google AI Studio key from aistudio.google.com) or GEMINI_API_KEY "
+                        "in Infisical."
+                    )
+                }
+            )
 
         # Allow env override for the default image model (lets us upgrade without chasing prompt changes).
         # If callers explicitly pick a different model_name, keep their choice.
@@ -3736,7 +3748,32 @@ def generate_image(
     except Exception as e:
         import traceback
 
-        return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+        err_str = str(e)
+        tb_str = traceback.format_exc()
+
+        # Detect 403 PERMISSION_DENIED from generativelanguage.googleapis.com.
+        # This means the GEMINI_API_KEY in Infisical does not have the
+        # Generative Language API enabled on its Google Cloud project.
+        if "403" in err_str and "PERMISSION_DENIED" in err_str:
+            return json.dumps(
+                {
+                    "error": (
+                        "PERMISSION_DENIED (403): The GEMINI_API_KEY does not have "
+                        "generativelanguage.googleapis.com enabled on its Google Cloud project. "
+                        "Fix: go to console.cloud.google.com → APIs & Services → Library → "
+                        "enable 'Generative Language API', or update GEMINI_API_KEY in Infisical "
+                        "to a key whose project has this API enabled."
+                    ),
+                    "fallback_suggestion": (
+                        "Use the HTML-to-infographic approach instead: create a richly styled "
+                        "HTML file (inline CSS, charts, data tables) and convert it to PDF using "
+                        "mcp__internal__html_to_pdf. This is the validated fallback path."
+                    ),
+                    "original_error": err_str,
+                }
+            )
+
+        return json.dumps({"error": err_str, "traceback": tb_str})
 
 
 def _parse_json_lenient(text: str) -> dict:

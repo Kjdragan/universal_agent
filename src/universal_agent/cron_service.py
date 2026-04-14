@@ -999,8 +999,9 @@ class CronService:
                                 import subprocess
                                 
                                 env = os.environ.copy()
-                                cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else "/home/kjdragan/lrepos/universal_agent"
-                                env["PYTHONPATH"] = f"/home/kjdragan/lrepos/universal_agent/src:{env.get('PYTHONPATH', '')}"
+                                cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else str(Path(__file__).resolve().parents[2])
+                                project_src = str(Path(__file__).resolve().parents[1])
+                                env["PYTHONPATH"] = f"{project_src}:{env.get('PYTHONPATH', '')}"
                                 
                                 proc = await asyncio.create_subprocess_exec(
                                     sys.executable, "-m", script_path.replace("/", ".").replace(".py", ""),

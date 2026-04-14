@@ -66,8 +66,10 @@ INSTRUCTIONS:
 3. For EACH selected topic:
    - Perform deep research using NotebookLM (the `nlm-skill`) and standard web search.
    - Synthesize a comprehensive, structured markdown report with the findings.
-   - Use the Image Generation tool (`generate_image` or Gemeni 3 Pro Image) to generate an infographic summarizing the top insights. 
+   - Use the Image Generation tool (`generate_image` with model `gemini-2.5-flash-image` or `gemini-3-pro-image-preview`) to generate an infographic summarizing the top insights.
      Save the image to the designated folder: {wiki_artifacts_dir}/{today}_wiki_infographic_[TOPIC].png
+     **FALLBACK**: If `generate_image` fails (e.g., 403 error or API unavailable), create a richly styled HTML infographic instead
+     and convert it to PDF using `html_to_pdf`. Save as {wiki_artifacts_dir}/{today}_wiki_infographic_[TOPIC].pdf
    - Ingest ALL compile insights into the Universal Agent Wiki using the `wiki_ingest_external_source` tool.
 4. When finished, format a "Nightly Wiki Report" documenting the selected topics, and absolute links to the NLM outputs, generated infographics, and the core themes added to the Wiki.
 5. Save exactly one payload file named 'nightly_wiki_{today}.md' to {wiki_artifacts_dir} containing just this summary of links and results so the Morning Briefing agent can surface it to the user.
