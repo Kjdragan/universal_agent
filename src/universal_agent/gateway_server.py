@@ -19267,20 +19267,6 @@ async def dashboard_todolist_answer_question(task_id: str, request: Request):
             conn.close()
 
 
-@app.get("/api/v1/dashboard/todolist/morning-report")
-async def dashboard_todolist_morning_report():
-    """Return the morning report snapshot for the dashboard."""
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            from universal_agent.services.proactive_advisor import build_morning_report
-            report = build_morning_report(conn)
-            return {"status": "ok", "report": report}
-        except Exception as e:
-            return {"status": "error", "error": str(e), "report": None}
-        finally:
-            conn.close()
-
 @app.post("/api/v1/dashboard/todolist/tasks")
 async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
     """Quick-add a new task from the dashboard."""
