@@ -1401,7 +1401,9 @@ async def require_dashboard_auth(request: Request, call_next):
 # =============================================================================
 
 from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
+from universal_agent.api.routers.csi_discord_watchlist import router as csi_discord_watchlist_router
 app.include_router(csi_watchlist_router)
+app.include_router(csi_discord_watchlist_router)
 
 @app.get("/")
 async def root():
