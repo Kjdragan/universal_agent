@@ -1,0 +1,22 @@
+{
+  "jobs": [
+    {
+      "job_id": "nightly_wiki",
+      "user_id": "system",
+      "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_nightly_wiki",
+      "command": "uv run python -m universal_agent.scripts.nightly_wiki_agent",
+      "every_seconds": 0,
+      "cron_expr": "0 3 * * *",
+      "timezone": "America/Chicago",
+      "run_at": null,
+      "delete_after_run": false,
+      "model": null,
+      "timeout_seconds": null,
+      "enabled": true,
+      "created_at": 1776175852.3359642,
+      "last_run_at": null,
+      "next_run_at": null,
+      "metadata": {}
+    }
+  ]
+}

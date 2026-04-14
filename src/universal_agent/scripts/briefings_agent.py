@@ -42,6 +42,15 @@ async def main():
     
     telemetry_json = json.dumps(briefing_data, indent=2)
     
+    wiki_content = ""
+    wiki_file = os.path.join(artifacts_dir, "nightly_wikis", f"nightly_wiki_{today}.md")
+    if os.path.exists(wiki_file):
+        try:
+            with open(wiki_file, "r") as f:
+                wiki_content = f.read()
+        except Exception as exc:
+            logger.warning(f"Failed to read wiki content: {exc}")
+
     objective = f"""Generate the daily autonomous operations briefing for the last 24 hours.
 Focus only on work executed without direct user prompting (scheduled/proactive flows).
 
@@ -50,9 +59,15 @@ Here is the raw telemetry data:
 {telemetry_json}
 ```
 
+Here is the external Nightly Wiki Proactive Generation output (if any):
+```markdown
+{wiki_content}
+```
+
 Instructions:
 - Summarize tasks completed, attempted, and failed.
 - Include links/paths to any artifacts produced.
+- MUST explicitly include a "Latest Proactive Knowledge Base Additions" section referencing the Nightly Wiki external paths and files if any are provided.
 - Highlight any items requiring user decisions.
 - If there are data quality warnings, mention them.
 
