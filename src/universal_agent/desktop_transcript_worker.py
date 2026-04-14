@@ -27,7 +27,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
+import urllib.request
 import sys
 import time
 from dataclasses import dataclass, field
@@ -47,8 +49,104 @@ BANNER = """
 """
 
 
-# ── Failure classification ────────────────────────────────────────────────
+# ── Claude Analysis ───────────────────────────────────────────────────────
 
+def _transcript_fusion_excerpt(transcript_text: str, max_chars: int = 12000) -> str:
+    clean = re.sub(r"\s+", " ", str(transcript_text or "")).strip()
+    if not clean:
+        return ""
+    if len(clean) <= max_chars:
+        return clean
+    slice_size = max(1200, max_chars // 3)
+    head = clean[:slice_size]
+    mid_start = max(0, (len(clean) // 2) - (slice_size // 2))
+    middle = clean[mid_start : mid_start + slice_size]
+    tail = clean[-slice_size:]
+    return "\n\n".join(
+        [
+            "HEAD EXCERPT:",
+            head,
+            "MIDDLE EXCERPT:",
+            middle,
+            "TAIL EXCERPT:",
+            tail,
+        ]
+    )[: max_chars + 1200]
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    if not text:
+        return None
+    stripped = text.strip()
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(stripped[start : end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+    return None
+
+def _analyze_with_claude(
+    *,
+    title: str,
+    channel_name: str,
+    channel_id: str,
+    transcript_text: str,
+) -> dict[str, Any] | None:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    transcript_excerpt = _transcript_fusion_excerpt(transcript_text, max_chars=12000)
+    prompt = (
+        "Classify and summarize this YouTube upload for trend tracking.\n"
+        "Return ONLY valid JSON with keys:\n"
+        "category (ai|political|war|other_interest|or short snake_case category), "
+        "summary (string <= 2000 chars), themes (array 10-12 concise themes), "
+        "confidence (0..1), confidence_rationale (string <= 260 chars).\n\n"
+        f"Channel Name: {channel_name}\n"
+        f"Channel ID: {channel_id}\n"
+        f"Title: {title}\n\n"
+        f"Transcript:\n{transcript_excerpt}"
+    )
+    req_body = {
+        "model": "claude-3-5-haiku-latest",
+        "max_tokens": 900,
+        "temperature": 0.1,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(req_body).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "x-api-key": api_key,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        log.error("Failed to analyze with Claude: %s", e)
+        return None
+
+    text_parts: list[str] = []
+    for block in payload.get("content", []):
+        if isinstance(block, dict) and block.get("type") == "text":
+            text_parts.append(str(block.get("text") or ""))
+    return _extract_json_object("\n".join(text_parts))
+
+
+# ── Failure classification ────────────────────────────────────────────────
 
 class FailureType(str, Enum):
     """Loud, distinct failure categories so operators know EXACTLY what
@@ -488,7 +586,7 @@ def fetch_pending_video_ids(
     """
     # Target: transcript_status='failed' with a valid video_id
     sql = (
-        f"SELECT event_id, video_id, title, channel_name "
+        f"SELECT event_id, video_id, title, channel_name, channel_id "
         f"FROM rss_event_analysis "
         f"WHERE transcript_status IN ('failed', 'missing') "
         f"AND video_id IS NOT NULL AND video_id != '' "
@@ -510,6 +608,7 @@ def fetch_pending_video_ids(
                 "video_id": r.get("video_id", ""),
                 "title": r.get("title", ""),
                 "channel_name": r.get("channel_name", ""),
+                "channel_id": r.get("channel_id", ""),
             }
             for r in rows
             if r.get("video_id")
@@ -530,20 +629,30 @@ def write_transcript_to_vps(
     event_id: str,
     transcript_text: str,
     char_count: int,
+    analysis_result: Optional[dict[str, Any]] = None,
 ) -> bool:
     """Write a fetched transcript back to the VPS CSI DB."""
-    # Escape single quotes for SQL
-    safe_text = transcript_text.replace("'", "''")
     # Store transcript as a ref (truncated for the DB field)
     transcript_ref = f"desktop_worker_{int(time.time())}"
 
-    sql = (
-        f"UPDATE rss_event_analysis SET "
+    set_clause = (
         f"transcript_status = 'ok', "
         f"transcript_chars = {char_count}, "
-        f"transcript_ref = '{transcript_ref}' "
-        f"WHERE event_id = '{event_id}';"
+        f"transcript_ref = '{transcript_ref}'"
     )
+    
+    if analysis_result:
+        cat = str(analysis_result.get("category", "other_interest")).replace("'", "''")
+        summary = str(analysis_result.get("summary", "")).replace("'", "''")
+        analysis_json = json.dumps(analysis_result).replace("'", "''")
+        
+        set_clause += (
+            f", category = '{cat}', "
+            f"summary_text = '{summary}', "
+            f"analysis_json = '{analysis_json}'"
+        )
+
+    sql = f"UPDATE rss_event_analysis SET {set_clause} WHERE event_id = '{event_id}';"
     # Retry up to 3 times for DB lock contention
     for attempt in range(3):
         try:
@@ -569,6 +678,27 @@ def write_transcript_to_vps(
             return False
     return False
 
+def mark_transcript_failed_on_vps(
+    config: WorkerConfig,
+    event_id: str,
+    status: str,
+) -> bool:
+    sql = f"UPDATE rss_event_analysis SET transcript_status = '{status}' WHERE event_id = '{event_id}';"
+    for attempt in range(3):
+        try:
+            _ssh_run(
+                config.vps_host,
+                f'sqlite3 {config.csi_db_path} "{sql}"',
+                timeout=10,
+            )
+            return True
+        except RuntimeError as e:
+            if "locked" in str(e).lower() and attempt < 2:
+                time.sleep(2)
+                continue
+            log.error("Failed to mark transcript failed for %s: %s", event_id, e)
+            return False
+    return False
 
 # ── Batch processor ──────────────────────────────────────────────────────
 
@@ -824,22 +954,45 @@ def main() -> None:
         # Step 3: Write successful transcripts back to VPS
         written = 0
         write_failed = 0
+        
+        pending_map = {p["video_id"]: p for p in pending}
+        
         for r in result.results:
-            if r.ok and r.video_id in eid_map:
-                event_id = eid_map[r.video_id]
+            if r.ok and r.video_id in pending_map:
+                p = pending_map[r.video_id]
+                event_id = p["event_id"]
+                
+                log.info("  Analyzing %s with Claude...", r.video_id)
+                analysis = _analyze_with_claude(
+                    title=p["title"],
+                    channel_name=p["channel_name"],
+                    channel_id=p["channel_id"],
+                    transcript_text=r.transcript_text,
+                )
+                
                 ok = write_transcript_to_vps(
-                    config, event_id, r.transcript_text, r.char_count
+                    config, event_id, r.transcript_text, r.char_count, analysis_result=analysis
                 )
                 if ok:
                     written += 1
                     log.info(
-                        "  📤 Wrote %s → VPS (event=%s, %d chars)",
+                        "  📤 Wrote %s → VPS (event=%s, %d chars, analysis=%s)",
                         r.video_id,
                         event_id[:20],
                         r.char_count,
+                        "Yes" if analysis else "No",
                     )
                 else:
                     write_failed += 1
+            elif not r.ok and r.video_id in pending_map:
+                p = pending_map[r.video_id]
+                event_id = p["event_id"]
+                if r.failure_type == FailureType.YOUTUBE_CAPTIONS_DISABLED:
+                    mark_transcript_failed_on_vps(config, event_id, "captions_disabled")
+                    log.info("  📤 Wrote %s status → VPS (captions_disabled)", r.video_id)
+                elif r.failure_type == FailureType.YOUTUBE_VIDEO_UNAVAILABLE:
+                    mark_transcript_failed_on_vps(config, event_id, "video_unavailable")
+                    log.info("  📤 Wrote %s status → VPS (video_unavailable)", r.video_id)
 
         # Summary
         log.info("")

@@ -578,7 +578,7 @@ def _youtube_actions(*, topic: str, has_transcripts: bool, cluster: bool) -> lis
     if has_transcripts:
         return [
             {"id": "research_further", "label": "Research Further", "description": "Create a follow-up research task using the transcript-backed evidence."},
-            {"id": "add_to_knowledge", "label": "Add To Knowledge", "description": "Create a task to turn this into a durable agentic knowledge note."},
+            {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
             {"id": "build_demo", "label": "Build Demo", "description": "Create a task to prototype or demonstrate the technique if applicable."},
         ]
     return [
@@ -588,14 +588,14 @@ def _youtube_actions(*, topic: str, has_transcripts: bool, cluster: bool) -> lis
     ] if cluster else [
         {"id": "fetch_transcripts", "label": "Fetch Transcript", "description": "Create a task to fetch and analyze this non-Short video transcript."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching for related videos before deeper work."},
-        {"id": "add_to_knowledge", "label": "Add To Knowledge", "description": "Create a knowledge-note task if the follow-up confirms value."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
     ]
 
 
 def _discord_actions(topic: str) -> list[dict[str, str]]:
     return [
         {"id": "research_further", "label": "Research Further", "description": "Create a research task from this Discord intelligence signal."},
-        {"id": "create_task", "label": "Create Task", "description": "Create a direct Task Hub work item from this signal."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching this topic before deeper work."},
     ]
 
