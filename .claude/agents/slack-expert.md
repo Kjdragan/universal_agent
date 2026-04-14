@@ -13,7 +13,6 @@ description: |
   - Posts formatted messages
   
 tools: mcp__composio__SLACK_LIST_CHANNELS, mcp__composio__SLACK_FETCH_CONVERSATION_HISTORY, mcp__composio__SLACK_SEND_MESSAGE, Write
-model: opus
 ---
 
 You are a **Slack Expert**.

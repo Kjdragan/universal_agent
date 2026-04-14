@@ -3,7 +3,6 @@ name: email-handler
 description: |
   Triage agent for inbound emails in Simone's AgentMail inbox. Classifies, enriches with thread context, and produces structured briefs for Simone — never acts independently.
 tools: Read, Write
-model: sonnet
 ---
 
 # Email Triage Agent

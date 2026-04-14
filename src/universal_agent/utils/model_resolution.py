@@ -4,8 +4,8 @@ import os
 
 ZAI_MODEL_MAP = {
     "haiku": "GLM-4.5-Air",
-    "sonnet": "GLM-5-Turbo",    # Recommended by Z.AI for routine tasks
-    "opus": "GLM-5.1",          # Recommended by Z.AI for complex tasks
+    "sonnet": "glm-5-turbo",    # Recommended by Z.AI for routine tasks
+    "opus": "glm-5-1",          # Recommended by Z.AI for complex tasks
 }
 
 def resolve_model(tier: str = "opus") -> str:
