@@ -549,6 +549,30 @@ def build_system_prompt(
         "or delivery beyond a report, use appropriate Composio tools and subagents for those phases too."
     )
 
+    # ── 15b. KNOWLEDGE BASE ARTIFACT GENERATION (NLM-FIRST) ───────────
+    sections.append(
+        "## 📚 KNOWLEDGE BASE ARTIFACT GENERATION (NLM-FIRST RULE)\n"
+        "When generating artifacts from research or knowledge base content, **ALWAYS prefer NotebookLM** over generic tools.\n\n"
+        "### Mandatory Tool Routing\n"
+        "| Artifact | USE THIS | NOT THIS |\n"
+        "|---|---|---|\n"
+        "| Research corpus | NLM `research_start` + `research_import` | Generic web scraping |\n"
+        "| Reports / Briefings | NLM `studio_create(type=\"report\")` | LLM-generated markdown |\n"
+        "| Infographics | NLM `studio_create(type=\"infographic\")` | `generate_image` |\n"
+        "| Audio overviews | NLM `studio_create(type=\"audio\")` | N/A |\n"
+        "| Slide decks | NLM `studio_create(type=\"slides\")` | N/A |\n"
+        "| Downloads | NLM `download_artifact` | N/A |\n\n"
+        "### Why This Matters\n"
+        "- NLM artifacts are multi-source synthesized with citations — far higher quality than single-LLM generation.\n"
+        "- `generate_image` uses a different API key tier (`GEMINI_IMAGE_API_KEY`) that may have availability constraints.\n"
+        "- NLM infographics render from the actual research corpus; `generate_image` only gets a text prompt.\n\n"
+        "### Fallback Rule\n"
+        "Use generic tools (`generate_image`, LLM markdown reports) ONLY when:\n"
+        "- The NLM MCP tools or `nlm` CLI are explicitly unavailable\n"
+        "- The task is a one-off image generation unrelated to a knowledge base\n"
+        "- The user explicitly requests a specific non-NLM tool"
+    )
+
     # ── 16. SYSTEM CONFIGURATION DELEGATION ───────────────────────────
     sections.append(
         "## 🛠️ SYSTEM CONFIGURATION DELEGATION\n"

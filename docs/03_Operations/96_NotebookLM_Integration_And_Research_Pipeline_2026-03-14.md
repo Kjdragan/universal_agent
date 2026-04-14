@@ -187,6 +187,29 @@ The NLM sub-agent should **never** attempt email delivery. In a March 2026 incid
 
 **Solution:** The NLM sub-agent now explicitly returns artifact paths and notebook URL to the primary agent without attempting delivery. Email routing follows the standard identity policy: AgentMail for Simone's work, gws MCP Gmail only on Kevin's explicit request. Composio Gmail tools are deprecated.
 
+### 9. Org-Level API Keys Block Image Generation Silently
+
+The `generate_image` MCP tool used `GEMINI_API_KEY` (a Cloud Console key) that worked for text but returned HTTP 403 for image generation. The cause was Google Cloud org-level policy enforcement on Imagen endpoints — invisible at the project API-enablement level.
+
+**Impact:** KB→Report→Infographic pipelines failed silently, with agents retrying `generate_image` until they exhausted fallback paths.
+
+**Solution:** Store a separate `GEMINI_IMAGE_API_KEY` from AI Studio (`aistudio.google.com`) in Infisical. The `generate_image` tool now prefers `GEMINI_IMAGE_API_KEY` over `GEMINI_API_KEY`. AI Studio keys bypass org-level policy enforcement.
+
+### 10. KB Pipelines Must Explicitly Mandate NLM for Artifact Generation
+
+When the nightly wiki agent dispatched a VP mission to build knowledge bases, the VP used `generate_image` for infographics instead of NLM's native `studio_create(type="infographic")`. The pipeline prompt described the *desired output* but never named the *required tool path*.
+
+**Impact:** Agents defaulted to generic tools, hit the 403 issue above, and fell into HTML-to-PDF fallback loops instead of using NLM's high-quality infographic renderer.
+
+**Solution:** Pipeline prompts must explicitly mandate the NLM tool path for each artifact type:
+- Research → `research_start` + `research_import`
+- Reports → `studio_create(type="report")`  
+- Infographics → `studio_create(type="infographic")`
+- Audio → `studio_create(type="audio")`
+- Download → `download_artifact`
+
+Generic tools (`generate_image`, LLM markdown) should only be used when NLM is explicitly unavailable.
+
 ## Configuration
 
 ### Environment Variables
@@ -255,7 +278,7 @@ NLM operations run on Google's infrastructure via our existing subscription. Key
 
 ## Future Opportunities
 
-1. **Scheduled Research Digests** — Periodic NotebookLM research runs on configured topics, with briefing docs emailed automatically via AgentMail
+1. ~~**Scheduled Research Digests**~~ — **REALIZED (2026-04-14):** The `nightly_wiki_agent.py` cron job runs at 03:15 CST, selects top proactive signal cards, dispatches VP missions to build NLM knowledge bases, and saves a summary for the morning briefing agent to surface. See `schedule_nightly_wiki.py` for cron registration.
 2. **Source Curation** — Use `source_describe` to evaluate and filter imported sources before artifact generation
 3. **Iterative Research** — Add more sources to existing notebooks over time, building cumulative knowledge bases
 4. **Export to Google Workspace** — Use `export_artifact` to push reports to Google Docs and data tables to Google Sheets

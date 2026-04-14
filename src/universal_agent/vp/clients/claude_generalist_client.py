@@ -96,5 +96,19 @@ def _build_prompt(*, objective: str, payload: dict[str, Any]) -> str:
         lines.append("Budget:")
         for key, value in budget.items():
             lines.append(f"- {key}: {value}")
+
+    # NLM-first artifact generation guidance
+    lines.append("")
+    lines.append("## Knowledge Base Artifact Generation (NLM-FIRST RULE)")
+    lines.append("When generating artifacts from research or knowledge base content, "
+                 "ALWAYS prefer NotebookLM (via `nlm` CLI) over generic tools:")
+    lines.append("- Reports → `nlm studio create <notebook> --type report`")
+    lines.append("- Infographics → `nlm studio create <notebook> --type infographic`")
+    lines.append("- Audio → `nlm studio create <notebook> --type audio`")
+    lines.append("- DO NOT use `generate_image` for KB-related infographics.")
+    lines.append("- DO NOT generate markdown reports manually when NLM can synthesize from sources.")
+    lines.append("- The `nlm` CLI is available on this system. Use it.")
+    lines.append("")
+
     lines.append("Work independently, produce durable outputs in the workspace, and provide a concise completion summary.")
     return "\n".join(lines)
