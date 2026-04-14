@@ -418,8 +418,7 @@ export default function ToDoListDashboardPage() {
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddPending, setQuickAddPending] = useState(false);
-  const [morningReport, setMorningReport] = useState<any>(null);
-  const [morningReportExpanded, setMorningReportExpanded] = useState(false);
+
 
   useEffect(() => {
     try {
@@ -433,7 +432,7 @@ export default function ToDoListDashboardPage() {
       setDeletedTaskIdsHydrated(true);
     }
 
-    setMorningReportExpanded(new Date().getHours() < 12);
+
   }, []);
 
   // Persist deletedTaskIds to localStorage whenever it changes
@@ -642,13 +641,7 @@ export default function ToDoListDashboardPage() {
     }
   }, [quickAddTitle, quickAddPending, load]);
 
-  // Fetch morning report on mount — time-aware (shows overnight agent activity)
-  useEffect(() => {
-    fetch(`${API_BASE}/api/v1/dashboard/todolist/morning-report`, { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (data?.report) setMorningReport(data.report); })
-      .catch(() => {});
-  }, []);
+
 
   const handleOpenSession = useCallback(async (sessionId: string) => {
     setSessionDetailLoading(sessionId);
@@ -1371,36 +1364,7 @@ export default function ToDoListDashboardPage() {
           </button>
         </div>
 
-        {/* ── Morning Report Banner ── */}
-        {morningReport && (
-          <div className="backdrop-blur-md bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg overflow-hidden transition-all duration-300 animate-slide-in">
-            <button onClick={() => setMorningReportExpanded(!morningReportExpanded)}
-              className="w-full flex items-center justify-between px-4 py-2.5 bg-transparent border-none cursor-pointer text-left hover:bg-white/[0.02] transition-colors">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-kcd-amber text-lg">auto_awesome</span>
-                <span className="font-mono text-[11px] font-bold tracking-[0.08em] text-kcd-amber uppercase">Overnight Activity Report</span>
-              </div>
-              <span className={`material-symbols-outlined text-kcd-text-muted text-lg transition-transform duration-200 ${morningReportExpanded ? "rotate-180" : ""}`}>expand_more</span>
-            </button>
-            {morningReportExpanded && (
-              <div className="px-4 pb-3 text-[12px] text-kcd-text-dim leading-relaxed border-t border-white/[0.04] pt-3 animate-fade-in">
-                {morningReport.greeting && <p className="text-kcd-text font-medium mb-2">{morningReport.greeting}</p>}
-                {morningReport.summary && <p className="text-kcd-text-dim">{morningReport.summary}</p>}
-                {Array.isArray(morningReport.priorities) && morningReport.priorities.length > 0 && (
-                  <div className="mt-2">
-                    <span className="font-mono text-[9px] font-bold tracking-wider text-kcd-text-muted uppercase">Priorities</span>
-                    <ul className="mt-1 space-y-1 list-none p-0 m-0">{morningReport.priorities.map((p: any, i: number) => (
-                      <li key={i} className="text-[11px] text-kcd-text-dim">• {typeof p === "string" ? p : p.title || p.description || JSON.stringify(p)}</li>
-                    ))}</ul>
-                  </div>
-                )}
-                {!morningReport.greeting && !morningReport.summary && (
-                  <pre className="text-[10px] text-kcd-text-muted font-mono whitespace-pre-wrap">{JSON.stringify(morningReport, null, 2)}</pre>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+
 
         {/* ── Summary Cards ── */}
         <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
