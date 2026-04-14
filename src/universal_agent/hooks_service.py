@@ -111,6 +111,7 @@ YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {
     "proxy_auth_failed",
     "proxy_not_configured",
     "proxy_connect_failed",
+    "request_blocked",
 }
 YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
     "invalid_video_target",
@@ -4865,6 +4866,13 @@ class HooksService:
                                 "YouTube ingest failed because Webshare reported no proxies allocated for the "
                                 "configured endpoint/username. Refresh the Webshare proxy list/rotation username "
                                 "and update Infisical proxy secrets."
+                            )
+                        elif failure_class == "request_blocked":
+                            _proxy_alert_msg = (
+                                "YouTube transcript fetch BLOCKED — YouTube is rate-limiting or IP-blocking "
+                                "the proxy. RSS feed analysis may be degraded while transcripts cannot be fetched. "
+                                "This usually resolves within a few hours as proxy IPs rotate. "
+                                "If persistent, check Webshare proxy pool health and quota."
                             )
                         else:
                             _proxy_alert_msg = (

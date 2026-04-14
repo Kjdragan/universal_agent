@@ -526,13 +526,17 @@ Verification surface:
 - `tests/gateway/test_signals_ingest_endpoint.py`
 - `tests/unit/test_signals_ingest.py`
 
-## 15. Desktop Transcript Worker (Desktop ↔ CSI DB)
+## 15. YouTube Transcript Ingestion
 
-The desktop transcript worker connects to the CSI SQLite database on the VPS via SSH to query videos with `transcript_status='failed'`, fetch transcripts locally from the desktop’s residential IP, and write back successful transcripts. This is the **primary transcript fetch path**, not a VPS service.
+YouTube transcript fetching runs entirely on the VPS via `youtube_ingest.py`, using Webshare rotating residential proxies. The CSI enrichment pipeline (`csi_rss_semantic_enrich.py`) calls the gateway's `/api/v1/youtube/ingest` endpoint on a systemd timer every 4 hours.
+
+> [!NOTE]
+> The desktop transcript worker (`desktop_transcript_worker.py`) was decommissioned in April 2026.
+> All transcript fetching now runs on the VPS via `youtube_ingest.py` with Webshare proxy.
 
 Primary implementation:
-- `src/universal_agent/desktop_transcript_worker.py`
-- `tests/test_desktop_transcript_worker.py`
+- `src/universal_agent/youtube_ingest.py`
+- `CSI_Ingester/development/scripts/csi_rss_semantic_enrich.py`
 
 ## Bottom Line
 
@@ -542,6 +546,6 @@ The canonical current CSI model is:
 - **signed HTTP delivery into UA’s signals-ingest endpoint**
 - **UA-side dispatch of valid CSI events into hooks and analyst lanes**
 - **a narrowed subsystem boundary where tutorial playlist polling now lives natively in UA, not CSI**
-- **the CSI database is also written to by the desktop transcript worker, which runs on Kevin’s desktop and fetches YouTube transcripts via residential IP**
+- **transcript fetching runs on the VPS via `youtube_ingest.py` with Webshare rotating residential proxy (desktop worker decommissioned April 2026)**
 
 That is the current implementation truth for CSI on the VPS and in this repository.
