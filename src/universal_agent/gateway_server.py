@@ -13986,6 +13986,13 @@ app = FastAPI(
 
 # Register unified error handling
 register_error_handlers(app)
+
+# Mount modular API routers
+try:
+    from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
+    app.include_router(csi_watchlist_router)
+except Exception:
+    logger.warning("Could not mount CSI watchlist router on gateway", exc_info=True)
 _LOGFIRE_FASTAPI_INSTRUMENTED = False
 
 
