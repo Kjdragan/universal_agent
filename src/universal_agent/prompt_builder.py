@@ -438,7 +438,28 @@ def build_system_prompt(
         "- **MD LINKS**: When linking files in your final response, YOU MUST use absolute paths: `[Name](file:///absolute/path/to/file)`."
     )
 
+    # ── 12b. LARGE TOOL OUTPUT FILES ──────────────────────────────────
+    sections.append(
+        "## 📂 HANDLING LARGE TOOL OUTPUT FILES\\n"
+        "Some tools (e.g., `notebook_query`, `wiki_search_and_retrieve`) return very large payloads. "
+        "When a result exceeds the context limit, the SDK automatically saves it to a temp file and returns a message like:\\n"
+        "  `Output too large (61KB). Full output saved to: .../tool-results/call_XXXX.txt\\n  Preview (first 2KB): ...`\\n\\n"
+        "**CRITICAL: Do NOT try to `Read` or `view_file` this file directly.** "
+        "The file is too large for the Read tool's token limit and you will hit an error.\\n\\n"
+        "**CORRECT pattern — always use Python to extract just what you need:**\\n"
+        "```python\\n"
+        "import json\\n"
+        "with open('/path/to/call_XXXX.txt') as f:\\n"
+        "    data = json.load(f)\\n"
+        "answer = data.get('answer') or data.get('result') or str(data)[:2000]\\n"
+        "print(answer)\\n"
+        "```\\n"
+        "This is always faster and more reliable than trying to paginate Read calls. "
+        "Use `Bash` or `python3 -c` inline to run it immediately without creating a script file."
+    )
+
     # ── 13. EMAIL & COMMUNICATION ───────────────────────────────────────
+
     sections.append(
         "## 📧 EMAIL & COMMUNICATION\n"
         "You have TWO email channels. Choose the right one based on WHO is sending:\n\n"
@@ -446,11 +467,20 @@ def build_system_prompt(
         "- **When to use**: ANY time Simone is sending her own email — reports, descriptions, poems, notifications, replies.\n"
         "- **How to use**: Use the official AgentMail MCP tools directly: `mcp__agentmail__send_message` for new outbound mail and `mcp__agentmail__reply_to_message` for replies.\n"
         "- **CRITICAL GUARDRAILS**: \n"
-        "   - For local attachments, first call `prepare_agentmail_attachment(path=...)` and pass the returned object in the official AgentMail MCP `attachments` field.\n"
         "   - Do NOT try to use Python (`import agentmail`) from an agent run. The SDK is for backend services, not in-session execution.\n"
         "   - Do NOT try to use `curl` to `/api/v1/ops/agentmail/send`. It will fail.\n"
         "   - Do NOT use bash or CLI commands to send mail when the official MCP tools are available.\n"
         "- Simone sends FROM her own `@agentmail.to` address.\n\n"
+        "### 📎 Attachment Rules — CRITICAL (read before attaching anything)\n"
+        "**Small text files (HTML, markdown, JSON — file size < 50 KB):**\n"
+        "  1. Call `prepare_agentmail_attachment(path=\"/path/to/file\")` to get a base64 attachment object.\n"
+        "  2. Pass the returned object in the `attachments` field of `mcp__agentmail__send_message`.\n\n"
+        "**Large binary files (PDFs, PNGs, any file > 50 KB):**\n"
+        "  - **DO NOT** use `prepare_agentmail_attachment` for these. It returns a base64 blob that overflows the context window (600KB+).\n"
+        "  - Instead, call `agentmail_send_with_local_attachments` directly:\n"
+        "    `agentmail_send_with_local_attachments(to=\"...\", subject=\"...\", body=\"...\", attachment_paths=[\"/path/to/file.pdf\"])`\n"
+        "  - This tool encodes files in Python and posts directly to AgentMail, bypassing the context window entirely.\n"
+        "  - For replies with large attachments: use `agentmail_reply_with_local_attachments` instead.\n\n"
         "### 2. GWS CLI — Kevin's Gmail (ONLY when acting as Kevin)\n"
         "- **When to use**: Only when the user explicitly asks you to send email FROM Kevin's Gmail (`kevinjdragan@gmail.com`).\n"
         "- **How to use**: Review the `gmail` skill for using gws CLI.\n"
@@ -459,7 +489,7 @@ def build_system_prompt(
         "- **Composio Gmail tools** (`GMAIL_SEND_EMAIL`, `mcp__composio__GMAIL_*`) — fully replaced by GWS CLI.\n"
         "- **`upload_to_composio`** for email attachments — not needed with GWS CLI.\n\n"
         "### Quick Decision:\n"
-        "- 'Email this to Kevin' → `mcp__agentmail__send_message` (Simone sends to Kevin)\n"
+        "- 'Email this to Kevin' → `mcp__agentmail__send_message` or `agentmail_send_with_local_attachments` (Simone sends to Kevin)\n"
         "- 'Send this from my Gmail' → GWS CLI (acting as Kevin)\n"
         "- Keep email bodies concise."
     )
