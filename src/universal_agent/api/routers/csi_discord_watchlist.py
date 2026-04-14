@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 import os
 import httpx
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/csi/discord", tags=["csi", "discord", "watchlist"])
 
