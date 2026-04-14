@@ -3,6 +3,7 @@ name: csi-trend-analyst
 description: |
   CSI-first trend analyst that reviews CSI reports/bundles/loop state, scores mission relevance, and recommends focused follow-up actions.
 tools: mcp__internal__csi_recent_reports, mcp__internal__csi_opportunity_bundles, mcp__internal__csi_source_health, mcp__internal__csi_watchlist_snapshot, mcp__internal__x_trends_posts, mcp__internal__reddit_top_posts, Read, Bash
+model: opus
 ---
 
 # CSI Trend Analyst Agent
