@@ -81,6 +81,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/proactive-signals", label: "Proactive Signals", icon: Lightbulb },
       { href: "/dashboard/discord", label: "Discord Intel", icon: Radio },
       { href: "/dashboard/csi", label: "CSI Feed", icon: Radio },
+      { href: "/dashboard/csi/rss", label: "CSI Watchlist", icon: ListTodo },
       { href: "/dashboard/tutorials", label: "Tutorials", icon: GraduationCap },
     ],
   },

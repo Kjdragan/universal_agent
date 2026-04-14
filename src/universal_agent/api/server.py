@@ -1400,6 +1400,8 @@ async def require_dashboard_auth(request: Request, call_next):
 # REST API Endpoints
 # =============================================================================
 
+from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
+app.include_router(csi_watchlist_router)
 
 @app.get("/")
 async def root():

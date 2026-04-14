@@ -490,7 +490,7 @@ def fetch_pending_video_ids(
     sql = (
         f"SELECT event_id, video_id, title, channel_name "
         f"FROM rss_event_analysis "
-        f"WHERE transcript_status = 'failed' "
+        f"WHERE transcript_status IN ('failed', 'missing') "
         f"AND video_id IS NOT NULL AND video_id != '' "
         f"ORDER BY analyzed_at DESC "
         f"LIMIT {limit};"
