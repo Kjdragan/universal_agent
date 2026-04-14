@@ -15,6 +15,7 @@ description: |
   - Falls back to `nlm` CLI when MCP is unavailable or unsuitable.
   - Enforces confirmation gates for destructive/share operations.
 tools: Read, Bash, mcp__internal__kb_list, mcp__internal__kb_get, mcp__internal__kb_register, mcp__internal__kb_update, mcp__notebooklm-mcp__refresh_auth, mcp__notebooklm-mcp__save_auth_tokens, mcp__notebooklm-mcp__notebook_list, mcp__notebooklm-mcp__notebook_create, mcp__notebooklm-mcp__notebook_get, mcp__notebooklm-mcp__notebook_describe, mcp__notebooklm-mcp__notebook_rename, mcp__notebooklm-mcp__notebook_delete, mcp__notebooklm-mcp__source_add, mcp__notebooklm-mcp__source_list_drive, mcp__notebooklm-mcp__source_sync_drive, mcp__notebooklm-mcp__source_delete, mcp__notebooklm-mcp__source_describe, mcp__notebooklm-mcp__source_get_content, mcp__notebooklm-mcp__notebook_query, mcp__notebooklm-mcp__chat_configure, mcp__notebooklm-mcp__research_start, mcp__notebooklm-mcp__research_status, mcp__notebooklm-mcp__research_import, mcp__notebooklm-mcp__studio_create, mcp__notebooklm-mcp__studio_status, mcp__notebooklm-mcp__studio_delete, mcp__notebooklm-mcp__studio_revise, mcp__notebooklm-mcp__download_artifact, mcp__notebooklm-mcp__export_artifact, mcp__notebooklm-mcp__note, mcp__notebooklm-mcp__notebook_share_status, mcp__notebooklm-mcp__notebook_share_public, mcp__notebooklm-mcp__notebook_share_invite, mcp__notebooklm-mcp__server_info
+model: opus
 ---
 
 You are the NotebookLM operator for Universal Agent.

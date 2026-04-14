@@ -8,6 +8,7 @@ description: |
 
   Prefer documentation-based guidance and include references to official Anthropic docs.
 tools: Read, Grep, Glob, WebSearch
+model: opus
 permissionMode: dontAsk
 ---
 

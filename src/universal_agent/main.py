@@ -8245,6 +8245,61 @@ def _print_tool_policy_explain(raw_tool_name: str) -> None:
         print("- matched_policy: no")
 
 
+def __load_programmatic_agents(src_dir: str) -> dict:
+    """Dynamically load agents from Markdown and apply programmatic model resolution."""
+    import glob
+    import os
+    import yaml
+    from claude_agent_sdk.types import AgentDefinition
+    from universal_agent.utils.model_resolution import resolve_claude_code_model
+    
+    agents_dir = os.path.join(src_dir, ".claude/agents")
+    md_files = glob.glob(f"{agents_dir}/*.md")
+    agents = {}
+
+    # Opus-tier agents as prioritized by users implicitly in legacy files.
+    opus_tier_agents = {"notebooklm-operator", "ui-review", "hop-automate", "code-writer", "list-tools"}
+
+    for fpath in md_files:
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            if not content.startswith("---"):
+                continue
+                
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                frontmatter = parts[1]
+                prompt = parts[2].strip()
+                meta = yaml.safe_load(frontmatter)
+                if meta is None:
+                    continue
+                name = meta.pop("name", os.path.splitext(os.path.basename(fpath))[0])
+                
+                # Assign default model if missing, simulating what .claude/agents originally had
+                model = meta.get("model")
+                if not model:
+                    if name in opus_tier_agents:
+                        model = "opus"
+                    else:
+                        model = "sonnet"
+
+                if model in ["opus", "sonnet", "haiku"]:
+                    meta["model"] = resolve_claude_code_model(model)
+                    
+                if isinstance(meta.get("tools"), str):
+                    meta["tools"] = [t.strip() for t in meta["tools"].split(",")]
+                    
+                valid_keys = AgentDefinition.__dataclass_fields__.keys()
+                filtered_meta = {k: v for k, v in meta.items() if k in valid_keys}
+                
+                agents[name] = AgentDefinition(prompt=prompt, **filtered_meta)
+        except Exception as e:
+            print(f"Failed to programmatically load agent {fpath}: {e}")
+
+    return agents
+
+
 async def setup_session(
     run_id_override: Optional[str] = None,
     workspace_dir_override: Optional[str] = None,
@@ -8659,6 +8714,7 @@ async def setup_session(
 
     options = ClaudeAgentOptions(
         model=resolve_claude_code_model(default="sonnet"),
+        agents=__load_programmatic_agents(src_dir),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
         disallowed_tools=disallowed_tools,
