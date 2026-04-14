@@ -3,7 +3,6 @@ name: trend-specialist
 description: |
   Sub-agent for dynamic discovery and "pulse" checks on current topics (Reddit, X, Trends).
 tools: mcp__internal__x_trends_posts, mcp__internal__reddit_top_posts, mcp__internal__csi_recent_reports, mcp__internal__csi_opportunity_bundles, mcp__internal__csi_source_health, mcp__internal__csi_watchlist_snapshot, Read, Bash
-model: opus
 ---
 
 # Trend Specialist Agent

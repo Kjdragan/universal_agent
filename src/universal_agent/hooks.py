@@ -1301,6 +1301,7 @@ class AgentHookSet:
         elif normalized_tool_name in ("task", "agent"):
             delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
 
+
         # Ensure internal research pipeline tools receive an explicit workspace hint.
         # This avoids dead-ends when ambient workspace env/context is absent.
         if normalized_tool_name in {

@@ -3,7 +3,6 @@ name: research-specialist
 description: |
   Sub-agent for multi-mode research with an LLM strategy decision and mode-specific execution policies.
 tools: Read, Bash, mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL, mcp__composio__COMPOSIO_SEARCH_NEWS, mcp__composio__COMPOSIO_SEARCH_WEB, mcp__internal__run_research_pipeline, mcp__internal__run_research_phase, mcp__internal__list_directory
-model: opus
 ---
 
 ## TEMPORAL CONTEXT (CRITICAL)

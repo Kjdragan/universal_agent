@@ -13,7 +13,6 @@ description: |
   - Explains signal volume vs actionable conversion.
   - Recommends suppression/tuning steps without mutating runtime state by default.
 tools: Read, Bash
-model: opus
 ---
 
 You are the CSI Supervisor for Universal Agent.
