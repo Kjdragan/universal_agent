@@ -457,7 +457,52 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/dashboard/discord/channels` | GET | List Discord channels |
 | `/api/v1/dashboard/discord/channels/{id}` | PATCH | Update Discord channel config |
 
-## 21. Dashboard Supervisors
+## 21. Dashboard Proactive Signals
+
+Manage proactive signal cards surfaced from CSI, Discord, and other intelligence sources. Cards represent actionable signals that require operator review, feedback, or action dispatch.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/proactive-signals` | GET | List proactive signal cards (syncs from CSI and Discord DBs first) |
+| `/api/v1/dashboard/proactive-signals/{card_id}/feedback` | PATCH | Record feedback on a signal card (tags, text, status change) |
+| `/api/v1/dashboard/proactive-signals/{card_id}/action` | POST | Apply an action to a signal card (triggers background rule distillation) |
+| `/api/v1/dashboard/proactive-signals/{card_id}` | DELETE | Silently delete a signal card (not treated as preference feedback) |
+
+### Query Parameters (list)
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `source` | `all` | Filter by source (`all`, `csi`, `discord`, etc.) |
+| `status` | `pending` | Filter by status (`pending`, `approved`, `rejected`, etc.) |
+| `limit` | `80` | Maximum cards to return |
+
+### Feedback Request Body
+
+```json
+{
+  "status": "optional-new-status",
+  "feedback_tags": ["tag1", "tag2"],
+  "feedback_text": "Optional free-text feedback"
+}
+```
+
+### Action Request Body
+
+```json
+{
+  "action_id": "string",
+  "feedback_tags": ["tag1"],
+  "feedback_text": "Optional context"
+}
+```
+
+Both feedback and action endpoints trigger background rule distillation when feedback text or tags are provided, automatically updating `docs/proactive_signals/generation_rules.md` with learned preferences.
+
+Related implementation:
+- `src/universal_agent/proactive_signals.py` — Card management, feedback recording, rule distillation
+- `src/universal_agent/gateway_server.py` — Dashboard API endpoints
+
+## 22. Dashboard Supervisors
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -466,7 +511,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/dashboard/supervisors/{id}/run` | POST | Trigger supervisor run |
 | `/api/v1/dashboard/supervisors/{id}/runs` | GET | List supervisor run history |
 
-## 22. AgentMail Extended Ops
+## 23. AgentMail Extended Ops
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -483,7 +528,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/agentmail/inbox-queue/{id}/retry-now` | POST | Retry a queued inbox item |
 | `/api/v1/ops/agentmail/messages` | GET | List AgentMail messages |
 
-## 23. Calendar and Scheduling
+## 24. Calendar and Scheduling
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -495,7 +540,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/scheduling/events` | GET | List scheduling events |
 | `/api/v1/ops/scheduling/stream` | GET | Stream scheduling events (SSE) |
 
-## 24. Skills and Models
+## 25. Skills and Models
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -504,7 +549,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/skills/{key}/doc` | GET | Get skill documentation |
 | `/api/v1/ops/models` | GET | List available models |
 
-## 25. Channels, Presence, and System Events
+## 26. Channels, Presence, and System Events
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -515,7 +560,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/system/events` | GET | Get system events |
 | `/api/v1/system/event` | POST | Post system event |
 
-## 26. Additional Metrics and Budget
+## 27. Additional Metrics and Budget
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -527,14 +572,14 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/session-budget/status` | GET | Current session token budget status |
 | `/api/v1/ops/session-budget/heavy-mode` | POST | Toggle heavy execution mode |
 
-## 27. Factory Live Chrome
+## 28. Factory Live Chrome
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/factory/live-chrome/status` | GET | Live Chrome tunnel status |
 | `/api/v1/factory/live-chrome/status` | POST | Start/stop Live Chrome tunnel |
 
-## 28. Heartbeat and Telemetry
+## 29. Heartbeat and Telemetry
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -543,7 +588,7 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/telemetry/briefing` | POST | Generate telemetry briefing |
 | `/api/v1/ops/system-health` | GET | System health overview |
 
-## 29. Artifacts and File Browsing
+## 30. Artifacts and File Browsing
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -553,13 +598,13 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/files/{session_id}/{path}` | GET | Get file contents from a session |
 | `/api/v1/sessions/{id}/upload` | POST | Upload file to session workspace |
 
-## 30. Vision
+## 31. Vision
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/vision/describe` | POST | Describe an image using vision model |
 
-## 31. Environment Variables
+## 32. Environment Variables
 
 Key environment variables controlling gateway behavior:
 
@@ -572,7 +617,7 @@ Key environment variables controlling gateway behavior:
 | `UA_OPS_AUTH_ENABLED` | `true` | Enable ops auth |
 | `UA_OPS_AUTH_PASSWORD` | - | Password for ops token issuance |
 
-## 32. Error Responses
+## 33. Error Responses
 
 All endpoints return standard HTTP status codes:
 
@@ -593,7 +638,7 @@ Error response body:
 }
 ```
 
-## 33. Source Files
+## 34. Source Files
 
 Primary implementation:
 - `src/universal_agent/gateway_server.py` — Main FastAPI application
@@ -605,7 +650,7 @@ Related services:
 - `src/universal_agent/hooks_service.py` — Hooks processing
 - `src/universal_agent/timeout_policy.py` — WebSocket timeouts
 
-## 34. Related Documentation
+## 35. Related Documentation
 
 - `docs/02_Flows/07_WebSocket_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` — WebSocket details
 - `docs/02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md` — Auth flows
