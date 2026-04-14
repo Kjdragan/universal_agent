@@ -13990,7 +13990,9 @@ register_error_handlers(app)
 # Mount modular API routers
 try:
     from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
+    from universal_agent.api.routers.csi_discord_watchlist import router as csi_discord_watchlist_router
     app.include_router(csi_watchlist_router)
+    app.include_router(csi_discord_watchlist_router)
 except Exception:
     logger.warning("Could not mount CSI watchlist router on gateway", exc_info=True)
 _LOGFIRE_FASTAPI_INSTRUMENTED = False
