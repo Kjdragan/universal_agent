@@ -97,55 +97,13 @@ Worker-only helpers can use:
 
 This prevents worker-side helpers from colliding with the HQ dev lane.
 
-## Desktop Transcript Worker (Always-On Requirement)
+## YouTube Transcript Fetching
 
-> [!IMPORTANT]
-> The desktop **must be running** for YouTube transcript fetching to work via the primary path.
-> Without the desktop, transcripts fall back to the VPS rotating proxy (more expensive, rate-limited).
+> [!NOTE]
+> The desktop transcript worker (`desktop_transcript_worker.py`) was **decommissioned in April 2026**.
+> All YouTube transcript fetching now runs entirely on the VPS via `youtube_ingest.py`
+> using the Webshare rotating residential proxy. No desktop-side processes are required.
 
-The desktop transcript worker is a **standalone program** that runs independently
-of both the HQ Dev Lane and the Desktop Worker Lane. It does not require any
-gateway, factory, or Infisical bootstrap — it only needs:
+The VPS enrichment pipeline (`csi_rss_semantic_enrich.py`) calls the gateway's
+`/api/v1/youtube/ingest` endpoint on a systemd timer every 4 hours.
 
-1. SSH access to the VPS (`root@uaonvps`)
-2. `youtube-transcript-api` installed (via `uv`)
-3. Network access to YouTube (residential IP)
-
-### How It Works
-
-- checkout: `/home/kjdragan/lrepos/universal_agent`
-- script: `src/universal_agent/desktop_transcript_worker.py`
-- run mode: standalone CLI or cron/systemd timer
-- NOT a UA cron job, NOT part of the gateway process
-
-### Running It
-
-```bash
-# One-shot batch (fetch from VPS, process, write back)
-DTW_BATCH_SIZE=25 uv run python src/universal_agent/desktop_transcript_worker.py --batch
-
-# Dry run (show what would be processed)
-uv run python src/universal_agent/desktop_transcript_worker.py --batch --dry-run
-
-# Test specific videos (no VPS interaction)
-uv run python src/universal_agent/desktop_transcript_worker.py --test daPwd4DnEfA avXA9Jgi-WE
-```
-
-### Scheduling
-
-The worker can be scheduled via:
-
-- **systemd timer**: `~/.config/systemd/user/desktop-transcript-worker.timer`
-- **cron**: `0 * * * * cd /home/kjdragan/lrepos/universal_agent && uv run python src/universal_agent/desktop_transcript_worker.py --batch`
-- **manual**: run on-demand as needed
-
-### What Happens When the Desktop Is Off
-
-When the desktop is not running:
-- New videos accumulate in the CSI database with `transcript_status='failed'`
-- The VPS proxy path in `youtube_ingest.py` continues to work as a fallback
-- When the desktop comes back online, the next batch run picks up all pending videos
-
-### Kill Switch
-
-Set `DESKTOP_TRANSCRIPT_WORKER_ENABLED=false` to disable without uninstalling.

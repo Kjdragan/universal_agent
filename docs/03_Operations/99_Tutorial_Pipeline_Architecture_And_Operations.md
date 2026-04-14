@@ -19,8 +19,7 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 | Playlist Watcher | `services/youtube_playlist_watcher.py` | Periodically polls configured YouTube playlists for new video IDs |
 | Hooks Service | `hooks_service.py` | Receives webhook events, manages dispatch queue, throttling, retry policies |
 | Gateway Server | `gateway_server.py` | Notification system, tutorial dashboard API, persistence |
-| YouTube Ingestion | `youtube_ingest.py` | Fetches transcripts via rotating proxies (VPS fallback path) |
-| Desktop Transcript Worker | `desktop_transcript_worker.py` | **Primary** transcript fetching from desktop residential IP, proxy fallback, VPS writeback |
+| YouTube Ingestion | `youtube_ingest.py` | Fetches transcripts via Webshare rotating residential proxy (primary and only path) |
 | Telegram Notifier | `services/tutorial_telegram_notifier.py` | Per-video dedup Telegram alerts for tutorial events |
 | Dashboard (Tutorials) | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorial runs, review jobs, bootstrap jobs, notifications with client-side dedup |
 | Dashboard (Main) | `web-ui/app/dashboard/page.tsx` | Notification panel with video-level dedup |
@@ -84,52 +83,24 @@ The tutorials tab has its own `visibleNotifications` memo that uses `notificatio
 
 ## 4. Transcript Ingestion
 
-Transcript fetching uses a **two-tier architecture**:
+Transcript fetching uses a **single, unified architecture** running entirely on the VPS.
 
-### 4.1 Primary: Desktop Transcript Worker (Residential IP)
+> [!NOTE]
+> The desktop transcript worker (`desktop_transcript_worker.py`) was decommissioned
+> in April 2026. All transcript fetching now runs on the VPS via `youtube_ingest.py`
+> using the Webshare rotating residential proxy.
 
-> [!IMPORTANT]
-> The desktop transcript worker is a **standalone program** that runs on Kevin's desktop,
-> NOT a UA cron job. The desktop must be running for this functionality to work.
+### Architecture: VPS Rotating Residential Proxy
 
-The `desktop_transcript_worker.py` module fetches YouTube transcripts from the desktop's residential IP address — no proxy needed. It connects to the VPS CSI database via SSH to:
-1. Query videos with `transcript_status='failed'`
-2. Fetch transcripts locally via `youtube-transcript-api`
-3. Write successful transcripts back to the CSI database
+The `youtube_ingest.py` module uses Webshare rotating residential proxies to bypass YouTube's datacenter IP blocking. It is exposed via the gateway endpoint `/api/v1/youtube/ingest` and is called by the CSI enrichment pipeline (`csi_rss_semantic_enrich.py`) on a systemd timer every 4 hours.
 
 Key behaviors:
-- **Local-first**: Uses residential IP, avoiding datacenter anti-bot detection
-- **Proxy fallback**: Falls back to Webshare rotating proxy on local failure (default: ON)
-- **Rate limiting**: Configurable delay between requests (default: 5s)
-- **Circuit breaker**: Trips after N consecutive failures, aborts after M trips
-- **Batch caps**: `batch_size` and `daily_cap` limits with loud banners
-- **Loud failure classification**: Three distinct failure types with unmissable banners:
-  - `⚠️ SELF-IMPOSED CAP HIT` — our own limits, not YouTube
-  - `🚫 YOUTUBE BLOCK DETECTED` — bot detection, rate limiting, etc.
-  - `🔌 CIRCUIT BREAKER` — systematic failure, pausing/aborting
-
-Run modes:
-```bash
-# Test specific videos (no VPS interaction)
-uv run python src/universal_agent/desktop_transcript_worker.py --test <VIDEO_IDs>
-
-# Dry run — show what VPS batch would process
-uv run python src/universal_agent/desktop_transcript_worker.py --batch --dry-run
-
-# Live batch — query VPS, fetch, write back
-DTW_BATCH_SIZE=10 uv run python src/universal_agent/desktop_transcript_worker.py --batch
-```
-
-### 4.2 Fallback: VPS Rotating Proxy (Legacy Path)
-
-The VPS-side proxy path (`youtube_ingest.py`) remains available when `UA_HOOKS_YOUTUBE_INGEST_MODE=proxy` is set. This is the legacy path and is now secondary to the desktop worker. It uses Webshare rotating residential proxies and is cost-sensitive.
-
-Key behaviors:
-- Configurable retry with exponential backoff and jitter
-- Minimum character threshold to detect empty/stub transcripts
-- Cooldown between ingestion attempts for the same video
-- In-flight TTL tracking to avoid double-processing
-- Proxy failure generates `youtube_ingest_proxy_alert` (health-alert dedup)
+- **Proxy-first**: Requires Webshare residential proxy by default (`UA_YOUTUBE_INGEST_REQUIRE_PROXY=1`)
+- **API-first metadata**: Uses YouTube Data API v3 for metadata (no proxy needed), yt-dlp as fallback
+- **Minimum character threshold** to detect empty/stub transcripts
+- **Cooldown between ingestion attempts** for the same video
+- **In-flight TTL tracking** to avoid double-processing
+- **Proxy failure generates** `youtube_ingest_proxy_alert` (health-alert dedup)
 
 ---
 
@@ -201,19 +172,15 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `UA_HOOKS_STARTUP_RECOVERY_MIN_AGE_SECONDS` | `120` | Min age for recovery candidates |
 | `UA_HOOKS_STARTUP_RECOVERY_COOLDOWN_SECONDS` | `1800` | Cooldown between recovery attempts |
 
-### Desktop Transcript Worker
+### VPS Proxy (youtube_ingest.py)
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DESKTOP_TRANSCRIPT_WORKER_ENABLED` | `true` | Kill switch for the desktop worker |
-| `DTW_BATCH_SIZE` | `25` | Max videos per batch run |
-| `DTW_DAILY_CAP` | `200` | Max videos per day |
-| `DTW_DELAY_SECONDS` | `5.0` | Delay between transcript requests |
-| `DTW_PROXY_FALLBACK` | `true` | Fall back to rotating proxy on local failure |
-| `DTW_MAX_CONSECUTIVE_FAILURES` | `3` | Circuit breaker threshold |
-| `DTW_CIRCUIT_BREAKER_COOLDOWN` | `60.0` | Pause after breaker trips (seconds) |
-| `DTW_MAX_CIRCUIT_BREAKER_TRIPS` | `2` | Abort batch after N trips |
-| `DTW_VPS_HOST` | `root@uaonvps` | SSH target for VPS CSI database |
-| `DTW_CSI_DB_PATH` | `/var/lib/universal-agent/csi/csi.db` | CSI database path on VPS |
+| `UA_YOUTUBE_INGEST_REQUIRE_PROXY` | `1` | Require Webshare proxy (set `0` for local dev only) |
+| `PROXY_USERNAME` | — | Webshare proxy username |
+| `PROXY_PASSWORD` | — | Webshare proxy password |
+| `WEBSHARE_PROXY_HOST` | `proxy.webshare.io` | Proxy domain |
+| `WEBSHARE_PROXY_PORT` | `80` | Proxy port |
+| `WEBSHARE_PROXY_LOCATIONS` | — | Optional location filter |
 
 ---
 
@@ -223,15 +190,13 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 |------|-------------|
 | `src/universal_agent/hooks_service.py` | Core pipeline orchestration, dispatch queue, retry |
 | `src/universal_agent/gateway_server.py` | Notification CRUD, tutorial dashboard API, dedup constants |
-| `src/universal_agent/youtube_ingest.py` | Transcript fetching, proxy rotation (VPS fallback path) |
-| `src/universal_agent/desktop_transcript_worker.py` | **Primary** desktop residential IP transcript worker |
+| `src/universal_agent/youtube_ingest.py` | Transcript fetching via Webshare rotating residential proxy |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |
 | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorials tab with entity-level dedup |
 | `tests/unit/test_tutorial_notification_dedup.py` | Backend video-level dedup tests |
 | `tests/unit/test_tutorial_telegram_dedup.py` | Telegram notifier dedup tests |
-| `tests/test_desktop_transcript_worker.py` | Desktop worker unit tests (37 tests) |
 
 ---
 

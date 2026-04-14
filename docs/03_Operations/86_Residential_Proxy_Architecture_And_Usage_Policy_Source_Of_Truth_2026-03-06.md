@@ -8,29 +8,27 @@ It defines where the residential proxy is used, why it exists, which use cases a
 
 ## Executive Summary
 
-Universal Agent uses a **two-tier transcript fetching architecture**:
+Universal Agent uses **Webshare rotating residential proxy** for YouTube transcript fetching on the VPS. This is the sole transcript fetch path.
 
-1. **Primary: Desktop Transcript Worker** — runs on Kevin's desktop (residential IP), fetches transcripts locally without any proxy. This is the default and preferred path.
-2. **Fallback: Webshare rotating residential proxy** — used only when the desktop worker is unavailable or when a local fetch fails.
+> [!NOTE]
+> The desktop transcript worker was decommissioned in April 2026. All transcript
+> fetching now runs on the VPS via `youtube_ingest.py` with Webshare proxy.
 
-The residential proxy remains available for a narrow set of approved cases where datacenter IPs are known to be blocked or degraded:
-- YouTube transcript fetching (fallback when desktop worker fails)
+The residential proxy is used for a narrow set of approved cases where datacenter IPs are known to be blocked or degraded:
+- YouTube transcript fetching (primary path via `youtube_ingest.py`)
 - YouTube metadata extraction that is explicitly **metadata-only**
 - approved TGTG proxy inheritance
 
 The residential proxy is **cost-sensitive** and should not be treated as a generic project-wide scraping tunnel.
 
 Current canonical implementation includes:
-- `src/universal_agent/desktop_transcript_worker.py` — **primary** desktop residential IP transcript worker
-- `src/universal_agent/youtube_ingest.py` — VPS proxy-based fallback path
+- `src/universal_agent/youtube_ingest.py` — primary VPS transcript fetching with Webshare proxy
 - `src/universal_agent/gateway_server.py`
 - `src/universal_agent/hooks_service.py`
 - `src/universal_agent/tgtg/config.py`
 
 Current runtime topology for YouTube transcript fetching is:
-- **Desktop-primary** for transcript fetching via residential IP (no proxy needed)
-- VPS proxy as fallback when desktop is unavailable or local fetch fails
-- The desktop must be running and connected via SSH to the VPS for the primary path to work
+- VPS-primary for all transcript fetching via Webshare rotating residential proxy
 - VPS-primary for playlist watching, hook ingest, artifact generation, and repo bootstrap
 
 ## Why the Residential Proxy Exists
@@ -48,49 +46,24 @@ It is not intended for broad indiscriminate scraping.
 
 ## 1. YouTube Transcript Fetching
 
-### Primary Path: Desktop Transcript Worker
-
-Implementation:
-- `src/universal_agent/desktop_transcript_worker.py`
-
-> [!IMPORTANT]
-> The desktop transcript worker requires Kevin's desktop to be running.
-> Without it, transcript fetching falls back to the VPS proxy path.
-
-The desktop transcript worker:
-- Runs on the desktop's residential IP — **no proxy needed**
-- Queries the VPS CSI database (SSH) for videos with `transcript_status='failed'`
-- Fetches transcripts via `youtube-transcript-api` locally
-- Falls back to Webshare rotating proxy on local failure (configurable, default: ON)
-- Writes successful transcripts back to the CSI database
-- Has configurable rate limiting, circuit breaker, and batch caps
-- Classifies failures loudly (self-imposed caps vs YouTube blocks vs circuit breaker)
-
-This eliminates most proxy usage for YouTube transcript fetching, significantly reducing proxy bandwidth costs.
-
-### Fallback Path: VPS Proxy
+### Primary Path: VPS Webshare Proxy
 
 Implementation:
 - `src/universal_agent/youtube_ingest.py`
 
-The VPS proxy path is the legacy approach. It builds a Webshare proxy configuration from env and passes it into `youtube-transcript-api` when available.
+The VPS transcript fetch path uses Webshare rotating residential proxies to bypass YouTube's datacenter IP blocking. It is exposed via the gateway endpoint `/api/v1/youtube/ingest` and called by the CSI enrichment pipeline.
 
 Primary credential env vars:
 - `PROXY_USERNAME`
 - `PROXY_PASSWORD`
 
-Alias/fallback env vars also supported in code:
-- `WEBSHARE_PROXY_USER`
-- `WEBSHARE_PROXY_PASS`
-- `PROXY_FILTER_IP_LOCATIONS`
-- `PROXY_LOCATIONS`
-- `YT_PROXY_FILTER_IP_LOCATIONS`
-- `WEBSHARE_PROXY_LOCATIONS`
-
 Behavior:
 - if credentials are missing, proxy mode becomes disabled
 - if proxy module support is unavailable, proxy mode reports module unavailability
 - if proxy is required and unavailable, the ingest hard fails instead of falling back silently to the VPS datacenter IP
+- API-first metadata (YouTube Data API v3), yt-dlp as metadata fallback (no proxy for metadata)
+
+
 
 ## 2. YouTube Metadata Extraction
 
@@ -197,8 +170,7 @@ The reason is both operational and financial:
 ### Approved Uses
 
 Approved now:
-- YouTube transcript fetching via the desktop worker (residential IP, no proxy)
-- YouTube transcript fetching via VPS proxy when desktop is unavailable
+- YouTube transcript fetching via VPS Webshare rotating residential proxy
 - YouTube metadata-only extraction paired with transcript workflows
 - approved TGTG use
 - **one-off agent scraping** via the `residential-proxy` skill when a target site blocks the VPS datacenter IP
@@ -349,16 +321,13 @@ Diagnostic scripts:
 Related tests and behavior references:
 - `tests/unit/test_youtube_ingest.py`
 - `tests/gateway/test_youtube_ingest_endpoint.py`
-- `tests/test_desktop_transcript_worker.py`
 
 ## Bottom Line
 
 The canonical residential proxy policy in Universal Agent is:
-- **use the desktop transcript worker (residential IP) as the primary YouTube transcript path**
-- **fall back to Webshare residential proxy when desktop is unavailable or local fetch fails**
-- **require proxy for VPS-only YouTube transcript ingestion unless explicitly in local dev mode**
+- **use Webshare rotating residential proxy as the primary YouTube transcript path on the VPS**
+- **require proxy for VPS YouTube transcript ingestion unless explicitly in local dev mode**
 - **never send video binary through the proxy**
 - **treat the proxy as a costly shared capability, not a default project-wide network path**
 - **surface misconfiguration loudly through ingest failures and hook notifications**
 - **treat `proxy_connect_failed` as a first-class proxy transport incident, not a generic API outage**
-- **the desktop must be running for the primary transcript fetch path to work**
