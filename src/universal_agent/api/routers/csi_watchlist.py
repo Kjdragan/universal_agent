@@ -76,17 +76,30 @@ async def get_watchlist():
             data = json.load(f)
             
         channels = data.get("channels", [])
+        categories = data.get("categories", [])
         
         # Enrich with classification if missing
         for ch in channels:
             if not ch.get("domain"):
                 ch["domain"] = _classify_channel_name(ch.get("channel_name", ""))
                 
-        return {"channels": channels}
+        return {"channels": channels, "categories": categories}
     except Exception as e:
         logger.error(f"Error reading watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+def _purge_channel_from_db(channel_id: str):
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db")).expanduser()
+    if not db_path.exists():
+        return
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DELETE FROM rss_event_analysis WHERE channel_id = ?", (channel_id,))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error purging DB for channel {channel_id}: {e}")
 
 @router.delete("/{channel_id}")
 async def delete_channel(channel_id: str):
@@ -106,6 +119,8 @@ async def delete_channel(channel_id: str):
             
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+            
+        _purge_channel_from_db(channel_id)
             
         return {"success": True, "message": f"Channel {channel_id} removed", "channels": data["channels"]}
     except HTTPException:
@@ -231,3 +246,126 @@ async def add_channel(request: AddChannelRequest):
     except Exception as e:
         logger.error(f"Error adding to watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class CategoryRequest(BaseModel):
+    name: str
+
+class ChannelPatchRequest(BaseModel):
+    domain: str
+
+@router.post("/categories")
+async def add_category(request: CategoryRequest):
+    """Add a new category."""
+    path = get_watchlist_path()
+    _ensure_file_exists(path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        categories = data.setdefault("categories", [])
+        if request.name in categories:
+            raise HTTPException(status_code=409, detail="Category already exists")
+            
+        categories.append(request.name)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            
+        return {"success": True, "categories": categories}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding category: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/categories/{old_name}")
+async def rename_category(old_name: str, request: CategoryRequest):
+    """Rename a category and migrate channels."""
+    path = get_watchlist_path()
+    _ensure_file_exists(path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        categories = data.get("categories", [])
+        if old_name in categories:
+            categories[categories.index(old_name)] = request.name
+        else:
+            categories.append(request.name)
+        data["categories"] = categories
+            
+        channels = data.get("channels", [])
+        for ch in channels:
+            if ch.get("domain") == old_name:
+                ch["domain"] = request.name
+                
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            
+        return {"success": True, "categories": data["categories"], "channels": data["channels"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error renaming category: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/categories/{name}")
+async def delete_category(name: str):
+    """Delete a category and cascade delete channels including in DB."""
+    path = get_watchlist_path()
+    _ensure_file_exists(path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        if "categories" in data and name in data["categories"]:
+            data["categories"].remove(name)
+            
+        channels = data.get("channels", [])
+        channels_to_delete = [ch for ch in channels if ch.get("domain") == name]
+        data["channels"] = [ch for ch in channels if ch.get("domain") != name]
+        
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            
+        for ch in channels_to_delete:
+            _purge_channel_from_db(ch.get("channel_id"))
+            
+        return {"success": True, "categories": data.get("categories", []), "channels": data["channels"]}
+    except Exception as e:
+        logger.error(f"Error deleting category: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/{channel_id}")
+async def patch_channel(channel_id: str, request: ChannelPatchRequest):
+    """Update a specific channel's metadata (e.g. category reassignment)."""
+    path = get_watchlist_path()
+    _ensure_file_exists(path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        channels = data.get("channels", [])
+        updated = False
+        for ch in channels:
+            if ch.get("channel_id") == channel_id:
+                ch["domain"] = request.domain
+                updated = True
+                break
+                
+        if not updated:
+            raise HTTPException(status_code=404, detail="Channel not found")
+            
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            
+        return {"success": True, "channels": data["channels"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error patching channel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
