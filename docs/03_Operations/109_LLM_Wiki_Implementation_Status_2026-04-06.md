@@ -1,12 +1,14 @@
 # LLM Wiki Implementation Status (2026-04-06)
 
-**Last updated:** 2026-04-07
+**Last updated:** 2026-04-14
 
 ## Current Phase
 
 Phase 1 complete: core scaffolding, runtime surfaces, initial projection/query/lint plumbing, and targeted verification are in place.
 
 Phase 2 in progress: runtime smoke validation has been completed, and hardening is underway based on real usage.
+
+Phase 3 in progress: nightly proactive integration is live — the wiki system is now wired into the autonomous pipeline via `nightly_wiki_agent.py` (cron at 03:15 CST), which selects proactive signal cards, dispatches VP missions to build NLM-backed knowledge bases, and surfaces results in the morning briefing.
 
 ## Completed Surfaces
 

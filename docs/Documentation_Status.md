@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-11
+**Last updated:** 2026-04-14
 
 ## Development (development/)
 
@@ -82,7 +82,8 @@ These are the authoritative references for each subsystem. When any other docume
 | 104 | Run/Attempt Lifecycle and Nomenclature Migration Plan — canonical migration plan for run/attempt terminology, packet rollout, rollback scope, and CSI boundary handling |
 | 105 | YouTube Tutorial Pipeline Run/Attempt Triage — notification-center audit of the tutorial hook flow after the refactor, plus the closure update that migrated tutorial hooks and cron admission onto durable run/attempt lifecycle handling |
 | 107 | Task Hub and Multi-Channel Execution Master Reference — central code-verified map of ingress channels, To Do execution, run workspaces, specialist delegation, delivery, lifecycle events, and Session Explorer file resolution |
-| 109 | LLM Wiki Implementation Status — living tracker for subsystem progress, blockers, verified tests, and current implementation state |
+| 103 | Debugging Lessons Living Document — reusable lessons from complex incidents: target-host verification, browser-profile state crashes, SHA-first release verification, env-mutation, Gemini API key tiering, and NLM-first KB artifact mandate |
+| 109 | LLM Wiki Implementation Status — living tracker for subsystem phases, Phase 3 nightly proactive integration with NLM-backed knowledge bases |
 | 110 | LLM Wiki Smoke Test — first manual smoke-test results, runtime issues, and next hardening targets |
 | 108 | Gateway Test Hardening And Regression Follow-Up — operational handoff for the April gateway regression pass, including what was fixed, what remains, and how to continue pruning stale tests while development resumes |
 | 111 | Discord Operations And Usage Guide — **Canonical source of truth** for operational usage, slash commands, and proactive task generation workflows via the Discord CC Bot |

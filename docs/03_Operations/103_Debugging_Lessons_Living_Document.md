@@ -504,6 +504,73 @@ Reusable rule:
 
 ---
 
+## 2026-04-14: Gemini Image Generation 403 — Org-Level API Keys vs AI Studio Keys
+
+### Incident Summary
+
+The `generate_image` MCP tool repeatedly returned HTTP 403 errors when Simone tried to generate infographics as part of the KB→Report→Infographic pipeline. Text generation with the same `GEMINI_API_KEY` worked fine. The investigation spiraled through model name checks, API enablement audits, and Vertex AI permission reviews before isolating the root cause.
+
+The `GEMINI_API_KEY` was a Google Cloud project-level key (Cloud Console → API & Credentials). Google Cloud org-level policies silently block the `imagen` / image generation models even when the Generative Language API is enabled. AI Studio keys (`aistudio.google.com`) bypass org restrictions because they go through `generativelanguage.googleapis.com` without org policy enforcement.
+
+### Lesson 1: Google Cloud API Keys Are Not Universal Across Gemini Capabilities
+
+Reusable rule:
+
+- A Cloud Console API key that works for text generation will **not** necessarily work for image generation.
+- Imagen-family endpoints have additional org-level policy enforcement that standard Generative Language API enablement does not control.
+- When image generation returns 403 but text works, suspect org policy before checking permissions or enablement.
+
+### Lesson 2: Maintain Separate Infisical Keys for Different Capability Tiers
+
+Reusable rule:
+
+- Store capability-specific API keys separately in Infisical (e.g., `GEMINI_IMAGE_API_KEY` for image-capable endpoints, `GEMINI_API_KEY` for general text).
+- Code should prefer the capability-specific key and fall back to the general key.
+- The `generate_image` tool now uses `GEMINI_IMAGE_API_KEY` (AI Studio key) before falling back to `GEMINI_API_KEY`.
+
+### Lesson 3: 403 Errors From Google APIs Need Org-Level Investigation
+
+Reusable rule:
+
+- When a Google API returns 403 despite the API being "enabled" in the project, check **org-level policies** and **domain-wide restrictions** before spending time on IAM roles or service account changes.
+- AI Studio keys are the fastest unblock path for individual developer usage.
+
+---
+
+## 2026-04-14: Knowledge Base Pipeline Must Explicitly Mandate NLM for Artifact Generation
+
+### Incident Summary
+
+The nightly wiki agent was designed to build knowledge bases from proactive signal cards, generate reports, and create infographics. During execution, the VP agent used `generate_image` (a generic Gemini image generation tool) for infographics instead of NotebookLM's native `studio_create(type="infographic")`. This hit the 403 API key issue above, but revealed a deeper architectural problem: the pipeline prompt never explicitly told the agent to use NLM's artifact generation capabilities.
+
+### Lesson 1: Agents Will Use Generic Tools Unless Explicitly Directed to Specialized Ones
+
+Reusable rule:
+
+- When a pipeline has access to both a generic capability (e.g., `generate_image`) and a specialized one (e.g., NLM `studio_create`), agents will default to the generic capability unless the prompt **explicitly mandates** the specialized tool.
+- Pipeline prompts must name the specific the tool and describe the expected invocation pattern, not just the desired outcome.
+
+### Lesson 2: KB Pipelines Should Follow the NLM-First Pattern
+
+Reusable rule for knowledge base artifact generation:
+
+1. **Research corpus** → NLM `research_start` + `research_import` (not generic web scraping)
+2. **Reports** → NLM `studio_create(type="report")` (not LLM-generated markdown)
+3. **Infographics** → NLM `studio_create(type="infographic")` (not `generate_image`)
+4. **Audio overviews** → NLM `studio_create(type="audio")` (only option)
+5. **Download** → NLM `download_artifact` to a known path
+
+Generic tools should only be used as an explicit fallback when NLM is unavailable.
+
+### Lesson 3: System Prompts Should Include Universal Anti-Patterns
+
+Reusable rule:
+
+- When a class of error recurs across multiple pipelines (e.g., agents using `generate_image` instead of NLM, or agents calling AgentMail SDK instead of `agentmail_send_with_local_attachments`), the fix belongs in the **system prompt** as a universal routing rule, not just in the individual pipeline prompt.
+- Section 13 of the Simone system prompt now routes large binary attachments to the correct handler; a similar universal rule should eventually route all KB artifact generation through NLM.
+
+---
+
 ## 2026-04-13: Python Execution Scope and Dictionary Initialization
 
 ### Incident Summary
