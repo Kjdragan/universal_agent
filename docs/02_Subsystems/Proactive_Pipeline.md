@@ -865,7 +865,7 @@ is advisory, never blocks heartbeat execution.
 
 ## 16. All Proactive Entry Points
 
-The system has **14 distinct ways** that tasks reach agents for proactive execution.
+The system has **13 distinct ways** that tasks reach agents for proactive execution.
 These are central to understanding how the system operates autonomously.
 
 ```mermaid
@@ -927,7 +927,9 @@ flowchart TD
 | 11 | **Priority Classifier** | Deterministic Python gate | N/A (inline) | `priority_classifier.py` |
 | 12 | **Nightly Wiki Creation** | Cron (03:15 CST daily) | Once per night | `scripts/nightly_wiki_agent.py` |
 | 13 | **Morning Briefing** | Cron (06:30 CST daily) | Once per morning | `scripts/briefings_agent.py` |
-| 14 | **Cron Job Registration** | Manual (one-time setup) | On demand | `scripts/schedule_nightly_wiki.py` |
+
+> [!NOTE]
+> **Setup Scripts:** `scripts/schedule_nightly_wiki.py` is a manual (one-time setup) script for Cron Job Registration, rather than an active agent execution entry point.
 
 ### How They Compose
 
