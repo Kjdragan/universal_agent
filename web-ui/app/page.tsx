@@ -1853,7 +1853,7 @@ function ChatInterface() {
 
         let cronOutputText: string | null = null;
         if ((!response.ok || raw.trim().length === 0) && sessionId.startsWith("cron_")) {
-          const cronFallbackUrl = buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "work_products/cron_output.md");
+          const cronFallbackUrl = buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "work_products/cron_result.md");
           const cronResp = await fetch(cronFallbackUrl, { cache: "no-store" });
           if (cronResp.ok) {
             cronOutputText = await cronResp.text();
