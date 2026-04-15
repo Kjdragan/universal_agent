@@ -788,6 +788,7 @@ is advisory, never blocks heartbeat execution.
 | `UA_REFLECTION_START_HOUR` | 22 | Start of overnight reflection window (24h local time) |
 | `UA_REFLECTION_END_HOUR` | 7 | End of overnight reflection window (24h local time) |
 | `UA_REFLECTION_MAX_NIGHTLY_TASKS` | 10 | Maximum tasks an agent may work on per night |
+| `UA_DAILY_PROACTIVE_WIKI_COUNT` | 1 | Number of NLM knowledge bases to create per nightly wiki run |
 
 ---
 
@@ -817,6 +818,14 @@ is advisory, never blocks heartbeat execution.
 | [`memory/memory_context.py`](../../src/universal_agent/memory/memory_context.py) | Token-budgeted context builder from recent entries |
 | [`memory/memory_store.py`](../../src/universal_agent/memory/memory_store.py) | Persistent storage with vector indexing |
 | [`tools/memory.py`](../../src/universal_agent/tools/memory.py) | Agent-facing `memory_get` and `memory_search` tools |
+
+### Autonomous Scripts
+
+| File | Role |
+|------|------|
+| [`nightly_wiki_agent.py`](../../src/universal_agent/scripts/nightly_wiki_agent.py) | Nightly proactive wiki creation — selects pending signal cards, dispatches VP missions to build NLM-backed knowledge bases (cron: 03:15 CST) |
+| [`briefings_agent.py`](../../src/universal_agent/scripts/briefings_agent.py) | Morning autonomous briefing — fetches telemetry and nightly wiki output, generates daily briefing report (cron: 06:30 CST) |
+| [`schedule_nightly_wiki.py`](../../src/universal_agent/scripts/schedule_nightly_wiki.py) | One-time setup script that registers the nightly wiki and morning briefing cron jobs via CronService |
 
 ### Dashboard / API Files
 
@@ -848,12 +857,15 @@ is advisory, never blocks heartbeat execution.
 | `decompose_with_llm()` | `decomposition_agent.py` | Claude-powered task breakdown |
 | `EmailTaskBridge.materialize()` | `email_task_bridge.py` | Email → Task Hub entry |
 | `MemoryOrchestrator` | `memory/orchestrator.py` | Unified memory read/write/search |
+| `main()` (nightly_wiki_agent) | `scripts/nightly_wiki_agent.py` | Loads pending signal cards, dispatches proactive wiki VP mission with NLM-first pipeline |
+| `main()` (briefings_agent) | `scripts/briefings_agent.py` | Fetches telemetry + nightly wiki output, dispatches morning briefing VP mission |
+| `main()` (schedule_nightly_wiki) | `scripts/schedule_nightly_wiki.py` | Upserts nightly_wiki and morning_briefing cron jobs via CronStore |
 
 ---
 
 ## 16. All Proactive Entry Points
 
-The system has **11 distinct ways** that tasks reach agents for proactive execution.
+The system has **14 distinct ways** that tasks reach agents for proactive execution.
 These are central to understanding how the system operates autonomously.
 
 ```mermaid
@@ -913,6 +925,9 @@ flowchart TD
 | 9 | **Brainstorm Capture** | User says "idea: ..." in chat | Starts refinement | `gateway_server.py` (system command) |
 | 10 | **HEARTBEAT.md Instructions** | Standing instructions file | Each heartbeat cycle | `heartbeat_service.py` |
 | 11 | **Priority Classifier** | Deterministic Python gate | N/A (inline) | `priority_classifier.py` |
+| 12 | **Nightly Wiki Creation** | Cron (03:15 CST daily) | Once per night | `scripts/nightly_wiki_agent.py` |
+| 13 | **Morning Briefing** | Cron (06:30 CST daily) | Once per morning | `scripts/briefings_agent.py` |
+| 14 | **Cron Job Registration** | Manual (one-time setup) | On demand | `scripts/schedule_nightly_wiki.py` |
 
 ### How They Compose
 
