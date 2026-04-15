@@ -22,6 +22,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 |-----|---------| 
 | Heartbeat_Service.md | **Canonical source of truth** — heartbeat supervision cycle, health findings contract, mediation flow, and the separation between heartbeat runtimes and dedicated ToDo execution |
 | Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: trusted email triage, Task Hub scoring, dedicated ToDo dispatch lifecycle, delivery-mode heuristics, brainstorm refinement, morning report, roadmap, and test coverage |
+| Proactive_Intelligence_Work_Product_Pipeline.md | Planned phased implementation for abundant proactive artifact generation, review candidate emails, feedback learning, CODIE proactive PRs, tutorial build automation, convergence detection, and GWS enhancements |
 | Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget, lightweight spotlight persistence contract, dispatcher health, forensic task history, and derived board-lane UX |
 | Memory_System.md | Tiered memory & auto-flush |
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |

@@ -392,6 +392,41 @@ class EmailTaskBridge:
         real_thread_id = str(real_thread_id or thread_id).strip()
         real_message_id = str(real_message_id or message_id).strip()
 
+        if sender_trusted:
+            try:
+                from universal_agent.services.proactive_feedback import handle_proactive_feedback_reply
+
+                feedback_result = handle_proactive_feedback_reply(
+                    self._conn,
+                    subject=subject,
+                    reply_text=reply_text,
+                    thread_id=real_thread_id or thread_id,
+                    message_id=real_message_id or message_id,
+                    actor=sender_email or "trusted_operator",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "📧→🧠 Proactive feedback interception failed thread=%s: %s",
+                    thread_id,
+                    exc,
+                )
+                feedback_result = None
+            if feedback_result is not None:
+                logger.info(
+                    "📧→🧠 Recorded proactive artifact feedback artifact_id=%s score=%s",
+                    feedback_result.get("artifact_id"),
+                    feedback_result.get("score"),
+                )
+                return {
+                    **feedback_result,
+                    "task_id": "",
+                    "is_update": False,
+                    "message_count": 0,
+                    "thread_id": thread_id,
+                    "sender_trusted": sender_trusted,
+                    "delivery_mode": "proactive_feedback",
+                }
+
         task_id = _deterministic_task_id(thread_id)
         master_key = self._classify_master_key(subject)
         existing = self._get_mapping(thread_id)
