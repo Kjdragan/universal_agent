@@ -72,7 +72,6 @@ These are the authoritative references for each subsystem. When any other docume
 | 89 | Runtime Bootstrap, Deployment Profiles & Factory Role |
 | 90 | Artifacts, Workspaces & Remote Sync |
 | 91 | Telegram |
-| 92 | CSI Architecture |
 | 96 | NotebookLM Integration & Research Pipeline |
 | 97 | Infisical CLI Reference & Lessons Learned |
 | 98 | Agent Skills Directory (`.agents/skills/`) |
@@ -134,40 +133,13 @@ These are the authoritative references for each subsystem. When any other docume
 | 06 | Final Integration Sprint Review (2026-02-14) |
 | 07 | Happy Path Review and Markdown Remediation (2026-02-19) |
 
-## CSI Rebuild (csi-rebuild/)
 
-| Doc | Subject |
-|-----|---------|
-| 00_master_plan.md | CSI rebuild master plan |
-| 01_architecture_v2.md | Revised CSI architecture |
-| 02_interfaces_and_schemas.md | CSI interfaces and schemas |
-| 03_rollout_and_runbooks.md | Rollout plan and runbook index |
-| 04_validation_matrix.md | Validation test matrix |
-| 05_incident_log.md | Incident tracking log |
-| 06_packet_handoff.md | Packet handoff documentation |
-| 07_post_packet10_work_phases.md | Post-packet work phases |
-| 08_rc_soak_ga_gate.md | Release candidate soak gate |
-| status.md | CSI rebuild status tracker |
-| kevin_handoff_for CSI.md | Handoff documentation |
-
-## CSI Rebuild Runbooks (csi-rebuild/runbooks/)
-
-| Doc | Subject |
-|-----|---------|
-| 01_incident_triage.md | Incident triage runbook |
-| 02_remediation_escalation.md | Remediation escalation runbook |
-| 03_rollback.md | Rollback runbook |
-| 04_data_repair.md | Data repair runbook |
-| 05_quick_commands.md | Quick command reference |
 
 ## SDK Phases and Integration Docs
 
 | Doc | Subject |
 |-----|---------|
 | 004 | Threads Infisical Sync Workflow |
-| 005 | CSI YouTube Proxy Usage Audit |
-| 006 | CSI Trend Analysis Functional Review and Plan |
-| 007 | CSI Persistence Briefing and Reminder Operations |
 | 008 | Threads Rollout Next Phases |
 | 009 | Threads Phase 2 Permission Readiness Runbook |
 | 010 | Threads Phase 2/3 Closeout Go/No-Go Report |

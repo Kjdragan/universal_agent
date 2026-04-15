@@ -59,6 +59,33 @@ Issues a JWT token for ops/administrative access.
 }
 ```
 
+### Comprehensive API Auth & Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Web/CLI)
+    participant Auth as Auth Middleware
+    participant GW as Gateway Router
+    participant Srv as Backend Service
+    participant DB as SQLite / Redis
+
+    C->>Auth: POST /auth/ops-token
+    Auth-->>C: Returns JWT
+
+    C->>GW: API Request (Auth: Bearer JWT)
+    GW->>Auth: Validate JWT / Enforce Owner Lane
+    
+    alt Token Invalid
+        Auth-->>C: 401 Unauthorized
+    else Token Valid & Owner Matches
+        Auth->>GW: Proceed Request
+        GW->>Srv: Process Request
+        Srv<->DB: State Read/Write
+        Srv-->>GW: Result Payload
+        GW-->>C: 200 OK Response
+    end
+```
+
 ### Auth Requirements
 
 Most `/api/v1/ops/*` and `/api/v1/dashboard/*` endpoints require:

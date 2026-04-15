@@ -1287,5 +1287,5 @@ uv run pytest tests/test_reflection_engine.py -v
 | [Heartbeat Service](Heartbeat_Service.md) | Cycle mechanics, JSON findings schema, repair pipeline, mediation flow |
 | [Memory System](Memory_System.md) | Tiered memory architecture, auto-flush |
 | [Email Architecture](../../docs/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md) | AgentMail identity, triage→Simone architecture |
-| [CSI Architecture](../../docs/03_Operations/92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md) | CSI ingester runtime, delivery contract |
+| [CSI Architecture](../04_CSI/CSI_Master_Architecture.md) | CSI ingester runtime, delivery contract |
 | [Heartbeat Issue Mediation](../../docs/03_Operations/95_Heartbeat_Issue_Mediation_And_Auto_Triage_2026-03-12.md) | Non-OK heartbeat auto-investigation |

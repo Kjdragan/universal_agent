@@ -24,6 +24,76 @@ PRAGMA auto_vacuum=INCREMENTAL;
 
 ## 2. Segregated Database Files
 
+> [!TIP]
+> The Entity-Relationship (ER) Diagram below represents the physical and logical boundaries of the isolated databases across the architecture. Notice that `csi.db` is also listed here as part of the overall topology, connecting to the Gateway.
+
+```mermaid
+erDiagram
+    %% runtime_state.db
+    TASK_HUB_ITEMS {
+        string id PK
+        string status
+        string agent_ready
+        string project_key
+    }
+    TASK_HUB_ASSIGNMENTS {
+        string id PK
+        string task_id FK
+        timestamp start_time
+    }
+    TASK_HUB_EVALUATIONS {
+        string id PK
+        string task_id FK
+    }
+    TASK_HUB_DISPATCH_QUEUE {
+        string id PK
+        string task_id FK
+    }
+
+    TASK_HUB_ITEMS ||--o{ TASK_HUB_ASSIGNMENTS : "has"
+    TASK_HUB_ITEMS ||--o{ TASK_HUB_EVALUATIONS : "evaluated via"
+    TASK_HUB_ITEMS ||--o{ TASK_HUB_DISPATCH_QUEUE : "queued as"
+
+    %% activity_state.db
+    ACTIVITY_EVENTS {
+        string id PK
+        json metadata
+    }
+    ACTIVITY_EVENT_STREAM {
+        string id PK
+    }
+    CSI_DIGESTS {
+        string id PK
+    }
+
+    %% lossless_memory/db.py
+    LCM_CONVERSATIONS {
+        string id PK
+    }
+    LCM_MESSAGES {
+        string id PK
+        string conversation_id FK
+    }
+    LCM_SUMMARIES {
+        string id PK
+    }
+    LCM_CONTEXT_ITEMS {
+        string id PK
+        string summary_id FK
+    }
+    
+    LCM_CONVERSATIONS ||--o{ LCM_MESSAGES : "contains"
+    LCM_SUMMARIES ||--o{ LCM_CONTEXT_ITEMS : "mapped by"
+
+    %% CSI Database
+    CSI_DB_CHANNELS {
+        string channel_id PK
+    }
+    CSI_DB_REDDIT {
+        string subreddit PK
+    }
+```
+
 Databases are strictly segregated to avoid "cross battles" (lock contention) between high-priority agent execution states and background tasks.
 
 ### `runtime_state.db`

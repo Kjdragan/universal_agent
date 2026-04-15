@@ -74,7 +74,6 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Runtime Bootstrap, Deployment Profiles, and Factory Role Source of Truth (2026-03-06)](03_Operations/89_Runtime_Bootstrap_Deployment_Profiles_And_Factory_Role_Source_Of_Truth_2026-03-06.md)**: Canonical reference for Infisical-first startup, deployment profile strictness, factory-role policy shaping, and shared runtime bootstrap behavior.
 - **[Artifacts, Workspaces, and Remote Sync Source of Truth (2026-03-06)](03_Operations/90_Artifacts_Workspaces_And_Remote_Sync_Source_Of_Truth_2026-03-06.md)**: Canonical reference for run workspace roots, durable artifacts roots, mirrored VPS storage, ready-marker-gated sync, and local-vs-mirror storage APIs.
 - **[Telegram Architecture and Operations Source of Truth (2026-03-06)](03_Operations/91_Telegram_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md)**: Canonical reference for the polling-based Telegram bot, gateway/in-process execution modes, allowlist and task semantics, CSI Telegram delivery paths, and legacy webhook-era remnants.
-- **[CSI Architecture and Operations Source of Truth (2026-03-06)](03_Operations/92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md)**: Canonical reference for the CSI ingester runtime, signed CSI->UA delivery contract, adapter and timer fleet model, VPS deployment, and the current boundary between CSI and native UA playlist watching.
 - **[NotebookLM Integration and Research Pipeline (2026-03-14)](03_Operations/96_NotebookLM_Integration_And_Research_Pipeline_2026-03-14.md)**: Canonical reference for NotebookLM integration — capabilities, delegation architecture, auth flow, research pipeline, artifact generation, circuit breaker tuning, API key tiering, NLM-first KB mandate, and lessons learned (10 entries).
 - **[Infisical CLI Reference and Lessons Learned (2026-03-14)](03_Operations/97_Infisical_CLI_Reference_And_Lessons_Learned_2026-03-14.md)**: Source of truth for using Infisical CLI — authentication, secret management, environment setup, agent integration patterns, and lessons learned.
 - **[Prioritized Cleanup Plan From Canonical Review (2026-03-06)](03_Operations/93_Prioritized_Cleanup_Plan_From_Canonical_Review_2026-03-06.md)**: Handoff-ready prioritized cleanup plan (17 items, P0-P2) derived from the 12-doc canonical review, with files-to-investigate and expected fix scope for each item.
@@ -139,34 +138,11 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 - **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, notification kinds, 3-layer dedup, proxy config, env vars, API endpoints.
 
-### 8. [CSI Rebuild](csi-rebuild)
 
-- **[Master Plan](csi-rebuild/00_master_plan.md)**: CSI rebuild master plan.
-- **[Architecture v2](csi-rebuild/01_architecture_v2.md)**: Revised CSI architecture.
-- **[Interfaces and Schemas](csi-rebuild/02_interfaces_and_schemas.md)**: CSI interfaces and schemas.
-- **[Rollout and Runbooks](csi-rebuild/03_rollout_and_runbooks.md)**: Rollout plan and runbook index.
-- **[Validation Matrix](csi-rebuild/04_validation_matrix.md)**: Validation test matrix.
-- **[Incident Log](csi-rebuild/05_incident_log.md)**: Incident tracking log.
-- **[Packet Handoff](csi-rebuild/06_packet_handoff.md)**: Packet handoff documentation.
-- **[Post Packet 10 Work Phases](csi-rebuild/07_post_packet10_work_phases.md)**: Post-packet work phases.
-- **[RC Soak GA Gate](csi-rebuild/08_rc_soak_ga_gate.md)**: Release candidate soak gate.
-- **[Status](csi-rebuild/status.md)**: CSI rebuild status tracker.
-- **[Kevin Handoff for CSI](csi-rebuild/kevin_handoff_for CSI.md)**: Handoff documentation.
-
-#### CSI Rebuild Runbooks
-
-- **[Incident Triage](csi-rebuild/runbooks/01_incident_triage.md)**: Incident triage runbook.
-- **[Remediation Escalation](csi-rebuild/runbooks/02_remediation_escalation.md)**: Remediation escalation runbook.
-- **[Rollback](csi-rebuild/runbooks/03_rollback.md)**: Rollback runbook.
-- **[Data Repair](csi-rebuild/runbooks/04_data_repair.md)**: Data repair runbook.
-- **[Quick Commands](csi-rebuild/runbooks/05_quick_commands.md)**: Quick command reference.
 
 ### 9. [SDK Phases and Integration Docs](.)
 
 - **[Threads Infisical Sync Workflow](004_THREADS_INFISICAL_SYNC_WORKFLOW.md)**: Infisical sync workflow.
-- **[CSI YouTube Proxy Usage Audit](005_CSI_YOUTUBE_PROXY_USAGE_AUDIT.md)**: Proxy usage audit.
-- **[CSI Trend Analysis Functional Review and Plan](006_CSI_TREND_ANALYSIS_FUNCTIONAL_REVIEW_AND_PLAN.md)**: Trend analysis review.
-- **[CSI Persistence Briefing and Reminder Operations](007_CSI_PERSISTENCE_BRIEFING_AND_REMINDER_OPERATIONS.md)**: Persistence operations.
 - **[Threads Rollout Next Phases](008_THREADS_ROLLOUT_NEXT_PHASES.md)**: Threads rollout phases.
 - **[Threads Phase 2 Permission Readiness Runbook](009_THREADS_PHASE2_PERMISSION_READINESS_RUNBOOK.md)**: Permission readiness.
 - **[Threads Phase 2/3 Closeout Go/No-Go Report](010_THREADS_PHASE2_3_CLOSEOUT_GO_NO_GO_REPORT.md)**: Phase closeout report.
