@@ -233,6 +233,56 @@ def get_delegation_context(
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def build_weekly_preference_report(conn: sqlite3.Connection, *, top_n: int = 10) -> dict[str, Any]:
+    model = rebuild_preference_snapshot(conn)
+    preferences = model.get("topic_preferences") if isinstance(model.get("topic_preferences"), dict) else {}
+    ranked = sorted(
+        preferences.items(),
+        key=lambda item: float((item[1] or {}).get("weight") or 0.0),
+        reverse=True,
+    )
+    positive = [(key, value) for key, value in ranked if float((value or {}).get("weight") or 0.0) > 0][:top_n]
+    negative = [
+        (key, value)
+        for key, value in sorted(
+            preferences.items(),
+            key=lambda item: float((item[1] or {}).get("weight") or 0.0),
+        )
+        if float((value or {}).get("weight") or 0.0) < 0
+    ][:top_n]
+    lines = [
+        "Weekly preference model update",
+        "",
+        f"Signals processed: {model.get('meta', {}).get('total_signals_processed', 0)}",
+        f"Last updated: {model.get('meta', {}).get('last_updated', '')}",
+        "",
+        "Rising / positive interests:",
+    ]
+    if positive:
+        for index, (key, value) in enumerate(positive, start=1):
+            lines.append(f"{index}. {key} (weight {float(value.get('weight') or 0.0):.2f}, signals {value.get('signal_count', 0)})")
+    else:
+        lines.append("- No strong positive signals yet.")
+    lines.extend(["", "Declining / negative signals:"])
+    if negative:
+        for index, (key, value) in enumerate(negative, start=1):
+            lines.append(f"{index}. {key} (weight {float(value.get('weight') or 0.0):.2f}, signals {value.get('signal_count', 0)})")
+    else:
+        lines.append("- No strong negative signals yet.")
+    lines.extend(
+        [
+            "",
+            "Reply with corrections if this ranking is wrong. Silence is treated as neutral.",
+        ]
+    )
+    return {
+        "model": model,
+        "positive": [{"key": key, **value} for key, value in positive],
+        "negative": [{"key": key, **value} for key, value in negative],
+        "report_text": "\n".join(lines),
+    }
+
+
 def _artifact_signal_keys(artifact: dict[str, Any]) -> list[str]:
     keys: list[str] = []
     artifact_type = str(artifact.get("artifact_type") or "").strip().lower()

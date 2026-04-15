@@ -371,6 +371,8 @@ export default function DashboardPage() {
   const [tutorialDispatchingId, setTutorialDispatchingId] = useState<string>("");
   const [dismissedVpEventIds, setDismissedVpEventIds] = useState<Set<string>>(new Set());
   const [expandedMissionEvents, setExpandedMissionEvents] = useState<Set<string>>(new Set());
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editDescriptionValue, setEditDescriptionValue] = useState<string>("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -971,6 +973,25 @@ export default function DashboardPage() {
     });
   }, []);
 
+  const saveSessionDescription = useCallback(async (sessionId: string, newDescription: string) => {
+    try {
+      const resp = await fetch(`${API_BASE}/api/v1/ops/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: newDescription || null }),
+      });
+      if (resp.ok) {
+        setSessionDirectory((prev) =>
+          prev.map((s) => (s.session_id === sessionId ? { ...s, description: newDescription || null } : s))
+        );
+      }
+    } catch (e) {
+      console.error("Failed to update description", e);
+    } finally {
+      setEditingSessionId(null);
+    }
+  }, []);
+
   const toggleAllVisible = useCallback(() => {
     const visibleIds = filteredSessions.map((s) => s.session_id);
     setSelectedSessions((prev) => {
@@ -1535,15 +1556,40 @@ export default function DashboardPage() {
                   {session.run_kind ? ` · ${session.run_kind}` : ""}
                 </p>
               ) : null}
-              {session.description ? (
-                <p
-                  className="mt-1 text-[11px] text-foreground/80/90 truncate"
-                  title={session.description}
-                >
-                  {session.description}
-                </p>
+              {editingSessionId === session.session_id ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    // eslint-disable-next-line jsx-a11y/no-autofocus
+                    autoFocus
+                    className="flex-1 rounded border border-border/40 bg-card/15 px-2 py-0.5 text-[11px] text-foreground outline-none"
+                    value={editDescriptionValue}
+                    onChange={(e) => setEditDescriptionValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveSessionDescription(session.session_id, editDescriptionValue);
+                      if (e.key === "Escape") setEditingSessionId(null);
+                    }}
+                    onBlur={() => saveSessionDescription(session.session_id, editDescriptionValue)}
+                  />
+                </div>
               ) : (
-                <p className="mt-1 text-[11px] text-muted italic truncate">no description yet</p>
+                <div className="group mt-1 flex items-center gap-2 text-[11px]">
+                  <p
+                    className={`truncate ${session.description ? "text-foreground/80/90" : "text-muted-foreground italic"}`}
+                    title={session.description || "no description yet"}
+                  >
+                    {session.description || "no description yet"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingSessionId(session.session_id);
+                      setEditDescriptionValue(session.description || "");
+                    }}
+                    className="opacity-0 group-hover:opacity-100 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-card/50 hover:text-foreground transition-opacity"
+                  >
+                    Edit
+                  </button>
+                </div>
               )}
               <p className="mt-1 text-[11px] text-muted-foreground">
                 memory: {session.memory_mode}

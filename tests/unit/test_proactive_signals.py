@@ -9,8 +9,11 @@ from universal_agent.proactive_signals import (
     generate_youtube_cards,
     list_cards,
     record_feedback,
+    sync_generated_cards,
     upsert_generated_card,
 )
+from universal_agent.services.proactive_artifacts import list_artifacts
+from universal_agent.services.proactive_convergence import get_topic_signature
 
 
 def _seed_csi_db(path):
@@ -159,3 +162,27 @@ def test_signal_feedback_and_action_create_task(tmp_path):
 
     cards = list_cards(conn)
     assert cards[0]["status"] == "actioned"
+
+
+def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tmp_path):
+    csi_db = tmp_path / "csi.db"
+    _seed_csi_db(csi_db)
+    db = tmp_path / "activity.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    task_hub.ensure_schema(conn)
+
+    counts = sync_generated_cards(conn, csi_db_path=csi_db)
+    repeated = sync_generated_cards(conn, csi_db_path=csi_db)
+    signature = get_topic_signature(conn, "video_one_1")
+    artifacts = list_artifacts(conn, limit=100)
+    tutorial_tasks = conn.execute(
+        "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind = 'tutorial_build'"
+    ).fetchone()["c"]
+
+    assert counts["youtube"] >= 1
+    assert counts["topic_signatures"] >= 1
+    assert repeated["topic_signatures"] >= 1
+    assert signature is not None
+    assert tutorial_tasks >= 1
+    assert any(item["source_kind"] == "proactive_signal" for item in artifacts)

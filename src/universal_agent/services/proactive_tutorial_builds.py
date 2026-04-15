@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from universal_agent import task_hub
@@ -85,6 +87,59 @@ def queue_tutorial_build_task(
         metadata={"task_id": task_id, "video_id": clean_video_id, "source": source},
     )
     return {"task": task, "artifact": artifact}
+
+
+def sync_build_oriented_csi_videos(
+    conn: sqlite3.Connection,
+    *,
+    csi_db_path: Path | None,
+    limit: int = 200,
+) -> dict[str, int]:
+    """Queue CODIE tutorial build tasks for build-oriented CSI RSS videos."""
+    if _auto_route_disabled() or csi_db_path is None or not csi_db_path.exists():
+        return {"seen": 0, "queued": 0}
+    db = sqlite3.connect(str(csi_db_path))
+    db.row_factory = sqlite3.Row
+    try:
+        rows = db.execute(
+            """
+            SELECT
+                e.event_id, e.occurred_at, e.subject_json,
+                a.category, a.summary_text, a.analysis_json, a.transcript_status
+            FROM events e
+            LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
+            WHERE e.source = 'youtube_channel_rss'
+            ORDER BY e.id DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 1000)),),
+        ).fetchall()
+    except sqlite3.Error:
+        return {"seen": 0, "queued": 0}
+    finally:
+        db.close()
+
+    queued = 0
+    for row in rows:
+        subject = _json_loads_obj(row["subject_json"])
+        analysis = _json_loads_obj(row["analysis_json"])
+        if not _looks_build_oriented(subject=subject, analysis=analysis, category=str(row["category"] or ""), summary=str(row["summary_text"] or "")):
+            continue
+        video_id = str(subject.get("video_id") or row["event_id"] or "").strip()
+        if not video_id:
+            continue
+        queue_tutorial_build_task(
+            conn,
+            video_id=video_id,
+            video_title=str(subject.get("title") or subject.get("media_title") or video_id),
+            video_url=str(subject.get("url") or ""),
+            channel_name=str(subject.get("channel_name") or subject.get("author_name") or ""),
+            source="csi_auto_route",
+            extraction_plan=_extraction_plan_from_analysis(analysis=analysis, row=row),
+            priority=3 if str(row["transcript_status"] or "").lower() == "ok" else 2,
+        )
+        queued += 1
+    return {"seen": len(rows), "queued": queued}
 
 
 def register_tutorial_build_artifact(
@@ -214,3 +269,63 @@ def _build_artifact_summary(metadata: dict[str, Any]) -> str:
     location = metadata.get("repo_url") or metadata.get("artifact_path") or "artifact"
     status = metadata.get("build_status") or "success"
     return f"Tutorial build {status}; final work product: {location}"
+
+
+def _looks_build_oriented(*, subject: dict[str, Any], analysis: dict[str, Any], category: str, summary: str) -> bool:
+    text = " ".join(
+        [
+            str(subject.get("title") or ""),
+            str(subject.get("description") or ""),
+            str(category or ""),
+            str(summary or ""),
+            json.dumps(analysis, ensure_ascii=True),
+        ]
+    ).lower()
+    positive = (
+        "tutorial",
+        "build",
+        "walkthrough",
+        "hands-on",
+        "code",
+        "coding",
+        "python",
+        "typescript",
+        "javascript",
+        "github",
+        "repo",
+        "mcp",
+        "sdk",
+        "api",
+        "docker",
+    )
+    negative = ("reaction", "drama", "news roundup", "podcast")
+    return any(token in text for token in positive) and not any(token in text for token in negative)
+
+
+def _extraction_plan_from_analysis(*, analysis: dict[str, Any], row: Any) -> dict[str, Any]:
+    return {
+        "language": str(analysis.get("language") or analysis.get("primary_language") or "unknown"),
+        "estimated_complexity": str(analysis.get("estimated_complexity") or "unknown"),
+        "dependencies": analysis.get("dependencies") if isinstance(analysis.get("dependencies"), list) else [],
+        "implementation_steps": analysis.get("implementation_steps") if isinstance(analysis.get("implementation_steps"), list) else [],
+        "summary": str(row["summary_text"] or ""),
+        "category": str(row["category"] or analysis.get("category") or ""),
+    }
+
+
+def _auto_route_disabled() -> bool:
+    raw = str(os.getenv("UA_PROACTIVE_TUTORIAL_AUTO_ROUTE", "1") or "1").strip().lower()
+    return raw in {"0", "false", "no", "off"}
+
+
+def _json_loads_obj(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}

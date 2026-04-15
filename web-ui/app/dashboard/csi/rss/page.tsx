@@ -394,7 +394,7 @@ export default function CsiWatchlistPage() {
           </div>
 
           {/* Persistent Channel Preview Viewer Panel */}
-          <div className="hidden md:flex w-[460px] lg:w-[500px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col shadow-inner overflow-hidden">
+          <div className="hidden md:flex w-[500px] lg:w-[600px] xl:w-[800px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col shadow-inner overflow-hidden">
              {previewChannel ? (
                 <>
                    <div className="bg-background/80 border-b border-border/40 p-4 shrink-0 flex items-center justify-between">
@@ -409,9 +409,8 @@ export default function CsiWatchlistPage() {
                    <div className="flex-1 w-full bg-black">
                        <iframe 
                           className="w-full h-full border-0"
-                          src={`https://www.youtube.com/embed/videoseries?list=UU${previewChannel.channel_id.replace(/^UC/, '')}`}
+                          src={`https://www.youtube.com/embed/videoseries?list=UU${previewChannel.channel_id.replace(/^UC/, '')}&playsinline=1&fs=0`}
                           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                          allowFullScreen
                           title="Channel Uploads Playlist Viewer"
                        />
                    </div>

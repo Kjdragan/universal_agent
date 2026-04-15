@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from universal_agent import task_hub
@@ -135,6 +136,73 @@ def upsert_topic_signature(
     )
     conn.commit()
     return get_topic_signature(conn, clean_video_id) or {}
+
+
+def sync_topic_signatures_from_csi(
+    conn: sqlite3.Connection,
+    *,
+    csi_db_path: Path | None,
+    limit: int = 400,
+) -> dict[str, int]:
+    """Sync transcript-backed CSI RSS analysis rows into topic signatures."""
+    if csi_db_path is None or not csi_db_path.exists():
+        return {"seen": 0, "upserted": 0, "convergence_events": 0}
+    ensure_schema(conn)
+    db = sqlite3.connect(str(csi_db_path))
+    db.row_factory = sqlite3.Row
+    try:
+        rows = db.execute(
+            """
+            SELECT
+                e.event_id, e.occurred_at, e.subject_json,
+                a.category, a.summary_text, a.analysis_json, a.analyzed_at,
+                a.transcript_status
+            FROM events e
+            LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
+            WHERE e.source = 'youtube_channel_rss'
+              AND a.summary_text IS NOT NULL
+              AND a.summary_text != ''
+            ORDER BY COALESCE(a.analyzed_at, e.occurred_at) DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 1000)),),
+        ).fetchall()
+    except sqlite3.Error:
+        return {"seen": 0, "upserted": 0, "convergence_events": 0}
+    finally:
+        db.close()
+
+    upserted = 0
+    convergence_events = 0
+    for row in rows:
+        subject = _json_loads_obj(row["subject_json"])
+        analysis = _json_loads_obj(row["analysis_json"])
+        video_id = str(subject.get("video_id") or row["event_id"] or "").strip()
+        if not video_id:
+            continue
+        topics = _analysis_topics(analysis=analysis, category=str(row["category"] or ""), title=str(subject.get("title") or ""))
+        signature = upsert_topic_signature(
+            conn,
+            video_id=video_id,
+            channel_id=str(subject.get("channel_id") or "").strip(),
+            channel_name=str(subject.get("channel_name") or subject.get("author_name") or "").strip(),
+            video_title=str(subject.get("title") or subject.get("media_title") or "").strip(),
+            video_url=str(subject.get("url") or "").strip(),
+            ingested_at=str(row["analyzed_at"] or row["occurred_at"] or _now_iso()),
+            primary_topics=topics[:3],
+            secondary_topics=topics[3:8],
+            key_claims=_analysis_claims(analysis=analysis, summary_text=str(row["summary_text"] or "")),
+            content_type=str(row["category"] or analysis.get("category") or "other").strip(),
+            metadata={
+                "event_id": str(row["event_id"] or ""),
+                "source": "csi_rss_analysis",
+                "transcript_status": str(row["transcript_status"] or ""),
+            },
+        )
+        upserted += 1
+        if detect_and_queue_convergence(conn, signature=signature):
+            convergence_events += 1
+    return {"seen": len(rows), "upserted": upserted, "convergence_events": convergence_events}
 
 
 def get_topic_signature(conn: sqlite3.Connection, video_id: str) -> Optional[dict[str, Any]]:
@@ -396,6 +464,30 @@ def _overlap_matcher(signature: dict[str, Any], candidates: list[dict[str, Any]]
 def _topic_set(signature: dict[str, Any]) -> set[str]:
     topics = [*signature.get("primary_topics", []), *signature.get("secondary_topics", [])]
     return {str(topic or "").strip().lower() for topic in topics if str(topic or "").strip()}
+
+
+def _analysis_topics(*, analysis: dict[str, Any], category: str, title: str) -> list[str]:
+    raw_topics: list[Any] = []
+    for key in ("themes", "topics", "primary_topics", "tags"):
+        value = analysis.get(key)
+        if isinstance(value, list):
+            raw_topics.extend(value)
+    if category:
+        raw_topics.append(category)
+    if not raw_topics:
+        raw_topics.extend(_fallback_signature(title=title, summary_text="").get("primary_topics", []))
+    return _clean_list(raw_topics)[:8]
+
+
+def _analysis_claims(*, analysis: dict[str, Any], summary_text: str) -> list[str]:
+    raw_claims: list[Any] = []
+    for key in ("key_claims", "claims", "takeaways"):
+        value = analysis.get(key)
+        if isinstance(value, list):
+            raw_claims.extend(value)
+    if not raw_claims and summary_text:
+        raw_claims.append(summary_text[:300])
+    return _clean_list(raw_claims)[:8]
 
 
 def _fallback_signature(*, title: str, summary_text: str, error: str = "") -> dict[str, Any]:

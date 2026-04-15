@@ -21,7 +21,11 @@ from universal_agent.services.proactive_artifacts import (
 )
 from universal_agent.services.proactive_feedback import parse_feedback_text
 from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
-from universal_agent.services.proactive_preferences import get_delegation_context, get_preference_snapshot
+from universal_agent.services.proactive_preferences import (
+    build_weekly_preference_report,
+    get_delegation_context,
+    get_preference_snapshot,
+)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -236,6 +240,30 @@ def test_preference_snapshot_and_delegation_context_update_from_feedback(tmp_pat
     assert "topic:mcp" in snapshot["topic_preferences"]
     assert "Kevin's preference context" in context
     assert "topic:mcp" in context
+
+
+def test_weekly_preference_report_and_email_payload(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    with _connect(db_path) as conn:
+        artifact = upsert_artifact(
+            conn,
+            artifact_type="tutorial_build",
+            source_kind="tutorial_build",
+            source_ref="video-1",
+            title="Tutorial preference seed",
+            topic_tags=["tutorial"],
+        )
+        updated = record_feedback(conn, artifact_id=artifact["artifact_id"], score=5, text="more tutorials")
+        record_artifact_feedback_signal(conn, artifact=updated, score=5, text="more tutorials")
+        report = build_weekly_preference_report(conn)
+        payload = IntelligenceReporter(conn).compose_weekly_preference_report(
+            recipient="kevinjdragan@gmail.com",
+        )
+
+    assert "Weekly preference model update" in report["report_text"]
+    assert "topic:tutorial" in report["report_text"]
+    assert "[UA Weekly]" in payload.subject
+    assert "Silence is treated as neutral" in payload.text
 
 
 def test_existing_proactive_signal_cards_sync_into_artifact_inventory(tmp_path):

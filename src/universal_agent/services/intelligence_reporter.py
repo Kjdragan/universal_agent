@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from universal_agent.services import proactive_artifacts
-from universal_agent.services.proactive_preferences import score_artifact_for_review
+from universal_agent.services.proactive_preferences import build_weekly_preference_report, score_artifact_for_review
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,39 @@ class IntelligenceReporter:
             html=html_body,
         )
 
+    def compose_weekly_preference_report(self, *, recipient: str) -> ReviewEmailPayload:
+        report = build_weekly_preference_report(self._conn)
+        today = datetime.now(timezone.utc).date().isoformat()
+        title = f"Weekly preference model update - {today}"
+        artifact = proactive_artifacts.upsert_artifact(
+            self._conn,
+            artifact_id=proactive_artifacts.make_artifact_id(
+                source_kind="preference_model",
+                source_ref=today,
+                artifact_type="weekly_preference_report",
+                title=title,
+            ),
+            artifact_type="weekly_preference_report",
+            source_kind="preference_model",
+            source_ref=today,
+            title=title,
+            summary="Weekly summary of learned proactive intelligence preferences.",
+            status=proactive_artifacts.ARTIFACT_STATUS_CANDIDATE,
+            priority=4,
+            topic_tags=["preferences", "weekly-report"],
+            metadata={"positive": report["positive"], "negative": report["negative"]},
+        )
+        subject = f"[UA Weekly] Preference Model Update - {today} [{artifact['artifact_id']}]"
+        text = str(report["report_text"])
+        html_body = self._compose_html(artifact, text)
+        return ReviewEmailPayload(
+            artifact_id=str(artifact["artifact_id"]),
+            to=recipient,
+            subject=subject,
+            text=text,
+            html=html_body,
+        )
+
     async def send_review_email(
         self,
         *,
@@ -140,6 +173,32 @@ class IntelligenceReporter:
         )
         return dict(result or {})
 
+    async def send_weekly_preference_report(
+        self,
+        *,
+        recipient: str,
+        mail_service: Any,
+    ) -> dict[str, Any]:
+        payload = self.compose_weekly_preference_report(recipient=recipient)
+        result = await mail_service.send_email(
+            to=payload.to,
+            subject=payload.subject,
+            text=payload.text,
+            html=payload.html,
+            force_send=True,
+            require_approval=False,
+        )
+        proactive_artifacts.record_email_delivery(
+            self._conn,
+            artifact_id=payload.artifact_id,
+            message_id=str((result or {}).get("message_id") or ""),
+            thread_id=str((result or {}).get("thread_id") or ""),
+            subject=payload.subject,
+            recipient=recipient,
+            metadata={"mail_status": str((result or {}).get("status") or ""), "weekly_preference_report": True},
+        )
+        return dict(result or {})
+
     def _subject_prefix(self, artifact: dict[str, Any]) -> str:
         artifact_type = str(artifact.get("artifact_type") or "").strip().lower()
         if artifact_type in {"tutorial_build", "private_repo"}:
@@ -148,6 +207,8 @@ class IntelligenceReporter:
             return "[UA PR Review]"
         if artifact_type in {"daily_digest", "digest"}:
             return "[UA Digest]"
+        if artifact_type == "weekly_preference_report":
+            return "[UA Weekly]"
         return "[Simone Review]"
 
     def _compose_text(self, artifact: dict[str, Any]) -> str:

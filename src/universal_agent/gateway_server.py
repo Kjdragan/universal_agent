@@ -2017,6 +2017,8 @@ class OpsSessionResetRequest(BaseModel):
     clear_logs: bool = True
     clear_memory: bool = True
     clear_work_products: bool = False
+class OpsSessionPatchRequest(BaseModel):
+    description: Optional[str] = None
 
 
 class OpsSessionCompactRequest(BaseModel):
@@ -2167,6 +2169,7 @@ class ProactiveArtifactFeedbackRequest(BaseModel):
 class ProactiveArtifactReviewEmailRequest(BaseModel):
     recipient: Optional[str] = None
     limit: Optional[int] = 12
+    include_calendar: bool = False
 
 
 class ProactiveCodieCleanupQueueRequest(BaseModel):
@@ -16163,6 +16166,17 @@ def _proactive_review_recipient(fallback: str = "") -> str:
     )
 
 
+def _proactive_calendar_context(enabled: bool) -> dict[str, Any]:
+    if not enabled:
+        return {"ok": False, "reason": "disabled", "events": []}
+    try:
+        from universal_agent.services.gws_calendar_context import today_calendar_context
+
+        return today_calendar_context()
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc), "events": []}
+
+
 def _register_tutorial_bootstrap_proactive_artifact(job: dict[str, Any]) -> None:
     try:
         from universal_agent.services.proactive_tutorial_builds import register_tutorial_bootstrap_job_artifact
@@ -16211,6 +16225,7 @@ async def dashboard_proactive_artifact_digest_preview(
     request: Request,
     recipient: str = "",
     limit: int = 12,
+    include_calendar: bool = False,
 ):
     _require_ops_auth(request)
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
@@ -16218,9 +16233,11 @@ async def dashboard_proactive_artifact_digest_preview(
     with _activity_store_lock:
         conn = _activity_connect()
         try:
+            calendar_context = _proactive_calendar_context(include_calendar)
             payload = IntelligenceReporter(conn).compose_daily_digest(
                 recipient=_proactive_review_recipient(recipient),
                 limit=max(1, min(int(limit), 50)),
+                calendar_events=calendar_context.get("events", []),
             )
         finally:
             conn.close()
@@ -16230,6 +16247,7 @@ async def dashboard_proactive_artifact_digest_preview(
         "to": payload.to,
         "subject": payload.subject,
         "text": payload.text,
+        "calendar": calendar_context if include_calendar else None,
     }
 
 
@@ -16246,10 +16264,59 @@ async def dashboard_proactive_artifact_digest_send(
     with _activity_store_lock:
         conn = _activity_connect()
         try:
+            calendar_context = _proactive_calendar_context(bool(payload.include_calendar))
             result = await IntelligenceReporter(conn).send_daily_digest(
                 recipient=_proactive_review_recipient(payload.recipient or ""),
                 mail_service=_agentmail_service,
                 limit=max(1, min(int(payload.limit or 12), 50)),
+                calendar_events=calendar_context.get("events", []),
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", "send": result, "calendar": calendar_context if payload.include_calendar else None}
+
+
+@app.get("/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview")
+async def dashboard_proactive_preference_weekly_preview(
+    request: Request,
+    recipient: str = "",
+):
+    _require_ops_auth(request)
+    from universal_agent.services.intelligence_reporter import IntelligenceReporter
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            payload = IntelligenceReporter(conn).compose_weekly_preference_report(
+                recipient=_proactive_review_recipient(recipient),
+            )
+        finally:
+            conn.close()
+    return {
+        "status": "ok",
+        "artifact_id": payload.artifact_id,
+        "to": payload.to,
+        "subject": payload.subject,
+        "text": payload.text,
+    }
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/preferences/weekly/send")
+async def dashboard_proactive_preference_weekly_send(
+    request: Request,
+    payload: ProactiveArtifactReviewEmailRequest,
+):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    from universal_agent.services.intelligence_reporter import IntelligenceReporter
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            result = await IntelligenceReporter(conn).send_weekly_preference_report(
+                recipient=_proactive_review_recipient(payload.recipient or ""),
+                mail_service=_agentmail_service,
             )
         finally:
             conn.close()
@@ -26394,6 +26461,17 @@ async def ops_vp_dispatch_mission(
     objective = body.objective.strip()
     if not objective:
         raise HTTPException(status_code=400, detail="objective is required")
+    try:
+        from universal_agent.tools.vp_orchestration import _with_preference_context
+
+        objective = _with_preference_context(
+            vp_id=vp_identifier,
+            objective=objective,
+            mission_type=body.mission_type.strip() or "task",
+            constraints=dict(body.constraints or {}),
+        )
+    except Exception:
+        pass
 
     try:
         mission = dispatch_mission_with_retry(
@@ -26705,6 +26783,20 @@ async def ops_session_compact(
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+@app.patch("/api/v1/ops/sessions/{session_id}")
+async def ops_patch_session(request: Request, session_id: str, payload: OpsSessionPatchRequest):
+    _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    
+    updates = {}
+    if payload.description is not None:
+        if not _ops_service.update_session_description(session_id, payload.description):
+            raise HTTPException(status_code=404, detail="Session not found")
+        updates["description"] = payload.description
+
+    return {"status": "updated", "session_id": session_id, "updates": updates}
 
 
 @app.delete("/api/v1/ops/sessions/{session_id}")

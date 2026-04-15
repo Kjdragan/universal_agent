@@ -317,10 +317,25 @@ def sync_generated_cards(
     csi_db_path: Optional[Path] = None,
     discord_db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    counts = {"youtube": 0, "discord": 0}
+    counts = {"youtube": 0, "discord": 0, "topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0}
     for card in generate_youtube_cards(csi_db_path):
         upsert_generated_card(conn, card)
         counts["youtube"] += 1
+    try:
+        from universal_agent.services.proactive_convergence import sync_topic_signatures_from_csi
+
+        signature_counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db_path)
+        counts["topic_signatures"] = int(signature_counts.get("upserted") or 0)
+        counts["convergence_events"] = int(signature_counts.get("convergence_events") or 0)
+    except Exception:
+        logger.debug("Failed syncing CSI topic signatures", exc_info=True)
+    try:
+        from universal_agent.services.proactive_tutorial_builds import sync_build_oriented_csi_videos
+
+        tutorial_counts = sync_build_oriented_csi_videos(conn, csi_db_path=csi_db_path)
+        counts["tutorial_build_tasks"] = int(tutorial_counts.get("queued") or 0)
+    except Exception:
+        logger.debug("Failed syncing CSI tutorial build tasks", exc_info=True)
     for card in generate_discord_cards(discord_db_path):
         upsert_generated_card(conn, card)
         counts["discord"] += 1

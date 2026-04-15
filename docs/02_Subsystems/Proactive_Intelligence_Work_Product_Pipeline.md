@@ -374,7 +374,8 @@ Implementation status as of 2026-04-15:
 - `proactive_signals.upsert_generated_card()` now immediately syncs signal cards into proactive artifact inventory.
 - Tutorial bootstrap completion paths register completed repo/local artifact outputs as tutorial build artifacts.
 - CODIE VP worker completion path detects GitHub PR URLs in completed coder mission output and registers PR artifacts.
-- Remaining hook work: direct CSI post-ingest topic signature extraction and richer tutorial classifier auto-route are still pending.
+- CSI proactive signal sync now also creates topic signatures, queues convergence brief tasks when independent channels converge, and auto-routes build-oriented RSS videos into private tutorial build tasks.
+- Remaining hook work: direct in-process CSI Ingester post-enrichment hook and live validation against production CSI data are still pending.
 
 Work items:
 
@@ -418,7 +419,7 @@ Implementation status as of 2026-04-15:
 - Added LLM topic signature extraction from title/summary/transcript with strict JSON output and deterministic fallback.
 - Added LLM-assisted convergence matching with deterministic overlap fallback.
 - Added dashboard endpoint for extraction + optional convergence detection in one call.
-- Remaining work: wire this extraction into the real CSI post-ingest path.
+- CSI sync path now populates topic signatures from existing `rss_event_analysis`; remaining work is live CSI Ingester post-enrichment invocation.
 
 Work items:
 
@@ -455,7 +456,9 @@ Implementation status as of 2026-04-15:
 - Added SQLite preference model snapshots derived from explicit feedback signals with exponential decay.
 - Added compact delegation context generation.
 - Proactive CODIE cleanup, tutorial build, and convergence brief task creation now inject available preference context into their task briefs.
-- Remaining work: weekly preference report, richer dimensions/source preferences, and generic injection into all ATLAS/CODIE delegation paths.
+- Generic VP dispatch via internal VP tools and ops dispatch now appends preference context when available, unless `constraints.skip_preference_context` is set.
+- Added weekly preference report artifact/email composition and dashboard preview/send endpoints.
+- Remaining work: richer dimensions/source preferences and live validation of preference context inside full ATLAS/CODIE missions.
 
 Work items:
 
@@ -527,7 +530,9 @@ Implementation status as of 2026-04-15:
 
 - Digest composition can now include injected calendar events.
 - Tests cover digest calendar rendering without shelling out to `gws`.
-- Remaining work: connect this to a real GWS/MCP calendar provider and report auth failures non-fatally.
+- Added optional GWS calendar context provider for today's events; GWS absence/auth/CLI failures are nonfatal and leave digest sending unblocked.
+- Dashboard digest preview/send can request calendar context with `include_calendar`.
+- Remaining work: live GWS auth smoke test and optional review-block scheduling/Drive archival.
 
 Work items:
 
@@ -552,6 +557,13 @@ Acceptance criteria:
 
 Goal: complete live operational validation for CODIE PRs and tutorial private repos.
 
+Validation status as of 2026-04-15:
+
+- GitHub CLI is authenticated locally as `Kjdragan` with `repo` scope and ADMIN access to `Kjdragan/universal_agent`.
+- `gws` is not installed/available on this shell PATH, so live GWS calendar smoke tests must run in the deployed/runtime environment after GWS install/auth is confirmed.
+- AgentMail environment variables are not present in this shell (`AGENTMAIL_API_KEY`, inbox id/address, and UA AgentMail enablement are unset), so live AgentMail send/reply smoke tests must run through the initialized deployed gateway service or an Infisical-backed runtime.
+- No public repos, PR merges, production deploys, or real email sends were performed during this validation pass.
+
 Work items:
 
 1. Verify GitHub credentials through the existing GitHub app/CLI path, not ad hoc token probing in code.
@@ -570,6 +582,12 @@ Acceptance criteria:
 ### Packet 7 - Final Documentation and Release Readiness
 
 Goal: make the feature maintainable and ready for normal review.
+
+Implementation status as of 2026-04-15:
+
+- `docs/04_API_Reference/Ops_API.md` documents the proactive artifact endpoint surface.
+- This subsystem plan documents implemented foundations, remaining live smoke tests, and safety boundaries.
+- Remaining work: run live smoke tests in the deployed environment, then update this section with actual message IDs, PR URLs, private repo URLs/local artifact paths, and GWS status.
 
 Work items:
 

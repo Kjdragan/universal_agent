@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -10,6 +11,7 @@ from universal_agent.services.proactive_convergence import (
     detect_and_queue_convergence,
     extract_topic_signature_from_text,
     llm_match_signatures,
+    sync_topic_signatures_from_csi,
     upsert_topic_signature,
 )
 
@@ -84,6 +86,63 @@ def test_convergence_requires_multiple_channels(tmp_path):
 
     assert first["channel_id"] == "same-channel"
     assert result is None
+
+
+def test_sync_topic_signatures_from_csi_creates_convergence(tmp_path):
+    csi_db = tmp_path / "csi.db"
+    csi = sqlite3.connect(csi_db)
+    csi.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT UNIQUE NOT NULL,
+            source TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            subject_json TEXT NOT NULL
+        )
+        """
+    )
+    csi.execute(
+        """
+        CREATE TABLE rss_event_analysis (
+            event_id TEXT UNIQUE NOT NULL,
+            transcript_status TEXT,
+            category TEXT,
+            summary_text TEXT,
+            analysis_json TEXT,
+            analyzed_at TEXT
+        )
+        """
+    )
+    for event_id, channel in (("evt-a", "Channel A"), ("evt-b", "Channel B")):
+        csi.execute(
+            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', '2026-04-15T10:00:00+00:00', ?)",
+            (
+                event_id,
+                json.dumps(
+                    {
+                        "video_id": event_id,
+                        "title": "MCP server pattern",
+                        "channel_name": channel,
+                        "channel_id": channel.lower().replace(" ", "-"),
+                        "url": f"https://youtube.test/{event_id}",
+                    }
+                ),
+            ),
+        )
+        csi.execute(
+            "INSERT INTO rss_event_analysis (event_id, transcript_status, category, summary_text, analysis_json, analyzed_at) VALUES (?, 'ok', 'ai', 'MCP server pattern for agents', ?, '2026-04-15T11:00:00+00:00')",
+            (event_id, json.dumps({"themes": ["MCP servers"], "key_claims": ["MCP is useful for agent tools."]})),
+        )
+    csi.commit()
+    csi.close()
+
+    with _connect(tmp_path / "activity.db") as conn:
+        counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+
+    assert counts["upserted"] == 2
+    assert counts["convergence_events"] >= 1
 
 
 @pytest.mark.asyncio

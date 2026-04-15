@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from claude_agent_sdk import tool
 
-from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path, get_vp_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_vp_mission, list_vp_events, list_vp_missions
 from universal_agent.vp.dispatcher import (
@@ -203,6 +203,12 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     mission_type = str(args.get("mission_type") or "task").strip() or "task"
     constraints = args.get("constraints") if isinstance(args.get("constraints"), dict) else {}
     budget = args.get("budget") if isinstance(args.get("budget"), dict) else {}
+    objective = _with_preference_context(
+        vp_id=vp_id,
+        objective=objective,
+        mission_type=mission_type,
+        constraints=constraints,
+    )
     reply_mode = str(args.get("reply_mode") or "async").strip() or "async"
     priority = int(args.get("priority") or 100)
     raw_idempotency = str(args.get("idempotency_key") or "").strip()
@@ -248,6 +254,38 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         return _result(_error_payload("dispatch_failed", str(exc)))
     finally:
         conn.close()
+
+
+def _with_preference_context(
+    *,
+    vp_id: str,
+    objective: str,
+    mission_type: str,
+    constraints: dict[str, Any],
+) -> str:
+    if bool((constraints or {}).get("skip_preference_context")):
+        return objective
+    if vp_id not in {"vp.coder.primary", "vp.general.primary"}:
+        return objective
+    topic_tags = constraints.get("topic_tags")
+    if not isinstance(topic_tags, list):
+        topic_tags = constraints.get("tags")
+    if not isinstance(topic_tags, list):
+        topic_tags = []
+    try:
+        from universal_agent.services.proactive_preferences import get_delegation_context
+
+        with connect_runtime_db(get_activity_db_path()) as conn:
+            context = get_delegation_context(
+                conn,
+                task_type=mission_type or vp_id,
+                topic_tags=[str(tag) for tag in topic_tags],
+            )
+    except Exception:
+        return objective
+    if not context:
+        return objective
+    return f"{objective.rstrip()}\n\n---\nKEVIN'S PREFERENCE CONTEXT:\n{context}\n---"
 
 
 @tool(

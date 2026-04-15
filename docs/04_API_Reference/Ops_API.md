@@ -217,6 +217,25 @@ These endpoints expose the durable run catalog. They are the canonical browsing 
 |----------|--------|-------------|
 | `/api/v1/ops/delegation/history` | GET | View delegation event history |
 
+### Proactive Artifacts
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/proactive-artifacts` | GET | List durable proactive work-product artifacts; optionally sync proactive signal cards first |
+| `/api/v1/dashboard/proactive-artifacts/digest/preview` | GET | Preview the proactive review digest email; supports `include_calendar=true` |
+| `/api/v1/dashboard/proactive-artifacts/digest/send` | POST | Send the proactive review digest through the initialized AgentMail service |
+| `/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview` | GET | Preview the weekly preference model report |
+| `/api/v1/dashboard/proactive-artifacts/preferences/weekly/send` | POST | Send the weekly preference report through AgentMail |
+| `/api/v1/dashboard/proactive-artifacts/{artifact_id}/feedback` | POST | Record explicit review feedback for an artifact |
+| `/api/v1/dashboard/proactive-artifacts/{artifact_id}/send-review` | POST | Send one artifact as a review email |
+| `/api/v1/dashboard/proactive-artifacts/codie/cleanup-task` | POST | Queue a review-gated CODIE cleanup Task Hub item |
+| `/api/v1/dashboard/proactive-artifacts/codie/pr` | POST | Register a CODIE draft PR as a review artifact |
+| `/api/v1/dashboard/proactive-artifacts/tutorial/build-task` | POST | Queue a private tutorial-build Task Hub item for CODIE |
+| `/api/v1/dashboard/proactive-artifacts/tutorial/build-artifact` | POST | Register a completed private tutorial repo or local fallback artifact |
+| `/api/v1/dashboard/proactive-artifacts/convergence/signature` | POST | Upsert a topic signature and optionally queue deterministic convergence detection |
+| `/api/v1/dashboard/proactive-artifacts/convergence/extract` | POST | Extract a topic signature with LLM/fallback logic and optionally queue convergence detection |
+
+Proactive artifact endpoints are review-oriented. They create inventory, Task Hub work candidates, review emails, and feedback records; they do not merge PRs, publish public repos, deploy production, or treat silence as rejection.
+
 ### VP Mission Control
 | Endpoint | Method | Description |
 |----------|--------|-------------|

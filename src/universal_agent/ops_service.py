@@ -186,9 +186,14 @@ class OpsService:
             req_lines.append(ln.lstrip(">").strip())
         return " ".join([l for l in req_lines if l]).strip() or None
 
+    def _try_read_explicit_description(self, session_path: Path) -> Optional[str]:
+        desc_path = session_path / "description.txt"
+        return self._read_text_prefix(desc_path)
+
     def _derive_session_description(self, session_path: Path) -> Optional[str]:
         raw = (
-            self._try_read_checkpoint_description(session_path)
+            self._try_read_explicit_description(session_path)
+            or self._try_read_checkpoint_description(session_path)
             or self._try_read_trace_description(session_path)
             or self._try_read_transcript_description(session_path)
         )
@@ -648,6 +653,17 @@ class OpsService:
             shutil.rmtree(workspace)
             return True
         return False
+
+    def update_session_description(self, session_id: str, description: str) -> bool:
+        """Explicitly set a session description via description.txt"""
+        safe_session_id = validate_session_id(session_id)
+        workspace = self._session_workspace(safe_session_id)
+        if not workspace.exists() or not workspace.is_dir():
+            return False
+        
+        desc_path = workspace / "description.txt"
+        desc_path.write_text(description.strip(), encoding="utf-8")
+        return True
 
     def tail_file(self, session_id: str, filename: str, cursor: Optional[int] = None, limit: int = DEFAULT_LOG_LIMIT, max_bytes: int = DEFAULT_LOG_MAX_BYTES) -> Dict[str, Any]:
         """Tail a specific log file in the session."""

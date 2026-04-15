@@ -62,6 +62,22 @@ def test_proactive_artifacts_list_feedback_and_digest_preview(monkeypatch, tmp_p
         assert "Endpoint artifact candidate" in body["text"]
         assert "[UA Digest]" in body["subject"]
 
+        monkeypatch.setattr(
+            "universal_agent.services.gws_calendar_context.today_calendar_context",
+            lambda: {"ok": True, "reason": "", "events": [{"start": "09:00", "summary": "Planning review"}]},
+        )
+        digest_with_calendar = client.get(
+            "/api/v1/dashboard/proactive-artifacts/digest/preview?limit=5&include_calendar=true"
+        )
+        assert digest_with_calendar.status_code == 200
+        assert "Planning review" in digest_with_calendar.json()["text"]
+        assert digest_with_calendar.json()["calendar"]["ok"] is True
+
+        weekly = client.get("/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview")
+        assert weekly.status_code == 200
+        assert "[UA Weekly]" in weekly.json()["subject"]
+        assert "Weekly preference model update" in weekly.json()["text"]
+
 
 def test_proactive_artifact_send_review_reports_missing_agentmail(monkeypatch, tmp_path):
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity.db").resolve()))

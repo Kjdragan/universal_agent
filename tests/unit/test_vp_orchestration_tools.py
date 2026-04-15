@@ -25,6 +25,7 @@ def _unwrap(result: dict) -> dict:
 
 def test_vp_tools_dispatch_lookup_list_cancel_flow(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_state.db").resolve()))
 
     dispatched = _unwrap(
         asyncio.run(
@@ -72,6 +73,54 @@ def test_vp_tools_dispatch_lookup_list_cancel_flow(monkeypatch, tmp_path: Path):
     )
     assert cancelled["ok"] is True
     assert cancelled["status"] == "cancel_requested"
+
+
+def test_vp_dispatch_injects_preference_context(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_state.db").resolve()))
+
+    from universal_agent.services.proactive_artifacts import record_feedback, upsert_artifact
+    from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+
+    activity_conn = connect_runtime_db(str((tmp_path / "activity_state.db").resolve()))
+    try:
+        artifact = upsert_artifact(
+            activity_conn,
+            artifact_type="convergence_brief",
+            source_kind="unit",
+            source_ref="unit",
+            title="MCP preference seed",
+            topic_tags=["mcp"],
+        )
+        updated = record_feedback(activity_conn, artifact_id=artifact["artifact_id"], score=5, text="more mcp")
+        record_artifact_feedback_signal(activity_conn, artifact=updated, score=5, text="more mcp")
+    finally:
+        activity_conn.close()
+
+    dispatched = _unwrap(
+        asyncio.run(
+            _vp_dispatch_mission_impl(
+                {
+                    "vp_id": "vp.general.primary",
+                    "objective": "Write a brief",
+                    "mission_type": "convergence_brief",
+                    "constraints": {"topic_tags": ["mcp"]},
+                }
+            )
+        )
+    )
+
+    conn = connect_runtime_db(get_vp_db_path())
+    try:
+        row = conn.execute(
+            "SELECT objective FROM vp_missions WHERE mission_id = ?",
+            (dispatched["mission_id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert "KEVIN'S PREFERENCE CONTEXT" in row["objective"]
+    assert "topic:mcp" in row["objective"]
 
 
 def test_vp_read_result_artifacts_wrapper_returns_file_index(monkeypatch, tmp_path: Path):
