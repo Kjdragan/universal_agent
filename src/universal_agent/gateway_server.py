@@ -2159,6 +2159,16 @@ class ProactiveSignalActionRequest(BaseModel):
     feedback_text: Optional[str] = None
 
 
+class ProactiveArtifactFeedbackRequest(BaseModel):
+    score: Optional[int] = None
+    feedback_text: Optional[str] = None
+
+
+class ProactiveArtifactReviewEmailRequest(BaseModel):
+    recipient: Optional[str] = None
+    limit: Optional[int] = 12
+
+
 class DashboardEventPresetCreateRequest(BaseModel):
     name: str
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -16069,6 +16079,157 @@ async def dashboard_proactive_signal_delete(
         finally:
             conn.close()
     return {"status": "ok", "card_id": card_id}
+
+
+def _proactive_review_recipient(fallback: str = "") -> str:
+    return (
+        str(fallback or "").strip()
+        or os.getenv("UA_PROACTIVE_REVIEW_EMAIL", "").strip()
+        or os.getenv("UA_MORNING_REPORT_EMAIL", "").strip()
+        or os.getenv("UA_PRIMARY_EMAIL", "").strip()
+        or os.getenv("UA_NOTIFICATION_EMAIL", "").strip()
+        or "kevinjdragan@gmail.com"
+    )
+
+
+@app.get("/api/v1/dashboard/proactive-artifacts")
+async def dashboard_proactive_artifacts(
+    request: Request,
+    status: str = "",
+    delivery_state: str = "",
+    limit: int = 80,
+    sync_signals: bool = True,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_artifacts import (
+        list_artifacts,
+        sync_from_proactive_signal_cards,
+    )
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            sync = sync_from_proactive_signal_cards(conn) if sync_signals else {"seen": 0, "upserted": 0}
+            artifacts = list_artifacts(
+                conn,
+                status=status,
+                delivery_state=delivery_state,
+                limit=max(1, min(int(limit), 500)),
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", "artifacts": artifacts, "sync": sync}
+
+
+@app.get("/api/v1/dashboard/proactive-artifacts/digest/preview")
+async def dashboard_proactive_artifact_digest_preview(
+    request: Request,
+    recipient: str = "",
+    limit: int = 12,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.intelligence_reporter import IntelligenceReporter
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            payload = IntelligenceReporter(conn).compose_daily_digest(
+                recipient=_proactive_review_recipient(recipient),
+                limit=max(1, min(int(limit), 50)),
+            )
+        finally:
+            conn.close()
+    return {
+        "status": "ok",
+        "artifact_id": payload.artifact_id,
+        "to": payload.to,
+        "subject": payload.subject,
+        "text": payload.text,
+    }
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/digest/send")
+async def dashboard_proactive_artifact_digest_send(
+    request: Request,
+    payload: ProactiveArtifactReviewEmailRequest,
+):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    from universal_agent.services.intelligence_reporter import IntelligenceReporter
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            result = await IntelligenceReporter(conn).send_daily_digest(
+                recipient=_proactive_review_recipient(payload.recipient or ""),
+                mail_service=_agentmail_service,
+                limit=max(1, min(int(payload.limit or 12), 50)),
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", "send": result}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/feedback")
+async def dashboard_proactive_artifact_feedback(
+    request: Request,
+    artifact_id: str,
+    payload: ProactiveArtifactFeedbackRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_artifacts import record_feedback
+    from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                artifact = record_feedback(
+                    conn,
+                    artifact_id=artifact_id,
+                    score=payload.score,
+                    text=str(payload.feedback_text or ""),
+                    actor=_activity_actor_from_request(request),
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Proactive artifact not found")
+            record_artifact_feedback_signal(
+                conn,
+                artifact=artifact,
+                score=payload.score,
+                text=str(payload.feedback_text or ""),
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", "artifact": artifact}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/send-review")
+async def dashboard_proactive_artifact_send_review(
+    request: Request,
+    artifact_id: str,
+    payload: ProactiveArtifactReviewEmailRequest,
+):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    from universal_agent.services.intelligence_reporter import IntelligenceReporter
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                result = await IntelligenceReporter(conn).send_review_email(
+                    artifact_id=artifact_id,
+                    recipient=_proactive_review_recipient(payload.recipient or ""),
+                    mail_service=_agentmail_service,
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Proactive artifact not found")
+        finally:
+            conn.close()
+    return {"status": "ok", "send": result}
 
 
 @app.get("/api/v1/dashboard/csi/reports")

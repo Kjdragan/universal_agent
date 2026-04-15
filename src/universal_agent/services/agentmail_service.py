@@ -1276,6 +1276,12 @@ class AgentMailService:
                 )
 
                 _task_id = bridge_result.get("task_id", "") if bridge_result else ""
+                if bridge_result and bridge_result.get("handled_as") == "proactive_feedback":
+                    logger.info(
+                        "📧→🧠 Inbound email consumed as proactive feedback artifact_id=%s",
+                        bridge_result.get("artifact_id"),
+                    )
+                    continue
                 if sender_trusted and extracted_due_at and _task_id:
                     try:
                         await self._schedule_future_task(
