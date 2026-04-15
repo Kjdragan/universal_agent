@@ -293,32 +293,40 @@ def sync_from_proactive_signal_cards(conn: sqlite3.Connection, *, limit: int = 2
 
     upserted = 0
     for card in cards:
-        card_id = str(card.get("card_id") or "").strip()
-        if not card_id:
+        try:
+            upsert_from_proactive_signal_card(conn, card)
+            upserted += 1
+        except ValueError:
             continue
-        evidence = card.get("evidence") if isinstance(card.get("evidence"), list) else []
-        source_url = _first_evidence_url(evidence)
-        upsert_artifact(
-            conn,
-            artifact_id=make_artifact_id(
-                source_kind="proactive_signal",
-                source_ref=card_id,
-                artifact_type=str(card.get("card_type") or "signal_card"),
-                title=str(card.get("title") or ""),
-            ),
-            artifact_type=str(card.get("card_type") or "signal_card"),
+    return {"seen": len(cards), "upserted": upserted}
+
+
+def upsert_from_proactive_signal_card(conn: sqlite3.Connection, card: dict[str, Any]) -> dict[str, Any]:
+    """Create/update a proactive artifact row for one proactive signal card."""
+    card_id = str(card.get("card_id") or "").strip()
+    if not card_id:
+        raise ValueError("card_id is required")
+    evidence = card.get("evidence") if isinstance(card.get("evidence"), list) else []
+    source_url = _first_evidence_url(evidence)
+    return upsert_artifact(
+        conn,
+        artifact_id=make_artifact_id(
             source_kind="proactive_signal",
             source_ref=card_id,
+            artifact_type=str(card.get("card_type") or "signal_card"),
             title=str(card.get("title") or ""),
-            summary=str(card.get("summary") or ""),
-            status=ARTIFACT_STATUS_CANDIDATE,
-            priority=int(card.get("priority") or 2),
-            source_url=source_url,
-            topic_tags=[str(card.get("source") or ""), str(card.get("card_type") or "")],
-            metadata={"proactive_signal_card_id": card_id, "card_status": card.get("status")},
-        )
-        upserted += 1
-    return {"seen": len(cards), "upserted": upserted}
+        ),
+        artifact_type=str(card.get("card_type") or "signal_card"),
+        source_kind="proactive_signal",
+        source_ref=card_id,
+        title=str(card.get("title") or ""),
+        summary=str(card.get("summary") or ""),
+        status=ARTIFACT_STATUS_CANDIDATE,
+        priority=int(card.get("priority") or 2),
+        source_url=source_url,
+        topic_tags=[str(card.get("source") or ""), str(card.get("card_type") or "")],
+        metadata={"proactive_signal_card_id": card_id, "card_status": card.get("status")},
+    )
 
 
 def update_artifact_state(

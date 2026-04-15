@@ -21,6 +21,7 @@ from universal_agent.services.proactive_artifacts import (
 )
 from universal_agent.services.proactive_feedback import parse_feedback_text
 from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+from universal_agent.services.proactive_preferences import get_delegation_context, get_preference_snapshot
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -215,6 +216,28 @@ def test_daily_digest_ranks_candidates_with_preference_feedback(tmp_path):
     assert first["artifact_id"] in digest.text or "Generic model news" in digest.text
 
 
+def test_preference_snapshot_and_delegation_context_update_from_feedback(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    with _connect(db_path) as conn:
+        artifact = upsert_artifact(
+            conn,
+            artifact_type="convergence_brief",
+            source_kind="convergence_detection",
+            source_ref="conv-1",
+            title="MCP convergence",
+            topic_tags=["mcp", "convergence"],
+        )
+        updated = record_feedback(conn, artifact_id=artifact["artifact_id"], score=5, text="more like this")
+        record_artifact_feedback_signal(conn, artifact=updated, score=5, text="more like this")
+        snapshot = get_preference_snapshot(conn)
+        context = get_delegation_context(conn, task_type="convergence_brief", topic_tags=["mcp"])
+
+    assert snapshot["meta"]["total_signals_processed"] >= 1
+    assert "topic:mcp" in snapshot["topic_preferences"]
+    assert "Kevin's preference context" in context
+    assert "topic:mcp" in context
+
+
 def test_existing_proactive_signal_cards_sync_into_artifact_inventory(tmp_path):
     db_path = tmp_path / "activity_state.db"
     with _connect(db_path) as conn:
@@ -240,3 +263,38 @@ def test_existing_proactive_signal_cards_sync_into_artifact_inventory(tmp_path):
     assert result["seen"] == 1
     assert result["upserted"] == 1
     assert "Interesting agent release" in digest.text
+
+
+def test_daily_digest_can_include_calendar_context(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    with _connect(db_path) as conn:
+        digest = IntelligenceReporter(conn).compose_daily_digest(
+            recipient="kevinjdragan@gmail.com",
+            calendar_events=[
+                {"start": "2026-04-15T09:00:00-05:00", "summary": "Planning review"},
+            ],
+        )
+
+    assert "Calendar context:" in digest.text
+    assert "Planning review" in digest.text
+
+
+def test_proactive_signal_card_upsert_immediately_creates_artifact(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    with _connect(db_path) as conn:
+        card = proactive_signals.upsert_generated_card(
+            conn,
+            {
+                "card_id": "card-immediate",
+                "source": "youtube",
+                "card_type": "signal_card",
+                "title": "Immediate artifact candidate",
+                "summary": "This should enter artifact inventory immediately.",
+                "priority": 3,
+                "evidence": [{"url": "https://example.test/immediate"}],
+            },
+        )
+        artifacts = [item for item in IntelligenceReporter(conn)._rank_digest_artifacts(limit=20) if item["source_ref"] == card["card_id"]]
+
+    assert artifacts
+    assert artifacts[0]["title"] == "Immediate artifact candidate"

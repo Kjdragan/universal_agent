@@ -421,6 +421,8 @@ class VpWorkerLoop:
                 workspace_root=self.profile.workspace_root,
             )
         )
+        if self.vp_id == "vp.coder.primary" and event_type == "vp.mission.completed":
+            self._register_proactive_pr_artifact(mission=mission, payload=payload)
 
         append_vp_event(
             self.conn,
@@ -431,6 +433,32 @@ class VpWorkerLoop:
             payload={**source_context, **payload},
         )
         self._upsert_session(status="idle")
+
+    def _register_proactive_pr_artifact(self, *, mission: sqlite3.Row, payload: dict[str, Any]) -> None:
+        try:
+            from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+            from universal_agent.services.proactive_codie import register_pr_artifact_from_text
+
+            text = "\n".join(
+                [
+                    str(payload.get("message") or ""),
+                    str(payload.get("final_text") or ""),
+                    str(payload.get("result_ref") or ""),
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                ]
+            )
+            mission_payload = _parse_mission_payload(mission)
+            context = mission_payload.get("context") if isinstance(mission_payload.get("context"), dict) else {}
+            with connect_runtime_db(get_activity_db_path()) as conn:
+                register_pr_artifact_from_text(
+                    conn,
+                    text=text,
+                    title=f"CODIE proactive PR: {str(mission['objective'] or '')[:120]}",
+                    summary=str(payload.get("message") or payload.get("final_text") or "")[:1000],
+                    theme=str(context.get("theme") or ""),
+                )
+        except Exception as exc:
+            logger.debug("Failed registering proactive PR artifact for mission %s: %s", mission["mission_id"], exc)
 
     def _upsert_session(self, *, status: str) -> None:
         upsert_vp_session(
@@ -720,3 +748,18 @@ def _write_vp_finalize_artifacts(
         artifact_refs["artifact_relpaths"] = user_artifact_relpaths
 
     return artifact_refs
+
+
+def _parse_mission_payload(mission_row: Any) -> dict[str, Any]:
+    try:
+        raw = mission_row["payload_json"] if "payload_json" in mission_row.keys() else None
+    except Exception:
+        raw = None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
