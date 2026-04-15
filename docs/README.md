@@ -46,7 +46,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory & Auto-Flush.
 - **[Lossless Memory](02_Subsystems/Lossless_Memory.md)**: Opt-in DAG-based context compression and SQLite history store.
 - **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Heartbeat supervision only — health checks, mediation, and role-isolated heartbeat runtimes separate from Task Hub execution.
-- **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — trusted email triage, Task Hub scoring, dedicated ToDo execution, delivery-mode heuristics, delegation lifecycle, brainstorm refinement, morning report.
+- **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — trusted email triage, Task Hub scoring, dedicated ToDo execution, delivery-mode heuristics, delegation lifecycle, brainstorm refinement, morning report, nightly proactive wiki creation, and autonomous morning briefing.
 - **[Task Hub Dashboard](02_Subsystems/Task_Hub_Dashboard.md)**: Frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget behavior, spotlight persistence rules, dispatcher health, forensic task history, and canonical execution visibility.
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
