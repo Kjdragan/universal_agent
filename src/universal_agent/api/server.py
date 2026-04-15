@@ -571,7 +571,7 @@ async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: 
         # Hook sessions are automation/system workflows and may be resumed with a
         # runtime identity that differs from the dashboard owner lane. Allow the
         # primary dashboard owner to inspect these sessions.
-        if session_id.startswith(("session_hook_", "run_session_hook_")) and hmac.compare_digest(
+        if session_id.startswith(("session_hook_", "run_session_hook_", "cron_")) and hmac.compare_digest(
             owner_id, _normalize_owner_id(None)
         ):
             return
