@@ -169,7 +169,7 @@ For session reads, session stream proxying, and session-attached WebSocket use, 
 A session is allowed when:
 - the session owner matches the authenticated owner
 - the session is system-owned and visible from the dashboard owner lane
-- the session id starts with `session_hook_` and the authenticated owner is the primary dashboard owner
+- the session id starts with `session_hook_`, `run_session_hook_`, or `cron_` and the authenticated owner is the primary dashboard owner
 
 ### Deny Rules
 

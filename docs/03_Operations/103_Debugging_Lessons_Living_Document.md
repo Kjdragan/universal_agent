@@ -598,6 +598,40 @@ Reusable rule:
 
 ---
 
+## 2026-04-15: Swallowed API 403s Masking Core Auth Bugs in Production Hydration
+
+### Incident Summary
+
+When clicking to open completed cron jobs on the production dashboard, the UI showed `NO RUN HISTORY FOUND FOR CRON_X`. Initially, this appeared to be a file-path issue since the UI expected `cron_output.md` but the backend generated `cron_result.md`. However, even after fixing the filename typo, the UI continued to show no run history on production. 
+
+Local tests worked fine, but fetching the API endpoint explicitly on the live server returned a `403 Forbidden` JSON error ("Access denied: session owner mismatch"). `cron` jobs automatically execute under an implicitly assigned `cron` system ownership tag. When the Dashboard owner fetched these files on the UI, the Next.js Client fired a request to the backend with their credentials, and the API `_enforce_session_owner` check rejected it.
+
+The primary issue was that the UI's fallback handling was checking if `cronResp.status === 404`, and if it *wasn't* 404 but simply `!response.ok` (like a 403), it merely swallowed the exception, returning an empty string. This misleadingly confirmed the initial "file missing" hypothesis.
+
+### Lesson 1: Swallowed Exceptions on the Frontend Send You on Wild Goose Chases
+
+If the frontend silences specific error codes and forces them into a generic functional fallback, standard debugging becomes impossible. The UI checking specifically for a `404` and ignoring a `403` meant the actual failure was never signaled. 
+
+Reusable rule:
+- Do not let `!response.ok` checks silently swallow potentially non-standard HTTP errors (like `403`, `500`). 
+- Log unexpected HTTP errors to the console explicitly before taking the fallback, so developers inspecting the site locally or via screenshots know immediately that an API failure occurred instead of a file missing.
+
+### Lesson 2: Do Not Use Dev / Localhost Environments to Debug Production-Specific Edge Cases
+
+When the bug was reported *on the production app*, testing it locally first provided a misleading "it works" result. Local development environments can easily have missing or overly permissive simulated auth bypasses compared to strict Live deployments.
+
+Reusable rule:
+- If a bug is observed on production, always trace the root cause against the production configuration, including checking production logs and raw cURL responses under production restrictions, before attempting to simulate it locally to confirm the fix.
+
+### Lesson 3: Automated Machine Identities Require Explicit Admin Dashboard Bypasses
+
+When generating sessions or workflows tied to machine/system accounts (`session_hook_`, `cron_`), those sessions inherit different ownership records than normal Interactive Developer accounts. 
+
+Reusable rule:
+- Always ensure that your primary UI/API auth mechanism (like `_enforce_session_owner`) explicitly maintains read-access parity for the developer/dashboard owner if those system sessions are supposed to be monitored within internal UI. 
+
+---
+
 ## Seed Questions For Future Entries
 
 When adding a new lesson, answer these:
