@@ -1933,6 +1933,7 @@ class HeartbeatService:
                     # Phase 5: Proactive Advisor — brainstorm context + morning report
                     # Skip entirely in task-focused mode (task_hub_claimed > 0) —
                     # the agent won't see this data anyway, so don't waste DB queries.
+                    _morning_text = ""
                     if not task_hub_claimed:
                         try:
                             from universal_agent.services.proactive_advisor import (
@@ -1943,39 +1944,14 @@ class HeartbeatService:
                             _brainstorm_ctx = build_brainstorm_context(conn)
                             _brainstorm_ctx_text = format_brainstorm_context_prompt(_brainstorm_ctx)
                             _pending_q_count = len(task_hub.list_pending_questions(conn, limit=100))
-
-                            # Morning report: trigger on first tick of the day
-                            _morning_text = ""
-                            last_run_ts = getattr(state, "last_run", None)
-                            now_date = datetime.now().date()
-                            last_date = None
-                            if last_run_ts:
-                                try:
-                                    last_date = datetime.fromtimestamp(last_run_ts).date()
-                                except Exception:
-                                    pass
-                            if last_date is None or last_date < now_date:
+                            
+                            try:
                                 report = build_morning_report(conn)
                                 _raw_morning_text = str(report.get("report_text") or "")
                                 if _raw_morning_text:
-                                    logger.info(
-                                        "Morning report generated for %s (%d active, %d brainstorm)",
-                                        session.session_id,
-                                        report.get("total_active", 0),
-                                        len(report.get("brainstorm_tasks") or []),
-                                    )
-                                    from universal_agent.services.health_evaluator import evaluate_health_snapshot
-                                    try:
-                                        eval_result = await evaluate_health_snapshot(report)
-                                    except Exception as e:
-                                        logger.error(f"Failed to evaluate health snapshot: {e}")
-                                        eval_result = {}
-                                    
-                                    # Get capacity info
                                     max_coder = os.getenv("UA_MAX_CONCURRENT_VP_CODER", "1")
                                     max_general = os.getenv("UA_MAX_CONCURRENT_VP_GENERAL", "2")
                                     
-                                    # Fetch active missions
                                     active_missions = []
                                     try:
                                         rows = conn.execute("SELECT task_id, title FROM task_hub_items WHERE status = 'delegated'").fetchall()
@@ -1992,21 +1968,10 @@ class HeartbeatService:
                                     _cap_report += f"Active VP Missions ({len(active_missions)}):\n"
                                     for m in active_missions:
                                         _cap_report += f"- {m}\n"
-                                        
-                                    dirs = eval_result.get("simone_directives", [])
-                                    esc = eval_result.get("human_escalations", [])
                                     
-                                    _morning_text = _cap_report + "\n"
-                                    if dirs or esc:
-                                        _morning_text += "== HEALTH CHECK DIRECTIVES ==\n"
-                                        for d in dirs:
-                                            _morning_text += f"- {d}\n"
-                                        if esc:
-                                            _morning_text += "\n== ESCALATIONS ==\n"
-                                            for e in esc:
-                                                _morning_text += f"- {e}\n"
-                                    else:
-                                        _morning_text += "== HEALTH CHECK ==\nAll systems nominal. No stuck tasks."
+                                    _morning_text = _raw_morning_text + "\n\n" + _cap_report + "\n"
+                            except Exception as _m_exc:
+                                logger.debug("Morning report unavailable: %s", _m_exc)
 
                             metadata["proactive_advisor"] = {
                                 "brainstorm_task_count": len(_brainstorm_ctx),
@@ -2017,7 +1982,6 @@ class HeartbeatService:
                             logger.debug("Proactive advisor unavailable: %s", pa_exc)
                             _brainstorm_ctx_text = ""
                             _pending_q_count = 0
-                            _morning_text = ""
                     else:
                         logger.info(
                             "Skipping proactive advisor for %s (task-focused mode, %d tasks claimed)",

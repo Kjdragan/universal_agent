@@ -236,6 +236,31 @@ This pattern matters because the dashboard embeds the mini Agent Flow widget and
 
 Blocked and parked items remain available through queue data and filters, but they are no longer primary board columns.
 
+> [!TIP]
+> The lifecycle of a task and how it visually propagates through the dashboard columns is outlined below.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Not_Assigned : Created (open)
+    
+    Not_Assigned --> In_Progress : Dispatch / Seize
+    Not_Assigned --> Blocked_Parked : Block / Park
+    
+    In_Progress --> Needs_Review : Review
+    In_Progress --> Completed : Complete
+    In_Progress --> Blocked_Parked : Block / Park
+    
+    Needs_Review --> Completed : Complete
+    Needs_Review --> Blocked_Parked : Park
+    
+    Blocked_Parked --> Not_Assigned : Reopen
+    Blocked_Parked --> In_Progress : Reopen / Seize
+    
+    Completed --> [*]
+```
+
+*As demonstrated in the exhibit above, tasks naturally flow from the `Not_Assigned` state into execution (`In_Progress`) and verification (`Needs_Review`) before `Completed` based strictly on API lifecycle mutations triggered by UI buttons or agent tool calls.*
+
 ### 6.3 Visibility And Forensics
 
 The board is intentionally more diagnostic than before:

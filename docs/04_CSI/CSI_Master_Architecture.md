@@ -33,36 +33,53 @@ Implementation: `csi_ingester/analytics/categories.py`
 
 ## 3. Architecture
 
-```
-┌──────────────────────────────────────────────────────┐
-│                    CSI Service                        │
-│  FastAPI app + scheduler (port 8091)                  │
-│                                                       │
-│  ┌──────────┐  ┌──────────┐  ┌────────────────────┐  │
-│  │ YouTube  │  │ Reddit   │  │ Threads (3 modes)  │  │
-│  │ RSS      │  │ Discovery│  │ owned/seeded/broad  │  │
-│  └────┬─────┘  └────┬─────┘  └────────┬───────────┘  │
-│       │              │                 │              │
-│       ▼              ▼                 ▼              │
-│  ┌─────────────────────────────────────────────────┐  │
-│  │      Source Manager (source_manager.py)          │  │
-│  │  SQLite tables → channels, subs, terms           │  │
-│  │  Quality scoring + tier promote/demote           │  │
-│  └─────────────────────┬───────────────────────────┘  │
-│                        ▼                              │
-│  ┌─────────────────────────────────────────────────┐  │
-│  │   Normalize → Dedupe → Store → Emit to UA        │  │
-│  └─────────────────────────────────────────────────┘  │
-│                                                       │
-│  Timer Fleet: enrichment, trend reports, digests,     │
-│               quality assessment, domain synthesis    │
-└──────────────────────────────────────────────────────┘
-         │                           │
-         ▼                           ▼
-   ┌──────────┐              ┌──────────────┐
-   │ UA Ingest│              │  Telegram     │
-   │ Endpoint │              │  Delivery     │
-   └──────────┘              └──────────────┘
+## 3. Architecture
+
+> [!TIP]
+> The subsystem data flow map below visualizes the components of CSI and their interactions.
+
+```mermaid
+%%{init: {'theme':'base'}}%%
+flowchart TD
+    %% Define Styles
+    classDef external fill:#f3e5f5,stroke:#ab47bc,stroke-width:2px,color:#4a148c
+    classDef core fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px,color:#0d47a1
+    classDef storage fill:#fff3e0,stroke:#fb8c00,stroke-width:2px,color:#e65100
+    classDef process fill:#e8f5e9,stroke:#43a047,stroke-width:2px,color:#1b5e20
+    classDef export fill:#ffebee,stroke:#e53935,stroke-width:2px,color:#b71c1c
+
+    subgraph "External Signals"
+        Y[YouTube RSS]:::external
+        R[Reddit Discovery]:::external
+        T[Threads APIs]:::external
+    end
+
+    subgraph "CSI Fast API Service (Port 8091)"
+        SM[Source Manager<br/>source_manager.py]:::core
+        
+        DB[(csi.db<br/>channels/subs/terms/quality)]:::storage
+        
+        PI[Pipeline Processing<br/>Normalize > Dedupe > Store]:::process
+        
+        TF[Timer Fleet<br/>Enrichment, Reports, Dignests, Synthesis]:::process
+        
+        SM <--> |Reads/Updates| DB
+        PI --> |Saves State| DB
+    end
+    
+    Y -.-> SM
+    R -.-> SM
+    T -.-> SM
+    SM ==> PI
+    PI ==> TF
+    
+    subgraph "Delivery Outputs"
+        UAE[UA Ingest Endpoint<br/>Signed HTTP]:::export
+        TG[Telegram Delivery<br/>Bots]:::export
+    end
+    
+    TF ==> |Push| UAE
+    TF ==> |Push| TG
 ```
 
 ## 4. Source Management (SQLite)

@@ -42,6 +42,33 @@ sequenceDiagram
 | `THINKING` | `thought_id`, `state` | Indicates the agent is "pondering" (Clawd-parity). |
 | `STATUS` | `message`, `level` | Operational updates (e.g., "Initializing MCP"). |
 
+### Event State Transitions & Error Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+
+    Idle --> Thinking : generate_thought()
+    Thinking --> Text : yield thought text
+    Thinking --> ToolCall : requires tool
+    Text --> Idle : completion
+
+    ToolCall --> AwaitingResult : dispatch to tool
+    AwaitingResult --> ToolResult : success
+    AwaitingResult --> ErrorEvent : failure/timeout
+
+    ToolResult --> Thinking : process result
+    ErrorEvent --> ErrorFlow : capture exception
+    
+    state ErrorFlow {
+        [*] --> LogError
+        LogError --> AutoRecover : retriable
+        LogError --> TerminalError : fatal
+        AutoRecover --> [*] : back to Thinking
+        TerminalError --> [*] : end session
+    }
+```
+
 ## 3. Implementation Details
 
 ### Context-Local Callbacks

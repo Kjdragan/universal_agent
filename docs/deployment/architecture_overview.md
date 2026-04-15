@@ -56,11 +56,55 @@ Machine identity is provided by bootstrap values written on each machine:
 - `UA_RUNTIME_STAGE`
 - `UA_MACHINE_SLUG`
 
-This lets the same stage environment support:
+> [!TIP]
+> The exhibit below visualizes how the physical machines map into Infisical environment lanes via these bootstrap configurations.
 
-- VPS headquarters runtime
-- desktop local worker runtime
-- desktop localhost headquarters development runtime
+```mermaid
+%%{init: {'theme':'base'}}%%
+flowchart TD
+    %% Define Styles
+    classDef infisical fill:#e1bee7,stroke:#8e24aa,stroke-width:2px,color:#4a148c
+    classDef vps fill:#c8e6c9,stroke:#388e3c,stroke-width:2px,color:#1b5e20
+    classDef worker fill:#bbdefb,stroke:#1976d2,stroke-width:2px,color:#0d47a1
+    classDef var fill:#fff9c4,stroke:#fbc02d,stroke-width:1px,color:#000
+
+    subgraph Infisical Service
+        A1[development lane]:::infisical
+        A2[production lane]:::infisical
+    end
+
+    subgraph Physical Machines & Bootstraps
+        direction LR
+        
+        subgraph Machine A: VPS Headquarters
+            B1([Environment Variables]):::var
+            B1 --- b1[UA_RUNTIME_STAGE=production]
+            B1 --- b2[FACTORY_ROLE=HEADQUARTERS]
+            B1 --- b3[UA_DEPLOYMENT_PROFILE=vps]
+        end
+
+        subgraph Machine B: Desktop Worker
+            C1([Environment Variables]):::var
+            C1 --- c1[UA_RUNTIME_STAGE=production]
+            C1 --- c2[FACTORY_ROLE=LOCAL_WORKER]
+            C1 --- c3[UA_DEPLOYMENT_PROFILE=local_workstation]
+        end
+
+        subgraph Machine C: Desktop Dev
+            D1([Environment Variables]):::var
+            D1 --- d1[UA_RUNTIME_STAGE=development]
+            D1 --- d2[FACTORY_ROLE=HEADQUARTERS]
+            D1 --- d3[UA_DEPLOYMENT_PROFILE=local_workstation]
+        end
+    end
+
+    %% Mappings
+    A2 ==>|Secret Provisioning| B1
+    A2 ==>|Secret Provisioning| C1
+    A1 ==>|Secret Provisioning| D1
+```
+
+*As shown in the exhibit, the same stage environment (e.g., `production`) naturally supports both the VPS headquarters runtime and local worker topologies depending solely on the local bootstrap machine identity tags, completely overriding the need for a separate staging logical layer.*
 
 ## Tutorial Runtime Contract
 

@@ -109,9 +109,9 @@ Current default:
 
 1. Do not do normal coding directly on `main`.
 2. Do not treat `dev-parallel` as the active integration branch.
-3. Do not use `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, `ssh`, `scp`, or `rsync` as the default application deployment path.
+3. Do not use `scripts/vpsctl.sh`, `ssh`, `scp`, or `rsync` as the default application deployment path. Older scripts like `deploy_vps.sh` have been completely removed.
 
-Those older scripts are legacy or break-glass tooling only.
+Those older scripts are legacy or break-glass tooling only. The `.agents/workflows/ship.md` automation workflow should be used as the standard proxy command to trigger deployments.
 4. Do not assume production is missing a fix until you verify the deployed VPS `HEAD` SHA directly.
 
 ## Status Snapshot As Of March 12, 2026
@@ -200,31 +200,27 @@ That fast-forwards `main` to the exact validated `develop` commit and triggers `
 
 ## 3. Branch Flow Diagram
 
-```text
-feature/my-change
-        |
-        v
-  PR to develop
- (Codex review)
-        |
-        v
-     develop
-  (integration)
-        |
-        v
- fast-forward exact SHA
-        |
-        v
-       main
- (production deploy)
+> [!TIP]
+> The diagram below visualizes our branch policy. This entire process is automated via the `/ship` slash command workflow which handles the merges and triggering of CI/CD.
+
+```mermaid
+%%{init: { 'theme': 'base', 'themeVariables': { 'git0': '#ff4757', 'git1': '#2ed573', 'git2': '#1e90ff' } } }%%
+gitGraph
+    commit id: "Initial state"
+    branch develop
+    checkout develop
+    commit id: "Integration baseline"
+    branch feature/my-change
+    checkout feature/my-change
+    commit id: "Code new feature"
+    commit id: "Address PR feedback"
+    checkout develop
+    merge feature/my-change id: "Merge PR" tag: "CI Validation"
+    checkout main
+    merge develop id: "Fast-Forward Release" tag: "Deploy Triggered"
 ```
 
-Read it this way:
-
-1. work starts on `feature/...`
-2. code review happens on the PR to `develop`
-3. integration validation happens through `develop`
-4. release happens by fast-forwarding the validated `develop` SHA to `main`
+*As demonstrated in the exhibit above, work originates on feature branches, merges exclusively into `develop` for CI validation and review, and relies entirely on a fast-forward operation to `main` to trigger the production deploy via GitHub Actions. At no point is standard development performed directly on `main` or `develop`.*
 
 For local runtime mode details, see:
 
