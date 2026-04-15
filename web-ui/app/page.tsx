@@ -1832,7 +1832,42 @@ function ChatInterface() {
             didFallback = true;
           }
         }
-        if (response.ok) {
+
+        let cronOutputText: string | null = null;
+        if (!response.ok && response.status === 404 && sessionId.startsWith("cron_")) {
+          const cronFallbackUrl = buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "work_products/cron_output.md");
+          const cronResp = await fetch(cronFallbackUrl, { cache: "no-store" });
+          if (cronResp.ok) {
+            cronOutputText = await cronResp.text();
+          } else if (cronResp.status === 404) {
+            // Also try transcript.md as a last resort
+            const transcriptUrl = buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "transcript.md");
+            const transcriptResp = await fetch(transcriptUrl, { cache: "no-store" });
+            if (transcriptResp.ok) {
+              cronOutputText = await transcriptResp.text();
+            }
+          }
+        }
+
+        if (cronOutputText) {
+          if (!cancelled) {
+            store.addMessage({
+              role: "assistant",
+              content: cronOutputText,
+              time_offset: 0,
+              is_complete: true,
+              author: "Cron Result"
+            });
+            hydratedMessageCount += 1;
+            store.addLog({
+              level: "info",
+              event: "cron_result_loaded",
+              summary: "Loaded cron output successfully",
+              time_offset: 0,
+            });
+            hydratedLogCount += 1;
+          }
+        } else if (response.ok) {
           let raw = "";
           if (useOpsTailHydration && !didFallback) {
             const payload = await response.json() as { lines?: unknown; content?: unknown };
