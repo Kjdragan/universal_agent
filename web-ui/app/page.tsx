@@ -1861,9 +1861,8 @@ function ChatInterface() {
             hydratedMessageCount += 1;
             store.addLog({
               level: "info",
-              event: "cron_result_loaded",
-              summary: "Loaded cron output successfully",
-              time_offset: 0,
+              message: "Loaded cron output successfully",
+              prefix: "SYSTEM"
             });
             hydratedLogCount += 1;
           }

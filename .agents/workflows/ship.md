@@ -44,19 +44,31 @@ echo "🧹 Returning to original branch ($CURRENT_BRANCH)..."
 git checkout $CURRENT_BRANCH
 
 # 5. Verify deployment completion
-echo "👀 Waiting for GitHub Actions deployment to finish..."
-sleep 5 # Give GHA a moment to start the workflow
+TARGET_SHA=$(git rev-parse main)
+echo "👀 Waiting for GitHub Actions to register the deployment for commit $TARGET_SHA..."
 
 # Prevent interactive prompts or colors from mangling output inside the script
 export NO_COLOR=1
 export GH_NO_UPDATE_NOTIFIER=1
 
-LATEST_RUN=$(gh run list --branch main --limit 1 --json databaseId -q ".[0].databaseId" | tr -dc '0-9')
+LATEST_RUN=""
+for i in {1..15}; do
+    LATEST_RUN=$(gh run list --branch main --commit "$TARGET_SHA" --limit 1 --json databaseId -q ".[0].databaseId" | tr -dc '0-9')
+    if [ -n "$LATEST_RUN" ]; then
+        break
+    fi
+    sleep 4
+done
+
 if [ -n "$LATEST_RUN" ]; then
     echo "Watching pipeline run: $LATEST_RUN"
-    gh run watch $LATEST_RUN --exit-status
-    echo "🎯 Deployment successfully completed and verified!"
+    if gh run watch "$LATEST_RUN" --exit-status; then
+        echo "🎯 Deployment successfully completed and verified!"
+    else
+        echo "❌ Deployment FAILED. Please check GitHub Actions logs."
+        exit 1
+    fi
 else
-    echo "⚠️ Could not find a running GHA deployment. Please manually verify."
+    echo "⚠️ Could not find a running GHA deployment for commit $TARGET_SHA after waiting. Please manually verify."
 fi
 ```
