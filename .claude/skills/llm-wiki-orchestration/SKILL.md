@@ -40,3 +40,13 @@ Internal memory syncs run completely locally via Python AST analysis and simple 
 - "Add this article URL to the agentic-harnesses knowledge base" → `kb_add_sources`
 - "What does our wiki know about Claude Agent SDK?" → `kb_query`
 - "Generate a mind map from the agentic-harnesses wiki" → `kb_generate_artifact`
+
+## Performance Hints (Include in Delegation)
+
+When delegating to the operator, include these hints:
+
+1. **Parallel artifact generation**: Fire ALL `studio_create` calls first, then poll `studio_status` once for all. Do NOT wait between individual create calls.
+2. **Adaptive polling**: Use `sleep 5` for fast research, `sleep 10` for studio artifacts, `sleep 20` for deep research/audio.
+3. **Default to fast research** unless user says "comprehensive/thorough/exhaustive."
+4. **NLM-first for all artifacts** — do NOT use `generate_image` or generic LLM markdown for KB artifacts.
+

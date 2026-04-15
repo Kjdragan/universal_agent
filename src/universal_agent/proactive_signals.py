@@ -578,25 +578,25 @@ def _youtube_actions(*, topic: str, has_transcripts: bool, cluster: bool) -> lis
     if has_transcripts:
         return [
             {"id": "research_further", "label": "Research Further", "description": "Create a follow-up research task using the transcript-backed evidence."},
-            {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
+            {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
             {"id": "build_demo", "label": "Build Demo", "description": "Create a task to prototype or demonstrate the technique if applicable."},
         ]
     return [
         {"id": "fetch_transcripts", "label": "Fetch More Transcripts", "description": "Create a capped transcript sampling task for representative non-Short videos."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching this topic before spending transcript budget."},
         {"id": "research_further", "label": "Research Further", "description": "Create a lightweight research task from metadata and available evidence."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
     ] if cluster else [
         {"id": "fetch_transcripts", "label": "Fetch Transcript", "description": "Create a task to fetch and analyze this non-Short video transcript."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching for related videos before deeper work."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
     ]
 
 
 def _discord_actions(topic: str) -> list[dict[str, str]]:
     return [
         {"id": "research_further", "label": "Research Further", "description": "Create a research task from this Discord intelligence signal."},
-        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to turn this into a comprehensive agentic knowledge note. You MUST extensively research the topic using web tools or NotebookLM, synthesize a complete report, and finally ingest it completely using the `wiki_ingest_external_source` tool. This is not a simple copy-paste."},
+        {"id": "create_wiki", "label": "Create Wiki", "description": "Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end."},
         {"id": "track_topic", "label": "Track Topic", "description": "Keep watching this topic before deeper work."},
     ]
 
