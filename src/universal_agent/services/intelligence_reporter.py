@@ -43,7 +43,13 @@ class IntelligenceReporter:
             html=html_body,
         )
 
-    def compose_daily_digest(self, *, recipient: str, limit: int = 12) -> ReviewEmailPayload:
+    def compose_daily_digest(
+        self,
+        *,
+        recipient: str,
+        limit: int = 12,
+        calendar_events: list[dict[str, Any]] | None = None,
+    ) -> ReviewEmailPayload:
         artifacts = self._rank_digest_artifacts(limit=max(1, int(limit or 12)))
         today = datetime.now(timezone.utc).date().isoformat()
         title = f"Daily proactive review digest - {today}"
@@ -65,7 +71,7 @@ class IntelligenceReporter:
             metadata={"included_artifact_ids": [artifact["artifact_id"] for artifact in artifacts]},
         )
         subject = f"[UA Digest] Proactive review candidates - {today} [{digest['artifact_id']}]"
-        text = self._compose_digest_text(artifacts)
+        text = self._compose_digest_text(artifacts, calendar_events=calendar_events or [])
         html_body = self._compose_html(digest, text)
         return ReviewEmailPayload(
             artifact_id=str(digest["artifact_id"]),
@@ -108,8 +114,13 @@ class IntelligenceReporter:
         recipient: str,
         mail_service: Any,
         limit: int = 12,
+        calendar_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        payload = self.compose_daily_digest(recipient=recipient, limit=limit)
+        payload = self.compose_daily_digest(
+            recipient=recipient,
+            limit=limit,
+            calendar_events=calendar_events or [],
+        )
         result = await mail_service.send_email(
             to=payload.to,
             subject=payload.subject,
@@ -199,12 +210,23 @@ class IntelligenceReporter:
         )
         return candidates[:limit]
 
-    def _compose_digest_text(self, artifacts: list[dict[str, Any]]) -> str:
+    def _compose_digest_text(
+        self,
+        artifacts: list[dict[str, Any]],
+        *,
+        calendar_events: list[dict[str, Any]],
+    ) -> str:
         lines = [
             "I made these proactively because I think some may be useful. Please review when convenient.",
             "",
             f"Review candidates: {len(artifacts)}",
         ]
+        if calendar_events:
+            lines.extend(["", "Calendar context:"])
+            for event in calendar_events[:8]:
+                title = str(event.get("summary") or event.get("title") or "(untitled)").strip()
+                start = str(event.get("start") or event.get("event_start") or "").strip()
+                lines.append(f"- {start} {title}".strip())
         if not artifacts:
             lines.extend(["", "No proactive work products are waiting for review right now."])
         for index, artifact in enumerate(artifacts, start=1):

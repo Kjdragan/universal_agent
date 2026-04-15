@@ -168,7 +168,14 @@ def upsert_generated_card(conn: sqlite3.Connection, card: dict[str, Any]) -> dic
         payload,
     )
     conn.commit()
-    return get_card(conn, card_id) or payload
+    hydrated = get_card(conn, card_id) or payload
+    try:
+        from universal_agent.services.proactive_artifacts import upsert_from_proactive_signal_card
+
+        upsert_from_proactive_signal_card(conn, hydrated)
+    except Exception:
+        logger.debug("Failed syncing proactive signal card to artifact inventory", exc_info=True)
+    return hydrated
 
 
 def get_card(conn: sqlite3.Connection, card_id: str) -> Optional[dict[str, Any]]:

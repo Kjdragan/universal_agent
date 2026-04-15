@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,6 +42,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_proactive_preference_signals_key
             ON proactive_preference_signals(signal_key, created_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proactive_preference_model (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            model_json TEXT NOT NULL,
+            last_updated TEXT NOT NULL
+        )
         """
     )
     conn.commit()
@@ -91,6 +101,7 @@ def record_artifact_feedback_signal(
             ),
         )
     conn.commit()
+    rebuild_preference_snapshot(conn)
 
 
 def score_artifact_for_review(conn: sqlite3.Connection, artifact: dict[str, Any]) -> float:
@@ -115,6 +126,113 @@ def score_artifact_for_review(conn: sqlite3.Connection, artifact: dict[str, Any]
     return float(artifact.get("priority") or 0) + preference_bonus
 
 
+def rebuild_preference_snapshot(conn: sqlite3.Connection, *, half_life_days: float = 14.0) -> dict[str, Any]:
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT signal_key, signal_type, weight, score, created_at
+        FROM proactive_preference_signals
+        ORDER BY created_at DESC
+        """
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    topic_preferences: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row["signal_key"] or "").strip()
+        if not key:
+            continue
+        age_days = _age_days(str(row["created_at"] or ""), now=now)
+        decayed_weight = float(row["weight"] or 0.0) * _decay_multiplier(age_days, half_life_days)
+        record = topic_preferences.setdefault(
+            key,
+            {
+                "weight_sum": 0.0,
+                "signal_count": 0,
+                "positive_count": 0,
+                "negative_count": 0,
+                "last_signal_at": str(row["created_at"] or ""),
+            },
+        )
+        record["weight_sum"] += decayed_weight
+        record["signal_count"] += 1
+        if decayed_weight > 0:
+            record["positive_count"] += 1
+        elif decayed_weight < 0:
+            record["negative_count"] += 1
+    normalized = {
+        key: {
+            "weight": max(-1.0, min(1.0, round(value["weight_sum"], 4))),
+            "signal_count": value["signal_count"],
+            "positive_count": value["positive_count"],
+            "negative_count": value["negative_count"],
+            "last_signal_at": value["last_signal_at"],
+        }
+        for key, value in topic_preferences.items()
+    }
+    model = {
+        "topic_preferences": normalized,
+        "meta": {
+            "last_updated": _now_iso(),
+            "half_life_days": half_life_days,
+            "total_signals_processed": len(rows),
+            "model_version": 1,
+        },
+    }
+    conn.execute(
+        """
+        INSERT INTO proactive_preference_model (id, model_json, last_updated)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            model_json=excluded.model_json,
+            last_updated=excluded.last_updated
+        """,
+        (_json_dumps(model), model["meta"]["last_updated"]),
+    )
+    conn.commit()
+    return model
+
+
+def get_preference_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
+    ensure_schema(conn)
+    row = conn.execute("SELECT model_json FROM proactive_preference_model WHERE id = 1").fetchone()
+    if row is None:
+        return rebuild_preference_snapshot(conn)
+    try:
+        parsed = json.loads(str(row["model_json"] or "{}"))
+    except Exception:
+        return rebuild_preference_snapshot(conn)
+    return parsed if isinstance(parsed, dict) else rebuild_preference_snapshot(conn)
+
+
+def get_delegation_context(
+    conn: sqlite3.Connection,
+    *,
+    task_type: str = "",
+    topic_tags: list[str] | None = None,
+) -> str:
+    model = get_preference_snapshot(conn)
+    preferences = model.get("topic_preferences") if isinstance(model.get("topic_preferences"), dict) else {}
+    keys = _context_keys(task_type=task_type, topic_tags=topic_tags or [])
+    matches = [(key, preferences[key]) for key in keys if key in preferences]
+    if not matches:
+        ranked = sorted(
+            preferences.items(),
+            key=lambda item: abs(float((item[1] or {}).get("weight") or 0.0)),
+            reverse=True,
+        )[:3]
+        matches = ranked
+    if not matches:
+        return ""
+    lines = ["Kevin's preference context for this proactive work:"]
+    for key, value in matches[:5]:
+        weight = float((value or {}).get("weight") or 0.0)
+        if abs(weight) < 0.05:
+            continue
+        direction = "positive" if weight > 0 else "negative"
+        lines.append(f"- {key}: {direction} signal weight {weight:.2f} from {value.get('signal_count', 0)} explicit signal(s).")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def _artifact_signal_keys(artifact: dict[str, Any]) -> list[str]:
     keys: list[str] = []
     artifact_type = str(artifact.get("artifact_type") or "").strip().lower()
@@ -128,3 +246,30 @@ def _artifact_signal_keys(artifact: dict[str, Any]) -> list[str]:
         if clean:
             keys.append(f"topic:{clean}")
     return sorted(set(keys))
+
+
+def _context_keys(*, task_type: str, topic_tags: list[str]) -> list[str]:
+    keys = []
+    clean_task_type = str(task_type or "").strip().lower()
+    if clean_task_type:
+        keys.append(f"type:{clean_task_type}")
+    for tag in topic_tags:
+        clean = str(tag or "").strip().lower()
+        if clean:
+            keys.append(f"topic:{clean}")
+    return sorted(set(keys))
+
+
+def _age_days(raw: str, *, now: datetime) -> float:
+    try:
+        parsed = datetime.fromisoformat(str(raw or "").replace("Z", "+00:00"))
+    except Exception:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - parsed.astimezone(timezone.utc)).total_seconds() / 86400)
+
+
+def _decay_multiplier(age_days: float, half_life_days: float) -> float:
+    half_life = max(1.0, float(half_life_days or 14.0))
+    return math.pow(0.5, max(0.0, age_days) / half_life)

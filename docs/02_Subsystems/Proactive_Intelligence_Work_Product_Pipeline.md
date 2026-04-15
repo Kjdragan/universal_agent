@@ -154,6 +154,13 @@ Acceptance criteria:
 
 Goal: let CODIE work freely on Universal Agent improvements while preserving review and deployment safety.
 
+Implementation status as of 2026-04-15:
+
+- Implemented `src/universal_agent/services/proactive_codie.py` for review-gated CODIE cleanup task creation and CODIE PR artifact registration.
+- Added dashboard endpoints to queue proactive CODIE cleanup work and register resulting draft PRs as review artifacts.
+- Cleanup tasks are ordinary Task Hub work items with explicit `code_change` workflow metadata and hard instructions not to merge, push to `main`, or deploy.
+- Registered CODIE PRs become `codie_pr` proactive artifacts and are eligible for the same review email, digest, and feedback loop as other proactive work products.
+
 Scope:
 
 1. Add a scheduled/idle CODIE cleanup mission generator.
@@ -180,6 +187,13 @@ Acceptance criteria:
 
 Goal: build-oriented videos produce private working repos automatically.
 
+Implementation status as of 2026-04-15:
+
+- Implemented `src/universal_agent/services/proactive_tutorial_builds.py` for queueing CODIE tutorial-build tasks from video metadata/extraction plans.
+- Tutorial build tasks carry explicit private-repo policy: private by default, no public publication without Kevin approval, local git artifact fallback if GitHub is unavailable.
+- Added dashboard endpoints to queue tutorial build tasks and register completed private repos or local fallback artifacts.
+- Completed tutorial builds become `tutorial_build` proactive artifacts eligible for review email, digest, and feedback.
+
 Scope:
 
 1. Reuse the existing YouTube tutorial pipeline and repo bootstrap path.
@@ -200,6 +214,13 @@ Acceptance criteria:
 ## Phase 5 - Cross-Channel Convergence Detection
 
 Goal: detect when independent creators cover the same topic and produce synthesis briefs.
+
+Implementation status as of 2026-04-15:
+
+- Implemented `src/universal_agent/services/proactive_convergence.py` for topic signature storage, no-embedding convergence matching, convergence event records, and ATLAS brief task creation.
+- Added dashboard endpoint to upsert topic signatures and optionally detect/queue convergence in one call.
+- Convergence brief requests become Task Hub work items plus `convergence_brief_task` proactive artifacts, so they enter the same review email/digest/feedback loop.
+- Matching currently uses deterministic topic overlap with an injectable matcher seam for a future LLM-based matcher.
 
 Scope:
 
@@ -225,6 +246,13 @@ Acceptance criteria:
 ## Phase 6 - Preference Model Maturation
 
 Goal: feedback changes ranking and surfacing without suppressing abundant generation.
+
+Implementation status as of 2026-04-15:
+
+- Not implemented beyond the Phase 1 explicit-feedback signal table and ranking helper.
+- No decay job exists yet.
+- Preference context is not yet injected into ATLAS/CODIE mission briefs.
+- Weekly preference report is not yet implemented.
 
 Scope:
 
@@ -252,6 +280,12 @@ Acceptance criteria:
 ## Phase 7 - GWS Enhancements
 
 Goal: use GWS as an enhancement layer without making it a prerequisite for proactive intelligence.
+
+Implementation status as of 2026-04-15:
+
+- Not implemented in this feature branch beyond reusing the already-existing GWS MCP/event-listener scaffolding.
+- Digest emails do not yet include calendar context.
+- Review-block scheduling and Drive archival remain planned enhancements.
 
 Scope:
 
@@ -301,3 +335,264 @@ Minimum verification per phase:
 Start with Phase 1. Do not start with convergence detection or tutorial build expansion. The feedback loop is the keystone that makes all later proactive generation learnable.
 
 Phase 1 should be considered complete only when Kevin can receive a proactive review email, reply with feedback, and see that feedback stored without generating a normal inbound Task Hub task.
+
+## Current Completion Snapshot
+
+Completed foundations:
+
+1. Proactive artifact inventory schema and service.
+2. Review email and digest composition/sending through existing AgentMail service objects.
+3. Feedback reply interception before normal `EmailTaskBridge` Task Hub materialization.
+4. SQLite preference signals from explicit artifact feedback.
+5. Dashboard endpoints for artifact listing, digest preview/send, individual review send, and feedback.
+6. Existing proactive signal cards sync into artifact inventory.
+7. CODIE cleanup work can be queued as review-gated Task Hub work.
+8. CODIE draft PRs can be registered as review artifacts.
+9. Tutorial build work can be queued as private-repo CODIE work.
+10. Completed tutorial private repos/local fallbacks can be registered as review artifacts.
+11. Topic signatures can be stored and deterministic cross-channel convergence can queue ATLAS brief tasks.
+
+Outstanding product work:
+
+1. Live automation wiring from CSI/tutoral/proactive runtime events into the new services.
+2. LLM-based topic signature extraction and matching.
+3. Preference decay and stronger preference model snapshots.
+4. Preference context injection into ATLAS/CODIE mission briefs.
+5. Weekly preference report.
+6. GWS calendar context in digest.
+7. Optional review-block scheduling and Drive archival.
+8. Live smoke tests for AgentMail delivery, inbound feedback reply handling, CODIE PR workflow, private GitHub repo creation, and CSI post-ingest convergence.
+
+## Detailed Next Build Plan
+
+### Packet 1 - Runtime Hook Wiring
+
+Goal: connect existing producers to the proactive artifact services so artifacts appear without manual dashboard API calls.
+
+Implementation status as of 2026-04-15:
+
+- `proactive_signals.upsert_generated_card()` now immediately syncs signal cards into proactive artifact inventory.
+- Tutorial bootstrap completion paths register completed repo/local artifact outputs as tutorial build artifacts.
+- CODIE VP worker completion path detects GitHub PR URLs in completed coder mission output and registers PR artifacts.
+- Remaining hook work: direct CSI post-ingest topic signature extraction and richer tutorial classifier auto-route are still pending.
+
+Work items:
+
+1. Wire proactive signal sync into the relevant heartbeat/report cycle if digest generation is enabled.
+2. Identify the existing CSI post-ingest or UA CSI event handling path and call `upsert_topic_signature()` after transcript analysis metadata exists.
+3. Identify tutorial pipeline completion events and call `register_tutorial_build_artifact()` when a repo bootstrap succeeds or local fallback artifact exists.
+4. Identify CODIE/VP mission completion metadata that includes PR URLs and call `register_pr_artifact()`.
+5. Ensure each hook is idempotent: same source event should update an existing artifact, not create duplicates.
+
+Likely files to inspect first:
+
+- `src/universal_agent/gateway_server.py`
+- `src/universal_agent/proactive_signals.py`
+- `src/universal_agent/services/youtube_playlist_watcher.py`
+- `src/universal_agent/hooks_service.py`
+- `src/universal_agent/vp/worker_loop.py`
+- `src/universal_agent/durable/state.py`
+- `src/universal_agent/services/intelligence_reporter.py`
+
+Acceptance criteria:
+
+- Existing proactive signal cards appear in proactive artifact inventory without manual sync calls.
+- A tutorial-ready notification or bootstrap-ready event can create/update a tutorial build artifact.
+- A PR URL surfaced from CODIE/VP metadata can create/update a `codie_pr` artifact.
+- Re-running the same event does not duplicate artifacts.
+
+Verification:
+
+```bash
+uv run pytest tests/unit/test_proactive_intelligence_phase1.py \
+  tests/gateway/test_proactive_artifacts_endpoint.py \
+  tests/gateway/test_proactive_signals_endpoint.py -q
+```
+
+### Packet 2 - LLM Topic Signature Extraction and Matching
+
+Goal: replace the current deterministic convergence foundation with LLM-assisted topic judgment while preserving deterministic fallback.
+
+Implementation status as of 2026-04-15:
+
+- Added LLM topic signature extraction from title/summary/transcript with strict JSON output and deterministic fallback.
+- Added LLM-assisted convergence matching with deterministic overlap fallback.
+- Added dashboard endpoint for extraction + optional convergence detection in one call.
+- Remaining work: wire this extraction into the real CSI post-ingest path.
+
+Work items:
+
+1. Add a function that extracts a topic signature from transcript/title/summary using a cheap model and strict JSON output.
+2. Add a matcher function that takes one new signature and recent candidate signatures and returns matched video IDs with a short reason.
+3. Keep deterministic overlap matcher as fallback when LLM fails.
+4. Add config/env controls for enabling LLM matching, window hours, min channels, cooldown hours, and model name.
+5. Store LLM extraction/match reasons in metadata for auditability.
+
+Likely files:
+
+- `src/universal_agent/services/proactive_convergence.py`
+- `src/universal_agent/services/llm_classifier.py` or a new focused helper under `services/`
+- `src/universal_agent/utils/model_resolution.py`
+
+Acceptance criteria:
+
+- Given a transcript summary, the system stores primary topics, secondary topics, key claims, and content type.
+- Given two semantically similar but lexically different topic signatures, LLM matching can detect convergence.
+- If the LLM call fails or returns bad JSON, deterministic fallback still works.
+
+Verification:
+
+```bash
+uv run pytest tests/unit/test_proactive_convergence.py -q
+```
+
+### Packet 3 - Preference Maturation
+
+Goal: make feedback shape ranking, mission context, and weekly summaries without suppressing generation.
+
+Implementation status as of 2026-04-15:
+
+- Added SQLite preference model snapshots derived from explicit feedback signals with exponential decay.
+- Added compact delegation context generation.
+- Proactive CODIE cleanup, tutorial build, and convergence brief task creation now inject available preference context into their task briefs.
+- Remaining work: weekly preference report, richer dimensions/source preferences, and generic injection into all ATLAS/CODIE delegation paths.
+
+Work items:
+
+1. Add a preference model snapshot table or singleton row derived from `proactive_preference_signals`.
+2. Implement time decay with a 14-day half-life.
+3. Track dimensions: topic, source, artifact type, format, CODIE cleanup theme, tutorial source channel.
+4. Add `get_delegation_context(task_type, topic_tags)` returning compact natural language for ATLAS/CODIE prompts.
+5. Wire preference context into the ToDo/VP mission prompt path where delegated missions are created.
+6. Add a weekly preference report artifact and optional email digest section.
+
+Likely files:
+
+- `src/universal_agent/services/proactive_preferences.py`
+- `src/universal_agent/services/todo_dispatch_service.py`
+- `src/universal_agent/heartbeat_service.py`
+- `src/universal_agent/tools/vp_orchestration.py`
+- `src/universal_agent/services/intelligence_reporter.py`
+
+Acceptance criteria:
+
+- Positive explicit feedback raises future ranking for matching topics/types.
+- Negative explicit feedback lowers ranking for matching topics/types.
+- Silence creates no meaningful penalty.
+- Delegation prompts can include a compact preference block.
+- Weekly preference report summarizes rising/declining interests.
+
+Verification:
+
+```bash
+uv run pytest tests/unit/test_proactive_intelligence_phase1.py \
+  tests/unit/test_proactive_codie.py \
+  tests/unit/test_proactive_tutorial_builds.py \
+  tests/unit/test_proactive_convergence.py -q
+```
+
+### Packet 4 - Live Delivery and Feedback Smoke Tests
+
+Goal: verify real AgentMail delivery and inbound feedback loop against a controlled test artifact.
+
+Work items:
+
+1. Create a test artifact in the runtime DB.
+2. Send a review email through the dashboard endpoint or service using Simone's initialized AgentMail service.
+3. Confirm `proactive_artifact_emails` has message/thread identifiers.
+4. Reply with `1 useful` from Kevin's Gmail/AgentMail route.
+5. Confirm the inbound path records proactive feedback and does not create a normal `email:` Task Hub item.
+
+Acceptance criteria:
+
+- Kevin receives the review email.
+- The reply updates artifact feedback and preference signals.
+- No duplicate or unrelated Task Hub task is created.
+- The artifact is marked reviewed/accepted for score `1` or `5`.
+
+Suggested focused verification after manual smoke:
+
+```bash
+uv run pytest tests/unit/test_agentmail_official_mcp.py \
+  tests/unit/test_agentmail_send_policy.py \
+  tests/unit/test_agentmail_service.py \
+  tests/unit/test_proactive_intelligence_phase1.py -q
+```
+
+### Packet 5 - GWS Digest Enhancements
+
+Goal: enrich digests with calendar context without making GWS a hard dependency.
+
+Implementation status as of 2026-04-15:
+
+- Digest composition can now include injected calendar events.
+- Tests cover digest calendar rendering without shelling out to `gws`.
+- Remaining work: connect this to a real GWS/MCP calendar provider and report auth failures non-fatally.
+
+Work items:
+
+1. Reuse existing GWS MCP/event listener status checks to determine whether calendar context is available.
+2. Add optional calendar section to `IntelligenceReporter.compose_daily_digest()`.
+3. If GWS is unavailable or auth fails, include a non-fatal note only when useful; do not block digest sending.
+4. Add tests with injected calendar provider rather than shelling out to `gws`.
+
+Likely files:
+
+- `src/universal_agent/services/intelligence_reporter.py`
+- `src/universal_agent/services/gws_mcp_bridge.py`
+- `src/universal_agent/services/gws_event_listener.py`
+
+Acceptance criteria:
+
+- Digest includes today's calendar context when provider returns events.
+- Digest still sends when provider fails.
+- No new direct Google API wrapper is introduced unless MCP/CLI cannot support the operation.
+
+### Packet 6 - PR and Private Repo Live Operations
+
+Goal: complete live operational validation for CODIE PRs and tutorial private repos.
+
+Work items:
+
+1. Verify GitHub credentials through the existing GitHub app/CLI path, not ad hoc token probing in code.
+2. Run a small CODIE cleanup task and ensure it creates a draft PR against `develop`.
+3. Register that PR as a proactive artifact and send a `[UA PR Review]` email.
+4. Run a controlled tutorial build task and ensure private repo creation or local fallback.
+5. Register the result as a `tutorial_build` artifact and send a `[UA Build Review]` email.
+
+Acceptance criteria:
+
+- No public repos are created automatically.
+- No merge/deploy happens automatically.
+- Review emails include final product links and concise review framing.
+- Kevin can accept/reject by reply and the preference system records it.
+
+### Packet 7 - Final Documentation and Release Readiness
+
+Goal: make the feature maintainable and ready for normal review.
+
+Work items:
+
+1. Update this document's status table with exact implemented surfaces and remaining gaps.
+2. Update `docs/02_Subsystems/Proactive_Pipeline.md` if runtime behavior changed.
+3. Update API docs if proactive artifact endpoints become supported dashboard APIs.
+4. Add an operator runbook section for manual smoke tests.
+5. Run the broad focused regression suite.
+
+Recommended verification:
+
+```bash
+uv run pytest tests/unit/test_proactive_convergence.py \
+  tests/unit/test_proactive_tutorial_builds.py \
+  tests/unit/test_proactive_codie.py \
+  tests/unit/test_proactive_intelligence_phase1.py \
+  tests/gateway/test_proactive_artifacts_endpoint.py \
+  tests/gateway/test_proactive_signals_endpoint.py \
+  tests/unit/test_proactive_signals.py \
+  tests/unit/test_proactive_advisor.py \
+  tests/unit/test_agentmail_ingress_tasks.py \
+  tests/unit/test_agentmail_service.py \
+  tests/unit/test_agentmail_official_mcp.py \
+  tests/unit/test_agentmail_send_policy.py \
+  tests/unit/test_task_hub_lifecycle.py -q
+```

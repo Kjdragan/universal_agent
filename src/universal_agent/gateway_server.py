@@ -2169,6 +2169,77 @@ class ProactiveArtifactReviewEmailRequest(BaseModel):
     limit: Optional[int] = 12
 
 
+class ProactiveCodieCleanupQueueRequest(BaseModel):
+    theme: Optional[str] = None
+    note: Optional[str] = None
+    priority: Optional[int] = 2
+
+
+class ProactiveCodiePrRegisterRequest(BaseModel):
+    pr_url: str
+    title: str
+    summary: Optional[str] = None
+    branch: Optional[str] = None
+    theme: Optional[str] = None
+    tests: Optional[str] = None
+    risk: Optional[str] = None
+
+
+class ProactiveTutorialBuildQueueRequest(BaseModel):
+    video_id: str
+    video_title: str
+    video_url: Optional[str] = None
+    channel_name: Optional[str] = None
+    source: Optional[str] = "csi_auto_route"
+    extraction_plan: dict[str, Any] = Field(default_factory=dict)
+    priority: Optional[int] = 3
+
+
+class ProactiveTutorialBuildRegisterRequest(BaseModel):
+    video_id: str
+    title: str
+    repo_url: Optional[str] = None
+    artifact_path: Optional[str] = None
+    video_url: Optional[str] = None
+    channel_name: Optional[str] = None
+    run_commands: Optional[str] = None
+    tests: Optional[str] = None
+    status: Optional[str] = "success"
+
+
+class ProactiveTopicSignatureRequest(BaseModel):
+    video_id: str
+    channel_id: Optional[str] = ""
+    channel_name: Optional[str] = ""
+    video_title: Optional[str] = ""
+    video_url: Optional[str] = ""
+    ingested_at: Optional[str] = ""
+    primary_topics: list[str] = Field(default_factory=list)
+    secondary_topics: list[str] = Field(default_factory=list)
+    key_claims: list[str] = Field(default_factory=list)
+    content_type: Optional[str] = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    detect: bool = True
+    window_hours: Optional[int] = 72
+    min_channels: Optional[int] = 2
+
+
+class ProactiveTopicSignatureExtractRequest(BaseModel):
+    video_id: str
+    title: Optional[str] = ""
+    transcript_text: Optional[str] = ""
+    summary_text: Optional[str] = ""
+    channel_id: Optional[str] = ""
+    channel_name: Optional[str] = ""
+    video_url: Optional[str] = ""
+    ingested_at: Optional[str] = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    detect: bool = True
+    use_llm_match: bool = True
+    window_hours: Optional[int] = 72
+    min_channels: Optional[int] = 2
+
+
 class DashboardEventPresetCreateRequest(BaseModel):
     name: str
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -16092,6 +16163,20 @@ def _proactive_review_recipient(fallback: str = "") -> str:
     )
 
 
+def _register_tutorial_bootstrap_proactive_artifact(job: dict[str, Any]) -> None:
+    try:
+        from universal_agent.services.proactive_tutorial_builds import register_tutorial_bootstrap_job_artifact
+
+        with _activity_store_lock:
+            conn = _activity_connect()
+            try:
+                register_tutorial_bootstrap_job_artifact(conn, job)
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.debug("Failed registering tutorial bootstrap proactive artifact: %s", exc)
+
+
 @app.get("/api/v1/dashboard/proactive-artifacts")
 async def dashboard_proactive_artifacts(
     request: Request,
@@ -16230,6 +16315,212 @@ async def dashboard_proactive_artifact_send_review(
         finally:
             conn.close()
     return {"status": "ok", "send": result}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/codie/cleanup-task")
+async def dashboard_proactive_codie_cleanup_task(
+    request: Request,
+    payload: ProactiveCodieCleanupQueueRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_codie import queue_cleanup_task
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            result = queue_cleanup_task(
+                conn,
+                theme=str(payload.theme or ""),
+                note=str(payload.note or ""),
+                priority=int(payload.priority or 2),
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", **result}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/codie/pr")
+async def dashboard_proactive_codie_pr_register(
+    request: Request,
+    payload: ProactiveCodiePrRegisterRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_codie import register_pr_artifact
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                artifact = register_pr_artifact(
+                    conn,
+                    pr_url=payload.pr_url,
+                    title=payload.title,
+                    summary=str(payload.summary or ""),
+                    branch=str(payload.branch or ""),
+                    theme=str(payload.theme or ""),
+                    tests=str(payload.tests or ""),
+                    risk=str(payload.risk or ""),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+    return {"status": "ok", "artifact": artifact}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/tutorial/build-task")
+async def dashboard_proactive_tutorial_build_task(
+    request: Request,
+    payload: ProactiveTutorialBuildQueueRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_tutorial_builds import queue_tutorial_build_task
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                result = queue_tutorial_build_task(
+                    conn,
+                    video_id=payload.video_id,
+                    video_title=payload.video_title,
+                    video_url=str(payload.video_url or ""),
+                    channel_name=str(payload.channel_name or ""),
+                    source=str(payload.source or "csi_auto_route"),
+                    extraction_plan=dict(payload.extraction_plan or {}),
+                    priority=int(payload.priority or 3),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+    return {"status": "ok", **result}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/tutorial/build-artifact")
+async def dashboard_proactive_tutorial_build_artifact(
+    request: Request,
+    payload: ProactiveTutorialBuildRegisterRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_tutorial_builds import register_tutorial_build_artifact
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                artifact = register_tutorial_build_artifact(
+                    conn,
+                    video_id=payload.video_id,
+                    title=payload.title,
+                    repo_url=str(payload.repo_url or ""),
+                    artifact_path=str(payload.artifact_path or ""),
+                    video_url=str(payload.video_url or ""),
+                    channel_name=str(payload.channel_name or ""),
+                    run_commands=str(payload.run_commands or ""),
+                    tests=str(payload.tests or ""),
+                    status=str(payload.status or "success"),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+    return {"status": "ok", "artifact": artifact}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/convergence/signature")
+async def dashboard_proactive_convergence_signature(
+    request: Request,
+    payload: ProactiveTopicSignatureRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_convergence import (
+        detect_and_queue_convergence,
+        upsert_topic_signature,
+    )
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            try:
+                signature = upsert_topic_signature(
+                    conn,
+                    video_id=payload.video_id,
+                    channel_id=str(payload.channel_id or ""),
+                    channel_name=str(payload.channel_name or ""),
+                    video_title=str(payload.video_title or ""),
+                    video_url=str(payload.video_url or ""),
+                    ingested_at=str(payload.ingested_at or ""),
+                    primary_topics=payload.primary_topics,
+                    secondary_topics=payload.secondary_topics,
+                    key_claims=payload.key_claims,
+                    content_type=str(payload.content_type or ""),
+                    metadata=dict(payload.metadata or {}),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            convergence = (
+                detect_and_queue_convergence(
+                    conn,
+                    signature=signature,
+                    window_hours=max(1, int(payload.window_hours or 72)),
+                    min_channels=max(2, int(payload.min_channels or 2)),
+                )
+                if payload.detect
+                else None
+            )
+        finally:
+            conn.close()
+    return {"status": "ok", "signature": signature, "convergence": convergence}
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/convergence/extract")
+async def dashboard_proactive_convergence_extract(
+    request: Request,
+    payload: ProactiveTopicSignatureExtractRequest,
+):
+    _require_ops_auth(request)
+    from universal_agent.services.proactive_convergence import (
+        detect_and_queue_convergence,
+        detect_and_queue_convergence_llm,
+        extract_topic_signature_from_text,
+        upsert_topic_signature,
+    )
+
+    extracted = await extract_topic_signature_from_text(
+        video_id=payload.video_id,
+        title=str(payload.title or ""),
+        transcript_text=str(payload.transcript_text or ""),
+        summary_text=str(payload.summary_text or ""),
+        channel_id=str(payload.channel_id or ""),
+        channel_name=str(payload.channel_name or ""),
+        video_url=str(payload.video_url or ""),
+        ingested_at=str(payload.ingested_at or ""),
+        metadata=dict(payload.metadata or {}),
+    )
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            signature = upsert_topic_signature(conn, **extracted)
+            if not payload.detect:
+                convergence = None
+            elif payload.use_llm_match:
+                convergence = await detect_and_queue_convergence_llm(
+                    conn,
+                    signature=signature,
+                    window_hours=max(1, int(payload.window_hours or 72)),
+                    min_channels=max(2, int(payload.min_channels or 2)),
+                )
+            else:
+                convergence = detect_and_queue_convergence(
+                    conn,
+                    signature=signature,
+                    window_hours=max(1, int(payload.window_hours or 72)),
+                    min_channels=max(2, int(payload.min_channels or 2)),
+                )
+        finally:
+            conn.close()
+    return {"status": "ok", "signature": signature, "convergence": convergence}
 
 
 @app.get("/api/v1/dashboard/csi/reports")
@@ -21828,6 +22119,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
             "error": "",
         }
     )
+    _register_tutorial_bootstrap_proactive_artifact(updated)
     _add_notification(
         kind="tutorial_repo_bootstrap_ready",
         title="Tutorial Repo Created",
@@ -22404,6 +22696,8 @@ async def ops_tutorial_bootstrap_result(
     )
 
     is_success = str(updated.get("status") or "") == "completed"
+    if is_success:
+        _register_tutorial_bootstrap_proactive_artifact(updated)
     title = str(updated.get("tutorial_title") or updated.get("tutorial_run_path") or "tutorial")
     execution_target = str(updated.get("execution_target") or "local").strip().lower() or "local"
     success_prefix = "VPS repo created" if execution_target == "server" else "Local repo created"
