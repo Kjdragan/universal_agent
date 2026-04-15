@@ -982,7 +982,7 @@ export default function DashboardPage() {
       });
       if (resp.ok) {
         setSessionDirectory((prev) =>
-          prev.map((s) => (s.session_id === sessionId ? { ...s, description: newDescription || null } : s))
+          prev.map((s) => (s.session_id === sessionId ? { ...s, description: newDescription || undefined } : s))
         );
       }
     } catch (e) {
