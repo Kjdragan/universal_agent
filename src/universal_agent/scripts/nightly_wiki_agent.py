@@ -63,16 +63,26 @@ Your target is to generate {wiki_count} complete Wiki knowledge bases from the p
 INSTRUCTIONS:
 1. Review the following {len(cards[:20])} pending proactive signal candidates.
 2. Select the {wiki_count} MOST interesting topics, prioritizing topics related to AI, LLMs, Agents, coding, or our recent focus areas.
-3. For EACH selected topic:
-   - Perform deep research using NotebookLM (the `nlm-skill`) and standard web search.
-   - Synthesize a comprehensive, structured markdown report with the findings.
-   - Use the Image Generation tool (`generate_image` with model `gemini-2.5-flash-image` or `gemini-3-pro-image-preview`) to generate an infographic summarizing the top insights.
-     Save the image to the designated folder: {wiki_artifacts_dir}/{today}_wiki_infographic_[TOPIC].png
-     **FALLBACK**: If `generate_image` fails (e.g., 403 error or API unavailable), create a richly styled HTML infographic instead
-     and convert it to PDF using `html_to_pdf`. Save as {wiki_artifacts_dir}/{today}_wiki_infographic_[TOPIC].pdf
-   - Ingest ALL compile insights into the Universal Agent Wiki using the `wiki_ingest_external_source` tool.
-4. When finished, format a "Nightly Wiki Report" documenting the selected topics, and absolute links to the NLM outputs, generated infographics, and the core themes added to the Wiki.
-5. Save exactly one payload file named 'nightly_wiki_{today}.md' to {wiki_artifacts_dir} containing just this summary of links and results so the Morning Briefing agent can surface it to the user.
+3. For EACH selected topic, follow the NLM-FIRST pipeline:
+   a. Create a NotebookLM notebook: `nlm notebook create "Topic Title"`
+   b. Run NLM research: `nlm research start "topic query" --notebook-id <id>` (use fast mode by default)
+   c. Poll: `nlm research status <id> --max-wait 0` with adaptive sleep intervals (sleep 5 for fast, sleep 20 for deep) until completed
+   d. Import sources: `nlm research import <id> <task-id>`
+   e. Generate artifacts via NLM studio — fire ALL creates first, then poll once:
+      - `nlm report create <id> --confirm`
+      - `nlm infographic create <id> --orientation landscape --style professional --confirm`
+   f. Poll `nlm studio status <id>` with sleep 10 until all artifacts are completed
+   g. Download artifacts:
+      - `nlm download report <id> --output {wiki_artifacts_dir}/{today}_wiki_report_[TOPIC].md`
+      - `nlm download infographic <id> --output {wiki_artifacts_dir}/{today}_wiki_infographic_[TOPIC].png`
+   h. Register the KB: use the `kb_register` tool with slug, notebook_id, title, and tags
+   i. Ingest the report into the Wiki using `wiki_ingest_external_source`
+
+   IMPORTANT: Do NOT use `generate_image` or HTML-to-PDF for infographics.
+   NLM studio generates source-grounded infographics that are higher quality.
+
+4. When finished, format a "Nightly Wiki Report" documenting the selected topics, notebook URLs, absolute paths to downloaded artifacts, and the core themes added to the Wiki.
+5. Save exactly one payload file named 'nightly_wiki_{today}.md' to {wiki_artifacts_dir} containing just this summary so the Morning Briefing agent can surface it to the user.
 
 RAW PENDING CARDS:
 ```json

@@ -186,6 +186,12 @@ _NOTEBOOKLM_INTENT_MARKERS = (
     "notebook_describe",
     "mcp tools to perform",
     "research and content generation pipeline",
+    "knowledge base",
+    "knowledgebase",
+    "knowledge-base",
+    "wiki",
+    "llm wiki",
+    "research corpus",
 )
 
 _YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
