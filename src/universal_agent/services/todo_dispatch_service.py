@@ -32,7 +32,6 @@ _CODE_WORKFLOW_MARKERS = (
     "update code",
     "write code",
     "repository",
-    "repo",
     "typescript",
     "javascript",
     "python",
@@ -52,6 +51,160 @@ _RESEARCH_WORKFLOW_MARKERS = (
     "what happened",
     "pdf",
 )
+
+
+def _coerce_labels(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    return []
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.getenv(name, str(default)) or default))
+    except Exception:
+        return default
+
+
+def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[int, int]:
+    coder = 0
+    general = 0
+    for assignment in active_assignments or []:
+        haystack = " ".join(
+            str(assignment.get(key) or "")
+            for key in ("agent_id", "provider_session_id", "title", "task_id")
+        ).lower()
+        if "vp.coder" in haystack or "codie" in haystack or "coder" in haystack:
+            coder += 1
+        elif "vp.general" in haystack or "atlas" in haystack:
+            general += 1
+    return coder, general
+
+
+def _available_agents_for_llm_routing(
+    active_assignments: list[dict[str, Any]] | None,
+) -> frozenset[str]:
+    from universal_agent.services.agent_router import AGENT_CODER, AGENT_GENERAL, AGENT_SIMONE
+
+    active_coder, active_general = _vp_active_counts(active_assignments)
+    max_coder = _env_positive_int("UA_MAX_CONCURRENT_VP_CODER", 1)
+    max_general = _env_positive_int("UA_MAX_CONCURRENT_VP_GENERAL", 2)
+    available = {AGENT_SIMONE}
+    if active_coder < max_coder:
+        available.add(AGENT_CODER)
+    if active_general < max_general:
+        available.add(AGENT_GENERAL)
+    return frozenset(available)
+
+
+def _non_coder_workflow_kind(
+    *,
+    description: str,
+    delivery_mode: str,
+    final_channel: str,
+) -> str:
+    text = str(description or "").strip().lower()
+    mode = str(delivery_mode or "").strip().lower()
+    channel = str(final_channel or "").strip().lower() or "chat"
+    suffix = "chat" if channel == "chat" else "email"
+
+    if mode == "interactive_email":
+        return "interactive_answer_email"
+    if mode in {"standard_report", "enhanced_report"}:
+        return f"research_report_{suffix}"
+    if any(marker in text for marker in _RESEARCH_WORKFLOW_MARKERS):
+        return f"research_report_{suffix}"
+    if mode == "interactive_chat":
+        return "interactive_answer"
+    return "general_execution"
+
+
+def _reconcile_manifest_with_llm_route(task: dict[str, Any], route: dict[str, Any]) -> None:
+    if str(route.get("method") or "").strip().lower() != "llm":
+        return
+
+    from universal_agent.services.agent_router import AGENT_CODER
+
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    manifest = metadata.get("workflow_manifest") if isinstance(metadata.get("workflow_manifest"), dict) else {}
+    if not manifest:
+        return
+
+    agent_id = str(route.get("agent_id") or "").strip()
+    current_kind = str(manifest.get("workflow_kind") or "").strip()
+    final_channel = str(manifest.get("final_channel") or "").strip().lower() or "chat"
+    delivery_mode = str(manifest.get("delivery_mode") or metadata.get("delivery_mode") or "").strip()
+
+    updated = dict(manifest)
+    updated["llm_agent_route"] = {
+        "agent_id": agent_id,
+        "confidence": str(route.get("confidence") or "").strip(),
+        "reasoning": str(route.get("reasoning") or route.get("reason") or "").strip(),
+    }
+
+    if agent_id == AGENT_CODER:
+        updated["workflow_kind"] = "code_change"
+        approved_roots = approved_codebase_roots_from_env()
+        resolved_codebase_root = str(updated.get("codebase_root") or (approved_roots[0] if approved_roots else "")).strip()
+        updated["codebase_root"] = resolved_codebase_root
+        updated["repo_mutation_allowed"] = bool(resolved_codebase_root)
+    elif current_kind == "code_change":
+        updated["workflow_kind"] = _non_coder_workflow_kind(
+            description=str(task.get("description") or ""),
+            delivery_mode=delivery_mode,
+            final_channel=final_channel,
+        )
+        updated["codebase_root"] = ""
+        updated["repo_mutation_allowed"] = False
+
+    metadata["workflow_manifest"] = updated
+    task["metadata"] = metadata
+
+
+async def _enrich_with_llm_agent_routing(
+    claimed_items: list[dict[str, Any]],
+    *,
+    active_assignments: list[dict[str, Any]] | None = None,
+) -> None:
+    if not claimed_items:
+        return
+
+    from universal_agent.services.llm_classifier import classify_agent_route
+
+    available_agents = _available_agents_for_llm_routing(active_assignments)
+    for item in claimed_items:
+        try:
+            route = await classify_agent_route(
+                title=str(item.get("title") or ""),
+                description=str(item.get("description") or ""),
+                labels=_coerce_labels(item.get("labels")),
+                source_kind=str(item.get("source_kind") or ""),
+                project_key=str(item.get("project_key") or ""),
+                available_agents=available_agents,
+            )
+        except Exception as exc:
+            logger.warning("LLM agent routing enrichment failed for task %s: %s", item.get("task_id"), exc)
+            continue
+
+        item["_routing"] = {
+            "agent_id": str(route.get("agent_id") or "simone").strip() or "simone",
+            "confidence": str(route.get("confidence") or "medium").strip() or "medium",
+            "reason": str(route.get("reasoning") or route.get("reason") or "").strip(),
+            "method": str(route.get("method") or "llm").strip() or "llm",
+            "should_delegate": bool(route.get("should_delegate")),
+        }
+        _reconcile_manifest_with_llm_route(item, route)
 
 
 def infer_workflow_kind(
@@ -144,7 +297,8 @@ TODO_DISPATCH_PROMPT = """
 You are Simone, the Pipeline Orchestrator. Your exclusive job is to execute the assigned work items from the Task Queue below to completion.
 Do not perform any system monitoring, infrastructure checks, or background reporting.
 The work items listed below are already claimed and routed into the canonical Task Hub execution lane.
-Do not re-triage them, do not re-claim them, and do not stop or replace the active Task Hub assignment.
+Do not re-claim them, and do not stop or replace the active Task Hub assignment.
+Use the LLM routing judgment attached to each item as advisory guidance for whether to execute yourself or delegate to CODIE/ATLAS.
 Your only goal is to execute the assigned work items, deliver results, then disposition them durably in Task Hub.
 
 ### Tool Constraints (CRITICAL):
@@ -272,7 +426,8 @@ def build_todo_execution_prompt(
             )
         routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
         if routing:
-            lines.append(f"Routing Hint: {routing}")
+            label = "LLM Routing Judgment" if routing.get("method") == "llm" else "Routing Hint"
+            lines.append(f"{label}: {routing}")
         lines.append("")
     return f"{TODO_DISPATCH_PROMPT}\n\n" + "\n".join(lines)
 
@@ -467,6 +622,10 @@ class ToDoDispatchService:
             with connect_runtime_db(activity_db_path) as conn:
                 activity = task_hub.get_agent_activity(conn)
             active_assignments = activity.get("active_assignments") if isinstance(activity, dict) else []
+            await _enrich_with_llm_agent_routing(
+                task_hub_claimed,
+                active_assignments=active_assignments,
+            )
             prompt = build_todo_execution_prompt(
                 claimed_items=task_hub_claimed,
                 capacity_snapshot_data=snapshot,

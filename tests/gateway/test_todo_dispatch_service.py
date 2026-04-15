@@ -9,6 +9,7 @@ import pytest
 from universal_agent.gateway import GatewaySession
 from universal_agent.services.todo_dispatch_service import (
     ToDoDispatchService,
+    _enrich_with_llm_agent_routing,
     build_execution_manifest,
     build_todo_execution_prompt,
 )
@@ -66,6 +67,18 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
         lambda: {"available_slots": 1, "active_slots": 0, "max_concurrent": 2, "in_backoff": False},
     )
     monkeypatch.setattr(
+        "universal_agent.services.llm_classifier.classify_agent_route",
+        AsyncMock(
+            return_value={
+                "agent_id": "simone",
+                "confidence": "medium",
+                "reasoning": "Simone should coordinate the weather response.",
+                "method": "llm",
+                "should_delegate": False,
+            }
+        ),
+    )
+    monkeypatch.setattr(
         "universal_agent.task_hub.get_agent_activity",
         lambda _conn: {"active_assignments": [{"agent_id": "todo:daemon_simone_todo", "task_id": "email:x", "title": "Existing"}]},
     )
@@ -80,7 +93,7 @@ async def test_todo_dispatch_service_executes_claimed_tasks(monkeypatch):
     assert request.metadata["run_kind"] == "todo_execution"
     assert request.metadata["claimed_task_ids"] == ["email:1"]
     assert "already claimed" in request.user_input.lower()
-    assert "do not re-triage" in request.user_input.lower()
+    assert "do not re-claim" in request.user_input.lower()
     assert "taskstop" in request.user_input.lower()
     assert "capacity snapshot" in request.user_input.lower()
     assert "delivery contract" in request.user_input.lower()
@@ -172,6 +185,73 @@ def test_build_execution_manifest_marks_code_change_with_codebase_root(monkeypat
     assert manifest["workflow_kind"] == "code_change"
     assert manifest["codebase_root"] == "/opt/universal_agent"
     assert manifest["repo_mutation_allowed"] is True
+
+
+def test_build_execution_manifest_does_not_treat_report_as_repo(monkeypatch):
+    monkeypatch.setenv("UA_APPROVED_CODEBASE_ROOTS", "/opt/universal_agent")
+    manifest = build_execution_manifest(
+        user_input=(
+            "Create a knowledge base about the Hermes agent. Use NotebookLM deep "
+            "research, create a report, an infographic, and an audio file, then "
+            "email them to me."
+        ),
+        delivery_mode="standard_report",
+        final_channel="email",
+    )
+
+    assert manifest["workflow_kind"] == "research_report_email"
+    assert manifest["codebase_root"] == ""
+    assert manifest["repo_mutation_allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_reconciles_false_code_change_manifest(monkeypatch):
+    task = {
+        "task_id": "chat:hermes",
+        "title": "Hermes agent knowledge base",
+        "description": (
+            "Create a knowledge base about the Hermes agent and its latest updates "
+            "over the last three weeks. Use NotebookLM deep research, then create "
+            "a report, infographic, and audio file."
+        ),
+        "source_kind": "chat_panel",
+        "project_key": "immediate",
+        "labels": ["interactive"],
+        "metadata": {
+            "delivery_mode": "standard_report",
+            "workflow_manifest": {
+                "workflow_kind": "code_change",
+                "delivery_mode": "standard_report",
+                "requires_pdf": True,
+                "final_channel": "email",
+                "canonical_executor": "simone_first",
+                "codebase_root": "/opt/universal_agent",
+                "repo_mutation_allowed": True,
+            },
+        },
+    }
+    monkeypatch.setattr(
+        "universal_agent.services.llm_classifier.classify_agent_route",
+        AsyncMock(
+            return_value={
+                "agent_id": "vp.general.primary",
+                "confidence": "high",
+                "reasoning": "NotebookLM research and artifacts belong with ATLAS.",
+                "method": "llm",
+                "should_delegate": True,
+            }
+        ),
+    )
+
+    await _enrich_with_llm_agent_routing([task], active_assignments=[])
+
+    manifest = task["metadata"]["workflow_manifest"]
+    assert task["_routing"]["agent_id"] == "vp.general.primary"
+    assert task["_routing"]["method"] == "llm"
+    assert manifest["workflow_kind"] == "research_report_email"
+    assert manifest["codebase_root"] == ""
+    assert manifest["repo_mutation_allowed"] is False
+    assert manifest["llm_agent_route"]["agent_id"] == "vp.general.primary"
 
 
 def test_build_todo_execution_prompt_uses_mode_specific_delivery_contract():
