@@ -180,27 +180,32 @@ async def classify_priority(
 # ── Agent Routing ────────────────────────────────────────────────────────────
 
 _ROUTING_SYSTEM = """\
-You are a task routing classifier for a multi-agent system. Given a task, decide
-which agent should handle it.
+You are a task routing judge for a multi-agent system. Given the user's natural
+language task, decide which agent should handle it. Use judgment about the task's
+actual objective; do not route by keyword counting.
 
 Available agents:
 - simone: Primary coordinator daemon. Handles email triage, calendar management,
   communication, brainstorming, coordination between agents, memory management,
   and anything ambiguous that needs human-like judgment.
-- vp.coder.primary (CODIE): Software engineering specialist. Handles code
-  changes, refactoring, debugging, deployments, CI/CD pipeline work, database
-  migrations, infrastructure, test creation, and all programming tasks.
-- vp.general.primary (ATLAS): Research and analysis specialist. Handles deep
-  research, competitive analysis, content writing, market research, exploration,
-  literature reviews, reports, and investigative tasks.
+- vp.coder.primary (CODIE): Specialized long-running coding agent. Handles
+  repository work such as implementation, refactoring, debugging, tests,
+  deployments, CI/CD, migrations, and infrastructure changes.
+- vp.general.primary (ATLAS): General-abilities agent. Handles deep research,
+  NotebookLM work, competitive analysis, content writing, market research,
+  exploration, literature reviews, reports, artifacts, and investigative tasks.
 
 Routing rules:
-- If the task is clearly about writing, modifying, or debugging code → CODIE
-- If the task requires research, analysis, or content creation → ATLAS
-- If the task involves coordination, communication, or is ambiguous → Simone
-- When in doubt, route to Simone (she can delegate further)
-- Consider the INTENT, not just keywords (e.g., "review the API docs" is research → ATLAS,
-  but "fix the API endpoint" is code → CODIE)
+- If the task is clearly about writing, modifying, or debugging code in a repo → CODIE.
+- If the task requires research, NotebookLM, analysis, content/artifact creation,
+  or reporting → ATLAS.
+- If the task requires Simone's personal context, communication judgment, or
+  coordination across agents → Simone.
+- If CODIE and ATLAS are both acceptable and one of them is available, choose an
+  available VP rather than defaulting to Simone.
+- Consider the intent, not just keywords. "Create a knowledge base about an
+  agent" is research/content work for ATLAS unless the user asks to change code.
+- "Review API docs" is research → ATLAS; "fix the API endpoint" is coding → CODIE.
 
 Respond with ONLY a JSON object:
 {
@@ -218,6 +223,7 @@ Description: {description}
 Labels: {labels}
 Source: {source}
 Project: {project}
+Available agents: {available_agents}
 """
 
 
@@ -250,6 +256,7 @@ async def classify_agent_route(
             labels=", ".join(labels or []) or "(none)",
             source=source_kind or "(none)",
             project=project_key or "(none)",
+            available_agents=", ".join(sorted(available_agents)) if available_agents else "simone, vp.coder.primary, vp.general.primary",
         )
 
         raw = await _call_llm(system=_ROUTING_SYSTEM, user=user_msg)
