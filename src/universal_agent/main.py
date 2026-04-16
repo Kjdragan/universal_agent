@@ -6850,12 +6850,11 @@ async def run_conversation(
 
                         # 1. Increment Iteration
                         if _ctx.run_id and _ctx.runtime_db_conn:
-                            current_iter = get_iteration_info(
+                            _iter_info = get_iteration_info(
                                 _ctx.runtime_db_conn, _ctx.run_id
-                            ).get("iteration_count", 0)
-                            max_iter = get_iteration_info(
-                                _ctx.runtime_db_conn, _ctx.run_id
-                            ).get("max_iterations", 10)
+                            )
+                            current_iter = int(_iter_info.get("iteration_count") or 0)
+                            max_iter = int(_iter_info.get("max_iterations") or 10)
 
                             if current_iter >= max_iter:
                                 print(
