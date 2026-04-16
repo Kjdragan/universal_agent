@@ -16438,18 +16438,17 @@ async def dashboard_proactive_artifact_digest_send(
         raise HTTPException(status_code=503, detail="AgentMail service not initialized")
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
 
-    with _activity_store_lock:
-        conn = _activity_connect()
-        try:
-            calendar_context = _proactive_calendar_context(bool(payload.include_calendar))
-            result = await IntelligenceReporter(conn).send_daily_digest(
-                recipient=_proactive_review_recipient(payload.recipient or ""),
-                mail_service=_agentmail_service,
-                limit=max(1, min(int(payload.limit or 12), 50)),
-                calendar_events=calendar_context.get("events", []),
-            )
-        finally:
-            conn.close()
+    conn = _activity_connect()
+    try:
+        calendar_context = _proactive_calendar_context(bool(payload.include_calendar))
+        result = await IntelligenceReporter(conn).send_daily_digest(
+            recipient=_proactive_review_recipient(payload.recipient or ""),
+            mail_service=_agentmail_service,
+            limit=max(1, min(int(payload.limit or 12), 50)),
+            calendar_events=calendar_context.get("events", []),
+        )
+    finally:
+        conn.close()
     return {"status": "ok", "send": result, "calendar": calendar_context if payload.include_calendar else None}
 
 
@@ -16488,15 +16487,14 @@ async def dashboard_proactive_preference_weekly_send(
         raise HTTPException(status_code=503, detail="AgentMail service not initialized")
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
 
-    with _activity_store_lock:
-        conn = _activity_connect()
-        try:
-            result = await IntelligenceReporter(conn).send_weekly_preference_report(
-                recipient=_proactive_review_recipient(payload.recipient or ""),
-                mail_service=_agentmail_service,
-            )
-        finally:
-            conn.close()
+    conn = _activity_connect()
+    try:
+        result = await IntelligenceReporter(conn).send_weekly_preference_report(
+            recipient=_proactive_review_recipient(payload.recipient or ""),
+            mail_service=_agentmail_service,
+        )
+    finally:
+        conn.close()
     return {"status": "ok", "send": result}
 
 
@@ -16545,19 +16543,18 @@ async def dashboard_proactive_artifact_send_review(
         raise HTTPException(status_code=503, detail="AgentMail service not initialized")
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
 
-    with _activity_store_lock:
-        conn = _activity_connect()
+    conn = _activity_connect()
+    try:
         try:
-            try:
-                result = await IntelligenceReporter(conn).send_review_email(
-                    artifact_id=artifact_id,
-                    recipient=_proactive_review_recipient(payload.recipient or ""),
-                    mail_service=_agentmail_service,
-                )
-            except KeyError:
-                raise HTTPException(status_code=404, detail="Proactive artifact not found")
-        finally:
-            conn.close()
+            result = await IntelligenceReporter(conn).send_review_email(
+                artifact_id=artifact_id,
+                recipient=_proactive_review_recipient(payload.recipient or ""),
+                mail_service=_agentmail_service,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Proactive artifact not found")
+    finally:
+        conn.close()
     return {"status": "ok", "send": result}
 
 
@@ -16742,28 +16739,27 @@ async def dashboard_proactive_convergence_extract(
         ingested_at=str(payload.ingested_at or ""),
         metadata=dict(payload.metadata or {}),
     )
-    with _activity_store_lock:
-        conn = _activity_connect()
-        try:
-            signature = upsert_topic_signature(conn, **extracted)
-            if not payload.detect:
-                convergence = None
-            elif payload.use_llm_match:
-                convergence = await detect_and_queue_convergence_llm(
-                    conn,
-                    signature=signature,
-                    window_hours=max(1, int(payload.window_hours or 72)),
-                    min_channels=max(2, int(payload.min_channels or 2)),
-                )
-            else:
-                convergence = detect_and_queue_convergence(
-                    conn,
-                    signature=signature,
-                    window_hours=max(1, int(payload.window_hours or 72)),
-                    min_channels=max(2, int(payload.min_channels or 2)),
-                )
-        finally:
-            conn.close()
+    conn = _activity_connect()
+    try:
+        signature = upsert_topic_signature(conn, **extracted)
+        if not payload.detect:
+            convergence = None
+        elif payload.use_llm_match:
+            convergence = await detect_and_queue_convergence_llm(
+                conn,
+                signature=signature,
+                window_hours=max(1, int(payload.window_hours or 72)),
+                min_channels=max(2, int(payload.min_channels or 2)),
+            )
+        else:
+            convergence = detect_and_queue_convergence(
+                conn,
+                signature=signature,
+                window_hours=max(1, int(payload.window_hours or 72)),
+                min_channels=max(2, int(payload.min_channels or 2)),
+            )
+    finally:
+        conn.close()
     return {"status": "ok", "signature": signature, "convergence": convergence}
 
 
