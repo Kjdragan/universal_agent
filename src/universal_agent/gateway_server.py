@@ -16037,6 +16037,43 @@ async def dashboard_discord_update_channel(
     return {"status": "ok", "channel_id": channel_id}
 
 
+@app.delete("/api/v1/dashboard/discord/events/{event_id}")
+async def dashboard_discord_delete_event(request: Request, event_id: str):
+    """Delete a single structured event from the Discord intelligence DB."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        cur = conn.execute("DELETE FROM scheduled_events WHERE id = ?", (event_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Event not found")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed deleting Discord event %s", event_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "deleted": event_id}
+
+
+@app.delete("/api/v1/dashboard/discord/events")
+async def dashboard_discord_delete_all_events(request: Request):
+    """Delete all structured events from the Discord intelligence DB."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        cur = conn.execute("DELETE FROM scheduled_events")
+        conn.commit()
+        deleted_count = cur.rowcount
+    except Exception as exc:
+        logger.exception("Failed bulk-deleting Discord events")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "deleted_count": deleted_count}
+
+
 @app.get("/api/v1/dashboard/proactive-signals")
 async def dashboard_proactive_signals(
     request: Request,

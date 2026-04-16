@@ -63,6 +63,9 @@ export default function DiscordIntelPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [updatingChannelId, setUpdatingChannelId] = useState("");
+  const [deletingEventId, setDeletingEventId] = useState("");
+  const [clearingAll, setClearingAll] = useState(false);
+  const [hoveredEventId, setHoveredEventId] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -129,6 +132,37 @@ export default function DiscordIntelPage() {
     }
   }, [load]);
 
+  const deleteEvent = useCallback(async (eventId: string) => {
+    setDeletingEventId(eventId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/discord/events/${encodeURIComponent(eventId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+      setEvents((prev) => prev.filter((e) => e.id !== eventId));
+    } catch (err) {
+      setError((err as Error).message || "Failed to delete event.");
+    } finally {
+      setDeletingEventId("");
+    }
+  }, []);
+
+  const clearAllEvents = useCallback(async () => {
+    if (!window.confirm("Delete all structured events? This cannot be undone.")) return;
+    setClearingAll(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/discord/events`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Clear all failed (${res.status})`);
+      setEvents([]);
+    } catch (err) {
+      setError((err as Error).message || "Failed to clear all events.");
+    } finally {
+      setClearingAll(false);
+    }
+  }, []);
+
   const counts = overview?.counts || {};
 
   return (
@@ -169,14 +203,58 @@ export default function DiscordIntelPage() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-primary">Top 10 Structured Events</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-primary">Top 10 Structured Events</h2>
+          {events.length > 0 && (
+            <button
+              type="button"
+              id="discord-clear-all-events"
+              onClick={clearAllEvents}
+              disabled={clearingAll}
+              className="rounded border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs text-red-300 hover:bg-red-500/20 hover:text-red-200 disabled:opacity-50 transition-colors"
+            >
+              {clearingAll ? "Clearing..." : "Clear All"}
+            </button>
+          )}
+        </div>
         <div className="grid gap-3">
           {events.length === 0 && <div className="border border-border bg-card/20 p-4 text-sm text-muted-foreground">No upcoming structured events.</div>}
           {events.map((event) => {
             const link = eventLink(event);
+            const isDeleting = deletingEventId === event.id;
+            const isHovered = hoveredEventId === event.id;
             return (
-              <article key={event.id} className="border border-border bg-card/30 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+              <article
+                key={event.id}
+                id={`discord-event-${event.id}`}
+                className="relative border border-border bg-card/30 p-4 transition-colors"
+                onMouseEnter={() => setHoveredEventId(event.id)}
+                onMouseLeave={() => setHoveredEventId("")}
+              >
+                {/* Hover delete button */}
+                {(isHovered || isDeleting) && (
+                  <button
+                    type="button"
+                    onClick={() => deleteEvent(event.id)}
+                    disabled={isDeleting}
+                    aria-label={`Delete event ${event.name}`}
+                    className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/25 hover:text-red-200 disabled:opacity-50 transition-colors"
+                    title="Delete event"
+                  >
+                    {isDeleting ? (
+                      <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                      </svg>
+                    ) : (
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+
+                <div className="flex flex-wrap items-start justify-between gap-3 pr-8">
                   <div>
                     <h3 className="font-semibold text-foreground">{event.name}</h3>
                     <p className="mt-1 text-xs text-muted-foreground">
