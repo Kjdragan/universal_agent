@@ -256,16 +256,59 @@ async def agentmail_send_with_local_attachments_wrapper(args: dict[str, Any]) ->
     attachment_paths = args.get("attachment_paths") or []
 
     attachments = []
+    large_file_links = []
+    large_file_text = []
+    
+    try:
+        from src.universal_agent.artifacts import resolve_artifacts_dir
+    except ImportError:
+        from universal_agent.artifacts import resolve_artifacts_dir
+        
     for path_str in attachment_paths:
         p = Path(path_str).expanduser()
         if p.is_file():
-            b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-            attachments.append({
-                "filename": p.name,
-                "content": b64
-            })
+            size_mb = p.stat().st_size / (1024 * 1024)
+            if size_mb > 4.0:
+                import uuid
+                import shutil
+                import urllib.parse
+                
+                artifacts_dir = resolve_artifacts_dir()
+                email_blobs_dir = artifacts_dir / "agentmail_drops"
+                email_blobs_dir.mkdir(parents=True, exist_ok=True)
+                
+                safe_name = f"{uuid.uuid4().hex[:8]}_{p.name}"
+                dest = email_blobs_dir / safe_name
+                shutil.copy2(p, dest)
+                
+                app_url = os.getenv("FRONTEND_URL", "https://app.clearspringcg.com").rstrip("/")
+                rel_path = f"agentmail_drops/{safe_name}"
+                file_url = f"{app_url}/api/artifacts/files/{urllib.parse.quote(rel_path, safe='/')}"
+                
+                large_file_links.append(f"<li><a href='{file_url}'>{p.name}</a> ({size_mb:.1f} MB)</li>")
+                large_file_text.append(f"- {p.name}: {file_url}")
+            else:
+                b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+                attachments.append({
+                    "filename": p.name,
+                    "content": b64
+                })
         else:
             return {"content": [{"type": "text", "text": f"error: attachment not found: {path_str}"}]}
+
+    if large_file_links:
+        links_html = f"<br/><br/><p><b>Large Attachments:</b></p><ul>{''.join(large_file_links)}</ul>"
+        if html:
+            html += links_html
+        elif text:
+            # If there's text but no HTML, we must promote text to HTML to embed the links nicely
+            # or just leave it as text. We will do both.
+            html = f"<p>{text}</p>{links_html}"
+        else:
+            html = links_html
+            
+        links_plain = "\n\nLarge Attachments:\n" + "\n".join(large_file_text)
+        text += links_plain
 
     payload = {
         "to": to,
@@ -325,16 +368,57 @@ async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -
     attachment_paths = args.get("attachment_paths") or []
 
     attachments = []
+    large_file_links = []
+    large_file_text = []
+
+    try:
+        from src.universal_agent.artifacts import resolve_artifacts_dir
+    except ImportError:
+        from universal_agent.artifacts import resolve_artifacts_dir
+        
     for path_str in attachment_paths:
         p = Path(path_str).expanduser()
         if p.is_file():
-            b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-            attachments.append({
-                "filename": p.name,
-                "content": b64
-            })
+            size_mb = p.stat().st_size / (1024 * 1024)
+            if size_mb > 4.0:
+                import uuid
+                import shutil
+                import urllib.parse
+                
+                artifacts_dir = resolve_artifacts_dir()
+                email_blobs_dir = artifacts_dir / "agentmail_drops"
+                email_blobs_dir.mkdir(parents=True, exist_ok=True)
+                
+                safe_name = f"{uuid.uuid4().hex[:8]}_{p.name}"
+                dest = email_blobs_dir / safe_name
+                shutil.copy2(p, dest)
+                
+                app_url = os.getenv("FRONTEND_URL", "https://app.clearspringcg.com").rstrip("/")
+                rel_path = f"agentmail_drops/{safe_name}"
+                file_url = f"{app_url}/api/artifacts/files/{urllib.parse.quote(rel_path, safe='/')}"
+                
+                large_file_links.append(f"<li><a href='{file_url}'>{p.name}</a> ({size_mb:.1f} MB)</li>")
+                large_file_text.append(f"- {p.name}: {file_url}")
+            else:
+                b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+                attachments.append({
+                    "filename": p.name,
+                    "content": b64
+                })
         else:
             return {"content": [{"type": "text", "text": f"error: attachment not found: {path_str}"}]}
+
+    if large_file_links:
+        links_html = f"<br/><br/><p><b>Large Attachments:</b></p><ul>{''.join(large_file_links)}</ul>"
+        if html:
+            html += links_html
+        elif text:
+            html = f"<p>{text}</p>{links_html}"
+        else:
+            html = links_html
+            
+        links_plain = "\n\nLarge Attachments:\n" + "\n".join(large_file_text)
+        text += links_plain
 
     payload = {
         "text": text,

@@ -36,6 +36,8 @@ from universal_agent.tools.local_toolkit_bridge import (
     preview_image_wrapper,
     ask_user_questions_wrapper,
     batch_tool_execute_wrapper,
+    agentmail_send_with_local_attachments_wrapper,
+    agentmail_reply_with_local_attachments_wrapper,
 )
 
 # PDF Bridge Tools
@@ -142,6 +144,8 @@ def get_core_internal_tools() -> List[Callable]:
         kb_get_wrapper,
         kb_register_wrapper,
         kb_update_wrapper,
+        agentmail_send_with_local_attachments_wrapper,
+        agentmail_reply_with_local_attachments_wrapper,
     ]
 
 def get_memory_tools() -> List[Callable]:
