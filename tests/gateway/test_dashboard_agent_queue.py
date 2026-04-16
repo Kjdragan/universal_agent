@@ -526,6 +526,22 @@ async def test_agent_queue_backward_compat_default_all(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agent_queue_default_all_does_not_rebuild_dispatch_queue(monkeypatch, tmp_path):
+    """Dashboard navigation must not rebuild the dispatch queue on read."""
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+
+    def _unexpected_rebuild(_conn):
+        raise AssertionError("dashboard agent queue read rebuilt the dispatch queue")
+
+    monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _unexpected_rebuild)
+
+    response = await gateway_server.dashboard_todolist_agent_queue(offset=0, limit=10, status="all")
+
+    assert response["status"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_agent_queue_incident_key_present(monkeypatch, tmp_path):
     """incident_key is included when present on the task."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
@@ -586,6 +602,66 @@ async def test_todolist_overview_includes_todo_dispatch_snapshot(monkeypatch):
     assert todo_dispatch["registered_session_count"] == 0
     assert todo_dispatch["pending_wake_count"] == 0
     assert todo_dispatch["sleeping_session_warning"] is False
+
+
+@pytest.mark.asyncio
+async def test_todolist_overview_does_not_rebuild_dispatch_queue(monkeypatch, tmp_path):
+    """The overview endpoint reads the latest queue snapshot without rebuilding it."""
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    monkeypatch.setattr(gateway_server, "_todo_dispatch_service", None)
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+
+    def _unexpected_rebuild(_conn):
+        raise AssertionError("dashboard overview read rebuilt the dispatch queue")
+
+    monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _unexpected_rebuild)
+
+    response = await gateway_server.dashboard_todolist_overview()
+
+    assert response["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_todolist_agent_activity_does_not_rebuild_dispatch_queue(monkeypatch, tmp_path):
+    """Activity metrics should not force queue scoring/rebuild work."""
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+
+    def _unexpected_rebuild(_conn):
+        raise AssertionError("dashboard activity read rebuilt the dispatch queue")
+
+    monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _unexpected_rebuild)
+
+    response = await gateway_server.dashboard_todolist_agent_activity()
+
+    assert response["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_todolist_dispatch_queue_rebuild_endpoint_still_rebuilds(monkeypatch, tmp_path):
+    """The explicit maintenance endpoint remains the dashboard rebuild path."""
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+    monkeypatch.setattr(gateway_server, "list_approvals", lambda status="pending": [])
+    calls = []
+
+    def _counted_rebuild(_conn):
+        calls.append("rebuild")
+        return {
+            "queue_build_id": "q_test",
+            "built_at": "2026-04-16T00:00:00+00:00",
+            "items_total": 0,
+            "eligible_total": 0,
+            "threshold": 3,
+        }
+
+    monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _counted_rebuild)
+
+    response = await gateway_server.dashboard_todolist_dispatch_queue_rebuild()
+
+    assert calls == ["rebuild"]
+    assert response["status"] == "ok"
+    assert response["queue_build_id"] == "q_test"
 
 
 @pytest.mark.asyncio
