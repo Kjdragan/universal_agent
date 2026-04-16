@@ -72,3 +72,142 @@ a process to run computer use tofigure out an event and record it when i cant be
 
 try to build a routine that uses a z ai endpoint for actual task and true haiku to run the routine but the routine references my code that uses zai. Need claude github app on the repo
 Can run from 1) web claude.ai/code/routines, 2) github triggers 3) api version .. gets own http endpoint and bearer token to post to to fire off and pass addition al context for kickoff. Gives ypou a session id and can watch i  browser, 4)CLI /schedule
+
+proactive_signal
+Fetch Transcript: YouTube candidate: OpenAI Keeps Reinventing Plugins — But This Time Codex Actually Nailed It
+Proactive signal action: Fetch Transcript Signal: YouTube candidate: OpenAI Keeps Reinventing Plugins — But This Time Codex Actually Nailed It OpenAI Codex just crossed 3 million weekly active users — up from 2 million just last month — and the wildest part? It's fully open source. But what most people don't realize is that Codex has quietly evolved from a coding tool into a full-blown knowledge work assistant. In this conversation with VB from OpenAI, we break down: → Why Codex's CLI, sandbox, and harness are all open source on GitHub → The new plugin system (yes, OpenAI is doing "plugins" AGAIN — here's why this time is different) → How Codex plugins bundle MCP servers, Stripe, Supabase, shadcn, and more into one-click packages → The App Server SDK that lets you build your own Codex-like experiences → How one OpenAI team member uses Codex to auto-summarize Slack, triage Gmail, and generate pre-briefing docs every morning at 9am — zero coding required Codex isn't just for developers anymore. It's becoming the AI operating layer for anyone who does knowledge work. 🔗 Try Codex: github.com/openai/codex ⏱️ Timestamps: 0:00 — OpenAI's plugin obsession (Plugins → GPTs → MCP → Plugins again) 0:20 — Codex is fully open source & just hit a huge milestone 1:00 — What is the Codex App Server? 1:30 — 3 million weekly active users 2:05 — Codex the App explained 2:25 — The new plugin system breakdown 3:00 — How plugins bundle MCP, Stripe, Supabase & more 3:45 — Using Codex for non-coding work (Slack, Gmail, Calendar) 4:55 — Wh Action instructions: Create a task to fetch and analyze this non-Short video transcript. Evidence: [ { "channel": "Alex Volkov from ThursdAI", "occurred_at": "2026-04-14T23:02:51+00:00", "source": "youtube", "summary": "OpenAI Codex just crossed 3 million weekly active users \u2014 up from 2 million just last month \u2014 and the wildest part? It's fully open source. But what most people don't realize is that Codex has quietly evolved from a coding tool into a full-blown knowledge work assistant.\n\nIn this conversation with VB from OpenAI, we break down:\n\u2192 Why Codex's CLI, sandbox, and harness are all open source on GitHub\n\u2192 The new plugin system (yes, OpenAI is doing \"plugins\" AGAIN \u2014 here's why this time is different)\n\u2192 How Codex plugins bundle MCP servers, Stripe, Supabase, shadcn, and more into one-click packages\n\u2192 ", "thumbnail_url": "https://i3.ytimg.com/vi/6vYyNIInwpQ/hqdefault.jpg", "title": "OpenAI Keeps Reinventing Plugins \u2014 But This Time Codex Actually Nailed It", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=6vYyNIInwpQ" } ]
+
+Medium
+proactive
+│
+Done about 18 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+proactive_signal
+Fetch Transcript: YouTube candidate: Favorite Agent Setups with Brian Christner
+Proactive signal action: Fetch Transcript Signal: YouTube candidate: Favorite Agent Setups with Brian Christner My friend Brian Christner (Docker Captain alum) and I go through our AI harnesses, agents, models, and what we’re playing with right now. OpenClaw, OpenCode, Claude Code, Copilot, and all of it. Listen to the audio version of this show: <https://agenticdevops.fm/episodes/our-favorite-agent-setups> This edited version is from my live stream show Mar 12, 2026: <https://www.youtube.com/live/yh6zPMML4t8?si=wIn4_zyQZ9OiuJqp&t=229> Show Links Brian’s Newsletter <https://brianchristner.io/tag/newsletter/> Agents & Claude Code Setup <https://github.com/VoltAgent/awesome-claude-code-subagents> <https://github.com/msitarzewski/agency-agents> Claude Code Course <https://github.com/carlvellotti/claude-code-pm-course> OpenClaw alternative <https://nanoclaw.dev> Brian's OpenClaw projects <https://brianchristner.io/openclaw-security-checklist-hardening-your-ai-agent-infrastructure/> <https://github.com/thebyteio/openclaw-skill-garmin-connect> <https://github.com/thebyteio/openclaw-skill-security-dashboard> 🙌 I've launched the Agentic DevOps Guild, which is my premium community for accelerating your AI adoption for DevOps, CI/CD, platform engineering, and SRE. It includes courses, regular meetups, workshops, and mentorship. 🍾 <https://www.bretfisher.com/theguild> 🗞️ Sign up for my weekly newsletter for the latest on upcoming guests and what I'm releasing: <https://www.bretfisher.com/newsletter/> Brian Chris Action instructions: Create a task to fetch and analyze this non-Short video transcript. Evidence: [ { "channel": "Bret Fisher", "occurred_at": "2026-04-14T18:20:45+00:00", "source": "youtube", "summary": "My friend Brian Christner (Docker Captain alum) and I go through our AI harnesses, agents, models, and what we\u2019re playing with right now. OpenClaw, OpenCode, Claude Code, Copilot, and all of it.\n\nListen to the audio version of this show: https://agenticdevops.fm/episodes/our-favorite-agent-setups\nThis edited version is from my live stream show Mar 12, 2026: https://www.youtube.com/live/yh6zPMML4t8?si=wIn4_zyQZ9OiuJqp&t=229\n\nShow Links\nBrian\u2019s Newsletter\nhttps://brianchristner.io/tag/newsletter/\n\nAgents & Claude Code Setup\nhttps://github.com/VoltAgent/awesome-claude-code-subagents\nhttps://gith", "thumbnail_url": "https://i1.ytimg.com/vi/8AFE0kxaY2k/hqdefault.jpg", "title": "Favorite Agent Setups with Brian Christner", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=8AFE0kxaY2k" } ]
+
+Medium
+proactive
+│
+Done about 18 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+email
+📧 Self-hosted APIs
+Hi Simone,I just had an idea. Since we are running our own VPS, are there some libraries or dependencies or frameworks that we should self-host on our our VPS and then we could hit that PPI and um it wouldn't pick up my local resources and it would be a great resource for us especially in the case that we can do this for free rather than having to pay for a service. One of those services I would think about of trying to implement is we currently use Crawl for AI cloud services in our project. Is that something instead we could self-host? hit that API on our VPS and do it that way rather than having to use the crawl for AI cloud service at a cost. I want you to perform deep research on this subject about what frameworks might make sense for me to self-host. To do that, I would use Notebook LLM and Deep Research. and it would be good if we could create a knowledge base with you for this. Let's call it self-hosting ideas. Our VPS doesn't have a GPU, but what it probably has good CPU services and plenty of storage. So one question I have is their ability to self-host a speech to text or text to speech service like a Partakeet model with an API, websockets or other type of connection as needed.  I want you to think on what the type of hosted services we could put on our VPS and utilize in our UA project. and then research the best versions of open source projects for that. I'd like you to also research what the best infrastructure style to do this is. For example, we could do bare metal installation on our VPS, but there's also Docker containers there, so the question is could we set up a docker for each of these services? Alternatively, could we install one large hosted services Docker which spins up things down our entire hosted service elements so we have everything in one place for potentially easier maintenance or I don't know if that makes it harder, but it just strikes me that that would be a good kind of package, whether officially or unofficially organized toget
+
+Normal
+immediate
+│
+Done about 3 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+email
+📧 Re: AI Harness Engineering: The Future of AI - Research Report
+Hi Simone, something is not right here. If you take a look at the report that you generated it’s not complete. Were you able to successfully create or get the transcript from this video analyze it and produce a report because this looks like a superficial analysis. Please investigate what went wrong. What I’m trying to consider is when I made the request to you I can’t remember if it was too fetch the transcript or whether it was to just add this to our genetic harness knowledge base that we have already. What I would suggest is that you use whatever YouTube skill capabilities that you have or agents to get the transcript, then analyze the transcript and create a comprehensive report about it using your own capabilities not notebookLM or the report-writer specialist. Email that to me.  Then what I’d like you to do is use the notebook LM operator Agent to load the video transcript into our Agent harness knowledge base. Notebook LLM has the functionality to do this if you provide the YouTube URL and the right processes which the notebook LM operator, agent sub agent should know and can refer to skills as well On Wed, Apr 15, 2026 at 6:08 PM Simone D <oddcity216@agentmail.to> wrote: Hi Kevin, Here's your research report on "AI Harness Engineering: The Future of AI" from the Discover AI YouTube channel (41 min video). This one is genuinely relevant to what we're building. The video covers two academic papers defining "harness engineering" — the practice of building deterministic scaffolding around LLMs to compensate for unreliability. It uses physics analogies (Lagrange multipliers, ergodicity breaking) to explain why external constraints on AI systems work, and argues the frontier has shifted from scaling model parameters to engineering external cognitive infrastructure. Key takeaway for our work: the quality of the scaffolding now matters more than the size of the model. Memory systems, skill frameworks, protocols, and orchestration harnesses are the new frontier.
+
+Normal
+immediate
+│
+Done about 16 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+proactive_signal
+Fetch Transcript: YouTube candidate: The Real Problem With AI Agents Nobody's Talking About
+Proactive signal action: Fetch Transcript Signal: YouTube candidate: The Real Problem With AI Agents Nobody's Talking About Full Story w/ Elicitation Prompt (SOUL.md): <https://natesnewsletter.substack.com/p/your-agent-needs-a-soulmd-you-cant?r=1z4sm5&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true> ___________________ What's really happening inside the OpenClaw phenomenon when 250,000 GitHub stars later the most common message in every community forum is still "now what?" The common story is that agents are magic boxes — type anything and they'll figure it out. But the reality is that installation is now a 10-minute problem while specification remains a 40-hour problem nobody is solving. In this video, I share the inside scoop on why agent products keep breaking against the same wall: • Why Brad Mills spent 40 hours writing standards and still ended up micromanaging harder than a human • How every successful deployment shares the same markdown file architecture that isn't AI at all • What tacit knowledge compression means for the people with the most to gain from delegation • Where the real solution lives and why your first agent should be an interviewer, not an assistant Builders who keep competing on installation, UI, and model selection are optimizing the wrong layer — the person on the other end has to produce a usable spec, and that's the hard problem. Chapters 00:00 Agents don't make you productive by themselves 02:30 The most common message: now what? 05:00 Brad Mills and the Action instructions: Create a task to fetch and analyze this non-Short video transcript. Evidence: [ { "channel": "AI News & Strategy Daily | Nate B Jones", "occurred_at": "2026-04-15T14:00:08+00:00", "source": "youtube", "summary": "Full Story w/ Elicitation Prompt (SOUL.md): https://natesnewsletter.substack.com/p/your-agent-needs-a-soulmd-you-cant?r=1z4sm5&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true\n___________________\nWhat's really happening inside the OpenClaw phenomenon when 250,000 GitHub stars later the most common message in every community forum is still \"now what?\"\n\nThe common story is that agents are magic boxes \u2014 type anything and they'll figure it out. But the reality is that installation is now a 10-minute problem while specification remains a 40-hour problem nobody is solving.\n\nIn this video, I ", "thumbnail_url": "https://i3.ytimg.com/vi/2PWJu6uAaoU/hqdefault.jpg", "title": "The Real Problem With AI Agents Nobody's Talking About", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=2PWJu6uAaoU" } ]
+
+Medium
+proactive
+│
+Done about 18 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+proactive_signal
+Create Wiki: YouTube candidate: ElevenLabs Quality for FREE? (VoxCPM2 Deep Dive)
+Proactive signal action: Create Wiki Signal: YouTube candidate: ElevenLabs Quality for FREE? (VoxCPM2 Deep Dive) STOP Paying for ElevenLabs! (VoxCPM2 is Better) 👉 Try it: <https://huggingface.co/spaces/openbmb/VoxCPM-Demo> 👉 Latest AI News, AI Tools and AI Prompts: <https://franklineh.com> 🔥 Join the newsletter free. No spam. <https://franklineh.com/newsletter> Stop paying for voiceovers because what you are hearing right now is 100% AI-generated and completely free to run on your own hardware! This video deep-dives into VoxCPM 2, a revolutionary 2-billion parameter tokenizer-free TTS model that delivers studio-quality 48kHz audio with insane realism. We explore its evolution from the 0.5B model to the current state-of-the-art version, featuring 30+ language support, advanced voice cloning, and a unique "Voice Design" feature that builds custom voices from simple text descriptions. You’ll learn how to set it up locally with just 8GB of VRAM, use it in "vibe coding" platforms, or try it instantly via Hugging Face. By the end of this guide, you’ll be able to clone any voice with "Ultimate Mode," generate ASMR-style audio, and even integrate these voices into your own apps for e-commerce, gaming, or dubbing. ━━━━━━━━━━ 🔗 SHOW LINKS ━━━━━━━━━━ 👉 Try it: <https://huggingface.co/spaces/openbmb/VoxCPM-Demo> 👉 Model: <https://huggingface.co/openbmb/VoxCPM2> 👉 Github: <https://github.com/OpenBMB/VoxCPM/?tab=readme-ov-file> ━━━━━━━━ 💫 HELPFUL AI LINKS ━━━━━━━━ ▸ Website: <https://franklineh.com> ▸ AI News: h Action instructions: Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. Evidence: [ { "channel": "Franklin AI", "occurred_at": "2026-04-15T16:03:25+00:00", "source": "youtube", "summary": "STOP Paying for ElevenLabs! (VoxCPM2 is Better)\n\n\ud83d\udc49 Try it: https://huggingface.co/spaces/openbmb/VoxCPM-Demo\n\ud83d\udc49 Latest AI News, AI Tools and AI Prompts: https://franklineh.com\n\ud83d\udd25 Join the newsletter free. No spam. https://franklineh.com/newsletter\n\nStop paying for voiceovers because what you are hearing right now is 100% AI-generated and completely free to run on your own hardware! This video deep-dives into VoxCPM 2, a revolutionary 2-billion parameter tokenizer-free TTS model that delivers studio-quality 48kHz audio with insane realism. We explore its evolution from the 0.5B model to the curre", "thumbnail_url": "https://i1.ytimg.com/vi/pjLnczkqJNA/hqdefault.jpg", "title": "ElevenLabs Quality for FREE? (VoxCPM2 Deep Dive)", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=pjLnczkqJNA" } ]
+
+Medium
+proactive
+│
+Done about 18 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+proactive_signal
+Create Wiki: YouTube candidate: Cloudflare Browser Run: How to Solve CAPTCHAs & Logins for AI Agents
+Proactive signal action: Create Wiki Signal: YouTube candidate: Cloudflare Browser Run: How to Solve CAPTCHAs & Logins for AI Agents In this video, Harshil is showcasing a massive update for Cloudflare Browser Run: the new Live View feature. One of the biggest hurdles for AI agents is handling sensitive roadblocks like CAPTCHAs, two-factor authentication, or credit card entries. Live View solves this by letting you jump into the agent's browser session in real-time. What we cover: - Real-Time Monitoring: Watch exactly what your AI agent is doing as it navigates the web. - Human-in-the-Loop: I show how I can manually enter my address and credit card info on Wolt while the agent handles the rest of the order. - Seamless Interaction: How to add extra parameters (like more protein!) mid-workflow. - Code Deep-Dive: A look at the createBrowserSession and keepAlive parameters in the Cloudflare Agents SDK. Technical Highlights: - Built with the Cloudflare Agents SDK - Powered by Playwright via the Chrome DevTools Protocol (CDP). - Compatible with agent harnesses like OpenClaw and Hermes Agent. GitHub Repo: <https://github.com/harshil1712/agent-browsing> Blog Post: <https://blog.cloudflare.com/browser-run-for-ai-agents/> Create an account on Cloudflare today for free: <https://dash.cloudflare.com/sign-up> Tools mentioned: <https://developers.cloudflare.com> <https://developers.cloudflare.com/browser-rendering/features/live-view/> <https://developers.cloudflare.com/agents/api-reference/browse-the-web/> <https://developers.cl> Action instructions: Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. Evidence: [ { "channel": "Cloudflare Developers", "occurred_at": "2026-04-15T15:30:07+00:00", "source": "youtube", "summary": "In this video, Harshil is showcasing a massive update for Cloudflare Browser Run: the new Live View feature. One of the biggest hurdles for AI agents is handling sensitive roadblocks like CAPTCHAs, two-factor authentication, or credit card entries. Live View solves this by letting you jump into the agent's browser session in real-time.\n\nWhat we cover:\n- Real-Time Monitoring: Watch exactly what your AI agent is doing as it navigates the web.\n- Human-in-the-Loop: I show how I can manually enter my address and credit card info on Wolt while the agent handles the rest of the order.\n- Seamless Inte", "thumbnail_url": "https://i4.ytimg.com/vi/s5PQE8bklNY/hqdefault.jpg", "title": "Cloudflare Browser Run: How to Solve CAPTCHAs & Logins for AI Agents", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=s5PQE8bklNY" } ]
+
+Medium
+proactive
+│
+Done about 18 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+chat_panel
+create a knowledge base called "Iran War" by using deep research with Notebooklm on research...
+create a knowledge base called "Iran War" by using deep research with Notebooklm on research about the current activity in the Iran war over the past 5 days, especially discussing Iran attacks on the gulf states and israel. Once you have that knowledge base, then go ahead and create a comprehensive report along with a infographic and email those both to me
+
+Normal
+immediate
+│
+Done about 18 hours ago
+│
+todo:daemon_simone_todo
+Review
+Inspect
+
+📂
+Workspace
+delete
+proactive_signal
+Create Wiki: YouTube candidate: Completely understand hooks in less than 20 minutes
+Proactive signal action: Create Wiki Signal: YouTube candidate: Completely understand hooks in less than 20 minutes Hooks let you handle events at key points in the Copilot or Claude Code lifecycle. This video shows you how to build them from scratch in under 20 minutes. You'll see how to create hook JSON files, wire up bash scripts, and debug them in VS Code's output panel. And we look at why only one of these hooks might be all you need. 0:00 Introduction to Hooks 0:25 How the Agent Loop Works 2:11 Hook Events Overview 4:48 Setting Up Hooks in VS Code 6:15 Creating Your First Hook 7:52 Testing Hooks and Viewing Output 9:15 Logging Output 11:00 Calling Script Files 12:29 Debugging Permission Errors 13:12 Reading Hook Input 14:40 Injecting Context 17:01 Pre-Tool Use ESLint Gate 19:13 Wrap-Up #ai #githubcopilot #coding Action instructions: Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. Evidence: [ { "channel": "Burke Holland", "occurred_at": "2026-04-14T16:00:39+00:00", "source": "youtube", "summary": "Hooks let you handle events at key points in the Copilot or Claude Code lifecycle. This video shows you how to build them from scratch in under 20 minutes. You'll see how to create hook JSON files, wire up bash scripts, and debug them in VS Code's output panel. And we look at why only one of these hooks might be all you need.\n\n0:00 Introduction to Hooks\n0:25 How the Agent Loop Works\n2:11 Hook Events Overview\n4:48 Setting Up Hooks in VS Code\n6:15 Creating Your First Hook \n7:52 Testing Hooks and Viewing Output\n9:15 Logging Output\n11:00 Calling Script Files\n12:29 Debugging Permission Errors\n13:12", "thumbnail_url": "https://i1.ytimg.com/vi/03CfGf9iw_U/hqdefault.jpg", "title": "Completely understand hooks in less than 20 minutes", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=03CfGf9iw_U" } ]
+
+Medium
+proactive
+│
+Done 1 day ago
+│
+todo:daemon_simone_todo
