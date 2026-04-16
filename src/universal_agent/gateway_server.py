@@ -16074,6 +16074,146 @@ async def dashboard_discord_delete_all_events(request: Request):
     return {"status": "ok", "deleted_count": deleted_count}
 
 
+@app.get("/api/v1/dashboard/discord/channels/{channel_id}/messages")
+async def dashboard_discord_channel_messages(
+    request: Request,
+    channel_id: str,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Fetch recent messages for a channel with any attached signals."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.id, m.author_name, m.content, m.timestamp,
+                   m.is_bot, m.reply_to_id, m.has_attachments,
+                   m.processed_by_triage,
+                   GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
+            FROM messages m
+            LEFT JOIN signals s ON s.message_id = m.id
+            WHERE m.channel_id = ?
+            GROUP BY m.id
+            ORDER BY m.timestamp DESC
+            LIMIT ? OFFSET ?
+            """,
+            (channel_id, max(1, min(int(limit), 200)), max(0, int(offset))),
+        ).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE channel_id = ?", (channel_id,)
+        ).fetchone()[0]
+    except Exception as exc:
+        logger.exception("Failed loading Discord channel messages for %s", channel_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
+    messages = []
+    for row in rows:
+        d = dict(row)
+        raw_sigs = d.pop("signals", None) or ""
+        sigs = []
+        for part in raw_sigs.split("|"):
+            if ":" in part:
+                rule, sev = part.split(":", 1)
+                sigs.append({"rule": rule, "severity": sev})
+        d["signals"] = sigs
+        messages.append(d)
+
+    return {"status": "ok", "channel_id": channel_id, "total": total, "messages": messages}
+
+
+@app.get("/api/v1/dashboard/discord/servers/{server_id}/messages")
+async def dashboard_discord_server_messages(
+    request: Request,
+    server_id: str,
+    limit: int = 150,
+    offset: int = 0,
+    watched_only: bool = False,
+):
+    """Fetch recent messages aggregated across all channels for a server."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        watched_clause = ""
+        if watched_only:
+            watched_clause = "AND c.tier IN ('A','B')"
+
+        rows = conn.execute(
+            f"""
+            SELECT m.id, m.channel_id, c.name AS channel_name,
+                   m.author_name, m.content, m.timestamp,
+                   m.is_bot, m.has_attachments, m.processed_by_triage,
+                   GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
+            FROM messages m
+            LEFT JOIN channels c ON c.id = m.channel_id
+            LEFT JOIN signals s ON s.message_id = m.id
+            WHERE m.server_id = ? {watched_clause}
+            GROUP BY m.id
+            ORDER BY m.timestamp DESC
+            LIMIT ? OFFSET ?
+            """,
+            (server_id, max(1, min(int(limit), 500)), max(0, int(offset))),
+        ).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE server_id = ?", (server_id,)
+        ).fetchone()[0]
+    except Exception as exc:
+        logger.exception("Failed loading Discord server messages for %s", server_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
+    messages = []
+    for row in rows:
+        d = dict(row)
+        raw_sigs = d.pop("signals", None) or ""
+        sigs = []
+        for part in raw_sigs.split("|"):
+            if ":" in part:
+                rule, sev = part.split(":", 1)
+                sigs.append({"rule": rule, "severity": sev})
+        d["signals"] = sigs
+        messages.append(d)
+
+    return {"status": "ok", "server_id": server_id, "total": total, "messages": messages}
+
+
+@app.delete("/api/v1/dashboard/discord/servers/{server_id}/messages")
+async def dashboard_discord_clear_server_messages(request: Request, server_id: str):
+    """Delete all stored messages for a server so you can start fresh."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        cur = conn.execute("DELETE FROM messages WHERE server_id = ?", (server_id,))
+        conn.commit()
+        deleted = cur.rowcount
+    except Exception as exc:
+        logger.exception("Failed clearing Discord messages for server %s", server_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "server_id": server_id, "deleted": deleted}
+
+
+@app.delete("/api/v1/dashboard/discord/messages")
+async def dashboard_discord_clear_all_messages(request: Request):
+    """Delete ALL stored Discord messages across all servers."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        cur = conn.execute("DELETE FROM messages")
+        conn.commit()
+        deleted = cur.rowcount
+    except Exception as exc:
+        logger.exception("Failed clearing all Discord messages")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "deleted": deleted}
+
+
 @app.get("/api/v1/dashboard/proactive-signals")
 async def dashboard_proactive_signals(
     request: Request,
