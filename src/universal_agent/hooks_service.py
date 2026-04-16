@@ -5546,6 +5546,26 @@ class HooksService:
                             session_id,
                             terminal_reason,
                         )
+                # Generate dossier for completed hook sessions
+                if session_workspace is not None:
+                    try:
+                        from universal_agent.services.session_dossier import generate_session_dossier
+
+                        if not (session_workspace / "context_brief.md").exists():
+                            await generate_session_dossier(
+                                workspace=session_workspace,
+                                metadata={
+                                    "source": run_source,
+                                    "hook_name": hook_name,
+                                    "session_id": session_id,
+                                },
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Dossier generation failed for hook session %s",
+                            session_id,
+                            exc_info=True,
+                        )
             if self._run_counter_finish:
                 try:
                     finish_call_attempts = (

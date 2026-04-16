@@ -26814,6 +26814,91 @@ async def ops_delete_session(request: Request, session_id: str, confirm: bool = 
     return {"status": "deleted", "session_id": session_id}
 
 
+@app.get("/api/v1/ops/sessions/{session_id}/context-brief")
+async def ops_get_session_context_brief(request: Request, session_id: str):
+    """Return the context_brief.md for a session."""
+    _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    brief = _ops_service.get_session_context_brief(session_id)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="No context brief available")
+    return {"session_id": session_id, "context_brief": brief}
+
+
+class OpsBulkDeleteRequest(BaseModel):
+    older_than_days: int = 7
+    channels: Optional[list] = None
+    exclude_active: bool = True
+
+
+@app.post("/api/v1/ops/sessions/bulk-delete")
+async def ops_bulk_delete_sessions(request: Request, payload: OpsBulkDeleteRequest):
+    """Delete sessions matching criteria: older_than_days, channels, exclude_active."""
+    _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    if payload.older_than_days < 1:
+        raise HTTPException(status_code=400, detail="older_than_days must be >= 1")
+    result = _ops_service.bulk_delete_sessions(
+        older_than_days=payload.older_than_days,
+        channels=payload.channels,
+        exclude_active=payload.exclude_active,
+    )
+    return result
+
+
+@app.post("/api/v1/ops/sessions/backfill-dossiers")
+async def ops_backfill_dossiers(request: Request, max_sessions: int = 50):
+    """One-time backfill of context_brief.md for existing sessions."""
+    _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    from universal_agent.services.session_dossier import backfill_missing_dossiers
+    count = await backfill_missing_dossiers(
+        workspaces_dir=_ops_service.workspaces_dir,
+        max_sessions=max_sessions,
+    )
+    return {"status": "complete", "backfilled": count}
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/generate-dossier")
+async def ops_generate_dossier(request: Request, session_id: str):
+    """Generate or regenerate context_brief.md for a specific session."""
+    _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    session_path = _ops_service._session_workspace(session_id)
+    if not session_path.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+    from universal_agent.services.session_dossier import generate_session_dossier
+    try:
+        dossier, description = await generate_session_dossier(
+            workspace=session_path,
+            metadata={"session_id": session_id},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Dossier generation failed: {exc}") from exc
+    return {
+        "status": "generated",
+        "session_id": session_id,
+        "description": description,
+        "dossier_length": len(dossier),
+    }
+
+
+@app.get("/api/v1/ops/sessions/daily-digest")
+async def ops_daily_digest(request: Request, since_hours: int = 24):
+    """Return aggregated context briefs from the last N hours."""
+    _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    digest = _ops_service.get_daily_activity_digest(since_hours=since_hours)
+    return {"digest": digest, "since_hours": since_hours}
+
+
 @app.get("/api/v1/ops/logs/tail")
 async def ops_logs_tail(
     request: Request,

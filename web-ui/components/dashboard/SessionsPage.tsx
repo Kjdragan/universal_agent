@@ -61,6 +61,25 @@ const AGE_DOTS: Record<AgeTier, string> = {
   stale: "bg-red-400",
 };
 
+// ── Channel grouping constants ────────────────────────────────────────────────
+
+const ACTIVE_WINDOW_MS = 36 * 3600 * 1000; // 36 hours
+
+type ChannelKey = "interactive" | "vp_mission" | "email" | "scheduled" | "proactive" | "discord" | "infrastructure" | "system";
+
+const CHANNEL_META: Record<ChannelKey, { icon: string; label: string; color: string; border: string; bg: string }> = {
+  interactive:    { icon: "💬", label: "Interactive Chats",   color: "text-primary",       border: "border-primary/25",       bg: "bg-primary/5" },
+  vp_mission:     { icon: "🤖", label: "VP Missions",        color: "text-violet-400",    border: "border-violet-500/25",    bg: "bg-violet-500/5" },
+  email:          { icon: "📧", label: "Email",              color: "text-sky-400",       border: "border-sky-500/25",       bg: "bg-sky-500/5" },
+  scheduled:      { icon: "⏰", label: "Scheduled / Cron",   color: "text-amber-400",     border: "border-amber-500/25",     bg: "bg-amber-500/5" },
+  proactive:      { icon: "📡", label: "Proactive Signals",  color: "text-emerald-400",   border: "border-emerald-500/25",   bg: "bg-emerald-500/5" },
+  discord:        { icon: "🎮", label: "Discord",            color: "text-indigo-400",    border: "border-indigo-500/25",    bg: "bg-indigo-500/5" },
+  infrastructure: { icon: "🔧", label: "Infrastructure",     color: "text-muted-foreground", border: "border-border/30",     bg: "bg-card/20" },
+  system:         { icon: "⚙️",  label: "System",             color: "text-muted-foreground", border: "border-border/30",     bg: "bg-card/20" },
+};
+
+const CHANNEL_ORDER: ChannelKey[] = ["interactive", "vp_mission", "email", "scheduled", "proactive", "discord", "infrastructure", "system"];
+
 function isDaemonSession(s: { session_id: string }): boolean {
   return (s.session_id || "").startsWith("daemon_");
 }
@@ -169,6 +188,12 @@ function SessionsPageInner() {
   const [staleFilter, setStaleFilter] = useState(false);
   const [purging, setPurging] = useState(false);
 
+  // Dossier viewer state
+  const [dossierContent, setDossierContent] = useState<string | null>(null);
+  const [dossierLoading, setDossierLoading] = useState(false);
+  const [dossierGenerating, setDossierGenerating] = useState<string | null>(null);
+  const [showOlderSessions, setShowOlderSessions] = useState(false);
+
   // ── Deep-link from calendar / other pages via ?sid=SESSION_ID ──
   const searchParams = useSearchParams();
   const deepLinkSid = searchParams.get("sid");
@@ -196,7 +221,7 @@ function SessionsPageInner() {
   const isVpSelected = /^vp_/i.test((selected || "").trim());
 
   // ── Categorized sessions ──
-  const { daemonSessions, activeSessions, historicalSessions, noiseCount, stats } = useMemo(() => {
+  const { daemonSessions, activeSessions, historicalSessions, noiseCount, stats, channelGroups, olderSessions } = useMemo(() => {
     const sorted = [...sessions].sort((a, b) => {
       const aTs = Date.parse(a.last_activity || a.last_modified || "") || 0;
       const bTs = Date.parse(b.last_activity || b.last_modified || "") || 0;
@@ -208,6 +233,11 @@ function SessionsPageInner() {
     const active: typeof sessions = [];
     const historical: typeof sessions = [];
     let noise = 0;
+
+    // Channel groupings for the inbox view
+    const chGroups: Record<string, typeof sessions> = {};
+    const older: typeof sessions = [];
+    const now = Date.now();
 
     for (const s of sorted) {
       if (isDaemonSession(s)) {
@@ -221,6 +251,17 @@ function SessionsPageInner() {
         }
         historical.push(s);
       }
+
+      // Channel grouping: all non-daemon sessions within the active window
+      if (!isDaemonSession(s)) {
+        const ts = Date.parse(s.last_activity || s.last_modified || "") || 0;
+        if (now - ts <= ACTIVE_WINDOW_MS) {
+          const ch = (s.channel || "system") as ChannelKey;
+          (chGroups[ch] ??= []).push(s);
+        } else {
+          older.push(s);
+        }
+      }
     }
 
     const staleCount = sessions.filter(
@@ -232,6 +273,8 @@ function SessionsPageInner() {
       activeSessions: active,
       historicalSessions: historical,
       noiseCount: noise,
+      channelGroups: chGroups as Record<ChannelKey, typeof sessions>,
+      olderSessions: older,
       stats: {
         total: sessions.length,
         active: active.length + daemon.length,
@@ -334,6 +377,67 @@ function SessionsPageInner() {
     } catch { /* silently fail */ }
     finally { setRehydratingId(null); }
   }, [fetchSessions]);
+
+  // ── Dossier viewer ──
+  const fetchDossier = useCallback(async (sessionId: string) => {
+    setDossierLoading(true);
+    setDossierContent(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sessionId)}/context-brief`, { headers: buildHeaders() });
+      if (r.ok) {
+        const d = await r.json();
+        setDossierContent(d.context_brief || null);
+      }
+    } catch { /* silently fail */ }
+    finally { setDossierLoading(false); }
+  }, []);
+
+  // ── Generate dossier for a session ──
+  const generateDossier = useCallback(async (sessionId: string) => {
+    setDossierGenerating(sessionId);
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sessionId)}/generate-dossier`, {
+        method: "POST",
+        headers: buildHeaders(),
+      });
+      if (r.ok) {
+        fetchSessions(); // Refresh to pick up has_context_brief
+        void fetchDossier(sessionId); // Load the new dossier
+      }
+    } catch { /* silently fail */ }
+    finally { setDossierGenerating(null); }
+  }, [fetchSessions, fetchDossier]);
+
+  // ── Chat with Simone (context handoff) ──
+  const chatWithSimone = useCallback(async (sessionId: string) => {
+    // For rehydratable sessions, just open the chat directly
+    const target = sessions.find((s) => s.session_id === sessionId);
+    if (target && isLiveAttachableSession(target)) {
+      openOrFocusChatWindow({ sessionId, attachMode: "tail", role: "writer" });
+      return;
+    }
+    // For non-rehydratable: build a context handoff message from the dossier
+    let briefText = dossierContent;
+    if (!briefText) {
+      try {
+        const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sessionId)}/context-brief`, { headers: buildHeaders() });
+        if (r.ok) {
+          const d = await r.json();
+          briefText = d.context_brief;
+        }
+      } catch { /* silently fail */ }
+    }
+    const handoffMessage = briefText
+      ? `I'm following up on a previous session (${sessionId}). Here's the context brief:\n\n${briefText}\n\nPlease review and let me know the status.`
+      : `I'm following up on a previous session (${sessionId}). Can you check what happened and give me a summary?`;
+
+    openOrFocusChatWindow({ newSession: true, message: handoffMessage, autoSend: true });
+  }, [sessions, dossierContent]);
+
+  // Clear dossier when selection changes
+  useEffect(() => {
+    setDossierContent(null);
+  }, [selected]);
 
   const runningCount = useMemo(
     () => sessions.filter((s) => isActiveSession(s)).length,
@@ -526,58 +630,92 @@ function SessionsPageInner() {
           </div>
         </div>
 
-        {/* ── Historical Sessions ── */}
-        <div className="border border-border/40 rounded-lg bg-background/40 overflow-hidden">
-          <button
-            onClick={() => setShowHistorical(!showHistorical)}
-            className="w-full px-3 py-2 border-b border-border/30 flex items-center justify-between hover:bg-card/30 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Historical Sessions</span>
-              <span className="text-[10px] text-muted">({historicalSessions.length})</span>
-              {noiseCount > 0 && (
-                <span className="text-[9px] text-muted italic">+{noiseCount} hidden</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <label
-                className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <input
-                  type="checkbox"
-                  checked={hideNoise}
-                  onChange={(e) => setHideNoise(e.target.checked)}
-                  className="rounded border-border bg-card w-3 h-3 accent-cyan-500"
-                />
-                Hide noise
-              </label>
-              <span className="text-muted text-xs">{showHistorical ? "▼" : "▶"}</span>
-            </div>
-          </button>
-
-          {showHistorical && (
-            <div className="p-2 space-y-1.5 max-h-[50vh] overflow-y-auto scrollbar-thin">
-              {historicalSessions.length === 0 && (
-                <div className="text-[11px] text-muted text-center py-3 italic">
-                  {hideNoise ? "No interesting historical sessions (noise hidden)" : "No historical sessions"}
+        {/* ── Channel-Grouped Inbox ── */}
+        {CHANNEL_ORDER.map((chKey) => {
+          const items = channelGroups[chKey];
+          if (!items || items.length === 0) return null;
+          const meta = CHANNEL_META[chKey];
+          return (
+            <div key={chKey} className={`border ${meta.border} rounded-lg ${meta.bg} overflow-hidden`}>
+              <div className={`px-3 py-2 border-b ${meta.border} flex items-center justify-between`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs">{meta.icon}</span>
+                  <span className={`text-xs font-semibold ${meta.color} uppercase tracking-wider`}>{meta.label}</span>
+                  <span className={`text-[10px] ${meta.color} opacity-70`}>({items.length})</span>
                 </div>
-              )}
-              {historicalSessions.map((s) => (
-                <SessionCard
-                  key={s.session_id}
-                  session={s}
-                  isSelected={selected === s.session_id}
-                  onSelect={() => setSelected(s.session_id)}
-                  onRehydrate={rehydrateSession}
-                  rehydrating={rehydratingId === s.session_id}
-                  isActive={false}
-                  hidden={staleFilter && ageTier(s.last_activity || s.created_at) !== "stale"}
-                />
-              ))}
+              </div>
+              <div className="p-2 space-y-1.5">
+                {items.map((s) => (
+                  <SessionCard
+                    key={s.session_id}
+                    session={s}
+                    isSelected={selected === s.session_id}
+                    onSelect={() => setSelected(s.session_id)}
+                    onRehydrate={rehydrateSession}
+                    rehydrating={rehydratingId === s.session_id}
+                    isActive={isActiveSession(s)}
+                    onChatWithSimone={chatWithSimone}
+                    onGenerateDossier={generateDossier}
+                    dossierGenerating={dossierGenerating === s.session_id}
+                  />
+                ))}
+              </div>
             </div>
-          )}
-        </div>
+          );
+        })}
+
+        {/* ── Older Sessions (beyond 36h window) ── */}
+        {olderSessions.length > 0 && (
+          <div className="border border-border/40 rounded-lg bg-background/40 overflow-hidden">
+            <button
+              onClick={() => setShowOlderSessions(!showOlderSessions)}
+              className="w-full px-3 py-2 border-b border-border/30 flex items-center justify-between hover:bg-card/30 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Older Sessions</span>
+                <span className="text-[10px] text-muted">({olderSessions.length})</span>
+                {noiseCount > 0 && (
+                  <span className="text-[9px] text-muted italic">+{noiseCount} hidden</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <label
+                  className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={hideNoise}
+                    onChange={(e) => setHideNoise(e.target.checked)}
+                    className="rounded border-border bg-card w-3 h-3 accent-cyan-500"
+                  />
+                  Hide noise
+                </label>
+                <span className="text-muted text-xs">{showOlderSessions ? "▼" : "▶"}</span>
+              </div>
+            </button>
+
+            {showOlderSessions && (
+              <div className="p-2 space-y-1.5 max-h-[50vh] overflow-y-auto scrollbar-thin">
+                {olderSessions.map((s) => (
+                  <SessionCard
+                    key={s.session_id}
+                    session={s}
+                    isSelected={selected === s.session_id}
+                    onSelect={() => setSelected(s.session_id)}
+                    onRehydrate={rehydrateSession}
+                    rehydrating={rehydratingId === s.session_id}
+                    isActive={false}
+                    hidden={staleFilter && ageTier(s.last_activity || s.created_at) !== "stale"}
+                    onChatWithSimone={chatWithSimone}
+                    onGenerateDossier={generateDossier}
+                    dossierGenerating={dossierGenerating === s.session_id}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {sessionsError && (
           <div className="rounded-md border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-[11px] text-accent">
@@ -640,6 +778,13 @@ function SessionsPageInner() {
               >
                 {attaching ? "…" : isVpSelected ? "Observer Chat" : selectedIsLiveSession ? "Attach Chat (Tail)" : "Open Run Viewer"}
               </button>
+              {/* Chat with Simone - context handoff */}
+              <button
+                onClick={() => chatWithSimone(selected)}
+                className="px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-xs transition-all font-semibold"
+              >
+                💬 Chat with Simone
+              </button>
               {!isVpSelected && (
                 <>
                   <button onClick={() => cancelSession(selected)} className="px-2.5 py-1 rounded-md border border-accent/25 bg-accent/10 text-accent hover:bg-accent/20 text-xs transition-all">Cancel Run</button>
@@ -653,6 +798,44 @@ function SessionsPageInner() {
 
             {isVpSelected && (
               <div className="text-[10px] text-muted-foreground italic">VP sessions are view-only. Use Simone chat for changes.</div>
+            )}
+          </div>
+
+          {/* Dossier Viewer */}
+          <div className="border border-border/40 rounded-lg bg-background/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-foreground/80 uppercase tracking-wider">Context Brief</span>
+              <div className="flex items-center gap-2">
+                {selectedSession.has_context_brief ? (
+                  <button
+                    onClick={() => fetchDossier(selected)}
+                    className="text-[10px] px-2 py-0.5 rounded-md border border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 transition-all"
+                    disabled={dossierLoading}
+                  >
+                    {dossierLoading ? "Loading…" : dossierContent ? "↻ Reload" : "📄 View Dossier"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => generateDossier(selected)}
+                    className="text-[10px] px-2 py-0.5 rounded-md border border-amber-500/25 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-all animate-pulse"
+                    disabled={dossierGenerating === selected}
+                  >
+                    {dossierGenerating === selected ? "Generating…" : "⚡ Generate Dossier"}
+                  </button>
+                )}
+              </div>
+            </div>
+            {dossierContent && (
+              <div className="bg-black/20 rounded-md border border-border/40 p-3 max-h-[40vh] overflow-y-auto scrollbar-thin">
+                <pre className="text-[10px] font-mono whitespace-pre-wrap text-foreground/80">{dossierContent}</pre>
+              </div>
+            )}
+            {!dossierContent && !dossierLoading && (
+              <div className="text-[10px] text-muted italic text-center py-2">
+                {selectedSession.has_context_brief
+                  ? "Click \"View Dossier\" to load the context brief."
+                  : "No dossier available. Click \"Generate Dossier\" to create one."}
+              </div>
             )}
           </div>
 
@@ -727,6 +910,9 @@ function SessionCard({
   rehydrating,
   isActive,
   hidden,
+  onChatWithSimone,
+  onGenerateDossier,
+  dossierGenerating,
 }: {
   session: {
     session_id: string;
@@ -742,6 +928,7 @@ function SessionCard({
     rehydrate_ready?: boolean;
     rehydrate_reason?: string;
     has_checkpoint?: boolean;
+    has_context_brief?: boolean;
     checkpoint_tasks_completed?: number;
     checkpoint_artifacts_count?: number;
   };
@@ -751,9 +938,14 @@ function SessionCard({
   rehydrating: boolean;
   isActive: boolean;
   hidden?: boolean;
+  onChatWithSimone?: (id: string) => void;
+  onGenerateDossier?: (id: string) => void;
+  dossierGenerating?: boolean;
 }) {
   if (hidden) return null;
   const tier = ageTier(s.created_at || s.last_modified);
+  const chKey = (s.channel || "system") as ChannelKey;
+  const chMeta = CHANNEL_META[chKey];
 
   return (
     <button
@@ -769,7 +961,12 @@ function SessionCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           {/* Session ID */}
-          <div className="font-mono text-[11px] text-foreground truncate">{shortSessionId(s.session_id)}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-[11px] text-foreground truncate">{shortSessionId(s.session_id)}</span>
+            {s.has_context_brief && (
+              <span className="text-[9px] shrink-0" title="Context brief available">📄</span>
+            )}
+          </div>
 
           {/* Description */}
           {s.description && (
@@ -791,10 +988,31 @@ function SessionCard({
               <span className="text-muted-foreground">{s.status}</span>
             )}
             <span className="text-muted">·</span>
-            <span className="text-muted-foreground">{s.source || s.channel || "local"}</span>
+            <span className={`${chMeta?.color || "text-muted-foreground"}`}>{chMeta?.icon} {s.channel || s.source || "local"}</span>
             <span className="text-muted">·</span>
             <span className="text-muted-foreground">{s.owner || "unknown"}</span>
           </div>
+
+          {/* Inline action buttons for non-rehydratable completed sessions */}
+          {!isActive && !s.rehydrate_ready && onChatWithSimone && (
+            <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => onChatWithSimone(s.session_id)}
+                className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all"
+              >
+                💬 Chat
+              </button>
+              {!s.has_context_brief && onGenerateDossier && (
+                <button
+                  onClick={() => onGenerateDossier(s.session_id)}
+                  className="text-[9px] px-1.5 py-0.5 rounded border border-amber-500/25 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-all"
+                  disabled={dossierGenerating}
+                >
+                  {dossierGenerating ? "…" : "⚡ Dossier"}
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right side: age + rehydrate */}

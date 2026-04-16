@@ -97,6 +97,67 @@ class OpsService:
             return "api"
         return "local"
 
+    @staticmethod
+    def _classify_channel(
+        session_id: str,
+        source: str,
+        run_kind: str = "",
+        trigger_source: str = "",
+        last_run_source: str = "",
+    ) -> str:
+        """Classify a session into a UI channel group.
+
+        Uses all available signals — not just the session_id prefix — to
+        produce a richer channel classification for the dashboard inbox.
+        """
+        sid = (session_id or "").lower()
+        rk = (run_kind or "").lower()
+        ts = (trigger_source or "").lower()
+        lrs = (last_run_source or "").lower()
+        src = (source or "").lower()
+
+        # Infrastructure / daemon
+        if sid.startswith(DAEMON_SESSION_PREFIX) or rk == "heartbeat":
+            return "infrastructure"
+
+        # VP missions
+        if (
+            sid.startswith("vp_")
+            or "vp" in rk
+            or src.startswith("vp")
+            or "vp" in lrs
+        ):
+            return "vp_mission"
+
+        # Email
+        if rk == "email_triage" or "agentmail" in ts or "email" in rk:
+            return "email"
+
+        # Scheduled / Cron
+        if rk == "cron" or sid.startswith("cron_") or "cron" in ts or "cron" in lrs:
+            return "scheduled"
+
+        # Proactive signals
+        if (
+            "proactive" in rk
+            or "signal" in rk
+            or ts == "dashboard_signal"
+            or "proactive" in lrs
+        ):
+            return "proactive"
+
+        # Discord
+        if sid.startswith("discord_") or "discord" in src or "discord" in ts:
+            return "discord"
+
+        # Interactive chats (websocket, local, telegram, api, chat)
+        if src in ("chat", "local", "websocket", "api") and not rk:
+            return "interactive"
+        if sid.startswith(("session_", "tg_")) and not rk:
+            return "interactive"
+
+        return "system"
+
     def _normalize_session_description(self, text: str) -> str:
         # Collapse whitespace/newlines, trim, and cap length for UI cards.
         cleaned = re.sub(r"\s+", " ", (text or "").strip())
@@ -190,9 +251,27 @@ class OpsService:
         desc_path = session_path / "description.txt"
         return self._read_text_prefix(desc_path)
 
+    def _try_read_context_brief_title(self, session_path: Path) -> Optional[str]:
+        """Extract the first heading from context_brief.md as a description fallback."""
+        brief_path = session_path / "context_brief.md"
+        text = self._read_text_prefix(brief_path, max_bytes=2048)
+        if not text:
+            return None
+        # Look for first markdown heading
+        m = re.search(r"^#{1,3}\s+(.+)$", text, flags=re.MULTILINE)
+        if m:
+            return m.group(1).strip()
+        # Fallback: first non-empty line
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("---"):
+                return stripped
+        return None
+
     def _derive_session_description(self, session_path: Path) -> Optional[str]:
         raw = (
             self._try_read_explicit_description(session_path)
+            or self._try_read_context_brief_title(session_path)
             or self._try_read_checkpoint_description(session_path)
             or self._try_read_trace_description(session_path)
             or self._try_read_transcript_description(session_path)
@@ -396,7 +475,7 @@ class OpsService:
             "workspace_dir": str(session_path),
             "status": status,
             "source": source,
-            "channel": source,
+            "channel": source,  # placeholder — enriched below once run catalog info is available
             "owner": owner or "unknown",
             "memory_mode": memory_mode,
             "description": description,
@@ -411,6 +490,7 @@ class OpsService:
             "has_activity_journal": journal_path.exists(),
             "has_memory": (session_path / "MEMORY.md").exists() or (session_path / "memory").exists(),
             "last_run_source": str(runtime.get("last_run_source") or ""),
+            "has_context_brief": (session_path / "context_brief.md").exists(),
         }
 
         run_summary = self.run_catalog.find_run_for_workspace(session_path)
@@ -433,6 +513,15 @@ class OpsService:
                 summary["external_origin"] = run_summary.get("external_origin")
             if run_summary.get("external_origin_id"):
                 summary["external_origin_id"] = run_summary.get("external_origin_id")
+
+        # Enrich channel classification with run catalog signals
+        summary["channel"] = self._classify_channel(
+            session_id,
+            source,
+            run_kind=str(run_summary.get("run_kind", "")) if run_summary else "",
+            trigger_source=str(run_summary.get("trigger_source", "")) if run_summary else "",
+            last_run_source=str(runtime.get("last_run_source", "")),
+        )
 
         # Packet 15: checkpoint diagnostics and rehydrate readiness
         checkpoint_diag = self._read_checkpoint_diagnostics(session_path)
@@ -827,3 +916,157 @@ class OpsService:
                 compacted[filename] = len(lines)
                 
         return {"status": "compacted", "files": compacted}
+
+    def get_session_context_brief(self, session_id: str) -> Optional[str]:
+        """Read the context_brief.md for a session, if it exists."""
+        session_path = self._session_workspace(session_id)
+        brief_path = session_path / "context_brief.md"
+        if not brief_path.exists():
+            return None
+        try:
+            return brief_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to read context_brief.md for %s: %s", session_id, exc)
+            return None
+
+    def bulk_delete_sessions(
+        self,
+        older_than_days: int,
+        channels: Optional[List[str]] = None,
+        exclude_active: bool = True,
+    ) -> Dict[str, Any]:
+        """Delete session workspaces matching the given criteria.
+
+        Args:
+            older_than_days: Delete sessions older than this many days.
+            channels: Only delete sessions in these channel types. If None, delete all.
+            exclude_active: If True, never delete sessions that are currently running.
+
+        Returns:
+            Dict with 'deleted', 'skipped', and 'errors' counts.
+        """
+        import time as _time
+
+        cutoff = _time.time() - (older_than_days * 86400)
+        active_ids = set(self.gateway._sessions.keys()) if exclude_active else set()
+
+        deleted = 0
+        skipped = 0
+        errors = 0
+
+        for session_dir in sorted(self.workspaces_dir.iterdir()):
+            if not session_dir.is_dir():
+                continue
+            if session_dir.name.startswith("."):
+                continue
+            if session_dir.name in active_ids:
+                skipped += 1
+                continue
+
+            try:
+                mtime = session_dir.stat().st_mtime
+            except Exception:
+                continue
+
+            if mtime >= cutoff:
+                skipped += 1
+                continue
+
+            # Channel filter
+            if channels:
+                source = self._infer_source(session_dir.name, None)
+                channel = self._classify_channel(session_dir.name, source)
+                if channel not in channels:
+                    skipped += 1
+                    continue
+
+            try:
+                shutil.rmtree(session_dir)
+                deleted += 1
+            except Exception as exc:
+                logger.warning("Failed to delete session %s: %s", session_dir.name, exc)
+                errors += 1
+
+        logger.info(
+            "Bulk delete: deleted=%d skipped=%d errors=%d (older_than_days=%d, channels=%s)",
+            deleted, skipped, errors, older_than_days, channels,
+        )
+        return {"deleted": deleted, "skipped": skipped, "errors": errors}
+
+    def get_daily_activity_digest(self, since_hours: int = 24) -> str:
+        """Aggregate context_brief.md files from recent sessions into a daily digest.
+
+        Returns a markdown document grouping session dossiers by channel type,
+        suitable for incorporation into Simone's daily memory updates.
+        """
+        import time as _time
+
+        cutoff = _time.time() - (since_hours * 3600)
+        now_str = datetime.now(tz=timezone.utc).strftime("%B %d, %Y")
+
+        channel_groups: Dict[str, List[tuple]] = {}  # channel -> [(session_id, brief)]
+
+        for session_dir in sorted(self.workspaces_dir.iterdir()):
+            if not session_dir.is_dir() or session_dir.name.startswith("."):
+                continue
+
+            try:
+                mtime = session_dir.stat().st_mtime
+            except Exception:
+                continue
+
+            if mtime < cutoff:
+                continue
+
+            brief_path = session_dir / "context_brief.md"
+            if not brief_path.exists():
+                continue
+
+            try:
+                brief_text = brief_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+            source = self._infer_source(session_dir.name, None)
+            channel = self._classify_channel(session_dir.name, source)
+
+            # Skip infrastructure sessions from the digest
+            if channel == "infrastructure":
+                continue
+
+            channel_groups.setdefault(channel, []).append((session_dir.name, brief_text))
+
+        # Build the digest
+        channel_labels = {
+            "interactive": "💬 Interactive Chats",
+            "vp_mission": "🤖 VP Missions",
+            "email": "📧 Email",
+            "scheduled": "⏰ Scheduled / Cron",
+            "proactive": "📡 Proactive Signals",
+            "discord": "🎮 Discord",
+            "system": "⚙️ System",
+        }
+
+        total = sum(len(briefs) for briefs in channel_groups.values())
+        lines = [
+            f"# Daily Activity Digest — {now_str}",
+            "",
+            f"## Sessions Completed: {total}",
+            "",
+        ]
+
+        for channel, label in channel_labels.items():
+            briefs = channel_groups.get(channel)
+            if not briefs:
+                continue
+            lines.append(f"### {label} ({len(briefs)})")
+            lines.append("")
+            for session_id, brief_text in briefs:
+                lines.append(f"#### Session: `{session_id}`")
+                lines.append("")
+                lines.append(brief_text.strip())
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+
+        return "\n".join(lines)

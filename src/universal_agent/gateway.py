@@ -1661,10 +1661,10 @@ class InProcessGateway(Gateway):
             return int(os.getenv("UA_SESSION_ADMIN_TTL_SECONDS", "600"))
         if source in self._VP_SOURCES:
             return int(os.getenv("UA_SESSION_VP_INACTIVITY_TTL_SECONDS", "900"))
-        # Interactive user sessions: reap after long inactivity (default 4h).
+        # Interactive user sessions: reap after long inactivity (default 1h).
         # Workspace files on disk are preserved — only the in-memory session
         # and adapter are released.  Dashboard still shows archived sessions.
-        return int(os.getenv("UA_SESSION_USER_TTL_SECONDS", "14400"))
+        return int(os.getenv("UA_SESSION_USER_TTL_SECONDS", "3600"))
 
     async def _session_reaper(self) -> None:
         """Background task: periodically close sessions that have exceeded their inactivity TTL."""
@@ -1710,15 +1710,49 @@ class InProcessGateway(Gateway):
                             inactivity,
                             ttl,
                         )
+                        # Capture workspace_dir BEFORE close — close_session() pops from _sessions
+                        _ws_dir = getattr(session, "workspace_dir", None)
                         try:
                             await self.close_session(session.session_id)
                         except Exception as exc:
                             logger.warning("Reaper error closing session %s: %s", session.session_id, exc)
+                        # Fire dossier generation in background (never blocks reaper)
+                        if _ws_dir:
+                            asyncio.create_task(
+                                self._generate_dossier_on_close(session.session_id, Path(str(_ws_dir)))
+                            )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error("Session reaper loop error: %s", exc)
         logger.info("Session reaper stopped")
+
+    async def _generate_dossier_on_close(
+        self, session_id: str, workspace: Path
+    ) -> None:
+        """Background task: generate context_brief.md after session close.
+
+        Never raises — errors are logged and silently ignored so the reaper
+        is never disrupted.
+        """
+        try:
+            from universal_agent.services.session_dossier import generate_session_dossier
+
+            # Skip if dossier already exists (e.g. from hooks path)
+            if (workspace / "context_brief.md").exists():
+                return
+
+            await generate_session_dossier(
+                workspace=workspace,
+                metadata={"session_id": session_id},
+            )
+            logger.info("Dossier generated for closed session %s", session_id)
+        except Exception as exc:
+            logger.warning(
+                "Dossier generation failed for session %s: %s",
+                session_id,
+                exc,
+            )
 
     def start_reaper(self) -> None:
         """Start the session reaper background task (idempotent)."""

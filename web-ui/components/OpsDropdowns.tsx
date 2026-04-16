@@ -42,6 +42,7 @@ type SessionSummary = {
   heartbeat_summary?: string;
   last_run_source?: string;
   terminal_reason?: string;
+  has_context_brief?: boolean;
 };
 type SkillStatus = { name: string; enabled: boolean; available: boolean; unavailable_reason?: string | null };
 type SystemEventItem = { id: string; event_type: string; payload: Record<string, unknown>; created_at?: string; session_id?: string; timestamp: number };
