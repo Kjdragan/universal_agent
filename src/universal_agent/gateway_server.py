@@ -18799,7 +18799,6 @@ def _task_hub_supervisor_snapshot() -> tuple[dict[str, Any], list[dict[str, Any]
         conn = _task_hub_open_conn()
         try:
             _task_hub_sync_pending_approvals(conn)
-            task_hub.rebuild_dispatch_queue(conn)
             overview = task_hub.overview(conn, approvals_pending=pending_count)
             overview["heartbeat"] = _heartbeat_runtime_snapshot()
             agent_queue = task_hub.list_agent_queue(
@@ -19280,7 +19279,6 @@ async def dashboard_todolist_overview():
         conn = _task_hub_open_conn()
         try:
             synced_approvals = _task_hub_sync_pending_approvals(conn)
-            task_hub.rebuild_dispatch_queue(conn)
             data = task_hub.overview(conn, approvals_pending=pending_count)
             data["sync"] = {"approvals_upserted": synced_approvals}
             data["mode_default"] = "agent"
@@ -19460,6 +19458,7 @@ async def dashboard_todolist_agent_queue(
                 task_hub.reconcile_task_lifecycle(
                     conn,
                     running_session_ids=_running_execution_session_ids(),
+                    rebuild_queue=False,
                 )
             # When a specific status filter is requested, use raw SQL so the
             # caller can filter by any status (pending, in_progress, blocked,
@@ -20554,7 +20553,6 @@ async def dashboard_todolist_dispatch_queue(limit: int = 120):
         conn = _task_hub_open_conn()
         try:
             _task_hub_sync_pending_approvals(conn)
-            task_hub.rebuild_dispatch_queue(conn)
             queue = task_hub.get_dispatch_queue(conn, limit=max(1, min(int(limit), 500)))
             return {"status": "ok", **queue}
         finally:

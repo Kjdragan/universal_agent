@@ -947,10 +947,15 @@ def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[st
         "SELECT queue_build_id, built_at FROM task_hub_dispatch_queue ORDER BY built_at DESC LIMIT 1"
     ).fetchone()
     if row is None:
-        summary = rebuild_dispatch_queue(conn)
-        queue_build_id = str(summary.get("queue_build_id") or "")
+        return {
+            "queue_build_id": "",
+            "built_at": None,
+            "items": [],
+            "eligible_total": 0,
+        }
     else:
         queue_build_id = str(row["queue_build_id"] or "")
+        built_at = str(row["built_at"] or "")
 
     rows = conn.execute(
         """
@@ -982,6 +987,7 @@ def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[st
 
     return {
         "queue_build_id": queue_build_id,
+        "built_at": built_at,
         "items": items,
         "eligible_total": int((eligible_row["c"] if eligible_row else 0) or 0),
     }
@@ -1604,6 +1610,7 @@ def reconcile_task_lifecycle(
     conn: sqlite3.Connection,
     *,
     running_session_ids: Optional[set[str]] = None,
+    rebuild_queue: bool = True,
 ) -> dict[str, int]:
     """Repair obviously orphaned lifecycle rows at startup or on-demand.
 
@@ -1794,7 +1801,8 @@ def reconcile_task_lifecycle(
         completion_flagged += 1
 
     conn.commit()
-    rebuild_dispatch_queue(conn)
+    if rebuild_queue:
+        rebuild_dispatch_queue(conn)
     return {
         "reopened": reopened,
         "reviewed": reviewed,
@@ -2288,7 +2296,6 @@ def list_agent_queue(
     include_not_ready: bool = False,
 ) -> dict[str, Any]:
     ensure_schema(conn)
-    rebuild_dispatch_queue(conn)
     policy = current_policy()
 
     rows = conn.execute(

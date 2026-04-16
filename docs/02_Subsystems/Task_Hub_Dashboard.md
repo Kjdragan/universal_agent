@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-04-05 — embedded dashboard Agent Flow spotlight widget, lightweight spotlight persistence contract, and browser-state troubleshooting guidance documented.
+> **Last updated:** 2026-04-16 — dashboard read-path performance invariant documented.
 
 ---
 
@@ -169,6 +169,8 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 | `/api/v1/dashboard/todolist/completed` | GET | Completed tasks with session/workspace links |
 | `/api/v1/dashboard/todolist/tasks/{task_id}/history` | GET | Assignment/evaluation trail, email mapping, transcript/run-log links, and canonical execution forensics |
 | `/api/v1/dashboard/todolist/morning-report` | GET | Deterministic morning report snapshot |
+
+Read endpoints must not rebuild the Task Hub dispatch queue. They read the latest stored queue snapshot so sidebar navigation and polling do not perform expensive scoring/write work while holding the activity-store lock. Use `/api/v1/dashboard/todolist/dispatch-queue/rebuild` or dispatcher/write paths when a queue rebuild is intentionally required.
 
 ### 5.2 Write Endpoints
 

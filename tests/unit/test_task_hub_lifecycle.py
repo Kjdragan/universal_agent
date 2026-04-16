@@ -696,6 +696,7 @@ def test_system_schedule_task_ranks_ahead_of_must_complete_backlog() -> None:
                 },
             },
         )
+        task_hub.rebuild_dispatch_queue(conn)
         queue = task_hub.get_dispatch_queue(conn, limit=10)
         items = queue.get("items") or []
         assert len(items) >= 2
@@ -743,6 +744,7 @@ def test_claim_next_dispatch_tasks_skips_ineligible_front_rows() -> None:
             },
         )
 
+        task_hub.rebuild_dispatch_queue(conn)
         queue = task_hub.get_dispatch_queue(conn, limit=8)
         assert queue["items"][0]["task_id"].startswith("task:review-front-")
         assert queue["items"][0]["eligible"] is False
@@ -756,6 +758,93 @@ def test_claim_next_dispatch_tasks_skips_ineligible_front_rows() -> None:
             os.environ.pop("UA_TASK_HUB_AGENT_THRESHOLD", None)
         else:
             os.environ["UA_TASK_HUB_AGENT_THRESHOLD"] = previous_threshold
+        conn.close()
+
+
+def test_overview_reads_existing_dispatch_snapshot_without_mutating() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:overview-read",
+                "source_kind": "internal",
+                "source_ref": "ops",
+                "title": "Overview read task",
+                "description": "Prebuilt queue snapshot",
+                "project_key": "immediate",
+                "priority": 2,
+                "labels": ["agent-ready"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": True,
+            },
+        )
+        task_hub.rebuild_dispatch_queue(conn)
+        eval_count_before = conn.execute("SELECT COUNT(*) AS c FROM task_hub_evaluations").fetchone()["c"]
+        item_rows_before = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT task_id, score, score_confidence, stale_state, metadata_json, updated_at
+                FROM task_hub_items
+                ORDER BY task_id
+                """
+            ).fetchall()
+        ]
+
+        overview = task_hub.overview(conn, approvals_pending=0)
+
+        eval_count_after = conn.execute("SELECT COUNT(*) AS c FROM task_hub_evaluations").fetchone()["c"]
+        item_rows_after = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT task_id, score, score_confidence, stale_state, metadata_json, updated_at
+                FROM task_hub_items
+                ORDER BY task_id
+                """
+            ).fetchall()
+        ]
+        assert overview["queue_health"]["dispatch_eligible"] >= 1
+        assert eval_count_after == eval_count_before
+        assert item_rows_after == item_rows_before
+    finally:
+        conn.close()
+
+
+def test_claim_next_dispatch_tasks_rebuilds_before_claiming(monkeypatch) -> None:
+    conn = _conn()
+    original_rebuild = task_hub.rebuild_dispatch_queue
+    calls = []
+
+    def _counted_rebuild(rebuild_conn):
+        calls.append("rebuild")
+        return original_rebuild(rebuild_conn)
+
+    monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _counted_rebuild)
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:claim-rebuild",
+                "source_kind": "internal",
+                "source_ref": "ops",
+                "title": "Claim rebuild task",
+                "description": "Claim path should rebuild",
+                "project_key": "immediate",
+                "priority": 2,
+                "labels": ["agent-ready"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": True,
+            },
+        )
+
+        claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:claim-rebuild")
+
+        assert calls == ["rebuild"]
+        assert len(claimed) == 1
+        assert claimed[0]["task_id"] == "task:claim-rebuild"
+    finally:
         conn.close()
 
 

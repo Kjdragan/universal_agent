@@ -152,3 +152,21 @@ class TestDispatchSweep:
             _insert_task(conn, f"batch_{i}")
         claimed = dispatch_sweep(conn, agent_id="heartbeat:test", limit=2)
         assert len(claimed) == 2
+
+    def test_rebuilds_before_claiming(self, monkeypatch):
+        conn = _make_conn()
+        original_rebuild = task_hub.rebuild_dispatch_queue
+        calls = []
+
+        def _counted_rebuild(rebuild_conn):
+            calls.append("rebuild")
+            return original_rebuild(rebuild_conn)
+
+        monkeypatch.setattr(task_hub, "rebuild_dispatch_queue", _counted_rebuild)
+        _insert_task(conn, "sweep-rebuild")
+
+        claimed = dispatch_sweep(conn, agent_id="heartbeat:test", limit=1)
+
+        assert calls == ["rebuild"]
+        assert len(claimed) == 1
+        assert claimed[0]["task_id"] == "sweep-rebuild"
