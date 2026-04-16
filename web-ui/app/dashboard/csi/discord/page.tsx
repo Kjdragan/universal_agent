@@ -1,4 +1,7 @@
 "use client";
+// NOTE: Discord message API calls are routed through /api/dashboard/gateway/ (the Next.js proxy)
+// so the session auth token is automatically injected. The CSI watchlist API calls
+// go directly to /api/v1/csi/discord (a Next.js route) and don't need the proxy.
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -24,7 +27,8 @@ type Message = {
   signals: Signal[];
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+const GATEWAY = "/api/dashboard/gateway"; // proxy that injects session auth
+
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -119,7 +123,7 @@ export default function CsiDiscordWatchlistPage() {
     setMessages([]);
     try {
       const r = await fetch(
-        `${API_BASE}/api/v1/dashboard/discord/servers/${encodeURIComponent(serverId)}/messages?limit=150`,
+        `${GATEWAY}/api/v1/dashboard/discord/servers/${encodeURIComponent(serverId)}/messages?limit=150`,
         { cache: "no-store" }
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -148,7 +152,7 @@ export default function CsiDiscordWatchlistPage() {
     setClearing(true);
     try {
       await fetch(
-        `${API_BASE}/api/v1/dashboard/discord/servers/${encodeURIComponent(activeServerId)}/messages`,
+        `${GATEWAY}/api/v1/dashboard/discord/servers/${encodeURIComponent(activeServerId)}/messages`,
         { method: "DELETE" }
       );
       setMessages([]);
