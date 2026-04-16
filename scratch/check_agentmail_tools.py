@@ -1,0 +1,3 @@
+from universal_agent.agentmail_official import build_agentmail_mcp_server_config
+
+print(build_agentmail_mcp_server_config())
