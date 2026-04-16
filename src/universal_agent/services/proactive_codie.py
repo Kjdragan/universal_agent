@@ -163,13 +163,16 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         f"Cleanup theme: {chosen_theme}",
         "",
         "Instructions:",
-        "1. Inspect the repository and choose a small, reviewable improvement within this theme.",
-        "2. Implement the change on a feature branch targeting develop.",
-        "3. Add or update focused tests for the behavior touched.",
-        "4. Open a draft pull request for Kevin review.",
-        "5. Do not merge, push to main, deploy, delete production data, or make public releases.",
-        "6. In the PR body, include rationale, changed files, tests run, risks, and rollback notes.",
-        "7. If no worthwhile improvement is found, produce a short artifact explaining what was inspected.",
+        "1. Inspect the repository for low-hanging fruit matching this theme: find dead code, identify overcomplicated structures, and simplify them for efficiency.",
+        "2. This is cleanup work only. Do NOT make any breaking code changes.",
+        "3. Implement the change on a feature branch targeting develop.",
+        "4. Add or update focused tests for the behavior touched.",
+        "5. Open a draft pull request for Kevin review.",
+        "6. Do not merge, push to main, deploy, delete production data, or make public releases.",
+        "7. In the PR body, include rationale, changed files, tests run, risks, and rollback notes.",
+        "8. After creating the PR, use the AgentMail tools from the shared VP mailbox to send an email to kevin.dragan@outlook.com.",
+        "9. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
+        "10. If no worthwhile improvement is found, produce a short artifact explaining what was inspected.",
     ]
     extra = str(note or "").strip()
     if extra:
