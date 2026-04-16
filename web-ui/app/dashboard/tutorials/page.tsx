@@ -245,6 +245,9 @@ export default function DashboardTutorialsPage() {
   const [watcherStatus, setWatcherStatus] = useState<WatcherStatus | null>(null);
   const [pollingNow, setPollingNow] = useState(false);
   const [pollResult, setPollResult] = useState<string>("");
+  // Note-before-dispatch state
+  const [pendingNoteRunPath, setPendingNoteRunPath] = useState<string>("");
+  const [pendingNoteText, setPendingNoteText] = useState<string>("");
 
   // Load seen runs from localStorage on mount
   useEffect(() => {
@@ -419,16 +422,18 @@ export default function DashboardTutorialsPage() {
   }, [notifications]);
 
   const dispatchToSimone = useCallback(
-    async (runPath: string) => {
+    async (runPath: string, note: string = "") => {
       const normalized = asText(runPath);
       if (!normalized) return;
+      setPendingNoteRunPath("");
+      setPendingNoteText("");
       setDispatchingRunPath(normalized);
       setDispatchStatus("");
       try {
         const res = await fetch(`${API_BASE}/api/v1/dashboard/tutorials/review`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ run_path: normalized }),
+          body: JSON.stringify({ run_path: normalized, note: note.trim() || undefined }),
         });
         const payload = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -903,14 +908,50 @@ export default function DashboardTutorialsPage() {
                         {latestJobStatus === "running" ? "Watch" : "Rehydrate"}
                       </a>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => void dispatchToSimone(runPath)}
-                      disabled={dispatchingRunPath === runPath || deletingRunPath === runPath || bootstrappingRunPath === runPath}
-                      className="rounded border border-primary/30/60 bg-primary/10 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20 disabled:opacity-50"
-                    >
-                      {dispatchingRunPath === runPath ? "Queueing..." : "Send to Simone"}
-                    </button>
+                    {/* Send to Simone — inline note flow */}
+                    {dispatchingRunPath === runPath ? (
+                      <span className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/90 opacity-70">
+                        Queueing...
+                      </span>
+                    ) : pendingNoteRunPath === runPath ? (
+                      <div className="flex w-full flex-col gap-1.5 mt-1">
+                        <textarea
+                          id={`simone-note-${runPath}`}
+                          autoFocus
+                          rows={3}
+                          value={pendingNoteText}
+                          onChange={(e) => setPendingNoteText(e.target.value)}
+                          placeholder="Optional: add your comment or instructions for Simone (e.g. 'Create a repo emulating this concept')…"
+                          className="w-full rounded border border-primary/30 bg-background/80 px-2 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/40 resize-none"
+                        />
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void dispatchToSimone(runPath, pendingNoteText)}
+                            disabled={deletingRunPath === runPath || bootstrappingRunPath === runPath}
+                            className="rounded border border-primary/40 bg-primary/20 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/30 disabled:opacity-50"
+                          >
+                            Send
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setPendingNoteRunPath(""); setPendingNoteText(""); }}
+                            className="rounded border border-border bg-background/60 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { setPendingNoteRunPath(runPath); setPendingNoteText(""); }}
+                        disabled={deletingRunPath === runPath || bootstrappingRunPath === runPath}
+                        className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20 disabled:opacity-50"
+                      >
+                        Send to Simone
+                      </button>
+                    )}
                     {latestBootstrapStatus === "completed" || latestBootstrapStatus === "success" ? (
                       <div className="flex items-center gap-1.5">
                         <span className="rounded border border-primary/30/60 bg-primary/15 px-2 py-1 text-[11px] text-primary/90">
