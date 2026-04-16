@@ -5,7 +5,7 @@ import os
 ZAI_MODEL_MAP = {
     "haiku": "glm-4.5-air",
     "sonnet": "glm-5-turbo",    # Maps to Z.AI standard model
-    "opus": "glm-5-turbo",      # Maps to Z.AI standard model
+    "opus": "glm-5.1",          # Maps to Z.AI advanced model
 }
 
 def resolve_model(tier: str = "opus") -> str:

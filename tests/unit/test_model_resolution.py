@@ -28,7 +28,7 @@ from universal_agent.utils.model_resolution import (
 
 # The Z.AI API requires lowercase model identifiers. If these names drift,
 # agents will get error 1211 "Unknown Model, please check the model code."
-KNOWN_ZAI_MODELS = {"glm-4.5-air", "glm-5-turbo"}
+KNOWN_ZAI_MODELS = {"glm-4.5-air", "glm-5-turbo", "glm-5.1"}
 
 
 class TestZaiModelMap:
@@ -53,11 +53,12 @@ class TestZaiModelMap:
     def test_opus_is_known_model(self):
         assert ZAI_MODEL_MAP["opus"] in KNOWN_ZAI_MODELS
 
-    def test_no_glm_5_1(self):
-        """GLM-5.1 was rejected by ZAI with error 1211. Ensure it's gone."""
+    def test_no_glm_5_1_pascal_case(self):
+        """GLM-5.1 (PascalCase) was rejected; glm-5.1 (lowercase) is valid."""
         for tier, model in ZAI_MODEL_MAP.items():
-            assert "5.1" not in model, (
-                f"ZAI_MODEL_MAP[{tier!r}] = {model!r} still references GLM-5.1 which is invalid."
+            assert model != "GLM-5.1", (
+                f"ZAI_MODEL_MAP[{tier!r}] uses 'GLM-5.1' (PascalCase) which is rejected. "
+                f"Use 'glm-5.1' (lowercase)."
             )
 
     def test_no_pascal_case_glm(self):
