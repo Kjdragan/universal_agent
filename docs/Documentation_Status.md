@@ -110,6 +110,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 93 | Prioritized Cleanup Plan from Canonical Review |
 | 94 | Architectural Integration Review |
 | 95 | Heartbeat Issue Mediation and Auto-Triage |
+| 112 | Codebase Recommendations and Cleanup Agenda |
 
 ## Deployment and Environment Continuity Docs (06_Deployment_And_Environments/)
 

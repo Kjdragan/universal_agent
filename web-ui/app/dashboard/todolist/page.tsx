@@ -808,11 +808,17 @@ export default function ToDoListDashboardPage() {
     const pCls = priorityColorClass(item.priority);
     const boardLane = String(item.board_lane || "");
     const isProcessing = boardLane === "in_progress";
-    const isAwaitingReview = boardLane === "needs_review";
+    const isAgentStaging = item.status === "pending_review";
+    const isHumanReview = item.status === "needs_review";
+    const isAwaitingReview = boardLane === "needs_review" && !isAgentStaging && !isHumanReview; // Fallback
     const isOrphaned = Boolean(item.reconciliation?.orphaned_in_progress);
     const lastDispatch = item.metadata?.dispatch;
     const wasReopenedAfterFailure =
       boardLane === "not_assigned" && String(lastDispatch?.last_assignment_state || "").toLowerCase() === "failed";
+      
+    // Pre-calculate href for navigation (title and human review badge)
+    const taskHref = taskSourceUrl(item.task_id, item.source_kind, item.url, item.source_ref);
+
     return (
       <article
         key={item.task_id}
@@ -820,7 +826,8 @@ export default function ToDoListDashboardPage() {
           "group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px]",
           item.must_complete ? "border-l-2 border-l-kcd-red" : "",
           isProcessing ? "processing-bar border-l-2 border-l-kcd-green" : "",
-          isAwaitingReview ? "border-l-2 border-l-kcd-amber" : "",
+          (isHumanReview || isAwaitingReview) ? "border-l-2 border-l-kcd-amber" : "",
+          isAgentStaging ? "border-l-2 border-l-indigo-400" : "",
         ].filter(Boolean).join(" ")}
       >
         {/* Processing / Review Status Badge */}
@@ -831,11 +838,38 @@ export default function ToDoListDashboardPage() {
             <span className="font-mono text-[9px] text-kcd-text-muted">· Agent working</span>
           </div>
         )}
-        {isAwaitingReview && (
-          <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-kcd-amber/[0.08] border border-kcd-amber/20 rounded-sm">
-            <span className="material-symbols-outlined text-xs text-kcd-amber">rate_review</span>
-            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Awaiting Review</span>
-            <span className="font-mono text-[9px] text-kcd-text-muted">· Run finished</span>
+        {/* Agent Staging Badge (Simone's pipeline) */}
+        {isAgentStaging && (
+          <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-indigo-500/[0.08] border border-indigo-400/20 rounded-sm">
+            <span className="material-symbols-outlined text-xs text-indigo-400">auto_awesome</span>
+            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-indigo-400 uppercase">VP Staging (Simone to Review)</span>
+            <span className="font-mono text-[9px] text-kcd-text-muted">· Autonomous pipeline staging</span>
+          </div>
+        )}
+        {/* Human Review Needed Badge (Fallback & Distinct) */}
+        {(isHumanReview || isAwaitingReview) && (
+          <div className="flex items-center mb-2 px-2 py-1 bg-kcd-amber/[0.08] border border-kcd-amber/20 rounded-sm hover:bg-kcd-amber/[0.15] hover:border-kcd-amber/40 transition-colors w-fit">
+            {taskHref ? (
+              taskHref.startsWith("http") ? (
+                <a href={taskHref} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 no-underline cursor-pointer group/reviewbadge">
+                  <span className="material-symbols-outlined text-xs text-kcd-amber group-hover/reviewbadge:scale-110 transition-transform">rate_review</span>
+                  <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Human Review Needed</span>
+                  <span className="material-symbols-outlined text-[10px] text-kcd-amber ml-1">open_in_new</span>
+                </a>
+              ) : (
+                <Link href={taskHref} className="flex items-center gap-1.5 no-underline cursor-pointer group/reviewbadge">
+                  <span className="material-symbols-outlined text-xs text-kcd-amber group-hover/reviewbadge:scale-110 transition-transform">rate_review</span>
+                  <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Human Review Needed</span>
+                  <span className="material-symbols-outlined text-[10px] text-kcd-amber ml-1">arrow_forward</span>
+                </Link>
+              )
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-xs text-kcd-amber">rate_review</span>
+                <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Human Review Needed</span>
+                <span className="font-mono text-[9px] text-kcd-text-muted">· Run finished</span>
+              </div>
+            )}
           </div>
         )}
         {isOrphaned && (

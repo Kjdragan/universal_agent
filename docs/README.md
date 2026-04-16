@@ -95,6 +95,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[LLM Wiki Implementation Status (2026-04-06)](03_Operations/109_LLM_Wiki_Implementation_Status_2026-04-06.md)**: Living implementation tracker for the LLM wiki subsystem — current phase, completed surfaces, pending work, blockers, and latest verified status.
 - **[LLM Wiki Smoke Test (2026-04-07)](03_Operations/110_LLM_Wiki_Smoke_Test_2026-04-07.md)**: First manual smoke-test report for the LLM wiki subsystem — external vault success path, internal sync timeout findings, and prioritized hardening opportunities.
 - **[Discord Operations And Usage Guide (2026-04-09)](03_Operations/111_Discord_Operations_And_Usage_Guide_2026-04-09.md)**: Canonical source of truth for operational usage, slash commands, and proactive task generation workflows via the Discord CC Bot.
+- **[Codebase Recommendations and Cleanup Agenda (2026-04-16)](03_Operations/112_Codebase_Recommendations_And_Cleanup_Agenda_2026-04-16.md)**: Direct os.getenv Secret violations, Blocking I/O in Async paths, and verification of Cody dead code removal.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 
