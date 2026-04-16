@@ -411,6 +411,7 @@ export default function CsiWatchlistPage() {
                           className="w-full h-full border-0"
                           src={`https://www.youtube.com/embed/videoseries?list=UU${previewChannel.channel_id.replace(/^UC/, '')}&playsinline=1&fs=0`}
                           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                          sandbox="allow-same-origin allow-scripts allow-presentation"
                           title="Channel Uploads Playlist Viewer"
                        />
                    </div>
