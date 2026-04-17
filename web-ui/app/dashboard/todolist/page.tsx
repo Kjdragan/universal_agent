@@ -1560,7 +1560,7 @@ export default function ToDoListDashboardPage() {
           accentColor="#22D3EE"
           emptyText="No unassigned tasks."
           headerAction={
-            notAssignedItems.length > 1 ? (
+            notAssignedItems.length > 0 ? (
               <button
                 onClick={() => void handleDeleteAllNotAssigned()}
                 disabled={deleteAllNotAssignedPending}
