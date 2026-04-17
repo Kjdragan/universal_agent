@@ -368,10 +368,11 @@ type KanbanColProps = {
   count: number;
   accentColor: string;
   emptyText: string;
+  headerAction?: React.ReactNode;
   children: React.ReactNode;
 };
 
-function KanbanCol({ label, icon, count, accentColor, emptyText, children }: KanbanColProps) {
+function KanbanCol({ label, icon, count, accentColor, emptyText, headerAction, children }: KanbanColProps) {
   return (
     <div className="flex flex-col bg-white/5 border-none rounded-none min-h-0 overflow-hidden transition-all duration-300">
       <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06]">
@@ -379,7 +380,10 @@ function KanbanCol({ label, icon, count, accentColor, emptyText, children }: Kan
           <span className="material-symbols-outlined text-lg" style={{ color: accentColor }}>{icon}</span>
           <span className="font-mono text-[11px] font-bold tracking-[0.1em] uppercase" style={{ color: accentColor }}>{label}</span>
         </div>
-        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-sm" style={{ background: `${accentColor}18`, color: accentColor }}>{count}</span>
+        <div className="flex items-center gap-2">
+          {headerAction}
+          <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-sm" style={{ background: `${accentColor}18`, color: accentColor }}>{count}</span>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-2.5 max-h-[60vh] scrollbar-thin">
         {count === 0 ? (
@@ -415,6 +419,7 @@ export default function ToDoListDashboardPage() {
   const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
   const [deletedTaskIdsHydrated, setDeletedTaskIdsHydrated] = useState(false);
   const [deleteAllPending, setDeleteAllPending] = useState(false);
+  const [deleteAllNotAssignedPending, setDeleteAllNotAssignedPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddPending, setQuickAddPending] = useState(false);
@@ -693,6 +698,31 @@ export default function ToDoListDashboardPage() {
     () => completedRows.filter((r) => !deletedTaskIds.has(r.task_id)),
     [completedRows, deletedTaskIds],
   );
+
+  const handleDeleteAllNotAssigned = useCallback(async () => {
+    if (!notAssignedItems.length) return;
+    const confirmed = window.confirm(
+      `Park all ${notAssignedItems.length} unassigned task${notAssignedItems.length === 1 ? "" : "s"}? They will be moved out of the active board.`,
+    );
+    if (!confirmed) return;
+    setDeleteAllNotAssignedPending(true);
+    try {
+      await Promise.allSettled(
+        notAssignedItems.map((item) =>
+          fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(item.task_id)}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "park", reason: "bulk_delete_unassigned" }),
+          }),
+        ),
+      );
+    } catch {
+      // noop — best-effort
+    } finally {
+      await load(true);
+      setDeleteAllNotAssignedPending(false);
+    }
+  }, [notAssignedItems, load]);
 
   // Allocation breakdown: source_kind counts
   const allocationBySource = useMemo(() => {
@@ -1523,7 +1553,24 @@ export default function ToDoListDashboardPage() {
 
       {/* ── Kanban Time Horizon Board ── */}
       <div className="grid gap-3 grid-cols-1 xl:grid-cols-4" onClick={(e) => e.stopPropagation()}>
-        <KanbanCol label="Not Assigned" icon="schedule" count={notAssignedItems.length} accentColor="#22D3EE" emptyText="No unassigned tasks.">
+        <KanbanCol
+          label="Not Assigned"
+          icon="schedule"
+          count={notAssignedItems.length}
+          accentColor="#22D3EE"
+          emptyText="No unassigned tasks."
+          headerAction={
+            notAssignedItems.length > 1 ? (
+              <button
+                onClick={() => void handleDeleteAllNotAssigned()}
+                disabled={deleteAllNotAssignedPending}
+                className="px-2 py-0.5 font-mono text-[9px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border-none rounded-sm cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40"
+              >
+                {deleteAllNotAssignedPending ? "Deleting…" : "Delete All"}
+              </button>
+            ) : undefined
+          }
+        >
           {notAssignedItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
         <KanbanCol label="In Progress" icon="bolt" count={inProgressItems.length} accentColor="#4ADE80" emptyText="Nothing actively in progress.">

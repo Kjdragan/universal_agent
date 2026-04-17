@@ -2120,6 +2120,7 @@ class QuickAddTaskRequest(BaseModel):
     description: Optional[str] = None
     priority: Optional[int] = 1
     project_key: Optional[str] = "immediate"
+    target_agent: Optional[str] = None
 
 
 
@@ -19988,6 +19989,12 @@ async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
         "must_complete": True,
         "labels": ["quick-add"],
     }
+    if payload.target_agent:
+        item["metadata"] = {
+            "workflow_manifest": {
+                "target_agent": payload.target_agent.strip()
+            }
+        }
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:

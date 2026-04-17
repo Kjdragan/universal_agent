@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useSyncExternalStore } from "react";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
-import { CopyPlus, Clock, Zap, User, Trash2, Pencil, X } from "lucide-react";
+import { CopyPlus, Clock, Zap, User, Trash2, Pencil, X, Send, ChevronDown } from "lucide-react";
 
 type ColumnType = "Backlog" | "In Progress" | "In Review" | "Done";
 
@@ -68,9 +68,6 @@ function EditModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] text-cyan-500 font-bold bg-cyan-500/10 px-1.5 py-0.5">
-              {task.id}
-            </span>
             <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
               Edit Task
             </span>
@@ -156,36 +153,18 @@ function EditModal({
             </label>
           </div>
 
-          {/* Row: Assignee / Points */}
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1.5">
-              <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
-                Assignee
-              </span>
-              <input
-                type="text"
-                value={draft.assignee}
-                onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
-                className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors placeholder:text-slate-600"
-                placeholder="Agent name…"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1.5">
-              <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
-                Points
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={99}
-                value={draft.points}
-                onChange={(e) =>
-                  setDraft({ ...draft, points: Math.max(0, parseInt(e.target.value) || 0) })
-                }
-                className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors"
-              />
-            </label>
+          {/* Row: Assignee */}
+          <div className="flex flex-col gap-1.5">
+            <span className="font-mono text-[10px] text-slate-400 uppercase tracking-widest">
+              Assignee
+            </span>
+            <input
+              type="text"
+              value={draft.assignee}
+              onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
+              className="bg-white/5 border border-white/10 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors placeholder:text-slate-600"
+              placeholder="Agent name…"
+            />
           </div>
         </div>
 
@@ -235,6 +214,16 @@ export default function KanbanBoard() {
     serverHydratedSnapshot,
   );
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [sendingTaskId, setSendingTaskId] = useState<string | null>(null);
+  const [dropdownOpenId, setDropdownOpenId] = useState<string | null>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!dropdownOpenId) return;
+    const handleClick = () => setDropdownOpenId(null);
+    window.addEventListener("click", handleClick);
+    return () => window.removeEventListener("click", handleClick);
+  }, [dropdownOpenId]);
 
   // Persist tasks to localStorage on every change
   useEffect(() => {
@@ -265,6 +254,46 @@ export default function KanbanBoard() {
   const handleSaveTask = (updated: Task) => {
     setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
     setEditingTask(null);
+  };
+
+  const handleSendToSimone = async (task: Task, targetAgent: string) => {
+    if (sendingTaskId) return;
+    setSendingTaskId(task.id);
+    
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+    try {
+      const priorityNum = task.priority === "High" ? 1 : task.priority === "Medium" ? 2 : 3;
+      
+      const payload: any = {
+        title: task.title,
+        description: task.description,
+        priority: priorityNum,
+      };
+
+      if (targetAgent === "atlas") {
+        payload.target_agent = "vp.general.primary";
+      } else if (targetAgent === "cody") {
+        payload.target_agent = "vp.coder.primary";
+      } else {
+        payload.target_agent = "simone";
+      }
+      
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!res.ok) throw new Error("Failed to send task to Simone");
+      
+      // On success, delete the task from the local board
+      handleDeleteTask(task.id);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to send to Simone.");
+    } finally {
+      setSendingTaskId(null);
+    }
   };
 
   const onDragEnd = (result: DropResult) => {
@@ -385,9 +414,6 @@ export default function KanbanBoard() {
                             >
                               <div className="flex justify-between items-start mb-2">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-mono text-[11px] text-cyan-500 font-bold bg-cyan-500/10 px-1.5 py-0.5">
-                                    {task.id}
-                                  </span>
                                   <button
                                     onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
                                     className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/20 text-red-500/60 hover:text-red-400"
@@ -397,11 +423,56 @@ export default function KanbanBoard() {
                                   </button>
                                   <button
                                     onClick={(e) => { e.stopPropagation(); setEditingTask(task); }}
-                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-cyan-500/20 text-cyan-500/60 hover:text-cyan-400"
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-cyan-500/20 text-cyan-500/60 hover:text-cyan-400 mr-2"
                                     title="Edit Task"
                                   >
                                     <Pencil className="w-3.5 h-3.5" />
                                   </button>
+                                  <div className="relative flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="flex bg-purple-500/10 rounded-sm border border-purple-500/20 overflow-hidden">
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); void handleSendToSimone(task, "simone"); }}
+                                        disabled={sendingTaskId === task.id}
+                                        className="flex items-center gap-1.5 px-2 py-1 hover:bg-purple-500/20 text-purple-500/80 hover:text-purple-400 transition-colors disabled:opacity-50"
+                                        title="Send to Simone"
+                                      >
+                                        <Send className={`w-3 h-3 ${sendingTaskId === task.id ? "animate-pulse" : ""}`} />
+                                        <span className="text-[10px] uppercase font-bold tracking-widest">Send</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setDropdownOpenId(dropdownOpenId === task.id ? null : task.id);
+                                        }}
+                                        className="px-1 border-l border-purple-500/20 hover:bg-purple-500/20 text-purple-500/80 hover:text-purple-400 transition-colors flex items-center justify-center"
+                                      >
+                                        <ChevronDown className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    
+                                    {dropdownOpenId === task.id && (
+                                      <div className="absolute top-full right-0 mt-1 w-32 bg-[#0c1528] border border-white/10 shadow-2xl shadow-black/50 z-[100] flex flex-col rounded-sm overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setDropdownOpenId(null); void handleSendToSimone(task, "simone"); }}
+                                          className="text-left px-3 py-2 text-[11px] font-mono font-semibold uppercase tracking-widest text-purple-400 hover:bg-white/5 transition-colors border-b border-white/5"
+                                        >
+                                          To Simone
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setDropdownOpenId(null); void handleSendToSimone(task, "atlas"); }}
+                                          className="text-left px-3 py-2 text-[11px] font-mono font-semibold uppercase tracking-widest text-blue-400 hover:bg-white/5 transition-colors border-b border-white/5"
+                                        >
+                                          To Atlas
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setDropdownOpenId(null); void handleSendToSimone(task, "cody"); }}
+                                          className="text-left px-3 py-2 text-[11px] font-mono font-semibold uppercase tracking-widest text-emerald-400 hover:bg-white/5 transition-colors"
+                                        >
+                                          To Cody
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                                 {task.priority === "High" && (
                                   <span className="font-mono text-[10px] text-[#EE9800] bg-[#EE9800]/10 px-1.5 py-0.5 border border-[#EE9800]/20 flex items-center gap-1 uppercase">
@@ -419,10 +490,6 @@ export default function KanbanBoard() {
                                 <div className="flex items-center gap-2 text-slate-300">
                                   <User className="w-3.5 h-3.5 opacity-60" />
                                   <span className="font-mono text-[11px] uppercase tracking-widest">{task.assignee}</span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <Clock className="w-3.5 h-3.5 text-cyan-500 opacity-60" />
-                                  <span className="font-mono text-[11px] text-cyan-400">{task.points} PT</span>
                                 </div>
                               </div>
                             </div>
