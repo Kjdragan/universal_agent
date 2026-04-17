@@ -8,7 +8,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(BASE_DIR))
 
-from universal_agent.cron_service import CronService, CronStore, parse_run_at
+from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.gateway import InProcessGateway
 
 def schedule_task():

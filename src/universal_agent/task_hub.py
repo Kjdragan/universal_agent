@@ -34,7 +34,6 @@ TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", 
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
 
 REFINEMENT_STAGES = {"raw_idea", "interviewing", "exploring", "crystallizing", "decomposing", "actionable"}
-DEFAULT_REFINEMENT_STAGE = "raw_idea"
 CSI_ROUTING_INCUBATING = "incubating"
 CSI_ROUTING_AGENT_ACTIONABLE = "agent_actionable"
 CSI_ROUTING_HUMAN_INTERVENTION_REQUIRED = "human_intervention_required"
@@ -2265,24 +2264,6 @@ def release_stale_assignments(
         "finalized": int(result.get("finalized") or 0),
         "reopened": int(result.get("reopened") or 0),
     }
-
-
-def _incident_key_from_text(title: str, description: str) -> str:
-    text = f"{title}\n{description}".lower()
-    patterns = ("event_id:", '"event_id":')
-    for marker in patterns:
-        idx = text.find(marker)
-        if idx < 0:
-            continue
-        tail = text[idx + len(marker):].strip().strip('"')
-        for sep in ("\n", " ", ",", '"'):
-            sep_idx = tail.find(sep)
-            if sep_idx > 0:
-                tail = tail[:sep_idx]
-                break
-        if tail:
-            return tail
-    return ""
 
 
 def list_agent_queue(

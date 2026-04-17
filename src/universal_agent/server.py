@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 
-from .agent_core import UniversalAgent, AgentEvent, EventType, configure_logfire
+from .agent_core import UniversalAgent, configure_logfire
 from universal_agent.api.error_handlers import register_error_handlers
 
 # Configure logfire on import

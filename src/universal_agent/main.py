@@ -522,10 +522,6 @@ from universal_agent.agent_setup import DISALLOWED_TOOLS
 from universal_agent.constants import PRIMARY_ONLY_BLOCKED_TOOLS
 
 
-def _normalize_gateway_tool_call_id(raw_id: object) -> str:
-    base = str(raw_id or uuid.uuid4())
-    return f"gw-{run_id or 'unknown'}-{base}"
-
 
 def _get_gateway_tool_call_id(raw_id: object) -> str:
     _ctx = _get_ctx()
