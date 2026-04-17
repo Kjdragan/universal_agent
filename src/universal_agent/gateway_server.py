@@ -5137,6 +5137,22 @@ _CSI_RECOMMENDATION_TEXT_KEYS = (
     "text",
     "name",
 )
+_CSI_CODE_SUBTASK_KEYWORDS = ("install", "fix", "patch", "signature", "hook", "code", "pydantic", "env")
+_CSI_RESEARCH_SUBTASK_KEYWORDS = ("analyze", "investigate", "review", "assess")
+_CSI_WRITER_SUBTASK_KEYWORDS = ("write", "draft", "publish", "message")
+
+
+def _classify_subtask_role(lowered_text: str) -> str:
+    """Classify CSI recommendation subtask role from lowered text via keyword lookup."""
+    if any(token in lowered_text for token in _CSI_CODE_SUBTASK_KEYWORDS):
+        return "code"
+    if any(token in lowered_text for token in _CSI_RESEARCH_SUBTASK_KEYWORDS):
+        return "research"
+    if any(token in lowered_text for token in _CSI_WRITER_SUBTASK_KEYWORDS):
+        return "writer"
+    return "general"
+
+
 _CSI_AGENT_RECOMMENDATION_HINTS = {
     "install",
     "pip",
@@ -5344,13 +5360,7 @@ def _classify_csi_recommendation_owner(
         reason = "automation_keyword_match"
         confidence = 0.85
 
-    subtask_role = "general"
-    if any(token in lowered for token in ("install", "fix", "patch", "signature", "hook", "code", "pydantic", "env")):
-        subtask_role = "code"
-    elif any(token in lowered for token in ("analyze", "investigate", "review", "assess")):
-        subtask_role = "research"
-    elif any(token in lowered for token in ("write", "draft", "publish", "message")):
-        subtask_role = "writer"
+    subtask_role = _classify_subtask_role(lowered)
 
     return {
         "owner_lane": owner_lane,
@@ -5438,6 +5448,9 @@ def _build_csi_recommendation_task_items(
     return out
 
 
+_CSI_SOURCE_BUCKET_KEYWORDS = ("threads", "reddit", "rss", "youtube", "analysis_task")
+
+
 def _csi_source_bucket(event: Any) -> str:
     event_type = str(getattr(event, "event_type", "") or "").strip().lower()
     source = str(getattr(event, "source", "") or "").strip().lower()
@@ -5445,16 +5458,9 @@ def _csi_source_bucket(event: Any) -> str:
     subject_obj = subject if isinstance(subject, dict) else {}
     report_type = str(subject_obj.get("report_type") or event_type).strip().lower()
     text = " ".join([event_type, source, report_type])
-    if "threads" in text:
-        return "threads"
-    if "reddit" in text:
-        return "reddit"
-    if "rss" in text:
-        return "rss"
-    if "youtube" in text:
-        return "youtube"
-    if "analysis_task" in text:
-        return "analysis_task"
+    for keyword in _CSI_SOURCE_BUCKET_KEYWORDS:
+        if keyword in text:
+            return keyword
     return source or "csi"
 
 
