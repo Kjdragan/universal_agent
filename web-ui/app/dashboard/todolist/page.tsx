@@ -1038,6 +1038,14 @@ export default function ToDoListDashboardPage() {
                 </button>
               );
             })()}
+            <button onClick={() => void handleOpenTaskHistory(item.task_id)} disabled={taskHistoryLoadingId === item.task_id}
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
+              {taskHistoryLoadingId === item.task_id ? "Loading…" : "📜 History"}
+            </button>
+            <button onClick={() => setSelectedTaskDetails(item)}
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
+              🔍 Inspect
+            </button>
           </div>
         )}
       </article>
