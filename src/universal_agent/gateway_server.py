@@ -20163,7 +20163,7 @@ def _task_hub_email_mapping_for_task(conn: sqlite3.Connection, task_id: str) -> 
 def _task_hub_active_assignment_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
-        SELECT assignment_id, agent_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
+        SELECT assignment_id, agent_id, workflow_run_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
         FROM task_hub_assignments
         WHERE task_id = ?
           AND state IN ('seized', 'running')
@@ -20177,6 +20177,7 @@ def _task_hub_active_assignment_for_task(conn: sqlite3.Connection, task_id: str)
     return {
         "assignment_id": str(row["assignment_id"] or ""),
         "agent_id": str(row["agent_id"] or ""),
+        "workflow_run_id": str(row["workflow_run_id"] or ""),
         "provider_session_id": str(row["provider_session_id"] or ""),
         "workspace_dir": str(row["workspace_dir"] or ""),
         "state": str(row["state"] or ""),
@@ -20189,7 +20190,7 @@ def _task_hub_active_assignment_for_task(conn: sqlite3.Connection, task_id: str)
 def _task_hub_latest_assignment_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
-        SELECT assignment_id, agent_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
+        SELECT assignment_id, agent_id, workflow_run_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
         FROM task_hub_assignments
         WHERE task_id = ?
         ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC
@@ -20202,6 +20203,7 @@ def _task_hub_latest_assignment_for_task(conn: sqlite3.Connection, task_id: str)
     return {
         "assignment_id": str(row["assignment_id"] or ""),
         "agent_id": str(row["agent_id"] or ""),
+        "workflow_run_id": str(row["workflow_run_id"] or ""),
         "provider_session_id": str(row["provider_session_id"] or ""),
         "workspace_dir": str(row["workspace_dir"] or ""),
         "state": str(row["state"] or ""),
@@ -20305,6 +20307,9 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
     serialized["run_kind"] = session_profile.get("run_kind")
     serialized["canonical_execution_session_id"] = (
         str((latest_assignment or {}).get("provider_session_id") or projection.get("assigned_session_id") or "") or None
+    )
+    serialized["canonical_execution_run_id"] = (
+        str((latest_assignment or {}).get("workflow_run_id") or "") or None
     )
     serialized["canonical_execution_workspace"] = (
         str((latest_assignment or {}).get("workspace_dir") or session_profile.get("workspace_dir") or "") or None
@@ -20490,6 +20495,7 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
     latest_links = {}
     canonical_execution = {
         "session_id": None,
+        "run_id": None,
         "workspace_dir": None,
         "session_role": None,
         "run_kind": None,
@@ -20498,6 +20504,7 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
         latest_links = dict(enriched_assignments[0].get("links") or {})
         canonical_execution = {
             "session_id": enriched_assignments[0].get("session_id"),
+            "run_id": enriched_assignments[0].get("workflow_run_id"),
             "workspace_dir": enriched_assignments[0].get("workspace_dir") or latest_links.get("workspace_dir"),
             "session_role": enriched_assignments[0].get("session_role"),
             "run_kind": enriched_assignments[0].get("run_kind"),
@@ -20510,6 +20517,7 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
         email_profile = _execution_profile_for_session(str(email_mapping.get("provider_session_id") or ""))
         canonical_execution = {
             "session_id": str(email_mapping.get("provider_session_id") or "") or None,
+            "run_id": str(email_mapping.get("workflow_run_id") or "") or None,
             "workspace_dir": latest_links.get("workspace_dir"),
             "session_role": email_profile.get("session_role"),
             "run_kind": email_profile.get("run_kind"),

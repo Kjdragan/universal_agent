@@ -603,15 +603,6 @@ function buildDurableFileListUrl(
   return `${API_BASE}/api/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
 }
 
-function buildSessionFileListUrl(
-  session: { session_id?: string } | null | undefined,
-  path: string,
-): string {
-  const sessionId = String(session?.session_id || "").trim();
-  if (!sessionId) return "";
-  return `${API_BASE}/api/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
-}
-
 function buildDurableFileUrl(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
   path: string,
@@ -740,7 +731,7 @@ function FileExplorer() {
         ? `${API_BASE}/api/vps/files?scope=workspaces&path=${encodeURIComponent(path)}`
         : mode === "vps_artifacts"
           ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
-          : buildSessionFileListUrl(currentSession, path);
+          : buildDurableFileListUrl(currentSession, path);
     fetch(url, { cache: "no-store" })
       .then(res => res.json())
       .then(data => {
@@ -2563,14 +2554,19 @@ export default function HomePage() {
       }
     } else if (requestedSessionId) {
       const store = useAgentStore.getState();
+      const existing = store.currentSession;
+      const sameSession = existing?.session_id === requestedSessionId;
+      const nextRunId = requestedRunId || (sameSession ? existing?.run_id || "" : "");
       store.setSessionAttachMode(requestedAttach === "tail" ? "tail" : "default");
-      if (!store.currentSession?.session_id) {
+      if (!sameSession || (requestedRunId && existing?.run_id !== requestedRunId)) {
         store.setCurrentSession({
           session_id: requestedSessionId,
-          workspace: "",
-          user_id: "observer",
-          session_url: undefined,
-          logfire_enabled: false,
+          workspace: sameSession ? existing?.workspace || "" : "",
+          user_id: sameSession ? existing?.user_id || "observer" : "observer",
+          session_url: sameSession ? existing?.session_url : undefined,
+          logfire_enabled: sameSession ? Boolean(existing?.logfire_enabled) : false,
+          run_id: nextRunId || null,
+          is_live_session: true,
         });
       }
       ws.attachToSession(requestedSessionId);
