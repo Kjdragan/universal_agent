@@ -1,6 +1,6 @@
 # Email Architecture and AgentMail Source of Truth
 
-> **Last updated: 2026-03-31** — trusted inbound email now defaults to one canonical Task Hub item per inbound request, pre-splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, and email is explicitly documented as transport-specific ingress that converges into the same Task Hub / `todo_execution` execution lane used by tracked chat.
+> **Last updated: 2026-04-17** — added multi-inbox VP routing (Cody/Atlas direct email engagement), CC-based Simone awareness protocol, automated VP FYI suppression, and `target_agent` workflow manifest routing.
 
 ## Purpose
 
@@ -56,6 +56,131 @@ Trusted status is determined by the transport layer (`sender_trusted` flag), **n
 
 ---
 
+## VP Email Routing & Hybrid Orchestration
+
+> **Added 2026-04-17** — Enables Cody and Atlas to receive email independently while maintaining Simone's system awareness.
+
+### Architecture Overview
+
+The system monitors **multiple AgentMail inboxes** simultaneously via WebSocket:
+
+| Inbox | Address | Owner | Purpose |
+|-------|---------|-------|---------|
+| Simone | `oddcity216@agentmail.to` | Simone | Primary orchestrator inbox, receives all trusted email |
+| VP Shared | `vp.agents@agentmail.to` | Codie/Atlas | Shared VP inbox for direct VP engagement |
+| System | `system.alerts@agentmail.to` | System | System alerts and monitoring |
+
+**Environment:** `UA_AGENTMAIL_INBOX_ADDRESSES=oddcity216@agentmail.to,vp.agents@agentmail.to,system.alerts@agentmail.to` (Infisical, production).
+
+### Hybrid Routing Model
+
+```mermaid
+flowchart TD
+    EMAIL[Inbound Email] --> INBOX{Which inbox?}
+    INBOX -->|Simone inbox| CCCHECK{VP FYI CC?}
+    INBOX -->|VP inbox| NAMEDETECT[Name Detection]
+    
+    CCCHECK -->|Yes: sender=vp.agents@ or subject=[VP Status]| SUPPRESS[📋 Log FYI, no task created]
+    CCCHECK -->|No: normal email| NAMEDETECT
+    
+    NAMEDETECT --> SCAN{Scan subject + body}
+    SCAN -->|"cody" / "codie" found| CODER[target_agent = vp.coder.primary]
+    SCAN -->|"atlas" found| GENERAL[target_agent = vp.general.primary]
+    SCAN -->|No VP name found| SIMONE[target_agent = None → Simone handles]
+    
+    CODER --> MATERIALIZE[Materialize Task in Task Hub]
+    GENERAL --> MATERIALIZE
+    SIMONE --> MATERIALIZE
+    
+    MATERIALIZE --> LABELS{Apply labels}
+    LABELS -->|VP targeted| VPLABEL["agent-cody / agent-atlas label<br/>+ target_agent in manifest"]
+    LABELS -->|Simone| STDLABEL[Standard email-task labels]
+    
+    VPLABEL --> DISPATCH[ToDo Dispatch]
+    STDLABEL --> DISPATCH
+    
+    DISPATCH --> DELEGATE{target_agent present?}
+    DELEGATE -->|Yes| VPDISPATCH["Immediate vp_dispatch_mission<br/>(no further triage)"]
+    DELEGATE -->|No| SIMONEEXEC[Simone executes normally]
+```
+
+### Name Detection
+
+Implementation: `_detect_target_agent_by_name()` in `agentmail_service.py`
+
+The system scans the email subject and first 300 characters of the body for VP name keywords:
+
+| Name Tokens | Maps To |
+|-------------|---------|
+| `cody`, `codie`, `codie vp` | `vp.coder.primary` |
+| `atlas`, `atlas vp` | `vp.general.primary` |
+
+When a match is found, `target_agent` is injected into the Task Hub workflow manifest metadata, and the label `agent-cody` or `agent-atlas` is added to the task.
+
+### CC Protocol (VP → Simone Awareness)
+
+When a VP replies directly to the requestor (e.g., Kevin), it **CC's Simone's inbox** so Simone maintains situational awareness without being prompted to act:
+
+```mermaid
+sequenceDiagram
+    participant K as Kevin
+    participant VP as VP Worker (Cody/Atlas)
+    participant SM as Simone Inbox
+    participant GATE as Gateway Handler
+
+    K->>VP: Email to vp.agents@ with "Cody" in subject
+    Note over GATE: target_agent=vp.coder.primary detected
+    GATE->>GATE: Materialize task with agent-cody label
+    GATE->>VP: ToDo dispatch → vp_dispatch_mission
+
+    VP->>K: Reply from vp.agents@
+    VP->>SM: CC with [VP Status] prefix + FYI header
+    
+    Note over GATE: _is_vp_fyi_cc() → True
+    GATE->>GATE: Log FYI, suppress task creation
+```
+
+VP outbound emails include:
+- **Subject prefix**: `[VP Status]` 
+- **FYI header** at top of body:
+  ```
+  ── VP Status Update (FYI — no action required) ──
+  This reply was sent by {agent_name} directly to the requestor.
+  Simone is CC'd for situational awareness only.
+  ────────────────────────────────────────────────
+  ```
+
+### CC Suppression (FYI Guard)
+
+Implementation: `_is_vp_fyi_cc()` in `agentmail_service.py`
+
+When an email arrives at Simone's inbox and meets **either** of these conditions, it is logged but **not materialized as a task**:
+1. The sender address contains `vp.agents@agentmail.to`
+2. The subject contains `[VP Status]`
+
+This prevents:
+- Duplicate task creation (VP already handling the work)
+- Simone attempting to act on informational status updates
+- Loop tasks where Simone delegates work the VP already completed
+
+### Task Hub Integration
+
+VP-targeted tasks appear in the Task Hub with:
+- Labels: `email-task`, `agent-ready`, `agent-cody` (or `agent-atlas`)
+- Metadata: `workflow_manifest.target_agent = "vp.coder.primary"` (or `"vp.general.primary"`)
+- The ToDo dispatch prompt surfaces `⚡ TARGET_AGENT=...` for immediate delegation
+
+### Implementation Files (VP Routing)
+
+| File | Purpose |
+|------|---------|
+| `agentmail_service.py` | `_detect_target_agent_by_name()`, `_is_vp_fyi_cc()`, CC suppression gate |
+| `email_task_bridge.py` | `target_agent` labels + manifest injection in `materialize()` |
+| `todo_dispatch_service.py` | VP-Targeted Email Tasks prompt section, `TARGET_AGENT` surfacing |
+| `proactive_codie.py` | CC protocol instructions in cleanup task descriptions |
+
+---
+
 ## Identities and Routing Rules
 
 ### 1. Simone Identity — AgentMail
@@ -91,6 +216,9 @@ Trusted status is determined by the transport layer (`sender_trusted` flag), **n
 | Kevin says "send from my email" | Gmail | Explicit Kevin identity |
 | Kevin says "check my email" | Gmail | Kevin inbox management |
 | Kevin replies to Simone's digest | AgentMail inbound | Reply handled in Simone pipeline |
+| Kevin emails VP inbox mentioning "Cody" | VP AgentMail inbound | Task created with `agent-cody`, delegated directly |
+| Kevin emails VP inbox mentioning "Atlas" | VP AgentMail inbound | Task created with `agent-atlas`, delegated directly |
+| VP replies to Kevin and CC's Simone | VP AgentMail outbound | CC suppressed by FYI guard, logged only |
 
 ---
 
@@ -420,6 +548,7 @@ Do NOT write or run Python/Bash scripts to interact with AgentMail.
 | `UA_AGENTMAIL_ENABLED` | `1` | Master toggle |
 | `AGENTMAIL_API_KEY` | (Infisical) | AgentMail auth |
 | `UA_AGENTMAIL_INBOX_ADDRESS` | `oddcity216@agentmail.to` | Simone inbox address |
+| `UA_AGENTMAIL_INBOX_ADDRESSES` | (Infisical) | Comma-separated list of all monitored inboxes (Simone + VP + system) |
 | `UA_AGENTMAIL_INBOX_USERNAME` | `simone` | Fallback inbox username for creation |
 | `UA_AGENTMAIL_AUTO_SEND` | `0` | Draft-first policy |
 | `UA_AGENTMAIL_WS_ENABLED` | `1` | Enable WebSocket listener |
@@ -475,6 +604,8 @@ There is a webhook transform at `webhook_transforms/agentmail_transform.py`. Thi
 ## Bottom Line
 
 - **AgentMail is Simone's primary email identity**
+- **VP Shared Inbox (`vp.agents@agentmail.to`) enables direct Cody/Atlas engagement** — name-based routing detects which VP to delegate to
+- **CC Protocol keeps Simone informed** — VPs CC Simone with `[VP Status]` prefix; FYI guard suppresses duplicate task creation
 - **Gmail is Kevin's identity and should be used only explicitly on his behalf**
 - **WebSockets are the authoritative inbound path**
 - **The email-handler is a pure triage agent** — classifies, enriches, produces briefs
