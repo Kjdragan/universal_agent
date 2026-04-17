@@ -13,8 +13,7 @@ import pytest
 
 from universal_agent.execution_engine import (
     _ENV_SAFE_THRESHOLD_BYTES,
-    _ENV_STRIP_CANDIDATES,
-    _MAX_SYSTEM_EVENTS_ENV_BYTES,
+    _STRIP_EXACT,
     EngineConfig,
     ProcessTurnAdapter,
     sanitize_env_for_subprocess,
@@ -73,7 +72,7 @@ class TestSanitizeEnvForSubprocess:
     def test_strips_bash_func_prefixes(self, monkeypatch):
         """BASH_FUNC_* vars should be stripped in Phase 2."""
         # Make env just under threshold with known candidates absent
-        for cand in _ENV_STRIP_CANDIDATES:
+        for cand in _STRIP_EXACT:
             monkeypatch.delenv(cand, raising=False)
 
         # Add bash function vars that push over
@@ -90,7 +89,7 @@ class TestSanitizeEnvForSubprocess:
     def test_phase3_drops_largest_non_critical(self, monkeypatch):
         """Phase 3 should drop the largest non-critical vars."""
         # Remove all strip candidates so phases 1+2 have nothing to do
-        for cand in _ENV_STRIP_CANDIDATES:
+        for cand in _STRIP_EXACT:
             monkeypatch.delenv(cand, raising=False)
 
         # Add many medium-sized non-critical vars to exceed threshold
@@ -114,9 +113,6 @@ class TestSanitizeEnvForSubprocess:
 
 class TestSystemEventsSizeCap:
     """Verify that the constants for system-events capping are sane."""
-
-    def test_max_system_events_env_bytes_is_reasonable(self):
-        assert 10_000 <= _MAX_SYSTEM_EVENTS_ENV_BYTES <= 100_000
 
     def test_threshold_leaves_headroom(self):
         """Threshold should be well under 2MB to leave room for CLI args."""
