@@ -203,8 +203,7 @@ def _temporary_sanitized_process_env() -> Any:
 # Everything else (including Infisical-injected service keys) passes through.
 # This is resilient by default: new secrets from Infisical just work.
 
-# Max bytes for a single system-events env var before it gets truncated.
-_MAX_SYSTEM_EVENTS_ENV_BYTES = 32_000  # 32 KB
+
 
 
 def _env_total_size() -> int:
@@ -227,8 +226,7 @@ _STRIP_PREFIXES = (
     "LESS_TERMCAP_",
 )
 
-# Backward-compatible alias kept for existing tests and internal references.
-_ENV_STRIP_CANDIDATES = tuple(sorted(_STRIP_EXACT))
+
 
 # Safety cap: if total env exceeds this, fall back to aggressive stripping.
 _ENV_SAFE_THRESHOLD_BYTES = 1_500_000  # 1.5 MB

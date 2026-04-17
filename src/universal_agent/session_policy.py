@@ -45,24 +45,6 @@ def _default_memory_scope() -> str:
     return "direct_only"
 
 
-def _normalize_tags(value: Any) -> list[str]:
-    if isinstance(value, str):
-        raw_items = [item.strip() for item in value.split(",") if item.strip()]
-    elif isinstance(value, list):
-        raw_items = [str(item).strip() for item in value if str(item).strip()]
-    else:
-        raw_items = []
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in raw_items:
-        key = item.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
-
-
 def default_memory_policy() -> dict[str, Any]:
     return {
         "enabled": True,

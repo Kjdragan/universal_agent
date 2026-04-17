@@ -133,39 +133,6 @@ def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any
     return parsed
 
 
-def _workflow_lineage_lines(
-    *,
-    workflow_run_id: str = "",
-    workflow_attempt_id: str = "",
-    provider_session_id: str = "",
-) -> list[str]:
-    lines: list[str] = []
-    if workflow_run_id:
-        lines.append(f"Workflow Run: {workflow_run_id}")
-    if workflow_attempt_id:
-        lines.append(f"Workflow Attempt: {workflow_attempt_id}")
-    if provider_session_id:
-        lines.append(f"Provider Session: {provider_session_id}")
-    return lines
-
-
-def _workflow_lineage_comment(
-    *,
-    workflow_run_id: str = "",
-    workflow_attempt_id: str = "",
-    provider_session_id: str = "",
-) -> str:
-    parts: list[str] = []
-    if workflow_run_id:
-        parts.append(f"run={workflow_run_id}")
-    if workflow_attempt_id:
-        parts.append(f"attempt={workflow_attempt_id}")
-    if provider_session_id:
-        parts.append(f"provider_session={provider_session_id}")
-    if not parts:
-        return ""
-    return f"**Workflow linkage:** {' | '.join(parts)}"
-
 
 # ── Database Schema ──────────────────────────────────────────────────────────
 
@@ -1052,21 +1019,3 @@ class EmailTaskBridge:
             return {}
 
 
-    def _update_heartbeat(
-        self,
-        *,
-        subject: str,
-        thread_id: str,
-        task_id: str,
-    ) -> None:
-        """Compatibility shim retained for callers during migration.
-
-        Email tasks no longer mirror into HEARTBEAT.md because Task Hub / ToDo
-        is the canonical execution path for trusted email missions.
-        """
-        logger.debug(
-            "📧→📋 Skipping legacy HEARTBEAT.md email-task mirror thread=%s task_id=%s subject=%s",
-            thread_id,
-            task_id,
-            subject[:80],
-        )

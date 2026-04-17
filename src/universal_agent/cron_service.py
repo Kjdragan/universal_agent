@@ -17,7 +17,7 @@ from croniter import croniter
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run_attempt
-from universal_agent.gateway import InProcessGateway, GatewayRequest, GatewaySession
+from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.heartbeat_service import _parse_duration_seconds
 from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 

@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_REFLECTION_START_HOUR = 22  # 10 PM
 DEFAULT_REFLECTION_END_HOUR = 7     # 7 AM
 DEFAULT_MAX_NIGHTLY_TASKS = 10      # Max tasks an agent can work on per night
-DEFAULT_REFLECTION_COOLDOWN_MINUTES = 30  # Minimum gap between reflection runs
 
 _NIGHTLY_TASK_COUNTER_KEY = "reflection_nightly_counter"
 

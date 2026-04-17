@@ -29,7 +29,6 @@ from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
-from universal_agent.run_catalog import RunCatalogService
 from universal_agent.workflow_admission import (
     WorkflowAdmissionDecision,
     WorkflowAdmissionService,
@@ -1027,31 +1026,6 @@ class HooksService:
         except Exception:
             logger.warning("Failed writing startup recovery marker session_id=%s", session_id)
 
-    def _write_pending_hook_recovery_marker(
-        self,
-        session_dir: Path,
-        *,
-        session_id: str,
-        reason: str,
-        expected_video_id: str,
-        retry_count: int = 0,
-        retry_status: str = "dispatch_interrupted",
-    ) -> Path:
-        marker = self._pending_hook_recovery_marker_path(session_dir)
-        out = {
-            "status": retry_status,
-            "session_id": session_id,
-            "video_id": str(expected_video_id or "").strip(),
-            "reason": str(reason or "hook_dispatch_interrupted").strip(),
-            "created_at_epoch": time.time(),
-            "retry_count": retry_count,
-        }
-        try:
-            marker.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
-        except Exception:
-            logger.warning("Failed writing pending hook recovery marker session_id=%s", session_id)
-        return marker
-
     def _read_pending_hook_recovery_marker(self, session_dir: Path) -> dict[str, Any]:
         marker = self._pending_hook_recovery_marker_path(session_dir)
         return self._safe_json(marker)
@@ -1190,21 +1164,6 @@ class HooksService:
         except Exception:
             logger.warning("Invalid UA_HOOKS_DISPATCH_RETRY_POLICIES, falling back to defaults")
         return default_policies
-
-    def _get_current_retry_count(self, session_dir: Optional[Path]) -> int:
-        """Read retry_count from an existing pending_hook_recovery.json marker, or 0."""
-        if session_dir is None:
-            return 0
-        marker = self._pending_hook_recovery_marker_path(session_dir)
-        if not marker.is_file():
-            return 0
-        try:
-            payload = json.loads(marker.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return int(payload.get("retry_count", 0))
-        except Exception:
-            pass
-        return 0
 
     @staticmethod
     def _is_dispatch_interruption_error(reason: str) -> bool:
@@ -2721,22 +2680,6 @@ class HooksService:
             return run_rel
         except Exception:
             return ""
-
-    @staticmethod
-    def _tutorial_manifest_probably_code(manifest_payload: dict[str, Any]) -> bool:
-        values = [
-            manifest_payload.get("title"),
-            manifest_payload.get("description"),
-            manifest_payload.get("summary"),
-            manifest_payload.get("channel"),
-            manifest_payload.get("channel_name"),
-        ]
-        tokens = " ".join(str(value or "") for value in values).strip().lower()
-        if not tokens:
-            return False
-        has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
-        has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
-        return has_code and not (has_non_code and not has_code)
 
     @staticmethod
     def _tutorial_manifest_explicitly_non_code(manifest_payload: dict[str, Any]) -> bool:

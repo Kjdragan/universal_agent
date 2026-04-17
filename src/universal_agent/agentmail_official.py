@@ -8,7 +8,6 @@ from typing import Any, Optional
 
 from universal_agent.runtime_role import build_factory_runtime_policy
 
-AGENTMAIL_MCP_SERVER_KEY = "agentmail"
 AGENTMAIL_MCP_SERVER_NAMES = {"agentmail", "AgentMail"}
 AGENTMAIL_MCP_DELIVERY_TOOLS = {
     "send_message",
@@ -16,20 +15,6 @@ AGENTMAIL_MCP_DELIVERY_TOOLS = {
     "forward_message",
     "create_draft",
     "send_draft",
-}
-AGENTMAIL_MCP_READ_TOOLS = {
-    "create_inbox",
-    "list_inboxes",
-    "get_inbox",
-    "delete_inbox",
-    "list_threads",
-    "get_thread",
-    "get_attachment",
-    "update_message",
-    "list_drafts",
-    "get_draft",
-    "update_draft",
-    "delete_draft",
 }
 AGENTMAIL_MCP_DEFAULT_TOOLS = [
     "send_message",
