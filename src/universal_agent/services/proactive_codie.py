@@ -170,9 +170,15 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         "5. Open a draft pull request for Kevin review.",
         "6. Do not merge, push to main, deploy, delete production data, or make public releases.",
         "7. In the PR body, include rationale, changed files, tests run, risks, and rollback notes.",
-        "8. After creating the PR, use the AgentMail tools from the shared VP mailbox to send an email to kevin.dragan@outlook.com.",
-        "9. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
-        "10. If no worthwhile improvement is found, produce a short artifact explaining what was inspected.",
+        "8. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevin.dragan@outlook.com.",
+        "9. CC Simone's inbox (oddcity216@agentmail.to) on the email for situational awareness.",
+        "10. Prefix the subject with '[VP Status]' and include this header at the top of the email body before your content:",
+        "   '── VP Status Update (FYI — no action required) ──",
+        "   This reply was sent by Codie (vp.coder.primary) directly to Kevin.",
+        "   Simone is CC'd for situational awareness only. No action is needed from her.",
+        "   ────────────────────────────────────────────────'",
+        "11. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
+        "12. If no worthwhile improvement is found, produce a short artifact explaining what was inspected.",
     ]
     extra = str(note or "").strip()
     if extra:

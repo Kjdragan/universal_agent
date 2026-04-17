@@ -1,6 +1,6 @@
 # 03. VP Workers and Delegation Architecture
 
-**Last verified against source code:** 2026-03-21
+**Last verified against source code:** 2026-04-17
 
 ## Overview
 
@@ -16,6 +16,16 @@ Each VP worker has its own **identity (soul)**, **streamlined system prompt**, a
 | `vp.general.primary` | **ATLAS** | `universal-agent-vp-worker@vp.general.primary` | Research, analysis, content creation, system ops |
 
 Each VP worker runs as a separate systemd service with its own Claude Agent SDK session.
+
+### Shared VP Email Identity
+
+| Property | Value |
+|----------|-------|
+| Inbox Address | `vp.agents@agentmail.to` |
+| Display Name | `Codie/Atlas` |
+| Monitored By | AgentMail WebSocket (multi-inbox subscription) |
+
+Both VPs share a single AgentMail inbox. Inbound emails to this address are routed to the correct VP by **name detection** (scanning the subject and body for "Cody"/"Codie" or "Atlas" keywords). When a VP sends a reply, it CC's Simone's inbox with a `[VP Status]` subject prefix so Simone maintains situational awareness. See [Email Architecture §VP Email Routing](../03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md#vp-email-routing--hybrid-orchestration) for the full protocol.
 
 ## Delegation Flow
 
