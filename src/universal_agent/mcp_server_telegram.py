@@ -3,7 +3,6 @@ import asyncio
 import os
 import logging
 from telegram import Bot
-from telegram.error import TelegramError
 
 # Logging
 logging.basicConfig(level=logging.INFO)

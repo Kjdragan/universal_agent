@@ -25,18 +25,7 @@ from universal_agent.guardrails.workspace_guard import (
     validate_tool_paths,
     WorkspaceGuardError,
 )
-from universal_agent.durable.tool_gateway import (
-    prepare_tool_call,
-    parse_tool_identity,
-    is_malformed_tool_name,
-    parse_malformed_tool_name,
-    is_invalid_tool_name,
-)
-from universal_agent.durable.classification import classify_tool
-from universal_agent.identity import (
-    resolve_email_recipients,
-    validate_recipient_policy,
-)
+from universal_agent.durable.tool_gateway import parse_tool_identity
 from universal_agent.codebase_policy import (
     agent_can_mutate_codebase,
     normalize_codebase_access,

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Callable, Any
 
-from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.agent_core import EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent import task_hub

@@ -29,7 +29,6 @@ AGENT_SIMONE = "simone"
 AGENT_CODER = "vp.coder.primary"
 AGENT_GENERAL = "vp.general.primary"
 
-ALL_AGENTS = frozenset({AGENT_SIMONE, AGENT_CODER, AGENT_GENERAL})
 
 
 # ---------------------------------------------------------------------------

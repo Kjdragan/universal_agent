@@ -27,7 +27,6 @@ from universal_agent.sdk.task_events import extract_typed_task_payload
 import logfire
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
-    ClaudeAgentOptions,
     AgentDefinition,
     AssistantMessage,
     ResultMessage,
@@ -36,7 +35,6 @@ from claude_agent_sdk.types import (
     ToolResultBlock,
     ThinkingBlock,
     UserMessage,
-    HookMatcher,
 )
 
 if TYPE_CHECKING:

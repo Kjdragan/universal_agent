@@ -31,9 +31,6 @@ _ACTIVE_RUN_STATUSES = {
 }
 _SUCCESS_RUN_STATUSES = {"completed", "succeeded", "success"}
 _FAILED_RUN_STATUSES = {"failed"}
-_SQLITE_LOCK_RETRY_BASE_SECONDS = 0.5
-_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS = 30.0
-_SQLITE_LOCK_RETRY_CEILING_SECONDS = 600.0  # 10 min — never give up before this
 _T = TypeVar("_T")
 
 

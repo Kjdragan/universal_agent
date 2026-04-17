@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import signal
-import socket
 import sys
 import urllib.parse
 from pathlib import Path
