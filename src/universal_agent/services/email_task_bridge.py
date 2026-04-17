@@ -374,6 +374,7 @@ class EmailTaskBridge:
         provider_session_id: str = "",
         real_thread_id: str = "",
         real_message_id: str = "",
+        target_agent: str | None = None,
     ) -> dict[str, Any]:
         """Convert an inbound email into a tracked task.
 
@@ -445,6 +446,12 @@ class EmailTaskBridge:
             if security_classification:
                 email_labels.append(f"security-{security_classification}")
 
+        # Add VP agent-specific label when the email targets a specific VP
+        if target_agent and target_agent not in ("simone", "simone_first"):
+            agent_label = "agent-cody" if "coder" in target_agent else "agent-atlas"
+            if agent_label not in email_labels:
+                email_labels.append(agent_label)
+
         # Auto-reactivate if this thread was waiting-on-reply
         if is_update and existing and str(existing.get("status", "")) == "waiting-on-reply":
             self._reactivate_waiting_thread(thread_id)
@@ -514,6 +521,7 @@ class EmailTaskBridge:
             initial_status="open",
             real_thread_id=real_thread_id,
             real_message_id=real_message_id,
+            target_agent=target_agent,
         )
 
         result = {
@@ -985,6 +993,7 @@ class EmailTaskBridge:
         initial_status: str = "open",
         real_thread_id: str = "",
         real_message_id: str = "",
+        target_agent: str | None = None,
     ) -> dict[str, Any]:
         """Create or update a Task Hub entry for this email task.
 
@@ -1021,6 +1030,10 @@ class EmailTaskBridge:
                 "canonical_execution_owner": "todo_dispatcher",
                 "workflow_manifest": _build_email_execution_manifest(subject=subject, body=reply_text),
             }
+            # Inject target_agent into the workflow manifest so the ToDo
+            # dispatcher can route this task directly to the named VP.
+            if target_agent and target_agent not in ("simone", "simone_first"):
+                metadata["workflow_manifest"]["target_agent"] = target_agent
             if workflow_run_id:
                 metadata["workflow_run_id"] = workflow_run_id
             if workflow_attempt_id:

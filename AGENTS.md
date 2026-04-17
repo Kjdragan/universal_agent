@@ -60,6 +60,32 @@ When asked to update or create documentation:
 3. **Log New Documents**: If you must create a new file, you are required to add a link and description of that new file to both `docs/README.md` and `docs/Documentation_Status.md`.
 4. **No Unindexed Files**: No document should exist in `docs/` without being linked from one of the two index files.
 
+### Dynamic Documentation Maintenance (MANDATORY)
+
+Documentation updates are **not optional follow-up work** — they are part of the implementation itself. When you make code changes that affect system behavior, architecture, routing, protocols, or configuration:
+
+1. **Update docs during implementation, not after.** Treat documentation updates as a deliverable of the same work unit, not a separate task.
+2. **Identify affected docs before coding.** Check `docs/README.md` and `docs/Documentation_Status.md` to find which existing documents cover the areas you are changing. Read them before you start coding so you understand the documented contract.
+3. **Update canonical source-of-truth docs first.** If your change touches email routing, update `82_Email_Architecture`. If it touches VP delegation, update `03_VP_Workers_And_Delegation`. If it touches Task Hub, update `107_Task_Hub_Master_Reference`. Always update the canonical doc, not a peripheral reference.
+4. **Include visual artifacts.** Mermaid diagrams, routing tables, and code-verified citations in doc updates — not just prose paragraphs.
+5. **Update both indexes.** Any new doc must appear in both `docs/README.md` and `docs/Documentation_Status.md`. Existing doc updates should bump the "last updated" timestamp.
+6. **When in doubt, update.** If you are unsure whether a change is "significant enough" to warrant a doc update, it is. Architecture drift caused by undocumented changes is worse than a minor redundant doc update.
+
+## Implementation Plan Quality Standards
+
+Implementation plans are decision documents — they must make complex system flows understandable at a glance. Text-only explanations are insufficient for this codebase's multi-agent architecture.
+
+**Every implementation plan MUST include:**
+
+1. **Mermaid sequence diagrams** for any multi-component interaction (email flows, task dispatch chains, agent delegation). Show the actual participants, message payloads, and decision points.
+2. **Mermaid flowcharts** for routing/branching logic (e.g., "which inbox → which agent → which action").
+3. **Code-verified citations** with `file:///path#Lnnn` links to the actual source lines that support each claim. Do not describe system behavior without pointing to the code that implements it.
+4. **Summary tables** for change impact ("What Changes vs. What Stays"), communication patterns, or comparison of alternatives.
+5. **Concrete code snippets** for every proposed modification — show the actual function signatures, new helper functions, and prompt text changes.
+6. **Phase-by-phase breakdown** with clear boundaries between config-only changes, code changes, and prompt changes.
+
+**Why this matters:** This system has complex multi-agent pipelines where a wrong mental model leads to flawed design decisions. Visual artifacts (diagrams, tables) catch misunderstandings that paragraphs hide.
+
 ## Review guidelines
 
 These guidelines apply when Codex reviews pull requests targeting `develop`.

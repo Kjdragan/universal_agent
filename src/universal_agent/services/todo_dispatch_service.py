@@ -318,6 +318,20 @@ If you believe a work item still needs a claim step, treat that as already satis
 If the work item genuinely cannot proceed, disposition it via `task_hub_task_action` with `review` or `block` and include the concrete missing dependency or system mismatch in the note.
 
 After finishing work, ALWAYS disposition every claimed work item via `task_hub_task_action` (`complete`, `review`, `block`, or `park`).
+
+### VP-Targeted Email Tasks:
+- When a task has `target_agent` in its workflow manifest metadata (e.g., "vp.coder.primary" or "vp.general.primary"),
+  the sender explicitly addressed that VP agent by name. Delegate to the named VP immediately via
+  `vp_dispatch_mission` without further triage — the routing decision has already been made by the sender.
+- In the VP mission briefing, instruct the VP to:
+  (a) Reply to the sender from the VP inbox (vp.agents@agentmail.to)
+  (b) CC Simone's inbox (oddcity216@agentmail.to) on all outbound emails for situational awareness
+  (c) Prefix the subject with "[VP Status]" so Simone knows this is informational, not actionable
+  (d) Include a header line at the top of the email body:
+      "── VP Status Update (FYI — no action required) ──
+       This reply was sent by {agent_name} directly to the requestor.
+       You are CC'd for situational awareness only.
+       ────────────────────────────────────────────────"
 """
 
 
@@ -428,6 +442,15 @@ def build_todo_execution_prompt(
         if routing:
             label = "LLM Routing Judgment" if routing.get("method") == "llm" else "Routing Hint"
             lines.append(f"{label}: {routing}")
+        # Surface target_agent when present — this is a strong routing signal
+        # from the sender explicitly naming a VP agent.
+        target_agent = str(
+            manifest.get("target_agent")
+            or metadata.get("workflow_manifest", {}).get("target_agent")
+            or ""
+        ).strip()
+        if target_agent:
+            lines.append(f"⚡ TARGET_AGENT={target_agent} (sender explicitly addressed this VP — delegate immediately)")
         lines.append("")
     return f"{TODO_DISPATCH_PROMPT}\n\n" + "\n".join(lines)
 

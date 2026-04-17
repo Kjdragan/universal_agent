@@ -309,6 +309,56 @@ def _is_automated_sender(sender_email: str, subject: str = "") -> bool:
     return False
 
 
+# ── VP agent routing helpers ─────────────────────────────────────────
+# These support the Hybrid Routing model where Kevin can email Cody/Atlas
+# directly at the shared VP inbox, with Simone kept informed via CC.
+
+_VP_INBOX_ADDRESS = "vp.agents@agentmail.to"
+_VP_STATUS_PREFIX = "[VP Status]"
+
+# Name tokens used to route emails to the correct VP agent.
+_CODER_NAME_TOKENS = ("cody", "codie", "codie vp")
+_GENERAL_NAME_TOKENS = ("atlas", "atlas vp")
+
+
+def _detect_target_agent_by_name(subject: str, body_snippet: str) -> str | None:
+    """Detect if an email explicitly targets Cody or Atlas by name.
+
+    Scans the subject and first 300 chars of body for VP name keywords.
+    Returns the canonical agent ID or None if no VP is mentioned.
+    """
+    text = f"{subject} {body_snippet[:300]}".lower()
+    if any(name in text for name in _CODER_NAME_TOKENS):
+        return "vp.coder.primary"
+    if any(name in text for name in _GENERAL_NAME_TOKENS):
+        return "vp.general.primary"
+    return None
+
+
+def _is_vp_fyi_cc(
+    *,
+    receiving_inbox: str,
+    primary_inbox: str,
+    sender_email: str,
+    subject: str,
+) -> bool:
+    """Detect if this email is a VP status CC that Simone should observe but not act on.
+
+    Returns True when the email arrived at Simone's inbox (primary_inbox) AND
+    the sender is the VP inbox or the subject contains the [VP Status] prefix.
+    This prevents duplicate task creation when a VP replies to Kevin and CC's Simone.
+    """
+    if receiving_inbox != primary_inbox:
+        return False  # Not Simone's inbox — don't suppress
+    sender_lower = (sender_email or "").strip().lower()
+    subject_lower = (subject or "").strip().lower()
+    if _VP_INBOX_ADDRESS in sender_lower:
+        return True
+    if _VP_STATUS_PREFIX.lower() in subject_lower:
+        return True
+    return False
+
+
 class AgentMailService:
     """Async AgentMail service for Simone's email inbox."""
 
@@ -1152,6 +1202,25 @@ class AgentMailService:
                     self._claim_seen_message_id(message_id)
                 return
 
+            # ── Suppress VP FYI CC emails ──
+            # When a VP replies to Kevin and CC's Simone, we log it for
+            # situational awareness but do NOT create a task — the VP is
+            # already handling the work and this is just a status update.
+            if _is_vp_fyi_cc(
+                receiving_inbox=receiving_inbox,
+                primary_inbox=self._inbox_address,
+                sender_email=sender_email,
+                subject=subject,
+            ):
+                logger.info(
+                    "📧📋 VP status CC received (FYI only, no task created): "
+                    "from=%s subject=%r inbox=%s",
+                    sender_email, subject, receiving_inbox,
+                )
+                if message_id:
+                    self._claim_seen_message_id(message_id)
+                return
+
             if message_id:
                 claimed_message = self._claim_seen_message_id(message_id)
                 if not claimed_message:
@@ -1167,6 +1236,19 @@ class AgentMailService:
                 "📧 Inbound email from=%s subject=%r thread=%s reply_extracted=%s trusted=%s",
                 sender, subject, thread_id, reply_is_extracted, sender_trusted,
             )
+
+            # ── Detect target VP agent by name ──
+            # Check if the email explicitly targets Cody or Atlas, either
+            # because it arrived at the VP inbox with a name mention, or
+            # because it arrived at Simone's inbox but references a VP.
+            target_agent: str | None = _detect_target_agent_by_name(
+                subject, reply_text or text_body or "",
+            )
+            if target_agent:
+                logger.info(
+                    "📧🎯 VP agent detected by name: target_agent=%s subject=%r inbox=%s",
+                    target_agent, subject, receiving_inbox,
+                )
 
             disjointed_tasks = await _extract_inbound_email_tasks(
                 subject=subject,
@@ -1273,6 +1355,7 @@ class AgentMailService:
                     triage_pending=sender_trusted,
                     priority=classified_priority,
                     due_at=extracted_due_at if sender_trusted else None,
+                    target_agent=target_agent,
                 )
 
                 _task_id = bridge_result.get("task_id", "") if bridge_result else ""
@@ -1382,6 +1465,7 @@ class AgentMailService:
         provider_session_id: str = "",
         real_thread_id: str = "",
         real_message_id: str = "",
+        target_agent: str | None = None,
     ) -> Optional[dict[str, Any]]:
         """Materialize an inbound email as a tracked task.
 
@@ -1411,6 +1495,7 @@ class AgentMailService:
                 provider_session_id=provider_session_id,
                 real_thread_id=real_thread_id,
                 real_message_id=real_message_id,
+                target_agent=target_agent,
             )
         except Exception as exc:
             logger.warning(
