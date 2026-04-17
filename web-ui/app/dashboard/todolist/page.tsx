@@ -50,6 +50,10 @@ type AgentQueueItem = {
   run_kind?: string | null;
   canonical_execution_session_id?: string | null;
   canonical_execution_workspace?: string | null;
+  links?: {
+    workspace_name?: string | null;
+    session_id?: string | null;
+  } | null;
   reconciliation?: {
     orphaned_in_progress?: boolean;
     completion_unverified?: boolean;
@@ -1017,6 +1021,21 @@ export default function ToDoListDashboardPage() {
                 </div>
               )}
             </div>
+            {(() => {
+              let sid = item.links?.workspace_name || item.links?.session_id || item.canonical_execution_workspace || item.canonical_execution_session_id || item.assigned_session_id;
+              if (!sid) return null;
+              if (sid.includes("/")) {
+                sid = sid.split("/").pop() || sid;
+              }
+              return (
+                <button onClick={() => {
+                  openOrFocusChatWindow({ [sid.startsWith("run_") ? "runId" : "sessionId"]: sid, attachMode: "tail", role: "viewer" });
+                }}
+                  className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
+                  <span className="text-[10px]">📂</span> Workspace
+                </button>
+              );
+            })()}
           </div>
         )}
       </article>
