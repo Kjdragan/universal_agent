@@ -97,6 +97,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Discord Operations And Usage Guide (2026-04-09)](03_Operations/111_Discord_Operations_And_Usage_Guide_2026-04-09.md)**: Canonical source of truth for operational usage, slash commands, and proactive task generation workflows via the Discord CC Bot.
 - **[Codebase Recommendations and Cleanup Agenda (2026-04-16)](03_Operations/112_Codebase_Recommendations_And_Cleanup_Agenda_2026-04-16.md)**: Direct os.getenv Secret violations, Blocking I/O in Async paths, and verification of Cody dead code removal.
 - **[Task Hub Dashboard Read Path Performance (2026-04-16)](03_Operations/113_Task_Hub_Dashboard_Read_Path_Performance_2026-04-16.md)**: Root cause and invariant for keeping dashboard GET endpoints from rebuilding the Task Hub dispatch queue during navigation.
+- **[CODIE Proactive Pipeline Audit Report (2026-04-16)](03_Operations/114_CODIE_Proactive_Pipeline_Audit_Report_2026-04-16.md)**: Detailed report assessing a manual CODIE proactive cleanup pipeline execution, brittle routing refactoring (PR #103), and system health observations.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 
