@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { resolveTaskWorkspaceTarget } from "@/lib/taskWorkspaceTarget";
 
 const API_BASE = "/api/dashboard/gateway";
 const AUTO_REFRESH_SECONDS = 30;
@@ -49,6 +50,7 @@ type AgentQueueItem = {
   session_role?: string | null;
   run_kind?: string | null;
   canonical_execution_session_id?: string | null;
+  canonical_execution_run_id?: string | null;
   canonical_execution_workspace?: string | null;
   links?: {
     workspace_name?: string | null;
@@ -214,6 +216,7 @@ type CompletedTaskItem = {
     ended_at?: string;
     result_summary?: string;
     session_id?: string;
+    workflow_run_id?: string | null;
   } | null;
   links?: TaskHistoryLinks;
 };
@@ -228,6 +231,7 @@ type TaskAssignmentHistory = {
   task_id: string;
   agent_id: string;
   session_id?: string;
+  workflow_run_id?: string | null;
   state: string;
   started_at?: string;
   ended_at?: string;
@@ -269,6 +273,7 @@ type TaskHistoryPayload = {
   delivery_mode?: string;
   canonical_execution?: {
     session_id?: string | null;
+    run_id?: string | null;
     workspace_dir?: string | null;
     session_role?: string | null;
     run_kind?: string | null;
@@ -1022,14 +1027,11 @@ export default function ToDoListDashboardPage() {
               )}
             </div>
             {(() => {
-              let sid = item.links?.workspace_name || item.links?.session_id || item.canonical_execution_workspace || item.canonical_execution_session_id || item.assigned_session_id;
-              if (!sid) return null;
-              if (sid.includes("/")) {
-                sid = sid.split("/").pop() || sid;
-              }
+              const target = resolveTaskWorkspaceTarget(item);
+              if (!target) return null;
               return (
                 <button onClick={() => {
-                  openOrFocusChatWindow({ [sid.startsWith("run_") ? "runId" : "sessionId"]: sid, attachMode: "tail", role: "viewer" });
+                  openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
                 }}
                   className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
                   <span className="text-[10px]">📂</span> Workspace
@@ -1115,15 +1117,21 @@ export default function ToDoListDashboardPage() {
             className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
             Inspect
           </button>
-          {(item.links?.workspace_name || item.links?.session_id) && (
-            <button onClick={() => {
-              const sid = String(item.links!.workspace_name || item.links!.session_id);
-              openOrFocusChatWindow({ [sid.startsWith("run_") ? "runId" : "sessionId"]: sid, attachMode: "tail", role: "viewer" });
-            }}
-              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
-              <span className="text-[10px]">📂</span> Workspace
-            </button>
-          )}
+          {(() => {
+            const target = resolveTaskWorkspaceTarget({
+              links: item.links,
+              workflow_run_id: item.last_assignment?.workflow_run_id,
+            });
+            if (!target) return null;
+            return (
+              <button onClick={() => {
+                openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
+              }}
+                className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
+                <span className="text-[10px]">📂</span> Workspace
+              </button>
+            );
+          })()}
         </div>
       </article>
     );
@@ -1345,17 +1353,24 @@ export default function ToDoListDashboardPage() {
                       {row.session_role || "unknown-role"}{row.run_kind ? ` · ${row.run_kind}` : ""}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    {(row.links?.workspace_name || row.links?.session_id || row.session_id) ? (
+                    {(() => {
+                      const target = resolveTaskWorkspaceTarget({
+                        links: row.links,
+                        canonical_execution_session_id: row.session_id,
+                        workflow_run_id: row.workflow_run_id,
+                      });
+                      if (!target) return null;
+                      return (
                         <button
                           onClick={() => {
-                            const sid = String(row.links?.workspace_name || row.links?.session_id || row.session_id);
-                            openOrFocusChatWindow({ [sid.startsWith("run_") ? "runId" : "sessionId"]: sid, attachMode: "tail", role: "viewer" });
+                            openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
                           }}
                           className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35 cursor-pointer inline-flex items-center gap-1"
                         >
                           <span className="text-[9px]">📂</span> Workspace
                         </button>
-                      ) : null}
+                      );
+                    })()}
                     </div>
                   </div>
                 ))}

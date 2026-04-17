@@ -475,6 +475,8 @@ These events drive runtime visibility in the dashboard and should be interpreted
 
 The right-panel file browser must prefer the durable run workspace when a `run_id` exists.
 
+The To Do List "Workspace" action has a separate navigation contract: when a live or provider `session_id` exists, open the normal agent/session workspace view with `session_id` and pass the explicit `run_id` only as additional durable file-browsing context. Do not treat `workspace_name` or a workspace path basename like `run_<id>` as the chat navigation target; those values identify storage, not the live session attachment surface.
+
 ### 15.1 Backend
 
 The authoritative durable file APIs are:
@@ -490,6 +492,7 @@ The Web UI now prefers run-backed URLs in:
 
 - `buildDurableFileListUrl(...)` at [page.tsx](../../web-ui/app/page.tsx#L582)
 - `buildDurableFileUrl(...)` at [page.tsx](../../web-ui/app/page.tsx#L595)
+- To Do workspace target resolution at [taskWorkspaceTarget.ts](../../web-ui/lib/taskWorkspaceTarget.ts)
 
 It also hydrates `run_id` and `workspace` metadata for live sessions in [page.tsx](../../web-ui/app/page.tsx#L1556) and [page.tsx](../../web-ui/app/page.tsx#L1615).
 

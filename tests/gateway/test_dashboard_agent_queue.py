@@ -88,6 +88,45 @@ async def test_agent_queue_empty_database(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_agent_queue_serializes_explicit_run_lineage(monkeypatch, tmp_path):
+    """Queue items expose run lineage separately from workspace/session links."""
+    monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
+
+    workspace_dir = tmp_path / "AGENT_RUN_WORKSPACES" / "run_dashboard_lineage"
+    workspace_dir.mkdir(parents=True)
+
+    with gateway_server._activity_store_lock:
+        conn = gateway_server._task_hub_open_conn()
+        try:
+            task_id = _seed_task(conn, task_id="tq-lineage", title="Lineage task", status="open")
+            task_hub.claim_task_for_agent(
+                conn,
+                task_id=task_id,
+                agent_id="todo:daemon_simone_todo",
+                provider_session_id="daemon_simone_todo",
+                workflow_run_id="run_dashboard_lineage",
+                workspace_dir=str(workspace_dir),
+                claim_reason="test_lineage",
+            )
+        finally:
+            conn.close()
+
+    response = await gateway_server.dashboard_todolist_agent_queue(
+        offset=0,
+        limit=10,
+        status="in_progress",
+    )
+
+    assert response["status"] == "ok"
+    item = next(entry for entry in response["items"] if entry["task_id"] == "tq-lineage")
+    assert item["canonical_execution_session_id"] == "daemon_simone_todo"
+    assert item["canonical_execution_run_id"] == "run_dashboard_lineage"
+    assert item["canonical_execution_workspace"] == str(workspace_dir)
+    assert item["links"]["session_id"] == "daemon_simone_todo"
+    assert item["links"]["workspace_name"] == "run_dashboard_lineage"
+
+
+@pytest.mark.asyncio
 async def test_agent_queue_status_filter_returns_seeded_tasks(monkeypatch, tmp_path):
     """Status filter returns seeded tasks with correct shape."""
     monkeypatch.setattr(gateway_server, "get_activity_db_path", lambda: str(tmp_path / "activity_state.db"))
