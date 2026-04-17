@@ -163,7 +163,6 @@ _QUEUE_STATUS_QUEUED = "queued"
 _QUEUE_STATUS_DISPATCHING = "dispatching"
 _QUEUE_STATUS_BUSY_RETRY = "busy_retry"
 _QUEUE_STATUS_TRIAGED = "triaged"
-_QUEUE_STATUS_ACK_SENT = "ack_sent"
 _QUEUE_STATUS_DISPATCHED_TO_TODO = "dispatched_to_todo"
 _QUEUE_STATUS_REVIEW_REQUIRED = "review_required"
 _QUEUE_STATUS_QUARANTINED = "quarantined"
@@ -1951,31 +1950,6 @@ class AgentMailService:
             )
         return queue_id, True
 
-    def _queue_insert_trusted_inbound(
-        self,
-        *,
-        message_id: str,
-        thread_id: str,
-        sender: str,
-        sender_email: str,
-        subject: str,
-        reply_text: str,
-        text_body: str,
-        session_key: str,
-        action_payload: dict[str, Any],
-    ) -> tuple[str, bool]:
-        return self._queue_insert_inbound(
-            message_id=message_id,
-            thread_id=thread_id,
-            sender=sender,
-            sender_email=sender_email,
-            sender_role="trusted_operator",
-            subject=subject,
-            reply_text=reply_text,
-            text_body=text_body,
-            session_key=session_key,
-            action_payload=action_payload,
-        )
 
     def _find_queue_item_by_message_id(self, message_id: str) -> Optional[dict[str, Any]]:
         with self._queue_connect() as conn:
@@ -2057,17 +2031,6 @@ class AgentMailService:
             )
             return int(cur.rowcount or 0) > 0
 
-    def _complete_queue_item(self, queue_id: str, *, attempts: int) -> None:
-        now = _iso_now()
-        with self._queue_connect() as conn:
-            conn.execute(
-                """
-                UPDATE agentmail_inbox_queue
-                SET status = ?, updated_at = ?, next_attempt_at = NULL, last_error = '', attempt_count = ?
-                WHERE queue_id = ?
-                """,
-                (_QUEUE_STATUS_COMPLETED, now, int(attempts), queue_id),
-            )
 
     def _fail_queue_item(self, queue_id: str, *, error: str, attempts: int) -> None:
         now = _iso_now()
