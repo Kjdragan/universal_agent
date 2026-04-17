@@ -57,7 +57,7 @@ describe("dashboard gateway proxy route", () => {
     expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
-  it("uses real upstream data before dev-mode stubs when backend is healthy", async () => {
+  it("returns dev-mode stubs immediately when enabled", async () => {
     process.env.UA_DEV_MODE_STUBS = "1";
     const fetchMock = vi.fn(async () => (
       new Response(
@@ -82,7 +82,7 @@ describe("dashboard gateway proxy route", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.sessions[0].session_id).toBe("real-session");
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(payload.sessions[0].session_id).toBe("stub-session-1");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
