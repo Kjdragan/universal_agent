@@ -20315,6 +20315,10 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
     serialized["canonical_execution_workspace"] = (
         str((latest_assignment or {}).get("workspace_dir") or session_profile.get("workspace_dir") or "") or None
     )
+    serialized["links"] = _task_history_links_for_session(
+        serialized["canonical_execution_session_id"] or "",
+        workspace_dir=serialized["canonical_execution_workspace"] or ""
+    )
     return serialized
 
 

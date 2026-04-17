@@ -26,6 +26,10 @@ type AgentQueueItem = {
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
+  links?: {
+    workspace_name?: string | null;
+    session_id?: string | null;
+  } | null;
 };
 
 type AgentQueuePayload = {
