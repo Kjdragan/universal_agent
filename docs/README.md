@@ -31,7 +31,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 - **[System Architecture Overview](01_Architecture/01_System_Architecture_Overview.md)**: Component map, services, data stores, deployment topology.
 - **[Gateway, Sessions & Execution](01_Architecture/02_Gateway_Sessions_And_Execution.md)**: Session model, auth surfaces, execution engine, background services.
-- **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat.
+- **[VP Workers & Delegation](01_Architecture/03_VP_Workers_And_Delegation.md)**: VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat, shared VP email identity.
 - **[Dual Factory and Capability Expansion Brainstorm](01_Architecture/04_Dual_Factory_And_Capability_Expansion_Brainstorm.md)**: Factory expansion concepts.
 - **[Simone-First Orchestration](01_Architecture/05_Simone_First_Orchestration.md)**: Simone-centric task routing — batch triage, VP delegation, sign-off protocol, two-layer email response, `/btw` sidebar sessions.
 - **[Comparison: Background Workers vs Simone Orchestration](01_Architecture/06_Comparison_Background_Workers_vs_Simone_Orchestration.md)**: Deep-dive evaluation of pull-based, branch-isolated background workers compared to the event-driven, hierarchical Simone-First orchestration model.
@@ -65,7 +65,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 4. [Operations](03_Operations)
 
-- **[Email Architecture and AgentMail Source of Truth (2026-03-06)](03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md)**: Canonical reference for AgentMail email identity, triage→Simone inbound architecture, HTML-aware reply extraction, prompt injection defense, queue lifecycle and crash detection, triage helper CLI, and outbound policy.
+- **[Email Architecture and AgentMail Source of Truth (2026-03-06)](03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md)**: Canonical reference for AgentMail email identity, triage→Simone inbound architecture, HTML-aware reply extraction, prompt injection defense, queue lifecycle, multi-inbox VP routing (Cody/Atlas direct email engagement), CC-based Simone awareness protocol, and outbound policy.
 - **[Webhook Architecture and Operations Source of Truth (2026-03-06)](03_Operations/83_Webhook_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md)**: Canonical reference for hook ingress, auth strategies, transforms, dispatch queueing, and public versus trusted internal webhook paths.
 - **[Infisical Secrets Architecture and Operations Source of Truth (2026-03-06)](03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md)**: Canonical reference for Infisical-first runtime secret bootstrap, strict/fallback modes, provisioning, and secure operational use.
 - **[Residential Proxy Architecture and Usage Policy Source of Truth (2026-03-06)](03_Operations/86_Residential_Proxy_Architecture_And_Usage_Policy_Source_Of_Truth_2026-03-06.md)**: Canonical reference for Webshare residential proxy usage, approved/disallowed paths, YouTube guardrails, and failure alerts.

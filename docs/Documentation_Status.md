@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-16
+**Last updated:** 2026-04-17
 
 ## Development (development/)
 
@@ -39,7 +39,7 @@ Written from source code review — these describe the system as it actually exi
 |-----|---------|
 | 01 | System Architecture Overview — component map, services, data stores, deployment topology |
 | 02 | Gateway, Sessions & Execution — session model, auth surfaces, execution engine, background services |
-| 03 | VP Workers & Delegation — VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat |
+| 03 | VP Workers & Delegation — VP lanes (CODIE & ATLAS), mission lifecycle, cross-machine delegation, factory heartbeat, shared VP email identity |
 | 04 | Dual Factory and Capability Expansion Brainstorm |
 | 05 | Simone-First Orchestration — batch triage, VP delegation lifecycle, two-layer email response, `/btw` sidebar |
 | 06 | Comparison: Background Workers vs Simone Orchestration — Deep-dive evaluation of pull-based agent workers vs the event-driven Simone-First orchestration model |
@@ -63,7 +63,7 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 07 | WebSocket Architecture (`02_Flows/`) |
 | 08 | Auth & Session Security (`02_Flows/`) |
-| 82 | Email / AgentMail |
+| 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression |
 | 83 | Webhooks |
 | 85 | Infisical Secrets |
 | 86 | Residential Proxy |

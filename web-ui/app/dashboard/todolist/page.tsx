@@ -968,8 +968,8 @@ export default function ToDoListDashboardPage() {
         {showActions && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => void handleTaskAction(item.task_id, "complete")} disabled={isPending}
-              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-green/10 text-kcd-green border-none rounded-sm cursor-pointer hover:bg-kcd-green/20 transition-colors disabled:opacity-40">
-              ✓ Complete
+              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border-none rounded-sm cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40">
+              🗑 Trash It
             </button>
             <button onClick={() => void handleWakeHeartbeat(item.task_id)} disabled={wakePending}
               className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
