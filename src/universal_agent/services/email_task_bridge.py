@@ -896,16 +896,29 @@ class EmailTaskBridge:
             metadata = dict(current.get("metadata") or {})
             if metadata_patch:
                 metadata.update(metadata_patch)
-            upsert_item(
-                self._conn,
-                {
-                    "task_id": task_id,
-                    "status": status,
-                    "labels": labels,
-                    "agent_ready": "agent-ready" in labels,
-                    "metadata": metadata,
-                },
-            )
+
+            # Ensure a human-readable title is always set.  When the
+            # task_hub entry doesn't have a proper title yet (or it
+            # equals the raw task_id), look up the email subject from
+            # email_task_mappings so the dashboard card is readable.
+            existing_title = str(current.get("title") or "").strip()
+            title: Optional[str] = None
+            if not existing_title or existing_title == task_id:
+                mapping = self._get_mapping(thread_id)
+                subject = str((mapping or {}).get("subject") or "").strip() if mapping else ""
+                title = f"📧 {subject}" if subject else "📧 Email Task (pending classification)"
+
+            item: dict[str, Any] = {
+                "task_id": task_id,
+                "source_kind": _EMAIL_TASK_SOURCE_KIND,
+                "status": status,
+                "labels": labels,
+                "agent_ready": "agent-ready" in labels,
+                "metadata": metadata,
+            }
+            if title is not None:
+                item["title"] = title
+            upsert_item(self._conn, item)
             return True
         except Exception as exc:
             logger.warning("📧→📋 Thread task state update failed thread=%s: %s", thread_id, exc)
