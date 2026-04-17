@@ -78,16 +78,28 @@ def _env_positive_int(name: str, default: int) -> int:
 
 
 def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[int, int]:
+    """Count active VP coder and general assignments.
+
+    Uses the canonical ``agent_id`` field for classification.  Falls back
+    to substring matching *only* on ``agent_id`` (not on title or task_id)
+    to avoid false positives from words like "encoder" or "atlassian".
+
+    Known aliases:
+      - Coder:  "vp.coder.primary", "codie", "coder"
+      - General: "vp.general.primary", "atlas"
+    """
+    from universal_agent.services.agent_router import AGENT_CODER, AGENT_GENERAL
+
+    coder_patterns = {AGENT_CODER, "codie", "coder"}
+    general_patterns = {AGENT_GENERAL, "atlas"}
+
     coder = 0
     general = 0
     for assignment in active_assignments or []:
-        haystack = " ".join(
-            str(assignment.get(key) or "")
-            for key in ("agent_id", "provider_session_id", "title", "task_id")
-        ).lower()
-        if "vp.coder" in haystack or "codie" in haystack or "coder" in haystack:
+        agent_id = str(assignment.get("agent_id") or "").strip().lower()
+        if agent_id in coder_patterns or any(pat in agent_id for pat in coder_patterns):
             coder += 1
-        elif "vp.general" in haystack or "atlas" in haystack:
+        elif agent_id in general_patterns or any(pat in agent_id for pat in general_patterns):
             general += 1
     return coder, general
 
