@@ -14,36 +14,46 @@ This script stages your work, updates `develop`, fast-forwards `main`, pushes to
 ```bash
 set -e
 
-# 1. Save state and commit
+# 1. Save state and validate branch
 CURRENT_BRANCH=$(git branch --show-current)
 echo "🚀 Shipping from branch: $CURRENT_BRANCH"
 
+# Guard: never ship directly from main or develop
+if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "develop" ]; then
+    echo "❌ ERROR: /ship must be run from a feature branch (e.g., feature/latest2), not '$CURRENT_BRANCH'."
+    echo "   Switch to your feature branch first: git checkout feature/latest2"
+    exit 1
+fi
+
+# 2. Commit and push current branch
 git add .
 git commit -m "chore: deployment auto-commit via /ship" || echo "No pending changes to commit."
 git push origin $CURRENT_BRANCH
 
-# 2. Merge into develop
+# 3. Merge into develop
 echo "🔄 Updating integration branch (develop)..."
 git fetch origin
-if [ "$CURRENT_BRANCH" != "develop" ]; then
-    git checkout develop
-    git pull origin develop
-    git merge $CURRENT_BRANCH -m "Merge branch '$CURRENT_BRANCH' into develop for deployment"
-    git push origin develop
-fi
+git checkout develop
+git pull origin develop
+git merge $CURRENT_BRANCH -m "Merge branch '$CURRENT_BRANCH' into develop for deployment"
+git push origin develop
 
-# 3. Fast-forward main to deploy
+# 4. Fast-forward main to deploy
 echo "🚢 Fast-forwarding production branch (main)..."
 git checkout main
 git pull origin main
 git merge develop --ff-only
 git push origin main
 
-# 4. Cleanup
-echo "🧹 Returning to original branch ($CURRENT_BRANCH)..."
+# 5. Return to feature branch
+echo "🧹 Returning to feature branch ($CURRENT_BRANCH)..."
 git checkout $CURRENT_BRANCH
 
-# 5. Verify deployment completion
+# 6. Fast-forward feature branch to stay in sync with main
+echo "🔄 Syncing $CURRENT_BRANCH with main..."
+git merge main --ff-only || echo "⚠️ Feature branch has diverged from main — manual merge may be needed."
+
+# 7. Verify deployment completion
 TARGET_SHA=$(git rev-parse main)
 echo "👀 Waiting for GitHub Actions to register the deployment for commit $TARGET_SHA..."
 

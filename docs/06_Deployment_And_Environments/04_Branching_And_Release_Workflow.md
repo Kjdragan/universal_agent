@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: April 11, 2026
+Last updated: April 18, 2026
 
 ## Purpose
 
@@ -112,6 +112,10 @@ Current default:
 3. Do not use `scripts/vpsctl.sh`, `ssh`, `scp`, or `rsync` as the default application deployment path. Older scripts like `deploy_vps.sh` have been completely removed.
 
 Those older scripts are legacy or break-glass tooling only. The `.agents/workflows/ship.md` automation workflow should be used as the standard proxy command to trigger deployments.
+
+> [!IMPORTANT]
+> The `/ship` workflow includes a guard that **refuses to run from `main` or `develop`**. It must be invoked from a feature branch. After deployment, it automatically returns you to the feature branch and fast-forwards it to stay in sync with `main`.
+
 4. Do not assume production is missing a fix until you verify the deployed VPS `HEAD` SHA directly.
 
 ## Status Snapshot As Of March 12, 2026
