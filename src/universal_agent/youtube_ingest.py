@@ -18,6 +18,13 @@ _LOW_INFO_PHRASES = (
     "see you in the next video",
 )
 
+# ── Pre-ingest triage thresholds ───────────────────────────────────────
+# Videos outside these bounds are skipped BEFORE consuming proxy bandwidth
+# on a transcript fetch.  Thresholds are intentionally conservative.
+_MIN_DURATION_SECONDS = 60       # < 1 min → likely short/promo clip
+_MAX_DURATION_SECONDS = 5400     # > 1.5 hr → likely livestream replay
+_MUSIC_CATEGORY_ID = "10"        # YouTube categoryId for Music
+
 
 def extract_video_id(video_url: str | None) -> Optional[str]:
     if not isinstance(video_url, str):
@@ -190,6 +197,123 @@ def _evaluate_transcript_quality(transcript_text: str, min_chars: int) -> tuple[
 
     score = min(1.0, 0.6 * min(chars / 6000.0, 1.0) + 0.4 * max(min(unique_ratio, 1.0), 0.0))
     return True, round(score, 4), ""
+
+
+def _should_skip_video_by_metadata(
+    metadata: dict[str, Any],
+) -> tuple[bool, str]:
+    """Pre-ingest triage gate: decide whether to skip transcript fetch.
+
+    Uses FREE metadata (YouTube Data API v3 or yt-dlp, already fetched
+    before this point) to avoid consuming expensive residential proxy
+    bandwidth on videos unlikely to produce valuable transcripts.
+
+    Returns (should_skip, reason).  If should_skip is True, the caller
+    should return early WITHOUT calling the transcript API through the
+    proxy.
+    """
+    if not metadata:
+        # No metadata available — cannot screen, proceed with fetch
+        return False, ""
+
+    # ── Duration gate ──────────────────────────────────────────────────
+    duration = metadata.get("duration")
+    if duration is not None:
+        try:
+            dur_int = int(duration)
+        except (TypeError, ValueError):
+            dur_int = None
+        if dur_int is not None:
+            if dur_int < _MIN_DURATION_SECONDS:
+                return True, (
+                    f"video too short ({dur_int}s < {_MIN_DURATION_SECONDS}s) "
+                    f"— unlikely to yield valuable transcript"
+                )
+            if dur_int > _MAX_DURATION_SECONDS:
+                return True, (
+                    f"video too long ({dur_int}s > {_MAX_DURATION_SECONDS}s / "
+                    f"{_MAX_DURATION_SECONDS // 3600}h{(_MAX_DURATION_SECONDS % 3600) // 60}m) "
+                    f"— likely a livestream replay; excessive proxy bandwidth"
+                )
+
+    # ── Music category gate ────────────────────────────────────────────
+    category_id = str(metadata.get("category_id") or "").strip()
+    if category_id == _MUSIC_CATEGORY_ID:
+        return True, (
+            f"video is categorized as Music (categoryId={_MUSIC_CATEGORY_ID}) "
+            f"— music video transcripts are typically lyrics-only filler"
+        )
+
+    # ── Live broadcast gate ────────────────────────────────────────────
+    live_status = str(metadata.get("live_broadcast_content") or "").strip().lower()
+    if live_status in ("live", "upcoming"):
+        return True, (
+            f"video is a live/upcoming broadcast (liveBroadcastContent={live_status}) "
+            f"— live streams may have no transcript or produce hours of low-density chat"
+        )
+
+    return False, ""
+
+
+def get_dataimpulse_usage_stats(
+    *,
+    timeout_seconds: int = 10,
+) -> dict[str, Any]:
+    """Fetch real-time usage stats from the DataImpulse User API.
+
+    Returns bandwidth usage, remaining balance, and thread count.
+    Uses the same proxy credentials (DATAIMPULSE_PROXY_USER/PASS)
+    with Basic Auth against https://gw.dataimpulse.com:777/api/stats.
+
+    This is NOT a proxy request — it's a direct HTTPS call to the
+    DataImpulse management API on port 777.
+    """
+    import base64
+
+    username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+    password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+    if not username or not password:
+        return {
+            "ok": False,
+            "error": "dataimpulse_credentials_missing",
+            "detail": "DATAIMPULSE_PROXY_USER/PASS not set",
+        }
+
+    host = (
+        os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com"
+    ).strip() or "gw.dataimpulse.com"
+    api_url = f"https://{host}:777/api/stats"
+
+    auth_bytes = base64.b64encode(f"{username}:{password}".encode()).decode()
+    req = urllib.request.Request(
+        api_url,
+        headers={
+            "Authorization": f"Basic {auth_bytes}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(
+            req, timeout=max(5, min(timeout_seconds, 30))
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "dataimpulse_api_request_failed",
+            "detail": str(exc),
+        }
+
+    # Normalize relevant fields for easy consumption
+    return {
+        "ok": True,
+        "source": "dataimpulse_api",
+        "total_traffic": data.get("total_traffic"),
+        "traffic_used": data.get("traffic_used"),
+        "traffic_left": data.get("traffic_left"),
+        "used_threads": data.get("used_threads"),
+        "raw": data,
+    }
 
 
 def _parse_proxy_locations(raw: str) -> list[str]:
@@ -404,6 +528,9 @@ def _run_youtube_data_api_metadata(
         "like_count": int(statistics.get("likeCount") or 0) or None,
         "description": str(snippet.get("description") or "").strip() or None,
         "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+        # Pre-ingest triage fields (used by _should_skip_video_by_metadata)
+        "category_id": str(snippet.get("categoryId") or "").strip() or None,
+        "live_broadcast_content": str(snippet.get("liveBroadcastContent") or "").strip() or None,
     }
     return {
         "ok": True,
@@ -608,6 +735,7 @@ def ingest_youtube_transcript(
 
     # ── Metadata strategy: API-first, yt-dlp fallback ──────────────────
     # YouTube Data API v3 returns ~2 KB JSON (no proxy, no anti-bot).
+    # Uses a standard API key with quota (10,000 units/day free tier).
     # yt-dlp scrapes ~500 KB HTML watch page — used only as fallback and
     # deliberately runs WITHOUT proxy to conserve residential bandwidth.
     metadata_result = _run_youtube_data_api_metadata(
@@ -624,6 +752,36 @@ def ingest_youtube_transcript(
             proxy_url="",  # no proxy for fallback metadata
             timeout_seconds=timeout_seconds,
         )
+
+    # ── Pre-ingest triage gate ────────────────────────────────────────
+    # Screen video metadata BEFORE consuming proxy bandwidth on transcript
+    # fetch.  This gate filters out videos unlikely to produce valuable
+    # transcripts (too short, too long, music, live broadcasts).
+    # The metadata was fetched for free above — this adds zero cost.
+    meta_for_triage = metadata_result.get("metadata") if isinstance(metadata_result.get("metadata"), dict) else {}
+    skip_video, skip_reason = _should_skip_video_by_metadata(meta_for_triage)
+    if skip_video:
+        log.info(
+            "PRE-INGEST TRIAGE: skipping transcript fetch for %s — %s",
+            resolved_video_id, skip_reason,
+        )
+        _metadata = meta_for_triage
+        _metadata_status = "attempted_succeeded" if metadata_result.get("ok") else "attempted_failed"
+        _metadata_source = str(metadata_result.get("source") or "youtube_data_api_v3")
+        return {
+            "ok": False,
+            "status": "skipped",
+            "error": "pre_ingest_triage_skipped",
+            "failure_class": "pre_ingest_triage",
+            "detail": skip_reason,
+            "video_url": resolved_url,
+            "video_id": resolved_video_id,
+            "metadata": _metadata,
+            "metadata_status": _metadata_status,
+            "metadata_source": _metadata_source,
+            "proxy_bandwidth_saved": True,
+            "attempts": [],
+        }
 
     # ── Transcript fetch (always needs proxy for anti-bot) ────────────
     transcript_result = _run_youtube_transcript_api_extract(
@@ -662,6 +820,11 @@ def ingest_youtube_transcript(
             "attempts": attempts,
         }
 
+    # NOTE: max_chars truncation happens AFTER the full transcript has
+    # already been downloaded through the residential proxy.  This does
+    # NOT save proxy bandwidth — it only caps downstream processing.
+    # To save actual proxy bandwidth, use the pre-ingest triage gate
+    # above which skips the transcript fetch entirely for filtered videos.
     max_chars = max(1_000, min(int(max_chars or 0), 800_000))
     truncated = False
     if len(transcript_text) > max_chars:

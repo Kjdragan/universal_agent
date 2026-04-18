@@ -81,9 +81,46 @@ Behavior:
 - if proxy module support is unavailable, proxy mode reports module unavailability
 - if proxy is required and unavailable, the ingest hard fails instead of falling back silently to the VPS datacenter IP
 - API-first metadata (YouTube Data API v3), yt-dlp as metadata fallback (no proxy for metadata)
+- **Pre-ingest triage gate** screens metadata BEFORE consuming proxy bandwidth (see §1a below)
 
 
 
+### 1a. Pre-Ingest Metadata Triage Gate
+
+Added: 2026-04-18
+
+Implementation:
+- `src/universal_agent/youtube_ingest.py` → `_should_skip_video_by_metadata()`
+
+The pre-ingest triage gate is a **zero-cost filter** that screens already-fetched metadata (from the free YouTube Data API v3 or yt-dlp fallback) to skip transcript fetches for videos unlikely to produce valuable transcripts. It runs BEFORE any proxy bandwidth is consumed.
+
+**Filter criteria:**
+
+| Gate | Threshold | Rationale |
+|---|---|---|
+| Too short | < 60 seconds | Promo clips, intros, shorts — minimal transcript value |
+| Too long | > 5400 seconds (1.5 hr) | Likely livestream replay — excessive bandwidth for low-density content |
+| Music category | `categoryId == 10` | Music video transcripts are lyrics-only filler |
+| Live/upcoming broadcast | `liveBroadcastContent ∈ {live, upcoming}` | No transcript yet, or hours of low-density chat |
+
+**Behavior:**
+- Videos matching any gate are returned with `failure_class: "pre_ingest_triage"` and `status: "skipped"`
+- The `pre_ingest_triage` failure class is registered as **non-retryable** — the hooks service will never retry these
+- The response includes `proxy_bandwidth_saved: true` for telemetry
+- The metadata is still returned in the response so downstream consumers can inspect it
+
+> [!IMPORTANT]
+> The triage gate is conservative by design — it only filters obvious low-value content.
+> Borderline cases (e.g., 55-second tutorials) should err on the side of fetching.
+> Thresholds are defined as module constants (`_MIN_DURATION_SECONDS`, `_MAX_DURATION_SECONDS`, `_MUSIC_CATEGORY_ID`).
+
+### 1b. Transcript Truncation (NOT a Bandwidth Optimization)
+
+> [!WARNING]
+> The `max_chars` parameter in `ingest_youtube_transcript()` truncates the transcript **AFTER** the
+> full transcript has already been downloaded through the residential proxy. This does NOT save
+> proxy bandwidth — it only caps downstream processing size. To save actual proxy bandwidth,
+> use the pre-ingest triage gate above which skips the transcript fetch entirely.
 ## 2. YouTube Metadata Extraction
 
 Also in:
@@ -365,13 +402,50 @@ Related tests and behavior references:
 - `tests/unit/test_youtube_ingest.py`
 - `tests/gateway/test_youtube_ingest_endpoint.py`
 
+## DataImpulse Bandwidth Telemetry
+
+Added: 2026-04-18
+
+Implementation:
+- `src/universal_agent/youtube_ingest.py` → `get_dataimpulse_usage_stats()`
+
+The DataImpulse User API (port 777) provides real-time bandwidth usage stats. The `get_dataimpulse_usage_stats()` helper function makes a direct HTTPS request (NOT through the proxy) to `https://gw.dataimpulse.com:777/api/stats` with Basic Auth using the same proxy credentials.
+
+**Response fields:**
+
+| Field | Description |
+|---|---|
+| `total_traffic` | Total bandwidth allocation |
+| `traffic_used` | Bandwidth consumed so far |
+| `traffic_left` | Remaining bandwidth |
+| `used_threads` | Currently active proxy threads |
+
+**Usage:**
+```python
+from universal_agent.youtube_ingest import get_dataimpulse_usage_stats
+
+stats = get_dataimpulse_usage_stats()
+if stats.get("ok"):
+    print(f"Bandwidth remaining: {stats['traffic_left']}")
+else:
+    print(f"API error: {stats.get('error')}")
+```
+
+This can be integrated into the health heartbeat, cron jobs, or manual diagnostics to monitor bandwidth consumption and implement threshold-based throttling.
+
+> [!NOTE]
+> The telemetry API uses the same `DATAIMPULSE_PROXY_USER`/`DATAIMPULSE_PROXY_PASS` credentials but on port 777
+> (management API), not port 823 (proxy traffic). This is a free API call that does not consume bandwidth.
+
 ## Bottom Line
 
 The canonical residential proxy policy in Universal Agent is:
 - **use rotating residential proxy (Webshare or DataImpulse, selected by `PROXY_PROVIDER`) as the primary YouTube transcript path on the VPS**
 - **require proxy for VPS YouTube transcript ingestion unless explicitly in local dev mode**
+- **screen videos with the pre-ingest triage gate BEFORE consuming proxy bandwidth — filter by duration, category, and live status**
 - **never send video binary through the proxy**
 - **treat the proxy as a costly shared capability, not a default project-wide network path**
 - **surface misconfiguration loudly through ingest failures and hook notifications — provider-aware error messages reference the active provider**
 - **treat `proxy_connect_failed` as a first-class proxy transport incident, not a generic API outage**
 - **maintain both providers' credentials in Infisical for failover resilience**
+- **monitor bandwidth consumption via the DataImpulse User API (`get_dataimpulse_usage_stats()`) and implement threshold alerts**

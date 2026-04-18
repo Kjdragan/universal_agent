@@ -118,6 +118,7 @@ YOUTUBE_INGEST_NON_RETRYABLE_FAILURE_CLASSES = {
     "api_unavailable",
     "transcript_unavailable",
     "empty_or_low_quality_transcript",
+    "pre_ingest_triage",  # metadata-based screening — never retry
     "proxy_not_configured",
     "proxy_auth_failed",
     "proxy_quota_or_billing",
@@ -3111,6 +3112,13 @@ class HooksService:
             return (
                 f"transcript is unavailable (error={err}, failure_class={cls}). "
                 "Captions are missing/disabled for this video; skipping retries."
+            )
+        if cls == "pre_ingest_triage":
+            return (
+                f"video skipped by pre-ingest triage (failure_class={cls}). "
+                "Metadata screening determined this video is unlikely to yield a valuable "
+                "transcript (e.g. too short, too long, music category, or live broadcast). "
+                "Proxy bandwidth saved — no transcript fetch attempted."
             )
         return (
             f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
