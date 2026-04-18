@@ -11713,6 +11713,10 @@ def _calendar_cleanup_state() -> None:
 
 
 def _calendar_match_cron_run(runs: list[dict[str, Any]], scheduled_at: float) -> Optional[dict[str, Any]]:
+    # Tolerance: 300s (5 minutes) to account for scheduling drift from server
+    # restarts, timezone edge cases, and scheduler tick timing.  The old 90s
+    # window produced false "missed" on daily cron jobs (e.g. Cody cleanup).
+    _MATCH_TOLERANCE_SECONDS = 300
     best: Optional[dict[str, Any]] = None
     best_delta = 1e12
     for run in runs:
@@ -11724,7 +11728,7 @@ def _calendar_match_cron_run(runs: list[dict[str, Any]], scheduled_at: float) ->
         except Exception:
             continue
         delta = abs(run_ts - scheduled_at)
-        if delta <= 90 and delta < best_delta:
+        if delta <= _MATCH_TOLERANCE_SECONDS and delta < best_delta:
             best = run
             best_delta = delta
     return best
@@ -11824,7 +11828,7 @@ def _calendar_project_cron_events(
             is_running = bool(
                 matched_run is None
                 and running_scheduled_at is not None
-                and abs(float(running_scheduled_at) - float(scheduled_at)) <= 90
+                and abs(float(running_scheduled_at) - float(scheduled_at)) <= 300
             )
             status_value = _calendar_status_from_cron_run(
                 matched_run,
