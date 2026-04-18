@@ -19,10 +19,57 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 | Playlist Watcher | `services/youtube_playlist_watcher.py` | Periodically polls configured YouTube playlists for new video IDs |
 | Hooks Service | `hooks_service.py` | Receives webhook events, manages dispatch queue, throttling, retry policies |
 | Gateway Server | `gateway_server.py` | Notification system, tutorial dashboard API, persistence |
-| YouTube Ingestion | `youtube_ingest.py` | Fetches transcripts via Webshare rotating residential proxy (primary and only path) |
+| YouTube Ingestion | `youtube_ingest.py` | Fetches transcripts via rotating residential proxy (Webshare or DataImpulse, selected by `PROXY_PROVIDER`) |
 | Telegram Notifier | `services/tutorial_telegram_notifier.py` | Per-video dedup Telegram alerts for tutorial events |
 | Dashboard (Tutorials) | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorial runs, review jobs, bootstrap jobs, notifications with client-side dedup |
 | Dashboard (Main) | `web-ui/app/dashboard/page.tsx` | Notification panel with video-level dedup |
+
+---
+
+> [!IMPORTANT]
+> **Two Separate YouTube Watching Systems Exist.** They use different databases,
+> different state storage, and require independent operational management.
+> Failing to reset BOTH systems (e.g., during a proxy provider switch) will
+> result in stale state in one pipeline while the other is clean.
+
+### 1.1 Dual-Pipeline Architecture
+
+```mermaid
+flowchart LR
+    subgraph "Pipeline A: Playlist Watcher (UA-native)"
+        PW[youtube_playlist_watcher.py] -->|new video ID| HS[hooks_service.py]
+        HS --> AS[Agent Session]
+        AS --> TG[Tutorial Generation]
+    end
+
+    subgraph "Pipeline B: CSI RSS Channel Feed"
+        RSS[youtube_channel_rss.py] -->|new video event| CSI_DB[(csi.db)]
+        CSI_DB --> ENRICH[LLM Enrichment]
+        ENRICH --> DIGEST[Digest/Reports]
+    end
+
+    PW -.->|state file| SF[youtube_playlist_watcher_state.json]
+    RSS -.->|source_state table| SS[(csi.db → source_state)]
+```
+
+| Aspect | Pipeline A: Playlist Watcher | Pipeline B: CSI RSS Channel Feed |
+|--------|------------------------------|-----------------------------------|
+| **Purpose** | Watch specific playlists for new tutorial videos | Watch 444+ channel RSS feeds for any new uploads |
+| **Owner** | UA Gateway (`services/youtube_playlist_watcher.py`) | CSI Ingester (`csi_ingester/adapters/youtube_channel_rss.py`) |
+| **State Storage** | `youtube_playlist_watcher_state.json` (flat file) | `source_state` table rows keyed `youtube_channel_rss:<channel_id>` |
+| **Database** | None (file-based state) | `csi.db` (default: `/var/lib/universal-agent/csi/csi.db`) |
+| **State Contents** | `seen_ids`, `pending_dispatch_items`, `run_retry_counts`, `permanently_failed_video_ids` | Per-channel: `seen_ids`, `seeded`, `etag`, `last_modified` |
+| **Reset Script** | `scripts/purge_youtube_backlog.py` Steps 1-3 | `scripts/purge_youtube_backlog.py` Steps 4-5 |
+| **Proxy Usage** | Transcript ingestion via residential proxy | RSS feed polling (no proxy needed for RSS, proxy used for transcript fetch if triggered) |
+
+> [!CAUTION]
+> When switching proxy providers or resetting YouTube state, you **MUST** run
+> the purge script which covers **both** pipelines:
+> ```bash
+> cd /opt/universal_agent
+> uv run python scripts/purge_youtube_backlog.py --dry-run  # preview
+> uv run python scripts/purge_youtube_backlog.py             # execute
+> ```
 
 ---
 
@@ -88,14 +135,22 @@ Transcript fetching uses a **single, unified architecture** running entirely on 
 > [!NOTE]
 > The desktop transcript worker (`desktop_transcript_worker.py`) was decommissioned
 > in April 2026. All transcript fetching now runs on the VPS via `youtube_ingest.py`
-> using the Webshare rotating residential proxy.
+> using a rotating residential proxy (Webshare or DataImpulse).
 
 ### Architecture: VPS Rotating Residential Proxy
 
-The `youtube_ingest.py` module uses Webshare rotating residential proxies to bypass YouTube's datacenter IP blocking. It is exposed via the gateway endpoint `/api/v1/youtube/ingest` and is called by the CSI enrichment pipeline (`csi_rss_semantic_enrich.py`) on a systemd timer every 4 hours.
+The `youtube_ingest.py` module uses rotating residential proxies to bypass YouTube's datacenter IP blocking. The active provider is selected by the `PROXY_PROVIDER` environment variable:
+
+| Provider | Endpoint | Port | Default |
+|---|---|---|---|
+| **Webshare** | `p.webshare.io` | `80` | — |
+| **DataImpulse** | `gw.dataimpulse.com` | `823` | ✅ (production default since April 2026) |
+
+The module is exposed via the gateway endpoint `/api/v1/youtube/ingest` and is called by the CSI enrichment pipeline (`csi_rss_semantic_enrich.py`) on a systemd timer every 4 hours.
 
 Key behaviors:
-- **Proxy-first**: Requires Webshare residential proxy by default (`UA_YOUTUBE_INGEST_REQUIRE_PROXY=1`)
+- **Proxy-first**: Requires residential proxy by default (`UA_YOUTUBE_INGEST_REQUIRE_PROXY=1`)
+- **Provider-agnostic**: `PROXY_PROVIDER` env var selects `webshare` or `dataimpulse`
 - **API-first metadata**: Uses YouTube Data API v3 for metadata (no proxy needed), yt-dlp as fallback
 - **Minimum character threshold** to detect empty/stub transcripts
 - **Cooldown between ingestion attempts** for the same video
@@ -175,12 +230,17 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 ### VPS Proxy (youtube_ingest.py)
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UA_YOUTUBE_INGEST_REQUIRE_PROXY` | `1` | Require Webshare proxy (set `0` for local dev only) |
+| `PROXY_PROVIDER` | `webshare` | Active proxy provider: `webshare` or `dataimpulse` |
+| `UA_YOUTUBE_INGEST_REQUIRE_PROXY` | `1` | Require residential proxy (set `0` for local dev only) |
 | `PROXY_USERNAME` | — | Webshare proxy username |
 | `PROXY_PASSWORD` | — | Webshare proxy password |
-| `WEBSHARE_PROXY_HOST` | `proxy.webshare.io` | Proxy domain |
-| `WEBSHARE_PROXY_PORT` | `80` | Proxy port |
-| `WEBSHARE_PROXY_LOCATIONS` | — | Optional location filter |
+| `WEBSHARE_PROXY_HOST` | `proxy.webshare.io` | Webshare proxy domain |
+| `WEBSHARE_PROXY_PORT` | `80` | Webshare proxy port |
+| `WEBSHARE_PROXY_LOCATIONS` | — | Optional Webshare location filter |
+| `DATAIMPULSE_HOST` | `gw.dataimpulse.com` | DataImpulse proxy domain |
+| `DATAIMPULSE_PORT` | `823` | DataImpulse proxy port |
+| `DATAIMPULSE_USER` | — | DataImpulse proxy username |
+| `DATAIMPULSE_PASS` | — | DataImpulse proxy password |
 
 ---
 
@@ -190,13 +250,15 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 |------|-------------|
 | `src/universal_agent/hooks_service.py` | Core pipeline orchestration, dispatch queue, retry |
 | `src/universal_agent/gateway_server.py` | Notification CRUD, tutorial dashboard API, dedup constants |
-| `src/universal_agent/youtube_ingest.py` | Transcript fetching via Webshare rotating residential proxy |
+| `src/universal_agent/youtube_ingest.py` | Transcript fetching via rotating residential proxy (Webshare or DataImpulse) |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |
 | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorials tab with entity-level dedup |
 | `tests/unit/test_tutorial_notification_dedup.py` | Backend video-level dedup tests |
 | `tests/unit/test_tutorial_telegram_dedup.py` | Telegram notifier dedup tests |
+| `scripts/check_proxy.py` | Provider-agnostic proxy connectivity diagnostic (TCP, HTTP, HTTPS, YouTube) |
+| `scripts/purge_youtube_backlog.py` | Operational script: reset playlist watcher state, finalize stale runs, purge pending signal cards |
 
 ---
 
@@ -216,23 +278,33 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 
 ## 10. Proxy Failure Semantics and Debugging Notes
 
-The VPS fallback path in `src/universal_agent/youtube_ingest.py` builds its
-Webshare configuration from the **current process environment** inside
-`_build_webshare_proxy_config()`.
+The VPS transcript path in `src/universal_agent/youtube_ingest.py` builds its
+proxy configuration from the **current process environment** using the
+provider-agnostic `_build_proxy_config()` router, which delegates to either
+`_build_webshare_proxy_config()` or `_build_dataimpulse_proxy_config()` based
+on the `PROXY_PROVIDER` env var.
 
-The relevant variables are:
+The relevant variables depend on the active provider:
 
+**Webshare:**
 - `PROXY_USERNAME` or `WEBSHARE_PROXY_USER`
 - `PROXY_PASSWORD` or `WEBSHARE_PROXY_PASS`
 - optional host, port, and location filters
+
+**DataImpulse:**
+- `DATAIMPULSE_USER`
+- `DATAIMPULSE_PASS`
+- `DATAIMPULSE_HOST` (default: `gw.dataimpulse.com`)
+- `DATAIMPULSE_PORT` (default: `823`)
 
 ### What `proxy_not_configured` Actually Means
 
 `proxy_not_configured` does **not** always mean "Infisical never had the
 secret."
 
-It specifically means `_build_webshare_proxy_config()` could not find a usable
-username/password pair in the current gateway process at request time.
+It specifically means the proxy config builder could not find a usable
+username/password pair for the **active provider** in the current gateway
+process at request time.
 
 That can happen for multiple reasons:
 
@@ -241,6 +313,7 @@ That can happen for multiple reasons:
 3. secret names or aliases are inconsistent
 4. later runtime code mutated `os.environ` and removed the proxy vars from the
    live process after bootstrap
+5. `PROXY_PROVIDER` is set to a provider whose credentials are not provisioned
 
 ### Live Service vs Fresh Process Matters
 

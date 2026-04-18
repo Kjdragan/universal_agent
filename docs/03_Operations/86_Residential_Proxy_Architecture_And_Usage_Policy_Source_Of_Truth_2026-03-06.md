@@ -349,9 +349,18 @@ Agent skill implementation:
 
 Diagnostic scripts:
 - `scripts/check_proxy.py` — provider-agnostic probe (supports `--provider webshare` and `--provider dataimpulse`)
+- `scripts/purge_youtube_backlog.py` — operational reset covering **both** YouTube pipelines:
+  - Steps 1-3: Playlist Watcher (state file + stale runs + signal cards)
+  - Steps 4-5: CSI RSS Channel Feed (source_state in csi.db + dedupe keys)
 - `scripts/check_webshare_proxy.py` (legacy, Webshare-only)
 - `scripts/check_webshare_proxy_credentials.py` (legacy, Webshare-only)
 
+> [!CAUTION]
+> **Proxy Provider Switch Checklist:** When switching providers (e.g., Webshare → DataImpulse):
+> 1. Update `PROXY_PROVIDER` in Infisical
+> 2. Run `purge_youtube_backlog.py` (covers both pipelines)
+> 3. Restart the gateway and CSI Ingester services
+> 4. Verify proxy connectivity with `check_proxy.py --provider <new_provider>`
 Related tests and behavior references:
 - `tests/unit/test_youtube_ingest.py`
 - `tests/gateway/test_youtube_ingest_endpoint.py`

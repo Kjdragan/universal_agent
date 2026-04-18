@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Purge YouTube RSS backlog before switching to DataImpulse proxy.
+"""Purge YouTube backlog across BOTH watching systems before proxy switch.
 
 This script is meant to run on the VPS BEFORE restarting the gateway with
-PROXY_PROVIDER=dataimpulse. It performs three cleanup actions:
+PROXY_PROVIDER=dataimpulse. It resets BOTH YouTube watching pipelines:
+
+  Pipeline A — Playlist Watcher (UA-native, file-based state)
+  Pipeline B — CSI RSS Channel Feed (CSI Ingester, csi.db state)
+
+Cleanup actions:
 
 1. Reset the YouTube playlist watcher state file to force a fresh seed.
    On next gateway boot the watcher will mark all current playlist items
@@ -13,6 +18,14 @@ PROXY_PROVIDER=dataimpulse. It performs three cleanup actions:
 
 3. Delete pending YouTube proactive signal cards from the activity DB
    so the dashboard doesn't show outdated "missing transcript" entries.
+
+4. Reset CSI RSS channel state in csi.db — clears seen_ids, etag, and
+   last_modified for all youtube_channel_rss:* keys in source_state.
+   On next CSI boot, each channel will re-seed (mark current videos as
+   "seen") rather than emitting a flood of stale "new" events.
+
+5. Purge YouTube-related dedupe keys from csi.db so stale videos don't
+   get silently suppressed if they need to be re-evaluated.
 
 Usage (on VPS):
     cd /opt/universal_agent
@@ -35,6 +48,9 @@ WORKSPACES = REPO_ROOT / "AGENT_RUN_WORKSPACES"
 WATCHER_STATE_FILE = WORKSPACES / "youtube_playlist_watcher_state.json"
 RUNTIME_DB = WORKSPACES / "runtime_state.db"
 ACTIVITY_DB = WORKSPACES / "activity_state.db"
+
+# CSI database — separate subsystem with its own SQLite DB
+CSI_DB = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
 
 
 def _now_iso() -> str:
@@ -259,9 +275,151 @@ def purge_signal_cards(dry_run: bool) -> dict:
     return result
 
 
+# ── Step 4: Reset CSI RSS channel state in csi.db ─────────────────────
+def reset_csi_rss_state(dry_run: bool) -> dict:
+    """Clear youtube_channel_rss:* keys from csi.db source_state.
+
+    This forces the CSI RSS adapter to re-seed each channel on next boot,
+    marking all current videos as 'seen' rather than emitting them.
+    """
+    result = {"action": "reset_csi_rss_state", "db": str(CSI_DB)}
+    if not CSI_DB.exists():
+        result["status"] = "skipped"
+        result["reason"] = "csi.db does not exist at expected path"
+        return result
+
+    conn = sqlite3.connect(str(CSI_DB), timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Verify source_state table exists
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='source_state'"
+            ).fetchall()
+        ]
+        if "source_state" not in tables:
+            result["status"] = "skipped"
+            result["reason"] = "source_state table does not exist"
+            return result
+
+        # Query all youtube_channel_rss:* keys
+        rss_rows = conn.execute(
+            "SELECT source_key, state_json FROM source_state WHERE source_key LIKE 'youtube_channel_rss:%'"
+        ).fetchall()
+
+        # Also check adapter_health key
+        health_row = conn.execute(
+            "SELECT source_key, state_json FROM source_state WHERE source_key = 'adapter_health:youtube_channel_rss'"
+        ).fetchone()
+
+        total_channels = len(rss_rows)
+        total_seen_ids = 0
+        for row in rss_rows:
+            try:
+                state = json.loads(row["state_json"])
+                total_seen_ids += len(state.get("seen_ids", []))
+            except Exception:
+                pass
+
+        result["channels_with_state"] = total_channels
+        result["total_seen_ids_across_channels"] = total_seen_ids
+        result["adapter_health_exists"] = health_row is not None
+
+        if total_channels == 0 and health_row is None:
+            result["status"] = "clean"
+            result["message"] = "no CSI RSS channel state found"
+            return result
+
+        if dry_run:
+            result["status"] = "dry_run"
+            result["would_delete_channel_keys"] = total_channels
+            result["would_delete_health_key"] = health_row is not None
+            return result
+
+        # Backup current state to a JSON file before deletion
+        backup_data = {}
+        for row in rss_rows:
+            backup_data[row["source_key"]] = row["state_json"]
+        if health_row:
+            backup_data[health_row["source_key"]] = health_row["state_json"]
+
+        backup_path = CSI_DB.parent / f"csi_rss_state_backup_{_now_iso().replace(':', '-')}.json"
+        backup_path.write_text(json.dumps(backup_data, indent=2), encoding="utf-8")
+
+        # Delete the rows
+        conn.execute("DELETE FROM source_state WHERE source_key LIKE 'youtube_channel_rss:%'")
+        conn.execute("DELETE FROM source_state WHERE source_key = 'adapter_health:youtube_channel_rss'")
+        conn.commit()
+
+        result["status"] = "reset"
+        result["deleted_channel_keys"] = total_channels
+        result["deleted_health_key"] = health_row is not None
+        result["backup"] = str(backup_path)
+    finally:
+        conn.close()
+
+    return result
+
+
+# ── Step 5: Purge YouTube dedupe keys from csi.db ─────────────────────
+def purge_csi_dedupe_keys(dry_run: bool) -> dict:
+    """Clear youtube:video:* dedupe keys from csi.db.
+
+    This allows previously-seen videos to be re-evaluated if needed,
+    preventing silent suppression of videos from the dormant period.
+    """
+    result = {"action": "purge_csi_youtube_dedupe_keys", "db": str(CSI_DB)}
+    if not CSI_DB.exists():
+        result["status"] = "skipped"
+        result["reason"] = "csi.db does not exist at expected path"
+        return result
+
+    conn = sqlite3.connect(str(CSI_DB), timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='dedupe_keys'"
+            ).fetchall()
+        ]
+        if "dedupe_keys" not in tables:
+            result["status"] = "skipped"
+            result["reason"] = "dedupe_keys table does not exist"
+            return result
+
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM dedupe_keys WHERE key LIKE 'youtube:video:%'"
+        ).fetchone()
+        yt_count = int(count_row["cnt"]) if count_row else 0
+
+        result["youtube_dedupe_keys"] = yt_count
+
+        if yt_count == 0:
+            result["status"] = "clean"
+            result["message"] = "no YouTube dedupe keys found"
+            return result
+
+        if dry_run:
+            result["status"] = "dry_run"
+            result["would_delete"] = yt_count
+            return result
+
+        conn.execute("DELETE FROM dedupe_keys WHERE key LIKE 'youtube:video:%'")
+        conn.commit()
+
+        result["status"] = "purged"
+        result["deleted_count"] = yt_count
+    finally:
+        conn.close()
+
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Purge YouTube RSS backlog before DataImpulse go-live"
+        description="Purge YouTube backlog across both watching systems before proxy switch"
     )
     parser.add_argument(
         "--dry-run",
@@ -271,27 +429,42 @@ def main():
     args = parser.parse_args()
 
     print(f"{'=' * 60}")
-    print(f"YouTube Backlog Purge — {'DRY RUN' if args.dry_run else 'LIVE'}")
+    print(f"YouTube Backlog Purge (Both Pipelines) — {'DRY RUN' if args.dry_run else 'LIVE'}")
     print(f"Time: {_now_iso()}")
     print(f"Repo: {REPO_ROOT}")
+    print(f"CSI DB: {CSI_DB}")
     print(f"{'=' * 60}")
 
     results = []
 
-    print("\n[1/3] Resetting playlist watcher state...")
+    print("\n── Pipeline A: Playlist Watcher (UA-native) ──")
+
+    print("\n[1/5] Resetting playlist watcher state...")
     r1 = reset_watcher_state(args.dry_run)
     results.append(r1)
     print(f"  → {json.dumps(r1, indent=2)}")
 
-    print("\n[2/3] Finalizing stale YouTube runs...")
+    print("\n[2/5] Finalizing stale YouTube runs...")
     r2 = finalize_stale_runs(args.dry_run)
     results.append(r2)
     print(f"  → {json.dumps(r2, indent=2)}")
 
-    print("\n[3/3] Purging pending YouTube signal cards...")
+    print("\n[3/5] Purging pending YouTube signal cards...")
     r3 = purge_signal_cards(args.dry_run)
     results.append(r3)
     print(f"  → {json.dumps(r3, indent=2)}")
+
+    print("\n── Pipeline B: CSI RSS Channel Feed (csi.db) ──")
+
+    print("\n[4/5] Resetting CSI RSS channel state...")
+    r4 = reset_csi_rss_state(args.dry_run)
+    results.append(r4)
+    print(f"  → {json.dumps(r4, indent=2)}")
+
+    print("\n[5/5] Purging CSI YouTube dedupe keys...")
+    r5 = purge_csi_dedupe_keys(args.dry_run)
+    results.append(r5)
+    print(f"  → {json.dumps(r5, indent=2)}")
 
     print(f"\n{'=' * 60}")
     print("Summary:")
