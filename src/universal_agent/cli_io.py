@@ -546,6 +546,18 @@ def print_job_completion_summary(
         ),
     }
 
+    # Dispatch table: (effect_label, tool_name_pattern, haystack_pattern|None)
+    # A rule matches when tool_name_pattern is found in the uppercased tool name
+    # AND haystack_pattern (if not None) is found in the lowered haystack.
+    _EFFECT_RULES: list[tuple[str, str, str | None]] = [
+        ("email", "GMAIL_SEND_EMAIL", None),
+        ("email", "MULTI_EXECUTE_TOOL", "gmail_send_email|recipient_email"),
+        ("email", "SEND_EMAIL", "gmail"),
+        ("email", "GMAIL", "send|draft"),
+        ("upload", "UPLOAD_TO_COMPOSIO", None),
+        ("upload", "UPLOAD", "composio"),
+    ]
+
     def _effects_from_receipts(receipt_items: list[dict[str, Any]]) -> set[str]:
         effects: set[str] = set()
         for receipt in receipt_items:
@@ -553,21 +565,16 @@ def print_job_completion_summary(
             response_ref = str(receipt.get("response_ref", "") or "")
             tool_name_upper = tool_name.upper()
             haystack = f"{tool_name} {response_ref}".lower()
-            if "GMAIL_SEND_EMAIL" in tool_name_upper:
-                effects.add("email")
-            elif "COMPOSIO_MULTI_EXECUTE_TOOL" in tool_name_upper:
-                if "gmail_send_email" in haystack or "recipient_email" in haystack:
-                    effects.add("email")
-            elif "send_email" in haystack and "gmail" in haystack:
-                effects.add("email")
-            elif "gmail" in haystack and ("send" in haystack or "draft" in haystack):
-                effects.add("email")
-            if "UPLOAD_TO_COMPOSIO" in tool_name_upper:
-                effects.add("upload")
-            elif "upload_to_composio" in haystack or (
-                "upload" in haystack and "composio" in haystack
-            ):
-                effects.add("upload")
+            for effect_label, tool_pat, hay_pat in _EFFECT_RULES:
+                if effect_label in effects:
+                    continue
+                if tool_pat not in tool_name_upper:
+                    continue
+                if hay_pat is not None and not any(
+                    p in haystack for p in hay_pat.split("|")
+                ):
+                    continue
+                effects.add(effect_label)
         return effects
 
     confirmed_effects = _effects_from_receipts(evidence_receipts)
