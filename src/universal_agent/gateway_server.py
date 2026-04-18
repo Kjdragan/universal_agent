@@ -11752,7 +11752,9 @@ def _calendar_iter_cron_occurrences(job: Any, start_ts: float, end_ts: float, ma
 
             tz_name = getattr(job, "timezone", None) or "UTC"
             tz = ZoneInfo(str(tz_name))
-            base_local = datetime.fromtimestamp(start_ts, timezone.utc).astimezone(tz) - timedelta(seconds=1)
+            job_created_at = float(getattr(job, "created_at", 0) or 0)
+            actual_start_ts = max(start_ts, job_created_at)
+            base_local = datetime.fromtimestamp(actual_start_ts, timezone.utc).astimezone(tz) - timedelta(seconds=1)
             itr = croniter(cron_expr, base_local)
             for _ in range(max_count):
                 next_dt = itr.get_next(datetime)

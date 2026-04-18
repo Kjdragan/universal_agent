@@ -5,11 +5,11 @@
   "keyword": "investigate",
   "phase": "planning",
   "activated_at": "2026-04-17T17:44:43.898Z",
-  "updated_at": "2026-04-17T17:50:07.014Z",
+  "updated_at": "2026-04-18T15:48:05.363Z",
   "source": "keyword-detector",
   "session_id": "",
-  "thread_id": "019d9c8b-2f82-7032-96d0-8b6cbbe8ed73",
-  "turn_id": "019d9c8b-38b0-7101-826d-0f607287af33",
+  "thread_id": "019da143-94d4-73f3-ba59-c65f7c8802de",
+  "turn_id": "019da143-c72b-74e2-8340-bd30aabdd226",
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
@@ -25,9 +25,7 @@
       "next i should"
     ],
     "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
-    "released_at": "2026-04-17T17:50:07.014Z",
+    "released_at": "2026-04-18T15:48:05.363Z",
     "exit_reason": "handoff"
-  },
-  "iteration": 5,
-  "last_turn_at": "2026-04-18T00:28:30.880Z"
+  }
 }
