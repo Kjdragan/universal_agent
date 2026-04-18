@@ -111,12 +111,15 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 
 ## Pipeline Steps (using `/ship` slash command)
 
+> [!IMPORTANT]
+> The `/ship` workflow **must** be run from `feature/latest2` (or another feature branch). It will refuse to run from `main` or `develop` directly. This prevents accidental direct commits to production branches that bypass the merge flow.
+
 1. **Commit & Push** on `feature/latest2`.
-2. **Open PR to `develop`**.
-3. **Devin PR Review** runs automated checks (does not block).
-4. **Merge to `develop`** once PR passes auto-merge limits.
-5. **Fast-forward `main`** to point to the new `develop` commit.
-6. **Production deploy** triggers automatically on push to `main` via Github Actions.
+2. **Merge to `develop`** — `/ship` handles this automatically.
+3. **Devin PR Review** runs automated checks on PRs to `develop` (does not block `/ship`).
+4. **Fast-forward `main`** to point to the new `develop` commit.
+5. **Production deploy** triggers automatically on push to `main` via Github Actions.
+6. **Return to `feature/latest2`** — `/ship` checks out your feature branch and fast-forwards it to stay in sync with `main`.
 7. **Post-release verification should use the deployed checkout SHA**. If production appears to be missing a fix, confirm the VPS `HEAD` commit before reopening code investigation or assuming a deploy gap.
 
 ## Lessons From The April 5 Dashboard Incident

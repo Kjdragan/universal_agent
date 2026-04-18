@@ -66,7 +66,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression |
 | 83 | Webhooks |
 | 85 | Infisical Secrets |
-| 86 | Residential Proxy |
+| 86 | Residential Proxy — dual-provider architecture (Webshare + DataImpulse), `PROXY_PROVIDER` selection, approved paths, YouTube guardrails |
 | 87 | Tailscale |
 | 88 | Factory Delegation, Heartbeat & Registry |
 | 89 | Runtime Bootstrap, Deployment Profiles & Factory Role |
@@ -102,7 +102,7 @@ These are the authoritative references for each subsystem. When any other docume
 |-----|---------|
 | secrets_and_environments.md | **Canonical entry-point** — Infisical secrets, environments, deploy workflow secrets contract |
 | architecture_overview.md | Git branching, environmental mapping, service topology, and SHA-based release verification |
-| ci_cd_pipeline.md | Workflow details, timing, pipeline structure, and SHA-first post-release verification |
+| ci_cd_pipeline.md | Workflow details, timing, pipeline structure, `/ship` branch guard, post-deploy sync, and SHA-first post-release verification |
 | infisical_factories.md | Stage naming and machine bootstrap (superseded by secrets_and_environments.md) |
 
 ## Review & Decision Documents
@@ -118,7 +118,7 @@ These are the authoritative references for each subsystem. When any other docume
 
 | Doc | Subject |
 |-----|---------|
-| 04 | Branching and release workflow, including return-to-feature-branch operator rule and SHA-based release confirmation |
+| 04 | Branching and release workflow, including return-to-feature-branch operator rule, `/ship` branch guard enforcement, and SHA-based release confirmation |
 | 05 | Local HQ dev vs desktop worker runtime modes |
 | 06 | Production deploy incident |
 | 07 | Stage-based Infisical and machine bootstrap migration plan |
