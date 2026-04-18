@@ -98,6 +98,13 @@ def _inject_environment_values(values: dict[str, str], *, overwrite: bool = Fals
             continue
         os.environ[clean_key] = str(value or "")
         inserted += 1
+        
+        # Alias for zai_vision tool compatibility
+        if clean_key == "ZAI_API_KEY":
+            if overwrite or "Z_AI_API_KEY" not in os.environ:
+                os.environ["Z_AI_API_KEY"] = str(value or "")
+                inserted += 1
+                
     return inserted
 
 

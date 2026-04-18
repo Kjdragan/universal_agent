@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -31,9 +32,27 @@ Return ONLY JSON:
 {
   "matches": [
     {"video_id": "id", "reason": "short reason"}
-  ]
+  ],
+  "signal_strength": 8
 }
 Match on semantic topic convergence, not exact wording. Exclude weakly related items.
+Rate the convergence signal_strength from 1-10 (10 being an extremely tight, actionable match).
+"""
+
+_IDEATION_SYSTEM = """\
+You are an expert intelligence synthesizer analyzing a batch of recent video schemas from a specific domain.
+Do you see any abstract relationships, interesting consistencies, conflicting viewpoints, or macro-trends emerging that aren't obvious? Capture the spirit of the activity.
+Return ONLY JSON:
+{
+  "insights": [
+    {
+      "narrative": "A compelling narrative or trend",
+      "value": "Why this insight is actionable or non-obvious",
+      "supporting_video_ids": ["id1", "id2"]
+    }
+  ]
+}
+If there are no non-obvious relationships, return an empty "insights" list. Do not generate generic summaries.
 """
 
 
@@ -200,8 +219,9 @@ def sync_topic_signatures_from_csi(
             },
         )
         upserted += 1
-        if detect_and_queue_convergence(conn, signature=signature):
-            convergence_events += 1
+        created_events = detect_and_queue_convergence(conn, signature=signature)
+        if created_events:
+            convergence_events += len(created_events)
     return {"seen": len(rows), "upserted": upserted, "convergence_events": convergence_events}
 
 
@@ -220,20 +240,55 @@ def detect_and_queue_convergence(
     signature: dict[str, Any],
     window_hours: int = 72,
     min_channels: int = 2,
-    matcher: SignatureMatcher | None = None,
-) -> Optional[dict[str, Any]]:
+) -> list[dict[str, Any]]:
     ensure_schema(conn)
     candidates = _recent_other_channel_signatures(conn, signature=signature, window_hours=window_hours)
-    matched = (matcher or _overlap_matcher)(signature, candidates)
-    channels = {
+    
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+        
+    created_events = []
+        
+    async def _run_tracks():
+        track_a_future = track_a_concrete_convergence(signature, candidates)
+        track_b_future = track_b_ideation_synthesis([signature] + candidates[:19])
+        return await asyncio.gather(track_a_future, track_b_future)
+        
+    if loop and loop.is_running():
+        import nest_asyncio
+        nest_asyncio.apply()
+        matched_a, insights_b = loop.run_until_complete(_run_tracks())
+    else:
+        matched_a, insights_b = asyncio.run(_run_tracks())
+
+    # Process Track A
+    channels_a = {
         str(signature.get("channel_name") or signature.get("channel_id") or "").strip(),
-        *[str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in matched],
+        *[str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in matched_a],
     }
-    channels.discard("")
-    if len(channels) < max(2, int(min_channels or 2)):
-        return None
-    participants = [signature, *matched]
-    return create_convergence_brief_task(conn, signatures=participants)
+    channels_a.discard("")
+    if len(channels_a) >= max(2, int(min_channels or 2)):
+        participants = [signature, *matched_a]
+        result_a = create_convergence_brief_task(conn, signatures=participants)
+        created_events.append(result_a)
+        
+    # Process Track B
+    for insight in insights_b:
+        sigs = insight["signatures"]
+        channels_b = {str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in sigs}
+        channels_b.discard("")
+        if len(channels_b) >= max(2, int(min_channels or 2)):
+            result_b = create_insight_brief_task(
+                conn, 
+                narrative=insight["narrative"], 
+                value=insight["value"], 
+                signatures=sigs
+            )
+            created_events.append(result_b)
+
+    return created_events
 
 
 async def extract_topic_signature_from_text(
@@ -282,13 +337,33 @@ async def extract_topic_signature_from_text(
     }
 
 
-async def llm_match_signatures(
+async def track_a_concrete_convergence(
     signature: dict[str, Any],
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Use an LLM to match semantically convergent topic signatures."""
+    """Track A: Fast Filter -> Deep Semantic Comparison -> Quality Gate."""
     if not candidates:
         return []
+        
+    # 1. Fast Filter
+    sig_topics = set(signature.get("primary_topics", []) + signature.get("secondary_topics", []))
+    sig_topics = {t.lower() for t in sig_topics}
+    
+    scored_candidates = []
+    for cand in candidates:
+        cand_topics = set(cand.get("primary_topics", []) + cand.get("secondary_topics", []))
+        cand_topics = {t.lower() for t in cand_topics}
+        overlap = len(sig_topics.intersection(cand_topics))
+        scored_candidates.append((overlap, cand))
+        
+    # Keep top 10 with at least some overlap
+    scored_candidates.sort(key=lambda x: x[0], reverse=True)
+    top_candidates = [cand for overlap, cand in scored_candidates[:10] if overlap > 0]
+    
+    if not top_candidates:
+        return []
+
+    # 2. Deep Semantic Comparison
     compact_candidates = [
         {
             "video_id": item.get("video_id"),
@@ -298,7 +373,7 @@ async def llm_match_signatures(
             "secondary_topics": item.get("secondary_topics"),
             "key_claims": item.get("key_claims"),
         }
-        for item in candidates[:40]
+        for item in top_candidates
     ]
     user = json.dumps(
         {
@@ -319,9 +394,18 @@ async def llm_match_signatures(
 
         raw = await _call_llm(system=_MATCH_SYSTEM, user=user, max_tokens=1200)
         parsed = _parse_json_response(raw)
+        
+        # 3. Quality Gate
+        if not isinstance(parsed, dict):
+            return []
+            
+        signal_strength = parsed.get("signal_strength", 0)
+        if signal_strength < 8:
+            return []
+            
         matched_ids = {
             str(item.get("video_id") or "").strip()
-            for item in (parsed.get("matches") if isinstance(parsed, dict) else []) or []
+            for item in (parsed.get("matches") if isinstance(parsed.get("matches"), list) else []) or []
             if isinstance(item, dict)
         }
         matched = [item for item in candidates if str(item.get("video_id") or "").strip() in matched_ids]
@@ -329,25 +413,65 @@ async def llm_match_signatures(
             return matched
     except Exception:
         pass
-    return _overlap_matcher(signature, candidates)
+    return []
 
 
-async def detect_and_queue_convergence_llm(
-    conn: sqlite3.Connection,
-    *,
-    signature: dict[str, Any],
-    window_hours: int = 72,
-    min_channels: int = 2,
-) -> Optional[dict[str, Any]]:
-    candidates = _recent_other_channel_signatures(conn, signature=signature, window_hours=window_hours)
-    matched = await llm_match_signatures(signature, candidates)
-    return detect_and_queue_convergence(
-        conn,
-        signature=signature,
-        window_hours=window_hours,
-        min_channels=min_channels,
-        matcher=lambda _signature, _candidates: matched,
+async def track_b_ideation_synthesis(
+    batch: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Track B: LLM Ideation / Synthesis on a batch of schemas."""
+    if len(batch) < 2:
+        return []
+        
+    compact_batch = [
+        {
+            "video_id": item.get("video_id"),
+            "channel": item.get("channel_name") or item.get("channel_id"),
+            "title": item.get("video_title"),
+            "primary_topics": item.get("primary_topics"),
+            "secondary_topics": item.get("secondary_topics"),
+            "key_claims": item.get("key_claims"),
+        }
+        for item in batch[:20]
+    ]
+    user = json.dumps(
+        {"recent_schemas": compact_batch},
+        ensure_ascii=True,
     )
+    
+    try:
+        from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+
+        raw = await _call_llm(system=_IDEATION_SYSTEM, user=user, max_tokens=1500)
+        parsed = _parse_json_response(raw)
+        
+        if not isinstance(parsed, dict):
+            return []
+            
+        insights = parsed.get("insights", [])
+        if not isinstance(insights, list):
+            return []
+            
+        results = []
+        for insight in insights:
+            if not isinstance(insight, dict):
+                continue
+            narrative = str(insight.get("narrative") or "").strip()
+            value = str(insight.get("value") or "").strip()
+            supporting_ids = set(insight.get("supporting_video_ids") or [])
+            
+            if narrative and value and len(supporting_ids) >= 2:
+                supporting_sigs = [item for item in batch if item.get("video_id") in supporting_ids]
+                if len(supporting_sigs) >= 2:
+                    results.append({
+                        "narrative": narrative,
+                        "value": value,
+                        "signatures": supporting_sigs
+                    })
+        return results
+    except Exception:
+        pass
+    return []
 
 
 def create_convergence_brief_task(
@@ -413,6 +537,95 @@ def create_convergence_brief_task(
     return {"event": get_convergence_event(conn, event_id), "task": task, "artifact": artifact}
 
 
+def create_insight_brief_task(
+    conn: sqlite3.Connection,
+    *,
+    narrative: str,
+    value: str,
+    signatures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ensure_schema(conn)
+    primary_topic = (narrative[:47] + "...") if len(narrative) > 50 else narrative
+    video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
+    event_id = _convergence_event_id(primary_topic=primary_topic, video_ids=video_ids)
+    
+    task_id = f"insight-brief:{event_id.removeprefix('conv_')}"
+    preference_context = _preference_context(conn, task_type="insight_brief", topic_tags=["insight", primary_topic])
+    
+    lines = [
+        f"Generate an insight brief about: {primary_topic}",
+        "",
+        "An abstract macro-trend or non-obvious relationship has been detected.",
+        f"Narrative: {narrative}",
+        f"Value/Actionability: {value}",
+        "",
+        "Sources:",
+    ]
+    for item in signatures:
+        claims = "; ".join(item.get("key_claims") or []) or "(no extracted claims)"
+        lines.append(
+            f"- {item.get('channel_name') or item.get('channel_id')}: {item.get('video_title') or item.get('video_id')} | {item.get('video_url') or ''} | claims: {claims}"
+        )
+    lines.extend(
+        [
+            "",
+            "Produce a concise brief with:",
+            "1. THE INSIGHT: what is the non-obvious relationship or macro-trend.",
+            "2. THE EVIDENCE: how the sources support this.",
+            "3. SO WHAT: why Kevin should care and what is actionable.",
+            "",
+            "Store the final brief as a durable artifact and make it suitable for Simone review email.",
+        ]
+    )
+    if preference_context:
+        lines.extend(["", "Preference context:", preference_context])
+    description = "\n".join(lines)
+
+    task = task_hub.upsert_item(
+        conn,
+        {
+            "task_id": task_id,
+            "source_kind": "insight_detection",
+            "source_ref": event_id,
+            "title": f"ATLAS insight brief: {primary_topic}",
+            "description": description,
+            "project_key": "proactive",
+            "priority": 3,
+            "labels": ["agent-ready", "insight", "atlas", "research"],
+            "status": task_hub.TASK_STATUS_OPEN,
+            "agent_ready": True,
+            "trigger_type": "heartbeat_poll",
+            "metadata": {
+                "source": "insight_detection",
+                "event_id": event_id,
+                "primary_topic": primary_topic,
+                "video_ids": video_ids,
+                "preferred_vp": "vp.general.primary",
+            },
+        },
+    )
+    artifact = upsert_artifact(
+        conn,
+        artifact_id=make_artifact_id(
+            source_kind="insight_detection",
+            source_ref=event_id,
+            artifact_type="insight_brief_task",
+            title=primary_topic,
+        ),
+        artifact_type="insight_brief_task",
+        source_kind="insight_detection",
+        source_ref=event_id,
+        title=str(task.get("title") or ""),
+        summary=f"Queued ATLAS insight brief for {len(signatures)} sources.",
+        status=ARTIFACT_STATUS_CANDIDATE,
+        priority=3,
+        topic_tags=["insight", primary_topic],
+        metadata={"task_id": task_id, "event_id": event_id, "video_ids": video_ids},
+    )
+    _record_convergence_event(conn, event_id=event_id, primary_topic=primary_topic, signatures=signatures, task_id=task_id, artifact_id=artifact["artifact_id"])
+    return {"event": get_convergence_event(conn, event_id), "task": task, "artifact": artifact}
+
+
 def get_convergence_event(conn: sqlite3.Connection, event_id: str) -> Optional[dict[str, Any]]:
     ensure_schema(conn)
     row = conn.execute(
@@ -433,6 +646,7 @@ def _recent_other_channel_signatures(
     end = ingested.isoformat()
     channel_id = str(signature.get("channel_id") or "").strip()
     video_id = str(signature.get("video_id") or "").strip()
+    content_type = str(signature.get("content_type") or "").strip()
     rows = conn.execute(
         """
         SELECT *
@@ -441,29 +655,13 @@ def _recent_other_channel_signatures(
           AND ingested_at <= ?
           AND video_id != ?
           AND (? = '' OR channel_id != ?)
+          AND (? = '' OR content_type = ?)
         ORDER BY ingested_at DESC
         LIMIT 80
         """,
-        (start, end, video_id, channel_id, channel_id),
+        (start, end, video_id, channel_id, channel_id, content_type, content_type),
     ).fetchall()
     return [_hydrate_signature(dict(row)) for row in rows]
-
-
-def _overlap_matcher(signature: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    base = _topic_set(signature)
-    if not base:
-        return []
-    matches = []
-    for candidate in candidates:
-        overlap = base & _topic_set(candidate)
-        if overlap:
-            matches.append(candidate)
-    return matches
-
-
-def _topic_set(signature: dict[str, Any]) -> set[str]:
-    topics = [*signature.get("primary_topics", []), *signature.get("secondary_topics", [])]
-    return {str(topic or "").strip().lower() for topic in topics if str(topic or "").strip()}
 
 
 def _analysis_topics(*, analysis: dict[str, Any], category: str, title: str) -> list[str]:

@@ -186,3 +186,22 @@ def test_initialize_runtime_secrets_preserves_bootstrap_identity_over_infisical(
     assert infisical_loader.os.getenv("UA_RUNTIME_STAGE") == "staging"
     assert infisical_loader.os.getenv("UA_MACHINE_SLUG") == "kevins-desktop"
     assert infisical_loader.os.getenv("UA_OPS_TOKEN") == "token"
+
+def test_initialize_runtime_secrets_aliases_zai_api_key(monkeypatch):
+    monkeypatch.setenv("UA_DEPLOYMENT_PROFILE", "local_workstation")
+    monkeypatch.setenv("UA_INFISICAL_ENABLED", "1")
+    monkeypatch.setenv("INFISICAL_CLIENT_ID", "client")
+    monkeypatch.setenv("INFISICAL_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("INFISICAL_PROJECT_ID", "project")
+    
+    monkeypatch.setattr(
+        infisical_loader,
+        "_fetch_infisical_secrets",
+        lambda: {"ZAI_API_KEY": "test-zai-key"},
+    )
+
+    result = infisical_loader.initialize_runtime_secrets(force_reload=True)
+
+    assert result.ok is True
+    assert infisical_loader.os.getenv("ZAI_API_KEY") == "test-zai-key"
+    assert infisical_loader.os.getenv("Z_AI_API_KEY") == "test-zai-key"

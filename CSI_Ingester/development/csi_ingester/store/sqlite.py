@@ -349,6 +349,10 @@ UPDATE reddit_event_analysis SET category = 'other_signal' WHERE category = 'oth
 UPDATE threads_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
 """
 
+MIGRATION_0011_CONTENT_SCHEMA = """
+ALTER TABLE rss_event_analysis ADD COLUMN content_schema TEXT;
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -360,6 +364,7 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0008_cross_source_analysis", MIGRATION_0008_CROSS_SOURCE_ANALYSIS),
     ("0009_source_management", MIGRATION_0009_SOURCE_MANAGEMENT),
     ("0010_category_defaults", MIGRATION_0010_CATEGORY_DEFAULTS),
+    ("0011_content_schema", MIGRATION_0011_CONTENT_SCHEMA),
 )
 
 

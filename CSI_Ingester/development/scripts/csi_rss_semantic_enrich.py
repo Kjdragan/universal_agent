@@ -188,8 +188,9 @@ def _analyze_with_claude(
     prompt = (
         "Classify and summarize this YouTube upload for trend tracking.\n"
         "Return ONLY valid JSON with keys:\n"
-        "category (ai|political|war|other_interest|or short snake_case category), "
+        "category (ai_coding_and_agents|ai_models_and_research|ai_news_and_business|software_engineering|geopolitics_and_conflict|longform_interviews|cooking|personal_health|other_signal|noise), "
         "summary (string <= 2000 chars), themes (array 10-12 concise themes), "
+        "content_schema (object with keys: 'core_topics' (array of strings), 'entities' (array of strings), 'novel_claims' (array of strings), 'sentiment' (string)), "
         "confidence (0..1), confidence_rationale (string <= 260 chars).\n\n"
         f"Channel Name: {channel_name}\n"
         f"Channel ID: {channel_id}\n"
@@ -276,6 +277,7 @@ def _upsert_analysis(
     completion_tokens: int,
     total_tokens: int,
     analysis_json: dict[str, Any],
+    content_schema: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -283,8 +285,8 @@ def _upsert_analysis(
             event_id, event_db_id, source, video_id, channel_id, channel_name, title,
             published_at, transcript_status, transcript_chars, transcript_ref,
             category, summary_text, model_name, prompt_tokens, completion_tokens,
-            total_tokens, analysis_json, analyzed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            total_tokens, analysis_json, content_schema, analyzed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(event_id) DO UPDATE SET
             event_db_id=excluded.event_db_id,
             source=excluded.source,
@@ -303,6 +305,7 @@ def _upsert_analysis(
             completion_tokens=excluded.completion_tokens,
             total_tokens=excluded.total_tokens,
             analysis_json=excluded.analysis_json,
+            content_schema=excluded.content_schema,
             analyzed_at=datetime('now')
         """,
         (
@@ -324,6 +327,7 @@ def _upsert_analysis(
             max(0, int(completion_tokens)),
             max(0, int(total_tokens)),
             json.dumps(analysis_json, separators=(",", ":"), sort_keys=True),
+            content_schema,
         ),
     )
     conn.commit()
@@ -490,6 +494,7 @@ def main() -> int:
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
+        content_schema_json = None
 
         if use_claude and api_key and transcript_text:
             parsed, usage = _analyze_with_claude(
@@ -517,6 +522,11 @@ def main() -> int:
                 except Exception:
                     confidence = confidence
                 confidence_rationale = str(parsed.get("confidence_rationale") or "").strip()[:260]
+                
+                content_schema_obj = parsed.get("content_schema")
+                if isinstance(content_schema_obj, dict):
+                    content_schema_json = json.dumps(content_schema_obj)
+
                 analysis_json = {
                     "category": suggested_category or "other_interest",
                     "themes": themes,
@@ -584,6 +594,7 @@ def main() -> int:
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             analysis_json=analysis_json,
+            content_schema=content_schema_json,
         )
 
         category_counts[category] += 1
