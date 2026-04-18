@@ -94,6 +94,22 @@ jobs:
             echo "--> Checking out branch main in $PROD_DIR"
             cd "$PROD_DIR"
             git config --global --add safe.directory "$PROD_DIR"
+
+            # Guard: remove stale git lock if no git process is running
+            # (prevents race when two deploys run in quick succession)
+            if [ -f "$PROD_DIR/.git/index.lock" ]; then
+              if ! pgrep -f "git.*$PROD_DIR" > /dev/null 2>&1; then
+                echo "---> Removing stale git index.lock (no active git process found)"
+                rm -f "$PROD_DIR/.git/index.lock"
+              else
+                echo "---> WARNING: git lock exists AND a git process is running — waiting 10s..."
+                sleep 10
+                if [ -f "$PROD_DIR/.git/index.lock" ]; then
+                  echo "---> Lock still present after wait; removing it to proceed."
+                  rm -f "$PROD_DIR/.git/index.lock"
+                fi
+              fi
+            fi
             git fetch origin main
             git reset --hard origin/main
             
