@@ -28,6 +28,8 @@ Dashboard read paths now read the latest dispatch queue snapshot instead of rebu
 - `get_agent_activity(...)` no longer indirectly rebuilds through `list_agent_queue(...)`.
 - `/api/v1/dashboard/todolist/overview`, `/agent-queue`, `/agent-activity`, and `/dispatch-queue` no longer rebuild queues during normal GET navigation.
 
+The same invariant now applies to Proactive Signals. `/api/v1/dashboard/proactive-signals` reads the existing card table by default and returns the current sync state. It no longer performs CSI and Discord source synchronization inline during ordinary dashboard navigation. Operators can request source refresh with `sync=background`, which schedules the sync after the response and respects a cooldown controlled by `UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`.
+
 Queue rebuilds remain in correctness and maintenance paths:
 
 - dispatcher claim flow via `claim_next_dispatch_tasks(...)`
@@ -76,6 +78,8 @@ Documentation updates:
 Do not add `rebuild_dispatch_queue(...)` back into dashboard GET endpoints or helper functions that are used by dashboard GET endpoints.
 
 If a UI needs a fresher queue, use the explicit rebuild endpoint or a write-side maintenance path. Reads should be fast, bounded, and safe to run repeatedly during navigation and polling.
+
+Do not add proactive signal generation or CSI/Discord sync back into the default Proactive Signals GET path. If source refresh is needed, keep it explicit or backgrounded so a large CSI database cannot make the Next dashboard gateway return a proxy timeout during navigation.
 
 ## What Not To Reintroduce
 

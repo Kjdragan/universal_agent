@@ -48,28 +48,38 @@ POLL_WINDOW_MINUTES: int = int(os.getenv("TGTG_POLL_WINDOW_MINUTES", "90"))
 # Option A — explicit list:
 #   TGTG_PROXIES=http://user:pass@host:port,http://user:pass@host2:port
 #
-# Option B — auto-built from shared Webshare credentials (same vars used by the
-#   YouTube transcript module).  If TGTG_PROXIES is not set but
-#   WEBSHARE_PROXY_USER / WEBSHARE_PROXY_PASS are present, a single
-#   Webshare rotating-residential URL is constructed automatically.
+# Option B — auto-built from shared residential proxy credentials (same vars
+#   used by the YouTube transcript module).  If TGTG_PROXIES is not set but
+#   proxy credentials are present, a single rotating-residential URL is
+#   constructed automatically.  PROXY_PROVIDER selects the provider:
+#   "webshare" (default) or "dataimpulse".
 #
-# Webshare residential backbone endpoint: proxy.webshare.io:80 (HTTP)
-# Sticky-session endpoint:                proxy.webshare.io:80 with provider-specific user suffixes
+# Webshare residential endpoint:    proxy.webshare.io:80  (HTTP)
+# DataImpulse residential endpoint: gw.dataimpulse.com:823 (HTTP/HTTPS)
 _WEBSHARE_HOST = os.getenv("WEBSHARE_PROXY_HOST", "proxy.webshare.io")
 _WEBSHARE_PORT = os.getenv("WEBSHARE_PROXY_PORT", "80")
+_DATAIMPULSE_HOST = os.getenv("DATAIMPULSE_PROXY_HOST", "gw.dataimpulse.com")
+_DATAIMPULSE_PORT = os.getenv("DATAIMPULSE_PROXY_PORT", "823")
 
 def _build_proxy_list() -> list[str]:
     raw = os.getenv("TGTG_PROXIES", "").strip()
     if raw:
         return [p.strip() for p in raw.split(",") if p.strip()]
 
-    # Fall back to Webshare shared credentials if explicitly enabled
+    # Fall back to shared residential proxy credentials if explicitly enabled
     tgtg_fallback = os.getenv("TGTG_PROXY_FALLBACK", "false").lower() == "true"
     if tgtg_fallback:
-        user = (os.getenv("PROXY_USERNAME") or os.getenv("WEBSHARE_PROXY_USER") or "").strip()
-        pw   = (os.getenv("PROXY_PASSWORD") or os.getenv("WEBSHARE_PROXY_PASS") or "").strip()
-        if user and pw:
-            return [f"http://{user}:{pw}@{_WEBSHARE_HOST}:{_WEBSHARE_PORT}"]
+        provider = (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
+        if provider == "dataimpulse":
+            user = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+            pw = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+            if user and pw:
+                return [f"http://{user}:{pw}@{_DATAIMPULSE_HOST}:{_DATAIMPULSE_PORT}"]
+        else:
+            user = (os.getenv("PROXY_USERNAME") or os.getenv("WEBSHARE_PROXY_USER") or "").strip()
+            pw   = (os.getenv("PROXY_PASSWORD") or os.getenv("WEBSHARE_PROXY_PASS") or "").strip()
+            if user and pw:
+                return [f"http://{user}:{pw}@{_WEBSHARE_HOST}:{_WEBSHARE_PORT}"]
     return []
 
 TGTG_PROXIES: list[str] = _build_proxy_list()

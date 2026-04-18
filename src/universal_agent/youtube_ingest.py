@@ -255,6 +255,59 @@ def _build_webshare_proxy_config() -> tuple[Optional[Any], str]:
     return WebshareProxyConfig(**kwargs), "webshare"
 
 
+def _build_dataimpulse_proxy_config() -> tuple[Optional[Any], str]:
+    """Build a GenericProxyConfig for DataImpulse rotating residential proxies.
+
+    Reads credentials from DATAIMPULSE_PROXY_USER / DATAIMPULSE_PROXY_PASS
+    env vars (populated from Infisical).  DataImpulse uses standard HTTP
+    proxy auth format: http://user:pass@host:port.
+
+    Rotating HTTP/HTTPS port: 823 (default)
+    SOCKS5 port:              824 (not used here)
+    """
+    username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+    password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+    if not username or not password:
+        return None, "disabled"
+
+    try:
+        from youtube_transcript_api.proxies import GenericProxyConfig
+    except Exception:
+        return None, "module_unavailable"
+
+    host = (
+        os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com"
+    ).strip() or "gw.dataimpulse.com"
+    port_raw = (
+        os.getenv("DATAIMPULSE_PROXY_PORT") or "823"
+    ).strip()
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 823
+    if port <= 0 or port > 65535:
+        port = 823
+
+    proxy_url = f"http://{username}:{password}@{host}:{port}"
+    return GenericProxyConfig(
+        http_url=proxy_url,
+        https_url=proxy_url,
+    ), "dataimpulse"
+
+
+def _build_proxy_config() -> tuple[Optional[Any], str]:
+    """Route to the correct proxy builder based on PROXY_PROVIDER env var.
+
+    Supported values:
+      - "webshare"     (default) — Webshare.io via WebshareProxyConfig
+      - "dataimpulse"  — DataImpulse via GenericProxyConfig
+    """
+    provider = (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
+    if provider == "dataimpulse":
+        return _build_dataimpulse_proxy_config()
+    return _build_webshare_proxy_config()
+
+
 def _parse_iso8601_duration(raw: str) -> int | None:
     """Parse ISO 8601 duration (e.g. 'PT1H2M34S') to total seconds."""
     if not raw:
@@ -515,9 +568,10 @@ def ingest_youtube_transcript(
             "attempts": [],
         }
 
-    proxy_config, proxy_mode = _build_webshare_proxy_config()
+    proxy_config, proxy_mode = _build_proxy_config()
 
     if require_proxy and proxy_config is None:
+        _provider = (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
         _reason = (
             "PROXY NOT CONFIGURED — YouTube transcript fetch BLOCKED. "
             "Residential proxy is REQUIRED to avoid IP bans on this server. "
@@ -525,7 +579,14 @@ def ingest_youtube_transcript(
         if proxy_mode == "module_unavailable":
             _reason += (
                 "The youtube_transcript_api.proxies module could not be imported. "
-                "Install or upgrade youtube-transcript-api to a version that includes WebshareProxyConfig."
+                "Install or upgrade youtube-transcript-api to a version that "
+                "includes WebshareProxyConfig / GenericProxyConfig."
+            )
+        elif _provider == "dataimpulse":
+            _reason += (
+                "Set DATAIMPULSE_PROXY_USER and DATAIMPULSE_PROXY_PASS environment variables "
+                "(DataImpulse residential proxy credentials). "
+                "Without a residential proxy, requests from this server's datacenter IP WILL be blocked by YouTube."
             )
         else:
             _reason += (
