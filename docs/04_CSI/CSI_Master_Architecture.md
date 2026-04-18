@@ -177,9 +177,19 @@ Key env vars: `CSI_DB_PATH`, `CSI_CONFIG_PATH`, `CSI_INSTANCE_ID`, `CSI_UA_ENDPO
 
 ## 8. Key Boundaries
 
+> [!IMPORTANT]
+> **Two YouTube Watching Systems Exist** with separate databases and state:
+> - **Playlist Watcher** (UA-native) — watches specific playlists, state in `youtube_playlist_watcher_state.json`
+> - **CSI RSS Channel Feed** (CSI Ingester) — watches 444+ channel RSS feeds, state in `csi.db → source_state`
+>
+> These are managed as **two distinct data entities**. Resetting one does NOT reset the other.
+> See `docs/03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md` §1.1 for details.
+
 - **Tutorial playlist polling** → Moved to native UA (`youtube_playlist_watcher.py`)
+- **CSI RSS channel polling** → CSI Ingester (`youtube_channel_rss.py`), state in `csi.db`
 - **CSI owns**: signal ingestion, enrichment, analytics, reporting, quality assessment
 - **UA owns**: tutorial pipeline, dashboard rendering, hook dispatch
+- **Shared resource**: Residential proxy (Webshare/DataImpulse) — used by UA for transcript ingestion, not by CSI for RSS polling
 
 ## 9. Document Trail
 

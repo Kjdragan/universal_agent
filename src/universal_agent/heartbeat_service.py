@@ -561,6 +561,33 @@ def _compose_heartbeat_prompt(
     # Inject recent topics history to prevent loops
     if recent_topics_text and not task_focused:
         prompt = f"{prompt}\n\n{recent_topics_text}"
+
+    # ── Database Health Alerts (health-check runs ONLY) ──────────────
+    # Run deterministic Python checks across all system databases and
+    # inject any findings into the prompt so Simone can report them.
+    # This is GATED by `not task_focused` — task-dispatch runs must
+    # remain clean and focused on task execution only.
+    if not task_focused:
+        try:
+            from universal_agent.utils.db_health_monitor import check_all_databases
+            db_findings = check_all_databases()
+            if db_findings:
+                lines = ["", "== DATABASE HEALTH ALERTS =="]
+                lines.append(f"{len(db_findings)} issue(s) detected across system databases:\n")
+                for f in db_findings:
+                    emoji = "🔴" if f.severity == "critical" else "🟡"
+                    lines.append(f"{emoji} [{f.category}] {f.title}")
+                    lines.append(f"   Observed: {f.observed_value} (threshold: {f.threshold_text})")
+                    lines.append(f"   → {f.recommendation}")
+                    if f.runbook_command:
+                        lines.append(f"   Runbook: `{f.runbook_command}`")
+                    lines.append("")
+                lines.append("Include these findings in your heartbeat_findings_latest.json output.")
+                lines.append("Merge them with any system health findings from your own checks.")
+                prompt = f"{prompt}\n" + "\n".join(lines)
+        except Exception as _db_health_exc:
+            logger.debug("DB health check injection skipped: %s", _db_health_exc)
+
     return prompt
 
 def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
