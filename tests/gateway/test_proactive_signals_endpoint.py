@@ -65,3 +65,78 @@ def test_proactive_signals_feedback_and_action_endpoints(monkeypatch, tmp_path):
         assert action.status_code == 200
         task_id = action.json()["task_id"]
         assert task_id.startswith("proactive_signal:")
+
+
+def test_proactive_signals_get_is_read_only_by_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity.db").resolve()))
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
+    monkeypatch.setattr(gateway_server, "OPS_JWT_SECRET", "")
+    monkeypatch.setattr(gateway_server, "_discord_intelligence_db_path", lambda: tmp_path / "missing_discord.db")
+    monkeypatch.setattr(gateway_server, "_csi_default_db_path", lambda: tmp_path / "missing_csi.db")
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_pending", False)
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_started_at", 0.0)
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_completed_at", 0.0)
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_counts", {})
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_error", "")
+
+    called = False
+
+    def _unexpected_sync(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("dashboard GET should not sync sources by default")
+
+    monkeypatch.setattr(gateway_server, "sync_proactive_signal_cards", _unexpected_sync)
+
+    @asynccontextmanager
+    async def _test_lifespan(app):
+        yield
+
+    monkeypatch.setattr(gateway_server.app.router, "lifespan_context", _test_lifespan)
+
+    with TestClient(gateway_server.app) as client:
+        listed = client.get("/api/v1/dashboard/proactive-signals")
+
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["cards"] == []
+    assert body["sync"]["scheduled"] is False
+    assert body["sync"]["reason"] == "not_requested"
+    assert called is False
+
+
+def test_proactive_signals_sync_query_schedules_background_sync(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity.db").resolve()))
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
+    monkeypatch.setattr(gateway_server, "OPS_JWT_SECRET", "")
+    monkeypatch.setattr(gateway_server, "_discord_intelligence_db_path", lambda: tmp_path / "missing_discord.db")
+    monkeypatch.setattr(gateway_server, "_csi_default_db_path", lambda: tmp_path / "missing_csi.db")
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_pending", False)
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_started_at", 0.0)
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_completed_at", 0.0)
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_counts", {})
+    monkeypatch.setattr(gateway_server, "_proactive_signal_sync_last_error", "")
+
+    calls = 0
+
+    def _sync(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {"youtube": 1, "discord": 0}
+
+    monkeypatch.setattr(gateway_server, "sync_proactive_signal_cards", _sync)
+
+    @asynccontextmanager
+    async def _test_lifespan(app):
+        yield
+
+    monkeypatch.setattr(gateway_server.app.router, "lifespan_context", _test_lifespan)
+
+    with TestClient(gateway_server.app) as client:
+        listed = client.get("/api/v1/dashboard/proactive-signals?sync=background")
+
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["sync"]["scheduled"] is True
+    assert body["sync"]["reason"] == "scheduled"
+    assert calls == 1

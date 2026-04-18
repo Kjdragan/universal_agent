@@ -164,7 +164,7 @@ deploy rather than editing keys in place.
   6. if any of those checks fail, delete `.venv`, do one clean `uv sync`, and rerun the full validation sequence
   7. if validation still fails, abort deploy before any service restart
 - `scripts/verify_observability_runtime.py` is stricter than the runtime fail-open bootstrap: deploy success requires a real `logfire` import and a healthy OpenTelemetry context entry-point load, not just the ability to limp forward on the stub.
-- Deploy rebuilds the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). The `.next` build cache persists on the VPS between deploys, so incremental Next.js builds are fast.
+- Deploy rebuilds the Next.js `universal-agent-webui` application via `npm run build`. `npm install` is **conditional** — it only re-runs when `package.json` has changed since the last deploy (detected via a mtime sentinel file `node_modules/.package-json-mtime`). Before every production web UI build, deploy deletes `web-ui/.next` so stale build locks, partial manifests, or interrupted build artifacts cannot survive into the next release.
 - Deploy rebuilds the MkDocs documentation site via `mkdocs build`. The generated static site is served by the `universal-agent-docs` systemd unit on `localhost:8100`, exposed to the tailnet via `tailscale serve`. See `scripts/configure_docs_server.sh` for one-time setup.
 - Deploy installs the external NotebookLM tool package `notebooklm-mcp-cli` for the `ua` service user via `uv tool install --force notebooklm-mcp-cli`.
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
@@ -176,7 +176,7 @@ deploy rather than editing keys in place.
 | Scenario | Production |
 |----------|------------|
 | First deploy on a fresh VPS (cold npm build) | ~20–25 min |
-| Normal deploy — no `package.json` change | ~8–12 min |
+| Normal deploy — no `package.json` change | ~10–15 min |
 | Deploy after `package.json` change (fresh npm install) | ~15–20 min |
 
 The deploy workflow has `timeout-minutes: 35` to accommodate the worst-case cold build. Normal deploys complete well within 15 minutes.
@@ -300,7 +300,17 @@ Configure these settings in GitHub repository settings.
 
 `deploy.yml` has `timeout-minutes: 35`.
 
-If a deploy times out, the most common cause is a cold `npm run build` with no existing `.next` cache on the VPS. This happens on the very first deploy to a fresh server or after `node_modules` is wiped. Simply re-run the workflow.
+If a deploy times out, the most common cause is a cold `npm run build` after the workflow removes `.next` for build hygiene. Simply re-run the workflow after confirming no separate deploy is still running.
+
+### Web UI Route Manifests Missing
+
+If `journalctl -u universal-agent-webui` reports an error like:
+
+```text
+Invariant: The client reference manifest for route "/dashboard/discord" does not exist
+```
+
+then the deployed `.next` directory is incomplete or inconsistent. The canonical fix is to re-run the production deploy workflow from the validated `main` SHA; deploy now removes `web-ui/.next` before building so the rerun cannot reuse the corrupt artifacts. Treat manual `rm -rf /opt/universal_agent/web-ui/.next && npm run build` as break-glass recovery only, not the normal deployment path.
 
 ### SSH Preflight Fails Fast
 

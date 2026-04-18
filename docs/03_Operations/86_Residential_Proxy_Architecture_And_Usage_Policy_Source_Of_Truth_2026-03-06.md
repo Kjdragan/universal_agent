@@ -8,11 +8,18 @@ It defines where the residential proxy is used, why it exists, which use cases a
 
 ## Executive Summary
 
-Universal Agent uses **Webshare rotating residential proxy** for YouTube transcript fetching on the VPS. This is the sole transcript fetch path.
+Universal Agent supports **two rotating residential proxy providers** for YouTube transcript fetching on the VPS:
+
+| Provider | Endpoint | Port | Config Class | Default |
+|---|---|---|---|---|
+| **Webshare** | `p.webshare.io` | `80` | `WebshareProxyConfig` | ✅ (default) |
+| **DataImpulse** | `gw.dataimpulse.com` | `823` | `GenericProxyConfig` | — |
+
+The active provider is selected by the `PROXY_PROVIDER` env var (default: `webshare`).
 
 > [!NOTE]
 > The desktop transcript worker was decommissioned in April 2026. All transcript
-> fetching now runs on the VPS via `youtube_ingest.py` with Webshare proxy.
+> fetching now runs on the VPS via `youtube_ingest.py` with residential proxy.
 
 The residential proxy is used for a narrow set of approved cases where datacenter IPs are known to be blocked or degraded:
 - YouTube transcript fetching (primary path via `youtube_ingest.py`)
@@ -22,13 +29,13 @@ The residential proxy is used for a narrow set of approved cases where datacente
 The residential proxy is **cost-sensitive** and should not be treated as a generic project-wide scraping tunnel.
 
 Current canonical implementation includes:
-- `src/universal_agent/youtube_ingest.py` — primary VPS transcript fetching with Webshare proxy
+- `src/universal_agent/youtube_ingest.py` — primary VPS transcript fetching with dual-provider proxy routing
 - `src/universal_agent/gateway_server.py`
 - `src/universal_agent/hooks_service.py`
 - `src/universal_agent/tgtg/config.py`
 
 Current runtime topology for YouTube transcript fetching is:
-- VPS-primary for all transcript fetching via Webshare rotating residential proxy
+- VPS-primary for all transcript fetching via rotating residential proxy (Webshare or DataImpulse)
 - VPS-primary for playlist watching, hook ingest, artifact generation, and repo bootstrap
 
 ## Why the Residential Proxy Exists
@@ -46,19 +53,31 @@ It is not intended for broad indiscriminate scraping.
 
 ## 1. YouTube Transcript Fetching
 
-### Primary Path: VPS Webshare Proxy
+### Primary Path: Dual-Provider Residential Proxy
 
 Implementation:
 - `src/universal_agent/youtube_ingest.py`
 
-The VPS transcript fetch path uses Webshare rotating residential proxies to bypass YouTube's datacenter IP blocking. It is exposed via the gateway endpoint `/api/v1/youtube/ingest` and called by the CSI enrichment pipeline.
+The VPS transcript fetch path uses rotating residential proxies to bypass YouTube's datacenter IP blocking. It is exposed via the gateway endpoint `/api/v1/youtube/ingest` and called by the CSI enrichment pipeline.
 
-Primary credential env vars:
-- `PROXY_USERNAME`
-- `PROXY_PASSWORD`
+The proxy provider is selected by `PROXY_PROVIDER` (default: `webshare`):
+
+| Provider | Builder function | Config Class |
+|---|---|---|
+| `webshare` | `_build_webshare_proxy_config()` | `WebshareProxyConfig` |
+| `dataimpulse` | `_build_dataimpulse_proxy_config()` | `GenericProxyConfig` |
+
+The router function `_build_proxy_config()` reads `PROXY_PROVIDER` and dispatches to the appropriate builder.
+
+Credential env vars by provider:
+
+| Provider | Username env | Password env | Host env | Port env |
+|---|---|---|---|---|
+| webshare | `PROXY_USERNAME` / `WEBSHARE_PROXY_USER` | `PROXY_PASSWORD` / `WEBSHARE_PROXY_PASS` | `WEBSHARE_PROXY_HOST` | `WEBSHARE_PROXY_PORT` |
+| dataimpulse | `DATAIMPULSE_PROXY_USER` | `DATAIMPULSE_PROXY_PASS` | `DATAIMPULSE_PROXY_HOST` | `DATAIMPULSE_PROXY_PORT` |
 
 Behavior:
-- if credentials are missing, proxy mode becomes disabled
+- if credentials are missing for the selected provider, proxy mode becomes disabled
 - if proxy module support is unavailable, proxy mode reports module unavailability
 - if proxy is required and unavailable, the ingest hard fails instead of falling back silently to the VPS datacenter IP
 - API-first metadata (YouTube Data API v3), yt-dlp as metadata fallback (no proxy for metadata)
@@ -85,11 +104,11 @@ The system must not route video binary downloads through the residential proxy, 
 Implementation:
 - `src/universal_agent/tgtg/config.py`
 
-TGTG can inherit shared Webshare credentials if explicit `TGTG_PROXIES` are not set.
+TGTG can inherit shared residential proxy credentials if explicit `TGTG_PROXIES` are not set.
 
 Current behavior:
 - if `TGTG_PROXIES` is set, use that explicit list
-- otherwise, if shared Webshare credentials are present, build a single rotating residential URL from them
+- otherwise, if `TGTG_PROXY_FALLBACK=true` and `PROXY_PROVIDER` is set, build a single rotating residential URL from the selected provider's credentials (Webshare or DataImpulse)
 
 This is an approved use.
 
@@ -228,15 +247,16 @@ This is important because missing proxy configuration can block the entire YouTu
 
 ## Configuration Surface
 
-Primary credential env vars:
-- `PROXY_USERNAME`
-- `PROXY_PASSWORD`
+### Provider Selection
 
-Alias/fallback env vars seen in code:
-- `WEBSHARE_PROXY_USER`
-- `WEBSHARE_PROXY_PASS`
-- `WEBSHARE_PROXY_HOST`
-- `WEBSHARE_PROXY_PORT`
+- `PROXY_PROVIDER` — selects active provider: `webshare` (default) or `dataimpulse`
+
+### Webshare Credential Env Vars
+
+- `PROXY_USERNAME` / `WEBSHARE_PROXY_USER`
+- `PROXY_PASSWORD` / `WEBSHARE_PROXY_PASS`
+- `WEBSHARE_PROXY_HOST` (default: `p.webshare.io`)
+- `WEBSHARE_PROXY_PORT` (default: `80`)
 - `WEBSHARE_PROXY_LOCATIONS`
 
 Canonical default Webshare residential endpoint:
@@ -245,7 +265,18 @@ Canonical default Webshare residential endpoint:
 Operational note:
 - `proxy.webshare.io:80` is a **legacy static-proxy host** and should not be used. If this appears in configuration, update `WEBSHARE_PROXY_HOST` in Infisical to `p.webshare.io`.
 
-Operational env vars:
+### DataImpulse Credential Env Vars
+
+- `DATAIMPULSE_PROXY_USER`
+- `DATAIMPULSE_PROXY_PASS`
+- `DATAIMPULSE_PROXY_HOST` (default: `gw.dataimpulse.com`)
+- `DATAIMPULSE_PROXY_PORT` (default: `823`)
+
+Canonical default DataImpulse residential endpoint:
+- `gw.dataimpulse.com:823`
+
+### Operational Env Vars
+
 - `UA_YOUTUBE_INGEST_REQUIRE_PROXY`
 - `UA_HOOKS_YOUTUBE_INGEST_URLS`
 - `UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT`
@@ -255,12 +286,13 @@ Operational env vars:
 
 TGTG-specific env surface:
 - `TGTG_PROXIES`
+- `TGTG_PROXY_FALLBACK`
 
 ## Operational Health Signals
 
 Healthy state for YouTube ingest with residential proxy:
-- proxy credentials are present
-- proxy mode resolves to `webshare`
+- proxy credentials are present for the selected provider
+- proxy mode resolves to `webshare` or `dataimpulse` (matching `PROXY_PROVIDER`)
 - transcript fetch succeeds without bot-block failure signatures
 - metadata extraction succeeds without downloading video content
 - hooks service does not emit proxy alert notifications
@@ -275,6 +307,7 @@ Unhealthy state indicators:
 
 Operational diagnostics:
 - terminal hook ingest failures should persist `local_ingest_result.json` in the run workspace
+- use `scripts/check_proxy.py --provider <webshare|dataimpulse>` to verify TCP, HTTP, HTTPS, and YouTube connectivity through the proxy
 - use `scripts/check_youtube_ingress_readiness.py --probe-video-id <public_video_id> --json` to verify end-to-end proxy-backed ingest from the active runtime
 
 ## Cost and Safety Rules
@@ -315,8 +348,9 @@ Agent skill implementation:
 - `.agents/skills/captcha-solver/scripts/solve_with_nopecha.py`
 
 Diagnostic scripts:
-- `scripts/check_webshare_proxy.py`
-- `scripts/check_webshare_proxy_credentials.py`
+- `scripts/check_proxy.py` — provider-agnostic probe (supports `--provider webshare` and `--provider dataimpulse`)
+- `scripts/check_webshare_proxy.py` (legacy, Webshare-only)
+- `scripts/check_webshare_proxy_credentials.py` (legacy, Webshare-only)
 
 Related tests and behavior references:
 - `tests/unit/test_youtube_ingest.py`
@@ -325,9 +359,10 @@ Related tests and behavior references:
 ## Bottom Line
 
 The canonical residential proxy policy in Universal Agent is:
-- **use Webshare rotating residential proxy as the primary YouTube transcript path on the VPS**
+- **use rotating residential proxy (Webshare or DataImpulse, selected by `PROXY_PROVIDER`) as the primary YouTube transcript path on the VPS**
 - **require proxy for VPS YouTube transcript ingestion unless explicitly in local dev mode**
 - **never send video binary through the proxy**
 - **treat the proxy as a costly shared capability, not a default project-wide network path**
-- **surface misconfiguration loudly through ingest failures and hook notifications**
+- **surface misconfiguration loudly through ingest failures and hook notifications — provider-aware error messages reference the active provider**
 - **treat `proxy_connect_failed` as a first-class proxy transport incident, not a generic API outage**
+- **maintain both providers' credentials in Infisical for failover resilience**

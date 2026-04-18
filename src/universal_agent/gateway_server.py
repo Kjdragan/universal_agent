@@ -2562,6 +2562,13 @@ _activity_digest_max_sample_ids = max(
     min(100, int(os.getenv("UA_ACTIVITY_DIGEST_MAX_SAMPLE_IDS", "20") or 20)),
 )
 _activity_store_lock = threading.Lock()
+_proactive_signal_sync_lock = threading.Lock()
+_proactive_signal_sync_state_lock = threading.Lock()
+_proactive_signal_sync_pending = False
+_proactive_signal_sync_last_started_at = 0.0
+_proactive_signal_sync_last_completed_at = 0.0
+_proactive_signal_sync_last_counts: dict[str, int] = {}
+_proactive_signal_sync_last_error = ""
 _csi_dispatch_recent: dict[str, float] = {}
 _csi_dispatch_lock = threading.Lock()
 # Tracks consecutive auto-remediation failure windows per source-event key.
@@ -15890,6 +15897,110 @@ def _csi_default_db_path() -> Path:
     return Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
 
 
+def _proactive_signal_sync_cooldown_seconds() -> int:
+    raw = str(os.getenv("UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS", "300") or "300").strip()
+    try:
+        return max(30, min(int(raw), 3600))
+    except ValueError:
+        return 300
+
+
+def _proactive_signal_sync_requested(raw: Optional[str]) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "background", "sync"}
+
+
+def _proactive_signal_sync_snapshot(*, scheduled: bool = False, reason: str = "") -> dict[str, Any]:
+    with _proactive_signal_sync_state_lock:
+        now = time.time()
+        running = _proactive_signal_sync_pending or _proactive_signal_sync_lock.locked()
+        completed_age = (
+            max(0.0, now - _proactive_signal_sync_last_completed_at)
+            if _proactive_signal_sync_last_completed_at
+            else None
+        )
+        started_age = (
+            max(0.0, now - _proactive_signal_sync_last_started_at)
+            if _proactive_signal_sync_last_started_at
+            else None
+        )
+        return {
+            "mode": "background",
+            "scheduled": scheduled,
+            "running": running,
+            "reason": reason,
+            "cooldown_seconds": _proactive_signal_sync_cooldown_seconds(),
+            "last_started_age_seconds": round(started_age, 3) if started_age is not None else None,
+            "last_completed_age_seconds": round(completed_age, 3) if completed_age is not None else None,
+            "last_counts": dict(_proactive_signal_sync_last_counts),
+            "last_error": _proactive_signal_sync_last_error,
+        }
+
+
+def _run_proactive_signal_sync_background() -> None:
+    global _proactive_signal_sync_pending
+    global _proactive_signal_sync_last_completed_at
+    global _proactive_signal_sync_last_counts
+    global _proactive_signal_sync_last_error
+
+    if not _proactive_signal_sync_lock.acquire(blocking=False):
+        with _proactive_signal_sync_state_lock:
+            _proactive_signal_sync_pending = False
+        return
+    try:
+        conn = _activity_connect()
+        try:
+            with _activity_store_lock:
+                counts = sync_proactive_signal_cards(
+                    conn,
+                    csi_db_path=_csi_default_db_path(),
+                    discord_db_path=_discord_intelligence_db_path(),
+                )
+        finally:
+            conn.close()
+        with _proactive_signal_sync_state_lock:
+            _proactive_signal_sync_last_counts = {key: int(value or 0) for key, value in counts.items()}
+            _proactive_signal_sync_last_error = ""
+            _proactive_signal_sync_last_completed_at = time.time()
+    except Exception as exc:
+        logger.exception("Background proactive signal sync failed")
+        with _proactive_signal_sync_state_lock:
+            _proactive_signal_sync_last_error = str(exc)
+            _proactive_signal_sync_last_completed_at = time.time()
+    finally:
+        with _proactive_signal_sync_state_lock:
+            _proactive_signal_sync_pending = False
+        _proactive_signal_sync_lock.release()
+
+
+def _schedule_proactive_signal_sync(background_tasks: BackgroundTasks, *, force: bool = False) -> dict[str, Any]:
+    global _proactive_signal_sync_pending
+    global _proactive_signal_sync_last_started_at
+
+    now = time.time()
+    scheduled = False
+    reason = "scheduled"
+    with _proactive_signal_sync_state_lock:
+        if _proactive_signal_sync_pending or _proactive_signal_sync_lock.locked():
+            reason = "already_running"
+        else:
+            cooldown = _proactive_signal_sync_cooldown_seconds()
+            in_cooldown = (
+                not force
+                and _proactive_signal_sync_last_completed_at
+                and now - _proactive_signal_sync_last_completed_at < cooldown
+            )
+            if in_cooldown:
+                reason = "cooldown"
+            else:
+                _proactive_signal_sync_pending = True
+                _proactive_signal_sync_last_started_at = now
+                scheduled = True
+
+    if scheduled:
+        background_tasks.add_task(_run_proactive_signal_sync_background)
+    return _proactive_signal_sync_snapshot(scheduled=scheduled, reason=reason)
+
+
 def _discord_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_discord_intelligence_db_path()))
     conn.row_factory = sqlite3.Row
@@ -16224,19 +16335,22 @@ async def dashboard_discord_clear_all_messages(request: Request):
 @app.get("/api/v1/dashboard/proactive-signals")
 async def dashboard_proactive_signals(
     request: Request,
+    background_tasks: BackgroundTasks,
     source: str = "all",
     status: str = "pending",
     limit: int = 80,
+    sync: Optional[str] = None,
+    force_sync: bool = False,
 ):
     _require_ops_auth(request)
+    sync_status = (
+        _schedule_proactive_signal_sync(background_tasks, force=force_sync)
+        if force_sync or _proactive_signal_sync_requested(sync)
+        else _proactive_signal_sync_snapshot(reason="not_requested")
+    )
     with _activity_store_lock:
         conn = _activity_connect()
         try:
-            sync_counts = sync_proactive_signal_cards(
-                conn,
-                csi_db_path=_csi_default_db_path(),
-                discord_db_path=_discord_intelligence_db_path(),
-            )
             cards = list_proactive_signal_cards(
                 conn,
                 source=source,
@@ -16245,7 +16359,7 @@ async def dashboard_proactive_signals(
             )
         finally:
             conn.close()
-    return {"status": "ok", "cards": cards, "sync": sync_counts}
+    return {"status": "ok", "cards": cards, "sync": sync_status}
 
 
 @app.patch("/api/v1/dashboard/proactive-signals/{card_id}/feedback")

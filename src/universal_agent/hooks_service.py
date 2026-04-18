@@ -3072,35 +3072,35 @@ class HooksService:
             return (
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
-                "PROXY ALERT: Webshare quota/billing appears exhausted; verify account credits/bandwidth and retry."
+                f"PROXY ALERT: {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} quota/billing appears exhausted; verify account credits/bandwidth and retry."
             )
         if cls == "proxy_pool_unallocated":
             return (
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
-                "PROXY ALERT: Webshare reported no allocated proxies for the configured endpoint/username. "
-                "Refresh your Webshare proxy list/rotation username and update Infisical secrets."
+                f"PROXY ALERT: {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} reported no allocated proxies for the configured endpoint/username. "
+                "Refresh your proxy list/rotation username and update Infisical secrets."
             )
         if cls == "proxy_auth_failed":
             return (
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
-                "PROXY ALERT: Webshare credentials appear invalid; verify PROXY_USERNAME/PROXY_PASSWORD secrets."
+                f"PROXY ALERT: {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} credentials appear invalid; verify proxy username/password secrets in Infisical."
             )
         if cls == "proxy_connect_failed":
             return (
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
-                "PROXY ALERT: Residential proxy CONNECT failed; verify Webshare host/port overrides, "
+                f"PROXY ALERT: Residential proxy CONNECT failed; verify {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} host/port overrides, "
                 "proxy credentials in Infisical, and upstream proxy availability."
             )
         if cls == "proxy_not_configured":
             return (
                 f"YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED "
                 f"(error={err}, failure_class={cls}). "
-                "PROXY ALERT: PROXY_USERNAME and PROXY_PASSWORD env vars are missing. "
+                "PROXY ALERT: Residential proxy credentials are missing. "
                 "Without a residential proxy, YouTube WILL ban this server's datacenter IP. "
-                "Add Webshare credentials to Infisical and redeploy."
+                f"Add {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} credentials to Infisical and redeploy."
             )
         if cls == "video_unavailable":
             return (
@@ -4801,13 +4801,13 @@ class HooksService:
                         elif failure_class == "proxy_connect_failed":
                             _proxy_alert_msg = (
                                 "YouTube ingest failed because the residential proxy CONNECT path is broken. "
-                                "Check Webshare host/port overrides, proxy credentials in Infisical, "
+                                f"Check {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} host/port overrides, proxy credentials in Infisical, "
                                 "and upstream proxy availability."
                             )
                         elif failure_class == "proxy_pool_unallocated":
                             _proxy_alert_msg = (
-                                "YouTube ingest failed because Webshare reported no proxies allocated for the "
-                                "configured endpoint/username. Refresh the Webshare proxy list/rotation username "
+                                f"YouTube ingest failed because {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} reported no proxies allocated for the "
+                                "configured endpoint/username. Refresh the proxy list/rotation username "
                                 "and update Infisical proxy secrets."
                             )
                         elif failure_class == "request_blocked":
@@ -4815,12 +4815,12 @@ class HooksService:
                                 "YouTube transcript fetch BLOCKED — YouTube is rate-limiting or IP-blocking "
                                 "the proxy. RSS feed analysis may be degraded while transcripts cannot be fetched. "
                                 "This usually resolves within a few hours as proxy IPs rotate. "
-                                "If persistent, check Webshare proxy pool health and quota."
+                                f"If persistent, check {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} proxy pool health and quota."
                             )
                         else:
                             _proxy_alert_msg = (
                                 "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
-                                "Check Webshare account status and proxy secrets."
+                                f"Check {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} account status and proxy secrets."
                             )
                         self._emit_notification(
                             kind="youtube_ingest_proxy_alert",
