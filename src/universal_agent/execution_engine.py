@@ -204,8 +204,6 @@ def _temporary_sanitized_process_env() -> Any:
 # This is resilient by default: new secrets from Infisical just work.
 
 
-
-
 def _env_total_size() -> int:
     """Return the approximate total byte size of the current process environ."""
     return sum(len(k) + len(v) + 2 for k, v in os.environ.items())
@@ -225,7 +223,6 @@ _STRIP_PREFIXES = (
     "BASH_FUNC_",
     "LESS_TERMCAP_",
 )
-
 
 
 # Safety cap: if total env exceeds this, fall back to aggressive stripping.
