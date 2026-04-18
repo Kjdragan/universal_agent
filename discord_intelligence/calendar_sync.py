@@ -96,8 +96,54 @@ def calendar_insert_command(payload: dict) -> list[str]:
     ]
 
 
+def _materialize_binary_secret(env: dict, env_key: str, target_path: Path) -> bool:
+    """Decode a base64-encoded Infisical secret and write it as a binary file.
+
+    Returns True if the file was written/already up-to-date, False if nothing to do.
+    """
+    b64_value = env.get(env_key, "").strip()
+    if not b64_value:
+        return False
+    raw_bytes = base64.b64decode(b64_value)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if target_path.exists() and target_path.read_bytes() == raw_bytes:
+        return True  # already current
+    target_path.write_bytes(raw_bytes)
+    target_path.chmod(0o600)
+    return True
+
+
 def gws_subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
+
+    # --- Materialize full encrypted gws credential suite from Infisical ---
+    # The gws CLI stores credentials as AES-256-GCM encrypted files.  On a
+    # headless VPS the OS keyring is unavailable, so we use the "file" backend
+    # which reads the encryption key from ~/.config/gws/.encryption_key.
+    # Four secrets are stored in Infisical as base64-encoded blobs:
+    #   GWS_CREDENTIALS_ENC_B64    -> ~/.config/gws/credentials.enc
+    #   GWS_TOKEN_CACHE_B64        -> ~/.config/gws/token_cache.json
+    #   GWS_ENCRYPTION_KEY_B64     -> ~/.config/gws/.encryption_key
+    #   GWS_CLIENT_SECRET_JSON_B64 -> ~/.config/gws/client_secret.json
+    gws_dir = Path(env.get("UA_GWS_CONFIG_DIR", "~/.config/gws")).expanduser()
+    _infisical_files = {
+        "GWS_CREDENTIALS_ENC_B64": gws_dir / "credentials.enc",
+        "GWS_TOKEN_CACHE_B64": gws_dir / "token_cache.json",
+        "GWS_ENCRYPTION_KEY_B64": gws_dir / ".encryption_key",
+        "GWS_CLIENT_SECRET_JSON_B64": gws_dir / "client_secret.json",
+    }
+    materialized_any = False
+    for secret_key, target_path in _infisical_files.items():
+        if _materialize_binary_secret(env, secret_key, target_path):
+            materialized_any = True
+        env.pop(secret_key, None)  # never leak raw blobs to subprocess
+
+    # If we materialized encrypted credentials on a headless box, tell gws
+    # to use the file-based keyring backend (reads .encryption_key on disk).
+    if materialized_any and "GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND" not in env:
+        env["GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"] = "file"
+
+    # --- Legacy plain-JSON credential path (kept for backwards compat) ---
     credentials_json = env.get("GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON", "").strip()
     credentials_b64 = env.get("GOOGLE_WORKSPACE_CLI_CREDENTIALS_JSON_B64", "").strip()
     if not env.get("GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE", "").strip() and (credentials_json or credentials_b64):
