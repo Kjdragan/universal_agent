@@ -22989,8 +22989,12 @@ async def ops_proactive_reports_get(request: Request, limit: int = 10):
     _require_ops_auth(request)
     try:
         from universal_agent.services.proactive_intelligence_report import get_latest_reports
-        conn = _get_db_conn()
-        reports = get_latest_reports(conn, limit=min(limit, 50))
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                reports = get_latest_reports(conn, limit=min(limit, 50))
+            finally:
+                conn.close()
         return {"ok": True, "reports": reports, "count": len(reports)}
     except Exception as exc:
         logger.warning("Failed to retrieve proactive reports: %s", exc)
@@ -23003,8 +23007,12 @@ async def ops_proactive_utilization_get(request: Request, window_hours: int = 24
     _require_ops_auth(request)
     try:
         from universal_agent.services.proactive_intelligence_report import get_utilization_stats
-        conn = _get_db_conn()
-        stats = get_utilization_stats(conn, window_hours=min(window_hours, 168))
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                stats = get_utilization_stats(conn, window_hours=min(window_hours, 168))
+            finally:
+                conn.close()
         return {"ok": True, "utilization": stats}
     except Exception as exc:
         logger.warning("Failed to retrieve utilization stats: %s", exc)
