@@ -23018,6 +23018,27 @@ async def ops_proactive_utilization_get(request: Request, window_hours: int = 24
         logger.warning("Failed to retrieve utilization stats: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
+
+@app.get("/api/v1/ops/proactive/outcomes")
+async def ops_proactive_outcomes_get(request: Request, window_hours: int = 168, limit: int = 20):
+    """Retrieve proactive task outcome statistics and recent outcomes."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services.proactive_outcome_tracker import (
+            get_outcome_stats, get_recent_outcomes,
+        )
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                stats = get_outcome_stats(conn, window_hours=min(window_hours, 720))
+                recent = get_recent_outcomes(conn, limit=min(limit, 50))
+            finally:
+                conn.close()
+        return {"ok": True, "stats": stats, "recent": recent}
+    except Exception as exc:
+        logger.warning("Failed to retrieve proactive outcomes: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
 async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
     _require_ops_auth(request)

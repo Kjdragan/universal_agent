@@ -2991,6 +2991,27 @@ def perform_task_action(
         )
 
     conn.commit()
+
+    # ── Phase 3: Proactive outcome tracking ──────────────────────────
+    # Record outcomes for terminal actions on proactive-sourced tasks.
+    # Uses the pre-action `item` snapshot to preserve original source_kind.
+    # Wrapped in try/except — outcome recording is non-critical.
+    _OUTCOME_TERMINAL_ACTIONS = {"complete", "block", "review", "park", "approve"}
+    if action_norm in _OUTCOME_TERMINAL_ACTIONS:
+        try:
+            from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+            record_proactive_outcome(
+                conn,
+                task=item,
+                action=action_norm,
+                reason=reason_text,
+                agent_id=agent_id,
+            )
+        except Exception as _outcome_exc:
+            logger.warning(
+                "Proactive outcome recording failed for %s: %s", task_id, _outcome_exc
+            )
+
     rebuild_dispatch_queue(conn)
     fresh = get_item(conn, task_id)
     if not fresh:

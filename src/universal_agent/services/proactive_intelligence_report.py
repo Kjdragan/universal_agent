@@ -151,6 +151,14 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     # ── Utilization stats ─────────────────────────────────────────────
     utilization = get_utilization_stats(conn, window_hours=24)
 
+    # ── Phase 3: Outcome tracking stats ──────────────────────────────
+    outcome_stats: dict[str, Any] = {}
+    try:
+        from universal_agent.services.proactive_outcome_tracker import get_outcome_stats
+        outcome_stats = get_outcome_stats(conn, window_hours=24)
+    except Exception as exc:
+        logger.debug("Outcome stats unavailable: %s", exc)
+
     now = datetime.now(timezone.utc)
     return {
         "proactive_tasks": {
@@ -170,6 +178,7 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "promoted": signal_promoted,
         },
         "utilization": utilization,
+        "outcomes": outcome_stats,
         "timestamp": now.isoformat(),
         "period": _current_period_label(),
     }

@@ -1408,6 +1408,145 @@ These samples accumulate in `proactive_utilization_samples` and are aggregated a
 
 ---
 
+## 19. Phase 3: Outcome Tracking & Feedback Loop
+
+Phase 3 closes the feedback loop on autonomous proactive tasks. When any proactive-sourced task reaches a terminal state (complete, block, review, park, approve), the system:
+
+1. **Records the outcome** in a `proactive_outcomes` table
+2. **Fires an implicit preference signal** to refine future dispatch decisions
+3. **Triggers auto-investigation** for failures (block/review)
+4. **Writes a memory entry** summarizing the outcome for long-term retrieval
+
+### Architecture
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant PTA as perform_task_action
+    participant OT as OutcomeTracker
+    participant AI as AutoInvestigator
+    participant MO as MemoryOrchestrator
+    participant PP as ProactivePreferences
+    participant DB as SQLite
+
+    Agent->>PTA: task_hub_task_action(complete/block/...)
+    PTA->>DB: UPDATE status
+    PTA->>OT: record_proactive_outcome()
+    OT->>DB: INSERT INTO proactive_outcomes
+    OT->>PP: implicit preference signal
+
+    alt Failure action (block/review)
+        OT->>AI: investigate_proactive_failure()
+        AI->>DB: Read assignments + evaluations
+        AI-->>AI: Gemini Flash diagnostic (or fallback)
+        AI->>DB: Store diagnostic artifact
+    end
+
+    OT->>MO: write(outcome summary, importance=0.6)
+```
+
+### Schema: `proactive_outcomes`
+
+```sql
+CREATE TABLE IF NOT EXISTS proactive_outcomes (
+    outcome_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    action TEXT NOT NULL,
+    terminal_status TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    agent_id TEXT NOT NULL DEFAULT '',
+    assignment_count INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL,
+    investigated INTEGER NOT NULL DEFAULT 0,
+    investigation_artifact_id TEXT,
+    created_at TEXT NOT NULL
+);
+```
+
+### Proactive Source Kinds
+
+The following `source_kind` values trigger outcome recording:
+
+| Source Kind | Origin |
+|-------------|--------|
+| `proactive_signal` | Signal card promotion |
+| `reflection` | Reflection engine ideation |
+| `convergence_detection` | Cross-channel signal convergence |
+| `csi` | CSI ingester pipeline |
+| `brainstorm` | Ideation mode brainstorming |
+| `calendar_bridge` | Calendar-driven proactive tasks |
+
+### Implicit Preference Signal Weights
+
+| Terminal Action | Weight | Interpretation |
+|----------------|--------|----------------|
+| `complete` | +0.3 | Task succeeded — reinforce topic/type |
+| `approve` | +0.5 | VP completed AND Simone approved — strong positive |
+| `block` | -0.4 | Task couldn't proceed — negative signal |
+| `review` | -0.2 | Needs human intervention — mild negative |
+| `park` | -0.1 | Deferred — very mild negative |
+
+### Auto-Investigation
+
+When a proactive task is terminated with `block` or `review`:
+
+1. **Context gathering**: Assignment history, evaluation history, comments
+2. **LLM diagnostic** (Gemini Flash): ROOT CAUSE, CONTRIBUTING FACTORS, RECOMMENDATION, DISPATCH QUALITY
+3. **Fallback**: Template-based diagnostic if LLM unavailable
+4. **Storage**: Diagnostic saved as `failure_diagnostic` proactive artifact
+5. **Memory**: Diagnostic summary written to MemoryOrchestrator
+
+### API Endpoint
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/v1/ops/proactive/outcomes` | Ops token | Outcome statistics + recent records |
+
+Query parameters:
+- `window_hours` (default 168 = 7 days, max 720)
+- `limit` (default 20, max 50)
+
+Response shape:
+```json
+{
+  "ok": true,
+  "stats": {
+    "total": 15,
+    "by_action": {"complete": 10, "block": 3, "review": 2},
+    "by_source_kind": {"reflection": 8, "proactive_signal": 7},
+    "success_rate": 0.667,
+    "avg_duration_seconds": 450.2,
+    "investigated_count": 5,
+    "top_failure_reasons": [...]
+  },
+  "recent": [...]
+}
+```
+
+### Files
+
+| File | Role |
+|------|------|
+| `services/proactive_outcome_tracker.py` | Core service — schema, recording, stats, preference signals, memory writes |
+| `services/proactive_auto_investigator.py` | Diagnostic generation — LLM analysis with deterministic fallback |
+| `task_hub.py` (post-action hook) | Integration point — fires after `conn.commit()` in `perform_task_action` |
+
+### Feature Flags
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UA_PROACTIVE_AUTO_INVESTIGATE` | `true` | Enable/disable auto-investigation of failed proactive tasks |
+| `UA_PROACTIVE_OUTCOME_MEMORY` | `true` | Enable/disable writing outcome summaries to memory vault |
+
+### Test Coverage
+
+| Test Module | Cases | Scope |
+|-------------|-------|-------|
+| `test_proactive_outcome_tracker.py` | 16 | Outcome recording (2), stats (1), preferences (2), duration (2), memory (2), investigation (2), diagnostic (1), API shape (1), report integration (1), edge cases (2) |
+
+---
+
 ## 20. Related Documentation
 
 | Document | Scope |
