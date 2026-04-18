@@ -5,10 +5,22 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-03-31 — trusted AgentMail inbound now defaults to one canonical Task Hub item per inbound request, disjoint email splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, tracked chat-panel requests now enter the same Task Hub / `todo_execution` lifecycle, the gateway accepts both `query` and `execute` websocket message types, and `todo_execution` now preserves the golden-run delegation path while still requiring a durable Task Hub lifecycle mutation.
+> **Last updated:** 2026-04-18 — current-state audit added. Trusted AgentMail inbound defaults to one canonical Task Hub item per inbound request, disjoint email splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, tracked chat-panel requests enter the same Task Hub / `todo_execution` lifecycle, the gateway accepts both `query` and `execute` websocket message types, and `todo_execution` preserves the golden-run delegation path while still requiring a durable Task Hub lifecycle mutation.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
+
+> [!WARNING]
+> **Current implementation audit (2026-04-18):** This document describes the target
+> proactive architecture, but several producer lanes are not fully wired end to
+> end in the current checkout. Reflection mode can enter an ideation prompt, but
+> its prompt tells the agent to create Task Hub rows with `task_hub_task_action`,
+> while that tool only supports lifecycle actions for existing tasks. Signal
+> curation currently collects pending cards into heartbeat metadata but does not
+> call the promotion helper that creates Task Hub work. The documented nightly
+> wiki and 3x daily proactive report jobs were found in `workspaces/cron_jobs.json`,
+> not the gateway's default `AGENT_RUN_WORKSPACES/cron_jobs.json` runtime store.
+> See [Proactive Automation Current State Audit (2026-04-18)](../03_Operations/115_Proactive_Automation_Current_State_Audit_2026-04-18.md).
 
 ---
 

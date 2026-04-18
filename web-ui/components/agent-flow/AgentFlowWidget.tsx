@@ -37,6 +37,8 @@ import { MOCK_DURATION } from "@/lib/agent-flow/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { SpotlightBar } from "./spotlight-bar"
 import { useAudioEffects } from "@/hooks/agent-flow/use-audio-effects"
+import { VisualsPanel } from "./visuals-panel"
+import { useAgentFlowVisualPreferences } from "@/lib/agent-flow/visual-preferences"
 
 export type AgentFlowMode = "full" | "compact" | "mini"
 
@@ -54,7 +56,8 @@ export function AgentFlowWidget({
   onExpand,
 }: AgentFlowWidgetProps) {
   const router = useRouter()
-  const bridge = useUABridge()
+  const { preferences: visualPreferences, setPreferences: setVisualPreferences, resetPreferences: resetVisualPreferences } = useAgentFlowVisualPreferences()
+  const bridge = useUABridge(visualPreferences)
 
   const {
     frameRef,
@@ -92,6 +95,7 @@ export function AgentFlowWidget({
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
+  const [showVisuals, setShowVisuals] = useState(false)
 
   const toggleExclusivePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
     setShowFileAttention(prev => panel === 'files' ? !prev : false)
@@ -370,6 +374,7 @@ export function AgentFlowWidget({
           onDiscoveryClick={() => {}}
           selectedDiscoveryId={null}
           showCostOverlay={false}
+          visualPreferences={visualPreferences}
         />
         {/* Overlay with agent count and expand hint */}
         <div className="absolute inset-0 pointer-events-none flex items-end justify-between p-3">
@@ -422,6 +427,8 @@ export function AgentFlowWidget({
             onDiscoveryClick={selection.handleDiscoveryClick}
             selectedDiscoveryId={selection.selectedDiscoveryId}
             showCostOverlay={false}
+            visualPreferences={visualPreferences}
+            onTextBurstClick={() => setShowTranscript(true)}
           />
 
           {/* Agent detail card */}
@@ -510,6 +517,8 @@ export function AgentFlowWidget({
           onDiscoveryClick={selection.handleDiscoveryClick}
           selectedDiscoveryId={selection.selectedDiscoveryId}
           showCostOverlay={showCostOverlay}
+          visualPreferences={visualPreferences}
+          onTextBurstClick={() => setShowTranscript(true)}
         />
 
         {/* Message feed panel (top-left) */}
@@ -613,6 +622,14 @@ export function AgentFlowWidget({
           onClose={() => setShowTimeline(false)}
         />
 
+        <VisualsPanel
+          visible={showVisuals}
+          preferences={visualPreferences}
+          onChange={setVisualPreferences}
+          onReset={resetVisualPreferences}
+          onClose={() => setShowVisuals(false)}
+        />
+
         <SpotlightBar
           mode={bridge.mode}
           recentArchives={recentArchives}
@@ -647,6 +664,7 @@ export function AgentFlowWidget({
           <button type="button" onClick={() => toggleExclusivePanel('transcript')} style={{ color: showTranscript ? COLORS.holoBright : COLORS.textMuted }}>Chat</button>
           <button type="button" onClick={() => toggleExclusivePanel('cost')} style={{ color: showCostOverlay ? COLORS.complete : COLORS.textMuted }}>$Cost</button>
           <button type="button" onClick={() => setShowTimeline(prev => !prev)} style={{ color: showTimeline ? COLORS.holoBright : COLORS.textMuted }}>Timeline</button>
+          <button type="button" onClick={() => setShowVisuals(prev => !prev)} style={{ color: showVisuals ? COLORS.holoBright : COLORS.textMuted }}>Visuals</button>
           <button type="button" onClick={handleToggleMute} style={{ color: isMuted ? COLORS.textMuted : COLORS.holoBright }}>
             {isMuted ? 'Mute' : 'Sound'}
           </button>

@@ -23,7 +23,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Heartbeat_Service.md | **Canonical source of truth** — heartbeat supervision cycle, health findings contract, mediation flow, and the separation between heartbeat runtimes and dedicated ToDo execution |
 | Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: trusted email triage, Task Hub scoring, dedicated ToDo dispatch lifecycle, delivery-mode heuristics, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily budget, priority lanes, proactive wiki creation, autonomous morning briefing, 3x daily hybrid intelligence reports (Phase 2), system utilization tracking, LLM analysis, outcome tracking with implicit preference feedback (Phase 3), auto-investigation of failures, memory integration, roadmap, and test coverage |
 | Proactive_Intelligence_Work_Product_Pipeline.md | Planned phased implementation for abundant proactive artifact generation, review candidate emails, feedback learning, CODIE proactive PRs, tutorial build automation, convergence detection, and GWS enhancements |
-| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget, lightweight spotlight persistence contract, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
+| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded/full Agent Flow visual process display, lightweight spotlight and visual preference persistence contracts, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
 | Memory_System.md | Tiered memory & auto-flush |
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |
 | Durable_Execution.md | Resilience features |
@@ -89,6 +89,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 111 | Discord Operations And Usage Guide — **Canonical source of truth** for operational usage, slash commands, and proactive task generation workflows via the Discord CC Bot |
 | 113 | Task Hub Dashboard Read Path Performance — root cause and invariant for keeping dashboard GET endpoints from rebuilding Task Hub or proactive signal state during navigation |
 | 114 | CODIE Proactive Pipeline Audit Report — detailed report assessing a manual CODIE proactive cleanup pipeline execution, brittle routing refactoring (PR #103), and system health observations |
+| 115 | Proactive Automation Current State Audit — code-verified current-state report for proactive generation, signal curation, reflection, cron registration, tutorial builds, artifact surfacing, and impediments preventing 24/7 proactive throughput |
 
 ## CSI Subsystem (04_CSI/)
 

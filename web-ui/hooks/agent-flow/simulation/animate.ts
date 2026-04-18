@@ -6,6 +6,11 @@ import {
   ANIM_SPEED,
 } from '@/lib/agent-flow/canvas-constants'
 
+const TEXT_BURST_MAX_AGE_S = 45
+const PHASE_TRANSITION_MAX_AGE_S = 7
+const ARTIFACT_VISUAL_MAX_AGE_S = 40
+const ERROR_RECOVERY_MAX_AGE_S = 12
+
 export interface AnimateOptions {
   useMockData: boolean
   mockScenarioLength: number
@@ -154,6 +159,15 @@ function animateParticles(particles: SimulationState['particles'], deltaTime: nu
   })
 }
 
+function pruneVisuals(currentState: SimulationState, newTime: number) {
+  return {
+    textBursts: currentState.textBursts.filter((item) => newTime - item.timestamp <= TEXT_BURST_MAX_AGE_S),
+    phaseTransitions: currentState.phaseTransitions.filter((item) => newTime - item.timestamp <= PHASE_TRANSITION_MAX_AGE_S),
+    artifactVisuals: currentState.artifactVisuals.filter((item) => newTime - item.timestamp <= ARTIFACT_VISUAL_MAX_AGE_S),
+    errorRecoveryVisuals: currentState.errorRecoveryVisuals.filter((item) => newTime - item.timestamp <= ERROR_RECOVERY_MAX_AGE_S),
+  }
+}
+
 export function computeNextFrame(prev: SimulationState, deltaTime: number, newTime: number, maxT: number, currentState: SimulationState, options: AnimateOptions): SimulationState {
       const newAgentsRaw = animateAgents(currentState.agents, deltaTime, currentState.currentTime)
       const newEdgesRaw = animateEdges(currentState.edges, deltaTime)
@@ -162,26 +176,29 @@ export function computeNextFrame(prev: SimulationState, deltaTime: number, newTi
       const { agents: newAgents, toolCalls: newToolCalls, edges: filteredEdges } =
         cleanupFaded(newAgentsRaw, newToolCallsRaw, newEdgesRaw, currentState.agents, currentState.toolCalls)
 
-      const newDiscoveries = animateDiscoveries(currentState.discoveries, deltaTime, newTime)
-      const newParticles = animateParticles(currentState.particles, deltaTime, currentState.speed)
+	      const newDiscoveries = animateDiscoveries(currentState.discoveries, deltaTime, newTime)
+	      const newParticles = animateParticles(currentState.particles, deltaTime, currentState.speed)
+	      const visualState = pruneVisuals(currentState, newTime)
 
       // Stop playback when mock scenario ends (user can restart manually)
       if (options.useMockData && currentState.eventIndex >= options.mockScenarioLength && newTime > options.mockScenarioEndTime + MOCK_END_BUFFER_S) {
         return {
           ...currentState, currentTime: newTime, eventIndex: currentState.eventIndex,
           agents: newAgents, toolCalls: newToolCalls,
-          particles: newParticles, edges: filteredEdges,
-          discoveries: newDiscoveries,
-          maxTimeReached: maxT,
-          isPlaying: false,
+	          particles: newParticles, edges: filteredEdges,
+	          discoveries: newDiscoveries,
+	          ...visualState,
+	          maxTimeReached: maxT,
+	          isPlaying: false,
         }
       }
 
       return {
         ...currentState, currentTime: newTime, eventIndex: currentState.eventIndex,
         agents: newAgents, toolCalls: newToolCalls,
-        particles: newParticles, edges: filteredEdges,
-        discoveries: newDiscoveries,
-        maxTimeReached: maxT,
-      }
+	        particles: newParticles, edges: filteredEdges,
+	        discoveries: newDiscoveries,
+	        ...visualState,
+	        maxTimeReached: maxT,
+	      }
 }

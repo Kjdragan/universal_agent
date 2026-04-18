@@ -17,15 +17,18 @@ describe('createGatewayAgentFlowAdapter', () => {
 
     expect(status.sessionId).toBe('session_alpha')
     expect(status.session?.label).toBe('Trace the active flow')
-    expect(status.events).toHaveLength(1)
-    expect(status.events[0]).toMatchObject({
+    expect(status.events).toContainEqual(expect.objectContaining({
       type: 'agent_spawn',
       sessionId: 'session_alpha',
-      payload: {
+      payload: expect.objectContaining({
         name: 'orchestrator',
         isMain: true,
-      },
-    })
+      }),
+    }))
+    expect(status.events).toContainEqual(expect.objectContaining({
+      type: 'phase_transition',
+      payload: expect.objectContaining({ phase: 'input' }),
+    }))
 
     const text = adapter.ingest({
       type: 'text',
@@ -36,7 +39,7 @@ describe('createGatewayAgentFlowAdapter', () => {
       },
     })
 
-    expect(text.events).toEqual([
+    expect(text.events).toContainEqual(
       expect.objectContaining({
         type: 'message',
         payload: expect.objectContaining({
@@ -45,7 +48,7 @@ describe('createGatewayAgentFlowAdapter', () => {
           content: 'Show me the live events.',
         }),
       }),
-    ])
+    )
 
     const toolCall = adapter.ingest({
       type: 'tool_call',
@@ -59,7 +62,7 @@ describe('createGatewayAgentFlowAdapter', () => {
       },
     })
 
-    expect(toolCall.events).toEqual([
+    expect(toolCall.events).toContainEqual(
       expect.objectContaining({
         type: 'tool_call_start',
         payload: expect.objectContaining({
@@ -68,7 +71,11 @@ describe('createGatewayAgentFlowAdapter', () => {
           args: '/tmp/active_flow.md',
         }),
       }),
-    ])
+    )
+    expect(toolCall.events).toContainEqual(expect.objectContaining({
+      type: 'phase_transition',
+      payload: expect.objectContaining({ phase: 'tools' }),
+    }))
 
     const toolResult = adapter.ingest({
       type: 'tool_result',
@@ -99,7 +106,7 @@ describe('createGatewayAgentFlowAdapter', () => {
       },
     })
 
-    expect(authRequired.events).toEqual([
+    expect(authRequired.events).toContainEqual(
       expect.objectContaining({
         type: 'permission_requested',
         payload: expect.objectContaining({
@@ -107,7 +114,7 @@ describe('createGatewayAgentFlowAdapter', () => {
           message: 'https://example.com/auth',
         }),
       }),
-    ])
+    )
 
     const completion = adapter.ingest({
       type: 'iteration_end',
@@ -116,12 +123,12 @@ describe('createGatewayAgentFlowAdapter', () => {
       },
     })
 
-    expect(completion.events).toEqual([
+    expect(completion.events).toContainEqual(
       expect.objectContaining({
         type: 'agent_complete',
         payload: { name: 'orchestrator' },
       }),
-    ])
+    )
   })
 
   it('preserves top-level session ids for global-flow system events', () => {
@@ -154,5 +161,93 @@ describe('createGatewayAgentFlowAdapter', () => {
         content: 'Heartbeat completed successfully',
       }),
     })
+  })
+
+  it('derives visual process events from long text, artifacts, and recovery', () => {
+    let now = 3000
+    const adapter = createGatewayAgentFlowAdapter(() => now++)
+
+    adapter.ingest({
+      type: 'status',
+      data: {
+        session_id: 'session_visual',
+        status: 'processing',
+        query: 'Visual run',
+      },
+    })
+
+    const longText = adapter.ingest({
+      type: 'text',
+      data: {
+        session_id: 'session_visual',
+        author: 'assistant',
+        text: 'This is a long assistant message. '.repeat(16),
+      },
+    })
+    expect(longText.events).toContainEqual(expect.objectContaining({
+      type: 'text_burst',
+      payload: expect.objectContaining({
+        kind: 'assistant',
+        title: 'CLAUDE OUTPUT',
+      }),
+    }))
+
+    adapter.ingest({
+      type: 'tool_call',
+      data: {
+        session_id: 'session_visual',
+        id: 'tool-write',
+        name: 'Write',
+        input: { file_path: '/tmp/report.md' },
+      },
+    })
+    const writeResult = adapter.ingest({
+      type: 'tool_result',
+      data: {
+        session_id: 'session_visual',
+        tool_use_id: 'tool-write',
+        content_preview: 'Wrote report.md',
+      },
+    })
+    expect(writeResult.events).toContainEqual(expect.objectContaining({
+      type: 'artifact_emitted',
+      payload: expect.objectContaining({ title: 'Write' }),
+    }))
+
+    adapter.ingest({
+      type: 'tool_call',
+      data: {
+        session_id: 'session_visual',
+        id: 'tool-fail',
+        name: 'Read',
+        input: { file_path: '/tmp/missing.md' },
+      },
+    })
+    const failed = adapter.ingest({
+      type: 'tool_result',
+      data: {
+        session_id: 'session_visual',
+        tool_use_id: 'tool-fail',
+        is_error: true,
+        content_preview: 'file missing',
+      },
+    })
+    expect(failed.events).toContainEqual(expect.objectContaining({
+      type: 'error_recovery',
+      payload: expect.objectContaining({ stage: 'error' }),
+    }))
+
+    const recovered = adapter.ingest({
+      type: 'text',
+      data: {
+        session_id: 'session_visual',
+        author: 'assistant',
+        text: 'Recovered by using a fallback file.',
+      },
+    })
+    expect(recovered.events).toContainEqual(expect.objectContaining({
+      type: 'error_recovery',
+      payload: expect.objectContaining({ stage: 'recovery' }),
+    }))
   })
 })

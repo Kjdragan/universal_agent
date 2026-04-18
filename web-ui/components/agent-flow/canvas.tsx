@@ -5,6 +5,7 @@ import { Agent, Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-flo
 import type { SimulationState } from '@/hooks/agent-flow/simulation/types'
 import { getStateColor } from '@/lib/agent-flow/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/agent-flow/canvas-constants'
+import { DEFAULT_VISUAL_PREFERENCES, type AgentFlowVisualPreferences } from '@/lib/agent-flow/visual-preferences'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
 import {
@@ -15,9 +16,13 @@ import {
   drawMessageBubblesWorld,
   drawEdges, getActiveEdgeIds,
   drawParticles, buildEdgeMap,
-  drawToolCalls,
-  drawDiscoveries, drawDiscoveryConnections,
-  drawCostLabels, drawCostSummaryPanel,
+    drawToolCalls,
+    drawDiscoveries, drawDiscoveryConnections,
+    drawArtifactVisuals,
+    drawErrorRecoveryVisuals,
+    drawPhaseTransitions,
+    drawTextBursts,
+    drawCostLabels, drawCostSummaryPanel,
   detectStateChanges as detectStateChangesPure,
 } from './canvas/index'
 import { useCanvasCamera } from '@/hooks/agent-flow/use-canvas-camera'
@@ -39,15 +44,19 @@ interface CanvasProps {
   onToolCallClick?: (toolCallId: string | null) => void
   selectedToolCallId?: string | null
   onDiscoveryClick?: (discoveryId: string | null) => void
-  selectedDiscoveryId?: string | null
-  showCostOverlay?: boolean
+    selectedDiscoveryId?: string | null
+    showCostOverlay?: boolean
+    visualPreferences?: AgentFlowVisualPreferences
+    onTextBurstClick?: (textBurstId: string | null) => void
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
-  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
-}: CanvasProps) {
+    onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+    visualPreferences = DEFAULT_VISUAL_PREFERENCES,
+    onTextBurstClick,
+  }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -62,7 +71,8 @@ export function AgentCanvas({
   // Effects system
   const effectsRef = useRef<VisualEffect[]>([])
   const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
-  const prevToolStatesRef = useRef<Map<string, string>>(new Map())
+    const prevToolStatesRef = useRef<Map<string, string>>(new Map())
+    const hoveredTextBurstIdRef = useRef<string | null>(null)
 
   // Rate-limited error logging for the draw loop (avoid flooding console)
   const lastDrawErrorRef = useRef(0)
@@ -90,15 +100,20 @@ export function AgentCanvas({
   // at the top of each draw frame, so it's always fresh even without re-renders.
   const sim = simulationRef.current
   const makeDrawProps = (prev?: { isDragging: boolean }) => ({
-    agents: sim.agents, toolCalls: sim.toolCalls,
-    particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
-    selectedAgentId, hoveredAgentId, showStats, showHexGrid,
-    showCostOverlay, selectedToolCallId, selectedDiscoveryId,
-    simTime: sim.currentTime, pauseAutoFit, dimensions,
-    onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
-    onToolCallClick, onDiscoveryClick,
-    isDragging: prev?.isDragging ?? false,
-  })
+      agents: sim.agents, toolCalls: sim.toolCalls,
+      particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
+      textBursts: sim.textBursts,
+      phaseTransitions: sim.phaseTransitions,
+      artifactVisuals: sim.artifactVisuals,
+      errorRecoveryVisuals: sim.errorRecoveryVisuals,
+      selectedAgentId, hoveredAgentId, showStats, showHexGrid,
+      showCostOverlay, selectedToolCallId, selectedDiscoveryId,
+      visualPreferences, hoveredTextBurstIdRef,
+      simTime: sim.currentTime, pauseAutoFit, dimensions,
+      onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
+      onToolCallClick, onDiscoveryClick, onTextBurstClick,
+      isDragging: prev?.isDragging ?? false,
+    })
   const drawPropsRef = useRef(makeDrawProps())
   drawPropsRef.current = makeDrawProps(drawPropsRef.current)
 
@@ -182,18 +197,24 @@ export function AgentCanvas({
         const p = drawPropsRef.current
         p.agents = s.agents
         p.toolCalls = s.toolCalls
-        p.particles = s.particles
-        p.edges = s.edges
-        p.discoveries = s.discoveries
-        p.simTime = s.currentTime
-      }
+          p.particles = s.particles
+          p.edges = s.edges
+          p.discoveries = s.discoveries
+          p.textBursts = s.textBursts
+          p.phaseTransitions = s.phaseTransitions
+          p.artifactVisuals = s.artifactVisuals
+          p.errorRecoveryVisuals = s.errorRecoveryVisuals
+          p.simTime = s.currentTime
+        }
 
       const {
-        agents, toolCalls, particles, edges, discoveries,
-        selectedAgentId, hoveredAgentId, showStats, showHexGrid,
-        showCostOverlay, selectedToolCallId, selectedDiscoveryId,
-        simTime, pauseAutoFit, dimensions, onAgentDrag,
-        isDragging,
+          agents, toolCalls, particles, edges, discoveries,
+          textBursts, phaseTransitions, artifactVisuals, errorRecoveryVisuals,
+          selectedAgentId, hoveredAgentId, showStats, showHexGrid,
+          showCostOverlay, selectedToolCallId, selectedDiscoveryId,
+          visualPreferences,
+          simTime, pauseAutoFit, dimensions, onAgentDrag,
+          isDragging,
       } = drawPropsRef.current
       const transform = transformRef.current
 
@@ -265,12 +286,16 @@ export function AgentCanvas({
         edgeLookupCacheRef.current = { particles, edges, activeEdgeIds, edgeMap }
       }
 
-      drawDiscoveryConnections(ctx, discoveries, agents)
-      drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
-      drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
-      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
-      drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
+        drawDiscoveryConnections(ctx, discoveries, agents)
+        drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
+        drawPhaseTransitions(ctx, phaseTransitions, agents, simTimeRef.current)
+        drawErrorRecoveryVisuals(ctx, errorRecoveryVisuals, agents, simTimeRef.current)
+        drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
+        drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
+        drawArtifactVisuals(ctx, artifactVisuals, agents, simTimeRef.current)
+        drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
+        drawTextBursts(ctx, textBursts, visualPreferences, simTimeRef.current, hoveredTextBurstIdRef.current)
+        drawMessageBubblesWorld(ctx, agents, simTimeRef.current, visualPreferences.thinkingDisplay)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
       drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
       drawEffects(ctx, effectsRef.current)

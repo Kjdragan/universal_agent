@@ -16,6 +16,10 @@ export const MEANINGFUL_EVENT_TYPES = new Set<SimulationEvent['type']>([
   'subagent_return',
   'permission_requested',
   'agent_complete',
+  'text_burst',
+  'phase_transition',
+  'artifact_emitted',
+  'error_recovery',
 ])
 
 export const GREATEST_HITS_MIN_EVENTS = 4

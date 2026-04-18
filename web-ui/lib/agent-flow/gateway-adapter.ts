@@ -3,6 +3,8 @@ import type { SessionInfo } from './bridge-types'
 
 const ORCHESTRATOR_AGENT = 'orchestrator'
 const HEARTBEAT_AGENT = 'heartbeat-service'
+const TEXT_BURST_MESSAGE_THRESHOLD = 220
+const TEXT_BURST_TOOL_THRESHOLD = 260
 
 type RawEvent = {
   type?: unknown
@@ -17,6 +19,7 @@ type SessionState = {
   sessionInfo?: SessionInfo
   toolCallsById: Map<string, { toolName: string; args: string; agent: string }>
   vpAgentsSeen: Set<string>
+  hasUnresolvedError: boolean
 }
 
 export interface GatewayAdapterResult {
@@ -130,6 +133,98 @@ function makeSimulationEvent(
   sessionId: string,
 ): SimulationEvent {
   return { time: now, type, payload, sessionId }
+}
+
+function visualId(sessionId: string, type: string, now: number): string {
+  return `${sessionId}:${type}:${Math.round(now * 1000)}`
+}
+
+function pushPhaseEvent(
+  events: SimulationEvent[],
+  now: number,
+  sessionId: string,
+  phase: string,
+  label: string,
+  agent = ORCHESTRATOR_AGENT,
+): void {
+  events.push(makeSimulationEvent(now, 'phase_transition', {
+    id: visualId(sessionId, `phase:${phase}`, now),
+    agent,
+    phase,
+    label,
+  }, sessionId))
+}
+
+function pushTextBurstEvent(args: {
+  events: SimulationEvent[]
+  now: number
+  sessionId: string
+  agent: string
+  kind: string
+  title: string
+  content: string
+  summary?: string
+}): void {
+  if (!args.content.trim()) return
+  args.events.push(makeSimulationEvent(args.now, 'text_burst', {
+    id: visualId(args.sessionId, `text:${args.kind}`, args.now),
+    agent: args.agent,
+    kind: args.kind,
+    title: args.title,
+    content: args.content,
+    summary: args.summary || truncate(args.content, 260),
+  }, args.sessionId))
+}
+
+function pushArtifactEvent(args: {
+  events: SimulationEvent[]
+  now: number
+  sessionId: string
+  agent: string
+  title: string
+  content: string
+}): void {
+  args.events.push(makeSimulationEvent(args.now, 'artifact_emitted', {
+    id: visualId(args.sessionId, 'artifact', args.now),
+    agent: args.agent,
+    title: args.title,
+    content: args.content || args.title,
+  }, args.sessionId))
+}
+
+function pushErrorRecoveryEvent(args: {
+  events: SimulationEvent[]
+  now: number
+  sessionId: string
+  agent: string
+  stage: 'error' | 'recovery'
+  label: string
+}): void {
+  args.events.push(makeSimulationEvent(args.now, 'error_recovery', {
+    id: visualId(args.sessionId, `error:${args.stage}`, args.now),
+    agent: args.agent,
+    stage: args.stage,
+    label: args.label,
+  }, args.sessionId))
+}
+
+function recoverAfterSuccessfulActivity(
+  state: SessionState,
+  events: SimulationEvent[],
+  now: number,
+  sessionId: string,
+  agent = ORCHESTRATOR_AGENT,
+): void {
+  if (!state.hasUnresolvedError) return
+  state.hasUnresolvedError = false
+  pushErrorRecoveryEvent({
+    events,
+    now,
+    sessionId,
+    agent,
+    stage: 'recovery',
+    label: 'Recovered and continued',
+  })
 }
 
 function sessionIdFromEvent(eventType: string, payload: Record<string, unknown>, raw: RawEvent): string {
@@ -294,12 +389,13 @@ export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => 
   function getSessionState(sessionId: string): SessionState {
     const existing = sessionState.get(sessionId)
     if (existing) return existing
-    const created: SessionState = {
-      sessionId,
-      orchestratorSpawned: false,
-      toolCallsById: new Map(),
-      vpAgentsSeen: new Set(),
-    }
+      const created: SessionState = {
+        sessionId,
+        orchestratorSpawned: false,
+        toolCallsById: new Map(),
+        vpAgentsSeen: new Set(),
+        hasUnresolvedError: false,
+      }
     sessionState.set(sessionId, created)
     return created
   }
@@ -328,15 +424,16 @@ export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => 
           })
           break
 
-        case 'session_info': {
+          case 'session_info': {
           const sessionPayload = asRecord(payload.session) || payload
           session = buildSessionInfo(sessionId, state.sessionInfo, {
             now,
             labelHint: asString(sessionPayload.workspace) || asString(sessionPayload.workspace_dir),
-          })
-          ensureOrchestrator(state, events, now, sessionId, session.label)
-          break
-        }
+            })
+            ensureOrchestrator(state, events, now, sessionId, session.label)
+            pushPhaseEvent(events, now, sessionId, 'start', 'Session attached')
+            break
+          }
 
         case 'status': {
           const status = asString(payload.status)
@@ -352,10 +449,11 @@ export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => 
             statusHint: status,
           })
 
-          if (status === 'processing') {
-            ensureOrchestrator(state, events, now, sessionId, labelHint)
-          } else if (status && status !== 'engine_complete' && status !== 'tools_complete') {
-            ensureOrchestrator(state, events, now, sessionId, labelHint)
+            if (status === 'processing') {
+              ensureOrchestrator(state, events, now, sessionId, labelHint)
+              pushPhaseEvent(events, now, sessionId, query ? 'input' : 'thinking', query ? 'Input received' : 'Processing')
+            } else if (status && status !== 'engine_complete' && status !== 'tools_complete') {
+              ensureOrchestrator(state, events, now, sessionId, labelHint)
             const content =
               payload.goal_satisfaction != null
                 ? `${status}: ${truncate(stringifyUnknown(payload.goal_satisfaction), 160)}`
@@ -365,26 +463,44 @@ export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => 
                 agent: ORCHESTRATOR_AGENT,
                 role: 'assistant',
                 content,
-              }, sessionId),
-            )
+                }, sessionId),
+              )
+              pushPhaseEvent(events, now, sessionId, status.includes('tool') ? 'tools' : 'thinking', status.replaceAll('_', ' '))
+            }
+            break
           }
-          break
-        }
 
         case 'text': {
           ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
           const text = asString(payload.text)
-          if (text) {
-            events.push(
+            if (text) {
+              events.push(
               makeSimulationEvent(now, 'message', {
                 agent: ORCHESTRATOR_AGENT,
                 role: roleFromAuthor(asString(payload.author)),
                 content: text,
-              }, sessionId),
-            )
+                }, sessionId),
+              )
+              const role = roleFromAuthor(asString(payload.author))
+              if (text.length >= TEXT_BURST_MESSAGE_THRESHOLD) {
+                pushTextBurstEvent({
+                  events,
+                  now,
+                  sessionId,
+                  agent: ORCHESTRATOR_AGENT,
+                  kind: role,
+                  title: role === 'user' ? 'USER INPUT' : 'CLAUDE OUTPUT',
+                  content: text,
+                })
+              }
+              if (role === 'user') {
+                pushPhaseEvent(events, now, sessionId, 'input', 'User input')
+              } else {
+                recoverAfterSuccessfulActivity(state, events, now, sessionId)
+              }
+            }
+            break
           }
-          break
-        }
 
         case 'thinking': {
           ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
@@ -414,67 +530,116 @@ export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => 
               agent: ORCHESTRATOR_AGENT,
             })
           }
-          events.push(
-            makeSimulationEvent(now, 'tool_call_start', {
+            events.push(
+              makeSimulationEvent(now, 'tool_call_start', {
               agent: ORCHESTRATOR_AGENT,
               tool: toolName,
               args,
               inputData,
-            }, sessionId),
-          )
-          break
-        }
+              }, sessionId),
+            )
+            pushPhaseEvent(events, now, sessionId, 'tools', toolName)
+            break
+          }
 
-        case 'tool_result': {
-          ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
-          const toolId = asString(payload.tool_use_id) || asString(payload.tool_call_id) || asString(payload.id)
-          const call = toolId ? state.toolCallsById.get(toolId) : undefined
-          if (toolId) state.toolCallsById.delete(toolId)
-          events.push(
-            makeSimulationEvent(now, 'tool_call_end', {
-              agent: call?.agent || ORCHESTRATOR_AGENT,
-              tool: call?.toolName || asString(payload.name) || 'Tool',
-              result: summarizeToolResult(payload),
-              isError: Boolean(payload.is_error),
-              errorMessage: Boolean(payload.is_error) ? summarizeToolResult(payload) : undefined,
-            }, sessionId),
-          )
-          break
-        }
+          case 'tool_result': {
+            ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
+            const toolId = asString(payload.tool_use_id) || asString(payload.tool_call_id) || asString(payload.id)
+            const call = toolId ? state.toolCallsById.get(toolId) : undefined
+            if (toolId) state.toolCallsById.delete(toolId)
+            const result = summarizeToolResult(payload)
+            const isError = Boolean(payload.is_error)
+            events.push(
+              makeSimulationEvent(now, 'tool_call_end', {
+                agent: call?.agent || ORCHESTRATOR_AGENT,
+                tool: call?.toolName || asString(payload.name) || 'Tool',
+                result,
+                isError,
+                errorMessage: isError ? result : undefined,
+              }, sessionId),
+            )
+            if (isError) {
+              state.hasUnresolvedError = true
+              pushErrorRecoveryEvent({
+                events,
+                now,
+                sessionId,
+                agent: call?.agent || ORCHESTRATOR_AGENT,
+                stage: 'error',
+                label: `${call?.toolName || asString(payload.name) || 'Tool'} failed`,
+              })
+              pushTextBurstEvent({
+                events,
+                now,
+                sessionId,
+                agent: call?.agent || ORCHESTRATOR_AGENT,
+                kind: 'tool',
+                title: 'TOOL ERROR',
+                content: result,
+              })
+            } else {
+              recoverAfterSuccessfulActivity(state, events, now, sessionId, call?.agent || ORCHESTRATOR_AGENT)
+              if (result.length >= TEXT_BURST_TOOL_THRESHOLD) {
+                pushTextBurstEvent({
+                  events,
+                  now,
+                  sessionId,
+                  agent: call?.agent || ORCHESTRATOR_AGENT,
+                  kind: 'tool',
+                  title: `${call?.toolName || asString(payload.name) || 'Tool'} RESULT`,
+                  content: result,
+                })
+              }
+              if ((call?.toolName || asString(payload.name)).toLowerCase().match(/write|artifact|publish|report/)) {
+                pushArtifactEvent({
+                  events,
+                  now,
+                  sessionId,
+                  agent: call?.agent || ORCHESTRATOR_AGENT,
+                  title: call?.toolName || asString(payload.name) || 'Artifact',
+                  content: result,
+                })
+              }
+            }
+            break
+          }
 
         case 'auth_required': {
           ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
-          events.push(
-            makeSimulationEvent(now, 'permission_requested', {
+            events.push(
+              makeSimulationEvent(now, 'permission_requested', {
               agent: ORCHESTRATOR_AGENT,
               message: asString(payload.auth_link) || 'Permission required',
               title: 'Permission required',
-            }, sessionId),
-          )
-          break
-        }
+              }, sessionId),
+            )
+            pushPhaseEvent(events, now, sessionId, 'thinking', 'Permission required')
+            break
+          }
 
         case 'iteration_end': {
           ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
-          events.push(
-            makeSimulationEvent(now, 'agent_complete', {
-              name: ORCHESTRATOR_AGENT,
-            }, sessionId),
-          )
-          break
-        }
-
-        case 'query_complete': {
-          ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
-          if (payload.completed !== false) {
             events.push(
               makeSimulationEvent(now, 'agent_complete', {
                 name: ORCHESTRATOR_AGENT,
               }, sessionId),
             )
+            pushPhaseEvent(events, now, sessionId, 'completion', 'Complete')
+            break
           }
-          break
-        }
+
+          case 'query_complete': {
+            ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
+            if (payload.completed !== false) {
+            events.push(
+              makeSimulationEvent(now, 'agent_complete', {
+                name: ORCHESTRATOR_AGENT,
+                }, sessionId),
+              )
+              pushPhaseEvent(events, now, sessionId, 'completion', 'Complete')
+            }
+            break
+          }
 
         case 'system_event': {
           ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
@@ -487,25 +652,60 @@ export function createGatewayAgentFlowAdapter(nowProvider: () => number = () => 
               now,
               systemEventSummary(systemType, systemPayload),
             ))
-          } else if (systemType === 'vp_mission_event') {
-            events.push(...vpLifecycleEvents(
+            } else if (systemType === 'vp_mission_event') {
+              pushPhaseEvent(events, now, sessionId, 'delegation', 'VP mission')
+              events.push(...vpLifecycleEvents(
               state,
               sessionId,
               now,
               asString(systemPayload.event_type) || systemType,
               systemPayload,
             ))
-          } else {
-            events.push(
+            } else {
+              if (systemType.toLowerCase().includes('artifact') || systemType.toLowerCase().includes('work_product')) {
+                pushArtifactEvent({
+                  events,
+                  now,
+                  sessionId,
+                  agent: ORCHESTRATOR_AGENT,
+                  title: systemType || 'Artifact',
+                  content: systemEventSummary(systemType || 'system_event', systemPayload),
+                })
+              }
+              events.push(
               makeSimulationEvent(now, 'message', {
                 agent: ORCHESTRATOR_AGENT,
                 role: 'assistant',
                 content: systemEventSummary(systemType || 'system_event', systemPayload),
               }, sessionId),
             )
+            }
+            break
           }
-          break
-        }
+
+          case 'work_product': {
+            ensureOrchestrator(state, events, now, sessionId, state.sessionInfo?.label)
+            const title = asString(payload.title) || asString(payload.name) || 'Work product'
+            const content = systemEventSummary(eventType, payload)
+            pushArtifactEvent({
+              events,
+              now,
+              sessionId,
+              agent: ORCHESTRATOR_AGENT,
+              title,
+              content,
+            })
+            pushTextBurstEvent({
+              events,
+              now,
+              sessionId,
+              agent: ORCHESTRATOR_AGENT,
+              kind: 'artifact',
+              title: title.toUpperCase(),
+              content,
+            })
+            break
+          }
 
         default:
           break

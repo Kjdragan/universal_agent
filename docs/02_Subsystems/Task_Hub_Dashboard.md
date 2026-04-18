@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-04-16 — dashboard read-path performance invariant documented.
+> **Last updated:** 2026-04-18 — Agent Flow visual process display controls and client-derived visual events documented.
 
 ---
 
@@ -31,6 +31,7 @@ The `/dashboard` landing page also embeds a mini Agent Flow widget beneath the m
 | `src/universal_agent/task_hub.py` | Core Task Hub data layer (SQLite) |
 | `src/universal_agent/services/dispatch_service.py` | Dispatch logic for "Start Now" / approval / scheduled tasks |
 | `web-ui/lib/agent-flow/spotlight-store.ts` | Persisted Agent Flow spotlight control state used by the embedded mini widget and the full Agent Flow route |
+| `web-ui/lib/agent-flow/visual-preferences.ts` | Persisted Agent Flow visual tuning state for text display, replay pacing, thinking display, and fade behavior |
 
 ---
 
@@ -147,7 +148,34 @@ Current contract:
 
 If old browser state contains the legacy heavy payload shape, rehydrate should discard the archived timeline graph and keep only the lightweight control fields.
 
-### 4.4 Helper Functions
+### 4.6 Agent Flow Visual Process Display
+
+The full `/dashboard/agent-flow` route is a truthful live process display and a compressed replay surface. Live mode consumes real gateway WebSocket events through the `global_agent_flow` observer socket; it must not invent process activity. Replay mode may rewrite event timing for readability, but the replayed visuals still come from observed or archived events.
+
+Visual tuning is browser-local UI state, separate from the lightweight spotlight state:
+
+| Control | Default | Purpose |
+|---------|---------|---------|
+| Text mode | `hybrid` | Chooses compact bubbles, readable fly-outs plus transcript, or larger inline sheets |
+| Replay pacing | `readable` | Chooses fast synthetic replay or short capped readability holds around text/artifact events |
+| Text scale | `1` | Scales readable text fly-outs without changing underlying event content |
+| Readable hold | `1` | Multiplies replay/display hold time for long text moments |
+| Thinking display | `ambient` | Keeps raw thinking visually lightweight by default |
+| Auto-fade text | `true` | Allows readable fly-outs to fade after their hold period |
+| Pin on hover | `true` | Keeps readable text visible while hovered |
+
+Phase 1 visual events are derived client-side from existing real events:
+
+| Visual event | Source signal | Display contract |
+|--------------|---------------|------------------|
+| `text_burst` | Long user/assistant text, long or failed tool result, artifact preview | Readable fly-out on canvas; clicking opens the Transcript panel for full context |
+| `phase_transition` | Session attach, input/status, tool work, delegation, completion | Ring/wave marker around the active agent |
+| `artifact_emitted` | Work product event, artifact-like system event, write/publish/report tool result | Output card connected to the producing agent |
+| `error_recovery` | Failed tool result and later successful activity | Red fracture for failure, green repair pulse when the run continues |
+
+Durable Greatest Hits and explicit gateway-level visual events are planned follow-up phases. Until those phases land, Greatest Hits remains browser-observed and the new visuals are derived from the event stream already reaching the Agent Flow tab.
+
+### 4.7 Helper Functions
 
 | Function | Purpose |
 |----------|---------|

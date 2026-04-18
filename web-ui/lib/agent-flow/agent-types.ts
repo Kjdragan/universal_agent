@@ -84,6 +84,48 @@ export interface Discovery {
   timestamp: number
 }
 
+export type TextBurstKind = 'user' | 'assistant' | 'tool' | 'artifact'
+
+export interface TextBurst {
+  id: string
+  agentId: string
+  kind: TextBurstKind
+  title: string
+  content: string
+  summary: string
+  x: number
+  y: number
+  timestamp: number
+}
+
+export type PhaseTransitionKind = 'start' | 'input' | 'thinking' | 'tools' | 'delegation' | 'synthesis' | 'completion'
+
+export interface PhaseTransition {
+  id: string
+  agentId: string
+  phase: PhaseTransitionKind
+  label: string
+  timestamp: number
+}
+
+export interface ArtifactVisual {
+  id: string
+  agentId: string
+  title: string
+  content: string
+  x: number
+  y: number
+  timestamp: number
+}
+
+export interface ErrorRecoveryVisual {
+  id: string
+  agentId: string
+  stage: 'error' | 'recovery'
+  label: string
+  timestamp: number
+}
+
 // File attention tracking
 export interface FileAttention {
   path: string
@@ -155,6 +197,10 @@ export interface SimulationEvent {
     | 'subagent_dispatch'
     | 'subagent_return'
     | 'permission_requested'
+    | 'text_burst'
+    | 'phase_transition'
+    | 'artifact_emitted'
+    | 'error_recovery'
   payload: Record<string, unknown>
   sessionId?: string
 }

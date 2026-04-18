@@ -4,6 +4,10 @@ import type {
   Particle,
   Edge,
   Discovery,
+  TextBurst,
+  PhaseTransition,
+  ArtifactVisual,
+  ErrorRecoveryVisual,
   FileAttention,
   TimelineEntry,
   SimulationEvent,
@@ -16,6 +20,10 @@ export interface SimulationState {
   particles: Particle[]
   edges: Edge[]
   discoveries: Discovery[]
+  textBursts: TextBurst[]
+  phaseTransitions: PhaseTransition[]
+  artifactVisuals: ArtifactVisual[]
+  errorRecoveryVisuals: ErrorRecoveryVisual[]
   fileAttention: Map<string, FileAttention>
   timelineEntries: Map<string, TimelineEntry>
   conversations: Map<string, ConversationMessage[]>
@@ -36,6 +44,10 @@ export function createEmptyState(overrides?: Partial<SimulationState>): Simulati
     particles: [],
     edges: [],
     discoveries: [],
+    textBursts: [],
+    phaseTransitions: [],
+    artifactVisuals: [],
+    errorRecoveryVisuals: [],
     fileAttention: new Map(),
     timelineEntries: new Map(),
     conversations: new Map(),

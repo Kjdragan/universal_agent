@@ -11,6 +11,12 @@ import { handleAgentSpawn, handleAgentComplete, handleAgentIdle, handlePermissio
 import { handleToolCallStart, handleToolCallEnd } from './handle-tool-events'
 import { handleMessage, handleContextUpdate } from './handle-message-events'
 import { handleSubagentDispatch, handleSubagentReturn } from './handle-subagent-events'
+import {
+  handleArtifactEmitted,
+  handleErrorRecovery,
+  handlePhaseTransition,
+  handleTextBurst,
+} from './handle-visual-events'
 
 export interface ProcessEventContext {
   syncForceSimulation: (agents: Map<string, Agent>, edges: Edge[]) => void
@@ -27,6 +33,10 @@ export interface MutableEventState {
   particles: SimulationState['particles']
   edges: Edge[]
   discoveries: SimulationState['discoveries']
+  textBursts: SimulationState['textBursts']
+  phaseTransitions: SimulationState['phaseTransitions']
+  artifactVisuals: SimulationState['artifactVisuals']
+  errorRecoveryVisuals: SimulationState['errorRecoveryVisuals']
   fileAttention: SimulationState['fileAttention']
   timelineEntries: SimulationState['timelineEntries']
   conversations: Map<string, ConversationMessage[]>
@@ -65,6 +75,10 @@ export function processEvent(event: SimulationEvent, prev: SimulationState, ctx:
         particles: [...prev.particles],
         edges: [...prev.edges],
         discoveries: [...prev.discoveries],
+        textBursts: [...prev.textBursts],
+        phaseTransitions: [...prev.phaseTransitions],
+        artifactVisuals: [...prev.artifactVisuals],
+        errorRecoveryVisuals: [...prev.errorRecoveryVisuals],
         fileAttention: new Map(prev.fileAttention),
         timelineEntries: new Map(prev.timelineEntries),
         conversations: new Map(prev.conversations),
@@ -82,16 +96,24 @@ export function processEvent(event: SimulationEvent, prev: SimulationState, ctx:
         case 'subagent_dispatch': handleSubagentDispatch(event.payload, prev.currentTime, state); break
         case 'subagent_return':   handleSubagentReturn(event.payload, prev.currentTime, state); break
         case 'permission_requested': handlePermissionRequested(event.payload, prev.currentTime, state, ctx); break
+        case 'text_burst':        handleTextBurst(event.payload, prev.currentTime, state); break
+        case 'phase_transition':  handlePhaseTransition(event.payload, prev.currentTime, state); break
+        case 'artifact_emitted':  handleArtifactEmitted(event.payload, prev.currentTime, state); break
+        case 'error_recovery':    handleErrorRecovery(event.payload, prev.currentTime, state); break
       }
 
       // Stabilize references for unchanged collections to prevent
       // downstream React useMemo/re-render cascades (O(n log n) sorts etc.)
       return {
         ...prev,
-        agents: state.agents, toolCalls: state.toolCalls,
-        particles: state.particles, edges: state.edges,
-        discoveries: state.discoveries,
-        fileAttention: mapsEqual(prev.fileAttention, state.fileAttention) ? prev.fileAttention : state.fileAttention,
+          agents: state.agents, toolCalls: state.toolCalls,
+          particles: state.particles, edges: state.edges,
+          discoveries: state.discoveries,
+          textBursts: state.textBursts,
+          phaseTransitions: state.phaseTransitions,
+          artifactVisuals: state.artifactVisuals,
+          errorRecoveryVisuals: state.errorRecoveryVisuals,
+          fileAttention: mapsEqual(prev.fileAttention, state.fileAttention) ? prev.fileAttention : state.fileAttention,
         timelineEntries: mapsEqual(prev.timelineEntries, state.timelineEntries) ? prev.timelineEntries : state.timelineEntries,
         conversations: mapsEqual(prev.conversations, state.conversations) ? prev.conversations : state.conversations,
       }

@@ -466,10 +466,14 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     // Canvas reads frameRef directly for 60fps rendering
     frameRef,
     // UI components use React state (updated only on events/user actions)
-    agents: state.agents, toolCalls: state.toolCalls,
-    particles: state.particles, edges: state.edges,
-    discoveries: state.discoveries,
-    fileAttention: state.fileAttention,
+	    agents: state.agents, toolCalls: state.toolCalls,
+	    particles: state.particles, edges: state.edges,
+	    discoveries: state.discoveries,
+	    textBursts: state.textBursts,
+	    phaseTransitions: state.phaseTransitions,
+	    artifactVisuals: state.artifactVisuals,
+	    errorRecoveryVisuals: state.errorRecoveryVisuals,
+	    fileAttention: state.fileAttention,
     timelineEntries: state.timelineEntries,
     currentTime: state.currentTime, isPlaying: state.isPlaying, speed: state.speed,
     maxTimeReached: state.maxTimeReached,

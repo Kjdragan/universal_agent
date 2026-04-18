@@ -1,12 +1,14 @@
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react'
-import { Agent, ToolCallNode, Discovery, ANIM } from '@/lib/agent-flow/agent-types'
+import { Agent, ToolCallNode, Discovery, TextBurst, ANIM } from '@/lib/agent-flow/agent-types'
+import type { AgentFlowVisualPreferences } from '@/lib/agent-flow/visual-preferences'
 import { CAMERA } from '@/lib/agent-flow/canvas-constants'
 import {
   findAgentAt as findAgentAtPure,
   findToolCallAt as findToolCallAtPure,
-  findBubbleAgentAt as findBubbleAgentAtPure,
-  findDiscoveryAt as findDiscoveryAtPure,
-} from '@/components/agent-flow/canvas/index'
+    findBubbleAgentAt as findBubbleAgentAtPure,
+    findDiscoveryAt as findDiscoveryAtPure,
+    findTextBurstAt as findTextBurstAtPure,
+  } from '@/components/agent-flow/canvas/index'
 import type { Transform } from './use-canvas-camera'
 
 interface InteractionCallbacks {
@@ -14,16 +16,20 @@ interface InteractionCallbacks {
   onAgentHover: (agentId: string | null) => void
   onAgentDrag: (agentId: string, x: number, y: number) => void
   onContextMenu: (e: React.MouseEvent, type: 'agent' | 'edge' | 'canvas', id?: string) => void
-  onToolCallClick?: (toolCallId: string | null) => void
-  onDiscoveryClick?: (discoveryId: string | null) => void
+    onToolCallClick?: (toolCallId: string | null) => void
+    onDiscoveryClick?: (discoveryId: string | null) => void
+    onTextBurstClick?: (textBurstId: string | null) => void
 }
 
 interface InteractionOptions {
   drawPropsRef: MutableRefObject<{
     agents: Map<string, Agent>
-    toolCalls: Map<string, ToolCallNode>
-    discoveries: Discovery[]
-  } & InteractionCallbacks>
+      toolCalls: Map<string, ToolCallNode>
+      discoveries: Discovery[]
+      textBursts: TextBurst[]
+      visualPreferences: AgentFlowVisualPreferences
+      hoveredTextBurstIdRef: MutableRefObject<string | null>
+    } & InteractionCallbacks>
   transformRef: MutableRefObject<Transform>
   userHasNavigatedRef: MutableRefObject<boolean>
   panVelocityRef: MutableRefObject<{ vx: number; vy: number; active: boolean }>
@@ -68,9 +74,13 @@ export function useCanvasInteraction({
     return findBubbleAgentAtPure(x, y, drawPropsRef.current.agents, simTimeRef.current)
   }, [drawPropsRef, simTimeRef])
 
-  const findDiscoveryAt = useCallback((x: number, y: number): string | null => {
-    return findDiscoveryAtPure(x, y, drawPropsRef.current.discoveries)
-  }, [drawPropsRef])
+    const findDiscoveryAt = useCallback((x: number, y: number): string | null => {
+      return findDiscoveryAtPure(x, y, drawPropsRef.current.discoveries)
+    }, [drawPropsRef])
+
+    const findTextBurstAt = useCallback((x: number, y: number): string | null => {
+      return findTextBurstAtPure(x, y, drawPropsRef.current.textBursts, drawPropsRef.current.visualPreferences)
+    }, [drawPropsRef])
 
   // ─── Mouse Handlers ─────────────────────────────────────────────────────
 
@@ -92,11 +102,13 @@ export function useCanvasInteraction({
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = screenToCanvas(e.clientX, e.clientY)
-    const hoveredId = findAgentAt(pos.x, pos.y)
-    if (hoveredId !== lastHoveredIdRef.current) {
-      lastHoveredIdRef.current = hoveredId
-      drawPropsRef.current.onAgentHover(hoveredId)
-    }
+      const hoveredId = findAgentAt(pos.x, pos.y)
+      const hoveredTextBurstId = hoveredId ? null : findTextBurstAt(pos.x, pos.y)
+      if (hoveredId !== lastHoveredIdRef.current) {
+        lastHoveredIdRef.current = hoveredId
+        drawPropsRef.current.onAgentHover(hoveredId)
+      }
+      drawPropsRef.current.hoveredTextBurstIdRef.current = hoveredTextBurstId
     const dragging = isDraggingRef.current
     const dragTarget = dragTargetRef.current
     if (dragging && dragTarget) {
@@ -122,7 +134,7 @@ export function useCanvasInteraction({
         }
       }
     }
-  }, [screenToCanvas, findAgentAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
+    }, [screenToCanvas, findAgentAt, findTextBurstAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
@@ -156,14 +168,20 @@ export function useCanvasInteraction({
           if (toolId) {
             p.onToolCallClick?.(toolId)
           } else {
-            const discId = findDiscoveryAt(pos.x, pos.y)
-            if (discId) {
-              p.onDiscoveryClick?.(discId)
-            } else {
-              p.onAgentClick(null)
-              p.onToolCallClick?.(null)
-              p.onDiscoveryClick?.(null)
-            }
+              const discId = findDiscoveryAt(pos.x, pos.y)
+              if (discId) {
+                p.onDiscoveryClick?.(discId)
+              } else {
+                const textBurstId = findTextBurstAt(pos.x, pos.y)
+                if (textBurstId) {
+                  p.onTextBurstClick?.(textBurstId)
+                } else {
+                  p.onAgentClick(null)
+                  p.onToolCallClick?.(null)
+                  p.onDiscoveryClick?.(null)
+                  p.onTextBurstClick?.(null)
+                }
+              }
           }
         }
       }
@@ -175,7 +193,7 @@ export function useCanvasInteraction({
     isDraggingRef.current = false
     setIsDragging(false)
     dragTargetRef.current = null
-  }, [screenToCanvas, findAgentAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, drawPropsRef, panVelocityRef])
+    }, [screenToCanvas, findAgentAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, findTextBurstAt, drawPropsRef, panVelocityRef])
 
   // Wheel handler attached as native event (passive: false) to allow preventDefault
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -219,11 +237,12 @@ export function useCanvasInteraction({
     setIsDragging(false)
     dragTargetRef.current = null
     dragLerpRef.current = null
-    if (lastHoveredIdRef.current !== null) {
-      lastHoveredIdRef.current = null
-      drawPropsRef.current.onAgentHover(null)
-    }
-  }, [drawPropsRef])
+      if (lastHoveredIdRef.current !== null) {
+        lastHoveredIdRef.current = null
+        drawPropsRef.current.onAgentHover(null)
+      }
+      drawPropsRef.current.hoveredTextBurstIdRef.current = null
+    }, [drawPropsRef])
 
   /** Call from draw loop to update floaty drag lerp */
   const updateDragLerp = useCallback((agents: Map<string, Agent>, onAgentDrag: (id: string, x: number, y: number) => void) => {

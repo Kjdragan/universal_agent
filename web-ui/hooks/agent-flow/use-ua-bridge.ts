@@ -21,6 +21,7 @@ import type {
   SpotlightSelectionSource,
   SpotlightSessionArchive,
 } from '@/lib/agent-flow/spotlight-types'
+import type { AgentFlowVisualPreferences } from '@/lib/agent-flow/visual-preferences'
 import { fetchSessionDirectory, type SessionDirectoryItem } from '@/lib/sessionDirectory'
 
 interface BridgeHookResult {
@@ -152,7 +153,7 @@ function mergeArchiveUpdate(args: {
   }
 }
 
-export function useUABridge(): BridgeHookResult {
+export function useUABridge(visualPreferences?: AgentFlowVisualPreferences): BridgeHookResult {
   ensureAgentFlowSpotlightSync()
 
   const connectionStatus = useAgentFlowSpotlightStore((state) => state.connectionStatus)
@@ -181,11 +182,14 @@ export function useUABridge(): BridgeHookResult {
   const selectedArchive = selectedSessionId ? (archivesBySessionId[selectedSessionId] || null) : null
   const selectedIsLive = selectedArchive?.status === 'active'
   const selectedPlaybackMode: SpotlightPlaybackMode = selectedIsLive ? 'live' : 'replay'
-  const selectedPlaybackEvents = useMemo(() => {
-    if (!selectedArchive) return []
-    if (selectedArchive.status === 'active') return selectedArchive.normalizedEvents
-    return buildReplayTimeline(selectedArchive.normalizedEvents)
-  }, [selectedArchive])
+    const selectedPlaybackEvents = useMemo(() => {
+      if (!selectedArchive) return []
+      if (selectedArchive.status === 'active') return selectedArchive.normalizedEvents
+      return buildReplayTimeline(selectedArchive.normalizedEvents, {
+        pacingMode: visualPreferences?.replayPacingMode,
+        readableHoldMultiplier: visualPreferences?.readableHoldMultiplier,
+      })
+    }, [selectedArchive, visualPreferences?.readableHoldMultiplier, visualPreferences?.replayPacingMode])
 
   useEffect(() => {
     pendingEventsRef.current.length = 0
