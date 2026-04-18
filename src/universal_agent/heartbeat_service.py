@@ -835,20 +835,19 @@ def _heartbeat_guard_policy(
         and not has_heartbeat_content
         and pending_question_count <= 0
     ):
-        # Phase 1: Overnight reflection mode — instead of always sleeping when
-        # the queue is empty, check if we're in the reflection window and the
-        # engine is enabled.  If so, the agent runs in reflection mode to
-        # generate and work on autonomous tasks.
+        # Autonomous Ideation Mode — instead of always sleeping when the
+        # queue is empty, check if the reflection engine is enabled.  If so,
+        # the agent runs in ideation mode (24/7, no time restriction) to
+        # create autonomous Task Hub items.
         _reflection_mode = False
         try:
             from universal_agent.services.reflection_engine import (
                 is_reflection_enabled,
-                is_reflection_hours,
             )
-            if is_reflection_enabled() and is_reflection_hours():
+            if is_reflection_enabled():
                 _reflection_mode = True
-                skip_reason = None  # Don't skip — run reflection mode
-                logger.info("Reflection mode activated: queue empty but within overnight window")
+                skip_reason = None  # Don't skip — run ideation mode
+                logger.info("Autonomous ideation mode activated: queue empty, reflection enabled")
             else:
                 skip_reason = "no_actionable_work"
         except Exception:
@@ -2009,6 +2008,35 @@ class HeartbeatService:
                             logger.debug("Proactive advisor unavailable: %s", pa_exc)
                             _brainstorm_ctx_text = ""
                             _pending_q_count = 0
+
+                        # ── Signal Curator (Track 1) ────────────────────────
+                        # When the queue is empty, check if accumulated signal
+                        # cards warrant an LLM curation pass.  This only
+                        # evaluates the trigger condition; the actual LLM call
+                        # happens inside the reflection/ideation prompt.
+                        try:
+                            from universal_agent.services.signal_curator import (
+                                should_run_curation,
+                                get_pending_cards,
+                                record_curation_run,
+                            )
+                            if should_run_curation(conn):
+                                pending_cards = get_pending_cards(conn, limit=30)
+                                if pending_cards:
+                                    metadata["signal_curator"] = {
+                                        "triggered": True,
+                                        "pending_card_count": len(pending_cards),
+                                        "cards": pending_cards[:10],  # Cap context size
+                                    }
+                                    record_curation_run(conn)
+                                    logger.info(
+                                        "Signal curator triggered for %s: %d pending cards",
+                                        session.session_id,
+                                        len(pending_cards),
+                                    )
+                        except Exception as _sc_exc:
+                            logger.debug("Signal curator unavailable: %s", _sc_exc)
+                        # ────────────────────────────────────────────────────
                     else:
                         logger.info(
                             "Skipping proactive advisor for %s (task-focused mode, %d tasks claimed)",
@@ -2049,9 +2077,9 @@ class HeartbeatService:
                 "reflection_mode": _is_reflection_mode,
             }
 
-            # Phase 1: Reflection context injection — when the queue is empty
-            # but we're in overnight reflection mode, build the reflection
-            # prompt so the agent has goals/missions/context to work from.
+            # Autonomous Ideation context injection — when the queue is empty
+            # and we're in ideation mode (24/7), build the ideation prompt so
+            # the agent has goals/missions/context to create tasks from.
             _reflection_ctx_text = ""
             if _is_reflection_mode:
                 try:
@@ -2084,10 +2112,10 @@ class HeartbeatService:
                                 len(ref_ctx.get("stalled_brainstorms") or []),
                             )
                         else:
-                            guard_skip_reason = "nightly_budget_exhausted"
+                            guard_skip_reason = "daily_budget_exhausted"
                             _is_reflection_mode = False
                             logger.info(
-                                "Reflection mode skipped for %s: nightly budget exhausted",
+                                "Ideation mode skipped for %s: daily proactive budget exhausted",
                                 session.session_id,
                             )
                     finally:

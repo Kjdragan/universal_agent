@@ -1,15 +1,18 @@
 """
-reflection_engine.py — Overnight autonomous work generator for idle agents.
+reflection_engine.py — 24/7 autonomous ideation engine for idle agents.
 
-When the Task Hub dispatch queue is empty and the agent would normally sleep,
-this engine provides a "reflection" prompt that asks the agent to:
+When the Task Hub dispatch queue is empty and the agent would otherwise idle,
+this engine provides an "ideation" prompt that asks the agent to:
 1. Review its memory and Kevin's goals/missions
 2. Consider recent task completions and patterns
-3. Generate new tasks, brainstorm ideas, or advance existing brainstorms
-4. Optionally start working on the highest-priority self-generated task
+3. Generate new Task Hub items for autonomous execution
+
+IMPORTANT: The reflection engine is IDEATION-ONLY.  It creates tasks in the
+Task Hub — it does NOT execute them inline.  The ToDo Dispatch service handles
+all execution to ensure session isolation and workspace integrity.
 
 All logic is pure Python — the LLM receives the formatted context and decides
-what to do.  The engine itself never calls an LLM.
+what tasks to create.  The engine itself never calls an LLM.
 """
 
 from __future__ import annotations
@@ -21,17 +24,22 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from universal_agent import task_hub
+from universal_agent.services.proactive_budget import (
+    get_daily_proactive_count,
+    has_daily_budget,
+    get_budget_remaining,
+    increment_daily_proactive_count,
+    DEFAULT_DAILY_BUDGET,
+)
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Legacy aliases (kept for backward compat with old tests / heartbeat refs)
 # ---------------------------------------------------------------------------
-DEFAULT_REFLECTION_START_HOUR = 22  # 10 PM
-DEFAULT_REFLECTION_END_HOUR = 7     # 7 AM
-DEFAULT_MAX_NIGHTLY_TASKS = 10      # Max tasks an agent can work on per night
-
-_NIGHTLY_TASK_COUNTER_KEY = "reflection_nightly_counter"
+DEFAULT_REFLECTION_START_HOUR = 22
+DEFAULT_REFLECTION_END_HOUR = 7
+DEFAULT_MAX_NIGHTLY_TASKS = DEFAULT_DAILY_BUDGET
 
 
 def _parse_int_env(key: str, default: int) -> int:
@@ -44,38 +52,22 @@ def _parse_int_env(key: str, default: int) -> int:
         return default
 
 
+# Re-export the shared budget key for backward-compat test access
+_NIGHTLY_TASK_COUNTER_KEY = "reflection_nightly_counter"  # legacy
+
+
 def is_reflection_hours(
     *,
     now: Optional[datetime] = None,
     start_hour: Optional[int] = None,
     end_hour: Optional[int] = None,
 ) -> bool:
-    """Return True if the current time is within the overnight reflection window.
+    """DEPRECATED: Reflection now runs 24/7.  Always returns True.
 
-    Default window: 10 PM – 7 AM (local time or USER_TIMEZONE).
+    Kept for backward compatibility with existing heartbeat code that
+    imports this function.  Will be removed in a future cleanup.
     """
-    if now is None:
-        tz_name = os.getenv("USER_TIMEZONE", "America/Chicago")
-        try:
-            import pytz
-            tz = pytz.timezone(tz_name)
-            now = datetime.now(tz)
-        except Exception:
-            now = datetime.now()
-
-    start = start_hour if start_hour is not None else _parse_int_env(
-        "UA_REFLECTION_START_HOUR", DEFAULT_REFLECTION_START_HOUR
-    )
-    end = end_hour if end_hour is not None else _parse_int_env(
-        "UA_REFLECTION_END_HOUR", DEFAULT_REFLECTION_END_HOUR
-    )
-
-    hour = now.hour
-    if start > end:
-        # Crosses midnight: e.g. 22-7 means 22,23,0,1,2,3,4,5,6
-        return hour >= start or hour < end
-    else:
-        return start <= hour < end
+    return True
 
 
 def is_reflection_enabled() -> bool:
@@ -92,40 +84,18 @@ def is_reflection_enabled() -> bool:
 
 
 def _get_nightly_task_count(conn: sqlite3.Connection) -> int:
-    """Get how many tasks the agent has worked on during the current night window."""
-    task_hub.ensure_schema(conn)
-    setting = task_hub._get_setting(conn, _NIGHTLY_TASK_COUNTER_KEY)
-    if not setting:
-        return 0
-    # Check if counter is from tonight (same date boundary)
-    counter_date = str(setting.get("date") or "")
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if counter_date != today:
-        return 0  # Reset for new night
-    return int(setting.get("count") or 0)
+    """DEPRECATED: Delegates to shared proactive_budget module."""
+    return get_daily_proactive_count(conn)
 
 
 def _increment_nightly_task_count(conn: sqlite3.Connection, increment: int = 1) -> int:
-    """Increment and return the updated nightly task count."""
-    task_hub.ensure_schema(conn)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    setting = task_hub._get_setting(conn, _NIGHTLY_TASK_COUNTER_KEY)
-    if not setting or str(setting.get("date") or "") != today:
-        new_count = increment
-    else:
-        new_count = int(setting.get("count") or 0) + increment
-    task_hub._set_setting(conn, _NIGHTLY_TASK_COUNTER_KEY, {
-        "date": today,
-        "count": new_count,
-    })
-    return new_count
+    """DEPRECATED: Delegates to shared proactive_budget module."""
+    return increment_daily_proactive_count(conn, increment)
 
 
 def has_nightly_budget(conn: sqlite3.Connection) -> bool:
-    """Check if the agent still has budget for nightly autonomous work."""
-    max_tasks = _parse_int_env("UA_REFLECTION_MAX_NIGHTLY_TASKS", DEFAULT_MAX_NIGHTLY_TASKS)
-    current = _get_nightly_task_count(conn)
-    return current < max_tasks
+    """DEPRECATED: Delegates to shared proactive_budget module."""
+    return has_daily_budget(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -216,31 +186,30 @@ def build_reflection_context(
     *,
     workspace_dir: str = "",
 ) -> dict[str, Any]:
-    """Assemble all context needed for a reflection prompt.
+    """Assemble all context needed for an autonomous ideation prompt.
 
     Returns a dict with:
       - recent_completions: what was recently accomplished
       - stalled_brainstorms: brainstorms that need attention
       - open_task_count: how many tasks are already queued
       - memory_context: goals/missions from memory
-      - nightly_task_count: how many nightly tasks already done
-      - nightly_budget_remaining: how many more allowed
+      - nightly_task_count: daily proactive count (legacy key name)
+      - nightly_budget_remaining: remaining daily budget (legacy key name)
       - reflection_prompt_text: formatted prompt text for injection
     """
     recent = _get_recent_completions(conn, limit=8)
     stalled = _get_stalled_brainstorms(conn)
     open_count = _get_open_task_count(conn)
     memory_hits = _get_memory_context(workspace_dir) if workspace_dir else []
-    nightly_count = _get_nightly_task_count(conn)
-    max_nightly = _parse_int_env("UA_REFLECTION_MAX_NIGHTLY_TASKS", DEFAULT_MAX_NIGHTLY_TASKS)
-    budget_remaining = max(0, max_nightly - nightly_count)
+    daily_count = get_daily_proactive_count(conn)
+    remaining = get_budget_remaining(conn)
 
     prompt_text = _format_reflection_prompt(
         recent_completions=recent,
         stalled_brainstorms=stalled,
         open_task_count=open_count,
         memory_context=memory_hits,
-        budget_remaining=budget_remaining,
+        budget_remaining=remaining,
     )
 
     return {
@@ -248,8 +217,8 @@ def build_reflection_context(
         "stalled_brainstorms": stalled,
         "open_task_count": open_count,
         "memory_context": memory_hits,
-        "nightly_task_count": nightly_count,
-        "nightly_budget_remaining": budget_remaining,
+        "nightly_task_count": daily_count,  # legacy key for heartbeat compat
+        "nightly_budget_remaining": remaining,  # legacy key for heartbeat compat
         "reflection_prompt_text": prompt_text,
     }
 
@@ -262,22 +231,22 @@ def _format_reflection_prompt(
     memory_context: list[dict[str, Any]],
     budget_remaining: int,
 ) -> str:
-    """Format the reflection context into a prompt section for the agent."""
+    """Format the ideation context into a prompt section for the agent."""
     lines: list[str] = [
-        "## 🌙 Overnight Reflection Mode",
+        "## 🧠 Autonomous Ideation Mode",
         "",
         "The Task Hub dispatch queue is currently empty. You are operating in",
-        "**overnight autonomous reflection mode**. Your goal is to advance Kevin's",
-        "missions and projects even when no explicit tasks are queued.",
+        "**Autonomous Ideation Mode**. Your job is to think about what Kevin's",
+        "team should work on next and create Task Hub items for autonomous execution.",
         "",
-        f"**Budget:** You may work on up to **{budget_remaining}** more tasks tonight.",
+        f"**Daily Budget:** You may create up to **{budget_remaining}** more proactive tasks today.",
         f"**Currently queued:** {open_task_count} task(s) already in the Task Hub.",
         "",
     ]
 
     # Stalled brainstorms — high priority
     if stalled_brainstorms:
-        lines.append("### ⚠️ Stalled Brainstorms (Advance These First)")
+        lines.append("### ⚠️ Stalled Brainstorms (Consider Advancing)")
         lines.append("")
         for b in stalled_brainstorms:
             lines.append(
@@ -285,7 +254,7 @@ def _format_reflection_prompt(
                 f"last updated: {b.get('updated_at', '?')[:16]})"
             )
         lines.append("")
-        lines.append("Consider advancing these brainstorms to the next refinement stage.")
+        lines.append("Consider creating tasks to advance these brainstorms.")
         lines.append("")
 
     # Recent completions — for pattern awareness
@@ -305,23 +274,32 @@ def _format_reflection_prompt(
             lines.append(f"- {snippet}")
         lines.append("")
 
-    # Action instructions
+    # Action instructions — IDEATION ONLY
     lines.extend([
-        "### Autonomous Actions You May Take",
+        "### Your Role: Create Tasks, Don't Execute Them",
         "",
-        "1. **Advance stalled brainstorms** — Call the refinement tools to move brainstorms forward",
-        "2. **Generate new brainstorm tasks** — If you identify gaps, create new tasks with `trigger_type=brainstorm`",
-        "3. **Research and documentation** — Investigate open questions, write findings to work products",
-        "4. **System improvements** — Review health checks, fix minor issues, improve monitoring",
-        "5. **Morning report preparation** — Summarize tonight's activity for the 7 AM report",
+        "Use the `task_hub_task_action` tool to create new Task Hub items.",
+        "The ToDo Dispatch service will handle all execution independently.",
+        "",
+        "Consider creating tasks for:",
+        "1. **Advancing stalled brainstorms** — Create actionable tasks from brainstorm ideas",
+        "2. **Research & investigation** — Topics aligned with Kevin's missions and goals",
+        "3. **System improvements** — Monitoring, documentation, code quality",
+        "4. **Novel exploration** — Something new and interesting you've noticed in the context",
+        "5. **Follow-ups** — Continue work from recent completions that could benefit from more depth",
+        "",
+        "Use your judgment. Sometimes prioritize novelty. Sometimes follow up on",
+        "stalled work. Sometimes create something entirely new based on what you",
+        "know about Kevin's goals. Be a proactive colleague, not a passive executor.",
+        "",
+        "Set `source_kind` to `reflection` on all tasks you create.",
         "",
         "**Do NOT:**",
         "- Deploy to production",
         "- Delete data or files without explicit approval",
         "- Send emails to external parties",
         "- Make breaking API changes",
-        "",
-        "Record all work as Task Hub items so it appears in the morning report.",
+        "- Execute the tasks yourself — only create them",
     ])
 
     return "\n".join(lines)
