@@ -237,10 +237,10 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `WEBSHARE_PROXY_HOST` | `proxy.webshare.io` | Webshare proxy domain |
 | `WEBSHARE_PROXY_PORT` | `80` | Webshare proxy port |
 | `WEBSHARE_PROXY_LOCATIONS` | — | Optional Webshare location filter |
-| `DATAIMPULSE_PROXY_HOST` | `gw.dataimpulse.com` | DataImpulse proxy domain |
-| `DATAIMPULSE_PROXY_PORT` | `823` | DataImpulse proxy port |
-| `DATAIMPULSE_PROXY_USER` | — | DataImpulse proxy username |
-| `DATAIMPULSE_PROXY_PASS` | — | DataImpulse proxy password |
+| `DATAIMPULSE_HOST` | `gw.dataimpulse.com` | DataImpulse proxy domain |
+| `DATAIMPULSE_PORT` | `823` | DataImpulse proxy port |
+| `DATAIMPULSE_USER` | — | DataImpulse proxy username |
+| `DATAIMPULSE_PASS` | — | DataImpulse proxy password |
 
 ---
 
@@ -292,10 +292,10 @@ The relevant variables depend on the active provider:
 - optional host, port, and location filters
 
 **DataImpulse:**
-- `DATAIMPULSE_PROXY_USER`
-- `DATAIMPULSE_PROXY_PASS`
-- `DATAIMPULSE_PROXY_HOST` (default: `gw.dataimpulse.com`)
-- `DATAIMPULSE_PROXY_PORT` (default: `823`)
+- `DATAIMPULSE_USER`
+- `DATAIMPULSE_PASS`
+- `DATAIMPULSE_HOST` (default: `gw.dataimpulse.com`)
+- `DATAIMPULSE_PORT` (default: `823`)
 
 ### What `proxy_not_configured` Actually Means
 

@@ -260,7 +260,7 @@ export default function KanbanBoard() {
     if (sendingTaskId) return;
     setSendingTaskId(task.id);
     
-    const API_BASE = "/api/dashboard/gateway";
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
     try {
       const priorityNum = task.priority === "High" ? 1 : task.priority === "Medium" ? 2 : 3;
       
