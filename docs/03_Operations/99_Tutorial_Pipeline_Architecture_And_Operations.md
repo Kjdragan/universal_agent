@@ -292,10 +292,10 @@ The relevant variables depend on the active provider:
 - optional host, port, and location filters
 
 **DataImpulse:**
-- `DATAIMPULSE_USER`
-- `DATAIMPULSE_PASS`
-- `DATAIMPULSE_HOST` (default: `gw.dataimpulse.com`)
-- `DATAIMPULSE_PORT` (default: `823`)
+- `DATAIMPULSE_PROXY_USER`
+- `DATAIMPULSE_PROXY_PASS`
+- `DATAIMPULSE_PROXY_HOST` (default: `gw.dataimpulse.com`)
+- `DATAIMPULSE_PROXY_PORT` (default: `823`)
 
 ### What `proxy_not_configured` Actually Means
 
