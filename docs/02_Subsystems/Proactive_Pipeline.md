@@ -1289,17 +1289,12 @@ The proactive pipeline has extensive unit test coverage across **15 test modules
 ### Running the Test Suite
 
 ```bash
-# Run all proactive pipeline tests
-uv run pytest tests/unit/test_task_hub_*.py tests/unit/test_dispatch_*.py \
-    tests/unit/test_proactive_advisor.py tests/unit/test_refinement.py \
-    tests/unit/test_decomposition.py tests/unit/test_email_task_bridge.py \
-    tests/unit/test_heartbeat_task_hub_claims.py \
-    tests/unit/test_trigger_type_queue_priority.py \
-    tests/unit/test_scheduled_dispatch.py \
-    tests/unit/test_gateway_dispatch_endpoints.py \
-    tests/test_auto_refinement_loop.py \
-    tests/test_integration_flows.py \
-    tests/test_capacity_governor.py -v
+# Phase 1 Pipeline tests
+uv run pytest tests/unit/test_proactive_pipeline_phase1.py \
+    tests/unit/test_proactive_intelligence_phase1.py -v
+
+# Phase 2 Reporting & Visibility tests
+uv run pytest tests/unit/test_proactive_pipeline_phase2.py -v
 
 # Quick smoke test (core lifecycle + dispatch only)
 uv run pytest tests/unit/test_task_hub_lifecycle.py tests/unit/test_dispatch_service.py -v
@@ -1312,6 +1307,104 @@ uv run pytest tests/test_auto_refinement_loop.py \
 # Reflection engine tests
 uv run pytest tests/test_reflection_engine.py -v
 ```
+
+---
+
+## 19.b Phase 2 — Reporting & Visibility
+
+### Overview
+
+Phase 2 adds a **3x daily hybrid intelligence reporting** layer to the proactive pipeline. Reports combine deterministic Python data gathering (pipeline stats, budget consumption, system utilization) with LLM reasoning that interprets results and provides actionable recommendations — "talk to me like a colleague, not a dashboard."
+
+### Architecture
+
+```mermaid
+graph TB
+    subgraph "Data Collection"
+        TH["Task Hub\n(proactive task counts)"]
+        SC["Signal Cards\n(pending/promoted)"]
+        BG["Proactive Budget\n(used/remaining)"]
+        UT["Utilization Samples\n(heartbeat occupancy)"]
+    end
+
+    subgraph "Report Composition"
+        GP["gather_pipeline_stats()\n(deterministic Python)"]
+        LLM["_call_reasoning_llm()\n(Gemini Flash analysis)"]
+        CR["compose_intelligence_report()\n(combine stats + analysis)"]
+    end
+
+    subgraph "Delivery"
+        EM["Email\n(AgentMail)"]
+        DB["Dashboard Store\n(SQLite)"]
+        API["Gateway API\n(/api/v1/ops/proactive/*)"]
+    end
+
+    TH --> GP
+    SC --> GP
+    BG --> GP
+    UT --> GP
+    GP --> CR
+    LLM --> CR
+    CR --> EM
+    CR --> DB
+    DB --> API
+```
+
+### Schedule
+
+| Time (CT) | Cron Job ID | Period Label |
+|-----------|-------------|--------------|
+| 7:00 AM | `proactive_report_7am` | `morning` |
+| 12:00 PM | `proactive_report_12pm` | `noon` |
+| 4:00 PM | `proactive_report_4pm` | `afternoon` |
+
+### Report Content
+
+Each report contains:
+
+1. **Pipeline Activity** (deterministic): Open/completed/failed proactive task counts, broken down by `source_kind`
+2. **Budget Consumption** (deterministic): Daily budget used/remaining/limit
+3. **Signal Cards** (deterministic): Pending and promoted card counts
+4. **System Utilization** (deterministic): Average slot occupancy %, peak slots, average queue depth — sampled from heartbeat loop
+5. **Analysis & Recommendations** (LLM): 2-4 paragraph conversational analysis from Gemini Flash, interpreting the stats and suggesting actionable next steps
+
+### Utilization Tracking
+
+The heartbeat loop records a utilization sample at every tick (after the capacity governor check), capturing:
+- `active_slots`: Currently occupied dispatch slots
+- `max_slots`: Maximum concurrent capacity (`UA_CAPACITY_MAX_CONCURRENT`)
+- `queue_depth`: Number of eligible tasks in the dispatch queue
+
+These samples accumulate in `proactive_utilization_samples` and are aggregated at report time into averages and peaks over a 24-hour window.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/ops/proactive/reports?limit=10` | Retrieve recent intelligence reports |
+| `GET` | `/api/v1/ops/proactive/utilization?window_hours=24` | Retrieve utilization statistics |
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `services/proactive_intelligence_report.py` | Core service — data gathering, LLM reasoning, composition, delivery, utilization tracking |
+| `scripts/proactive_report_agent.py` | Cron entry point — invoked by CronService at 7/12/4 |
+| `workspaces/cron_jobs.json` | Cron schedule definitions |
+
+### Feature Flags
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UA_PROACTIVE_DAILY_BUDGET` | `10` | Shared daily budget for proactive task creation (used in report stats) |
+| `UA_CAPACITY_MAX_CONCURRENT` | `2` | Max concurrent agent slots (used in utilization tracking) |
+| `GEMINI_API_KEY` | — | Required for LLM reasoning pass; falls back to static analysis if unavailable |
+
+### Test Coverage
+
+| Test Module | Cases | Scope |
+|-------------|-------|-------|
+| `test_proactive_pipeline_phase2.py` | 12 | Data gathering (5), LLM reasoning (2), dual delivery (2), utilization tracking (2), email format (1) |
 
 ---
 

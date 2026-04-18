@@ -22983,6 +22983,33 @@ async def ops_telemetry_briefing_get(request: Request):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/api/v1/ops/proactive/reports")
+async def ops_proactive_reports_get(request: Request, limit: int = 10):
+    """Retrieve recent proactive intelligence reports for dashboard display."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services.proactive_intelligence_report import get_latest_reports
+        conn = _get_db_conn()
+        reports = get_latest_reports(conn, limit=min(limit, 50))
+        return {"ok": True, "reports": reports, "count": len(reports)}
+    except Exception as exc:
+        logger.warning("Failed to retrieve proactive reports: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/v1/ops/proactive/utilization")
+async def ops_proactive_utilization_get(request: Request, window_hours: int = 24):
+    """Retrieve system utilization statistics from heartbeat sampling."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services.proactive_intelligence_report import get_utilization_stats
+        conn = _get_db_conn()
+        stats = get_utilization_stats(conn, window_hours=min(window_hours, 168))
+        return {"ok": True, "utilization": stats}
+    except Exception as exc:
+        logger.warning("Failed to retrieve utilization stats: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
 async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
     _require_ops_auth(request)

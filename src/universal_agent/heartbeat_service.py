@@ -1891,6 +1891,26 @@ class HeartbeatService:
                         logger.debug("Capacity governor unavailable: %s", _cap_exc)
                     # ────────────────────────────────────────────────────
 
+                    # ── Utilization Sampling (Phase 2) ────────────────
+                    # Record a point-in-time sample of slot occupancy and
+                    # queue depth for the 3x daily intelligence reports.
+                    try:
+                        from universal_agent.services.proactive_intelligence_report import record_utilization_sample
+                        if _capacity_ok or _capacity_reason != "not_checked":
+                            # Governor was instantiated above — get snapshot
+                            _gov = CapacityGovernor.get_instance()
+                            _snap = _gov.snapshot()
+                            _q_depth = int((queue or {}).get("eligible_total", 0)) if isinstance(queue, dict) else 0
+                            record_utilization_sample(
+                                conn,
+                                active_slots=_snap.active_slots,
+                                max_slots=_snap.max_concurrent,
+                                queue_depth=_q_depth,
+                            )
+                    except Exception as _util_exc:
+                        logger.debug("Utilization sampling unavailable: %s", _util_exc)
+                    # ──────────────────────────────────────────────────
+
                     # Dispatch logic moved to todo_dispatch_service
                     task_hub_claimed = []
                     dispatch_claimed_count = 0

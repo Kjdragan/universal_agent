@@ -46,7 +46,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory & Auto-Flush.
 - **[Lossless Memory](02_Subsystems/Lossless_Memory.md)**: Opt-in DAG-based context compression and SQLite history store.
 - **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Heartbeat supervision only — health checks, mediation, and role-isolated heartbeat runtimes separate from Task Hub execution.
-- **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — trusted email triage, Task Hub scoring, dedicated ToDo execution, delivery-mode heuristics, delegation lifecycle, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily proactive budget, priority lanes, and autonomous morning briefing.
+- **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — trusted email triage, Task Hub scoring, dedicated ToDo execution, delivery-mode heuristics, delegation lifecycle, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily proactive budget, priority lanes, autonomous morning briefing, 3x daily hybrid intelligence reports (7am/12pm/4pm), system utilization tracking, and LLM-powered analysis.
 - **[Proactive Intelligence Work Product Pipeline](02_Subsystems/Proactive_Intelligence_Work_Product_Pipeline.md)**: Product and implementation plan for abundant proactive artifact generation, review emails, feedback learning, CODIE proactive PRs, tutorial builds, convergence detection, and phased rollout.
 - **[Task Hub Dashboard](02_Subsystems/Task_Hub_Dashboard.md)**: Frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded Agent Flow widget behavior, spotlight persistence rules, dispatcher health, forensic task history, canonical execution visibility, and workspace action routing.
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
@@ -140,8 +140,6 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 ### 8. Tutorial Pipeline
 
 - **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, notification kinds, 3-layer dedup, proxy config, env vars, API endpoints.
-
-
 
 ### 9. [SDK Phases and Integration Docs](.)
 
