@@ -566,14 +566,14 @@ flowchart TD
     WorkCheck -- "Brainstorm<br/>candidates" --> Proceed✅
     WorkCheck -- "Exec completions<br/>waiting" --> Proceed✅
 
-    WorkCheck -- "None of<br/>the above" --> RefCheck{Reflection<br/>hours?}
+    WorkCheck -- "None of<br/>the above" --> IdeCheck{UA_REFLECTION<br/>_ENABLED?}
 
-    RefCheck -- "Yes + UA_REFLECTION<br/>_ENABLED" --> RefBudget{Nightly<br/>budget left?}
-    RefBudget -- Yes --> ReflMode[/"REFLECTION MODE<br/>memory-driven work"/]
-    RefBudget -- No --> Skip5[/"SKIP:<br/>nightly_budget_exhausted"/]
-    RefCheck -- No --> Skip3[/"SKIP:<br/>no_actionable_work"/]
+    IdeCheck -- Yes --> BudgetCheck{Daily proactive<br/>budget left?}
+    BudgetCheck -- Yes --> IdeMode[/"IDEATION MODE<br/>24/7 autonomous tasks"/]
+    BudgetCheck -- No --> Skip5[/"SKIP:<br/>daily_budget_exhausted"/]
+    IdeCheck -- No --> Skip3[/"SKIP:<br/>no_actionable_work"/]
 
-    ReflMode --> CoolCheck
+    IdeMode --> CoolCheck
     Proceed✅ --> CoolCheck{Foreground<br/>cooldown?}
     CoolCheck -- "Active + not<br/>a directed wake" --> Skip4[/"SKIP:<br/>foreground_cooldown"/]
     CoolCheck -- "No / Directed<br/>wake request" --> Execute[/"EXECUTE<br/>heartbeat cycle"/]
@@ -585,7 +585,7 @@ flowchart TD
     style Skip4 fill:#b33,color:#fff
     style Skip5 fill:#b33,color:#fff
     style Execute fill:#2d7d46,color:#fff
-    style ReflMode fill:#1a5276,color:#fff
+    style IdeMode fill:#1a5276,color:#fff
 ```
 
 > [!NOTE]
@@ -593,6 +593,42 @@ flowchart TD
 > checked as a work source. The guard skipped every cycle with `no_actionable_work`
 > because the Task Hub had nothing, even though `HEARTBEAT.md` contained
 > standing instructions. The `has_heartbeat_content` parameter now bypasses this.
+
+> [!IMPORTANT]
+> **Architectural change (2026-04-18):** The legacy "overnight reflection hours"
+> time gating (`is_reflection_hours()`) has been removed. Ideation mode now runs
+> **24/7** whenever `UA_REFLECTION_ENABLED=1` and the daily proactive budget
+> (`UA_PROACTIVE_DAILY_BUDGET`) is not exhausted. The budget is shared between
+> the Signal Curator (Track 1) and Reflection Engine (Track 2).
+
+### 9.1 Signal Curator (Track 1)
+
+The Signal Curator (`signal_curator.py`) runs during idle heartbeat cycles to evaluate
+accumulated signal cards (from CSI, email digests, etc.) and promote the most relevant
+ones to actionable Task Hub items.
+
+**Trigger conditions** (either triggers a run):
+- ≥ `UA_CURATOR_MIN_CARDS` (default: 10) pending cards
+- ≥ `UA_CURATOR_MIN_HOURS` (default: 12) hours since last curation run
+
+**Execution**: When triggered, the curator injects pending cards into the heartbeat
+metadata so the LLM can assess relevance using mission context, memory, and reasoning.
+Promoted cards are converted to Task Hub items with `source_kind='proactive_signal'`.
+
+### 9.2 Reflection Engine (Track 2)
+
+The Reflection Engine (`reflection_engine.py`) generates autonomous ideation tasks
+based on mission goals, recent completions, and memory context. It operates in
+**ideation-only mode** — it creates Task Hub items but does not execute work inline.
+
+### 9.3 Shared Proactive Budget
+
+Both tracks share a unified daily budget (`proactive_budget.py`):
+- Default: `UA_PROACTIVE_DAILY_BUDGET=10` tasks per day
+- Cron jobs and `system_command` tasks are **excluded** from the count
+- Budget resets at midnight local time
+- Priority lanes ensure proactive tasks (`proactive_signal`, `reflection`) rank
+  below user-originated tasks in the dispatch queue
 
 ---
 
@@ -784,11 +820,11 @@ is advisory, never blocks heartbeat execution.
 | `UA_TASK_AGENT_THRESHOLD` | **3** | Score threshold for dispatch eligibility |
 | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | 1 | Kill switch for autonomous runs |
 | `UA_HEARTBEAT_INTERVAL` | 1800 | Interval between heartbeat cycles (seconds) |
-| `UA_REFLECTION_ENABLED` | follows `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | Master toggle for overnight reflection engine |
-| `UA_REFLECTION_START_HOUR` | 22 | Start of overnight reflection window (24h local time) |
-| `UA_REFLECTION_END_HOUR` | 7 | End of overnight reflection window (24h local time) |
-| `UA_REFLECTION_MAX_NIGHTLY_TASKS` | 10 | Maximum tasks an agent may work on per night |
-| `UA_DAILY_PROACTIVE_WIKI_COUNT` | 1 | Number of NLM knowledge bases to create per nightly wiki run |
+| `UA_REFLECTION_ENABLED` | follows `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | Master toggle for 24/7 autonomous ideation engine |
+| `UA_PROACTIVE_DAILY_BUDGET` | 10 | Max proactive tasks (curator + reflection) per day; excludes cron/system_command |
+| `UA_CURATOR_MIN_CARDS` | 10 | Minimum pending signal cards to trigger a curation run |
+| `UA_CURATOR_MIN_HOURS` | 12 | Hours since last curation before time-based trigger fires |
+| `UA_DAILY_PROACTIVE_WIKI_COUNT` | 1 | Number of NLM knowledge bases to create per wiki run |
 
 ---
 

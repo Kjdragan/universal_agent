@@ -20,8 +20,6 @@ LiteParse new from llamaparse
 
 CMUX
 
-investigate Browserbase pay browser service
-
 stripe machine to machinepayments research
 
 Take a look at our GitHub action with regards to the OpenClaw research process and see if we can generalize this so we can have this kind of up-to-date latest release analysis for whatever library we want to examine
@@ -151,71 +149,5 @@ Review
 Inspect
 
 📂
-Workspace
-delete
-proactive_signal
-Create Wiki: YouTube candidate: ElevenLabs Quality for FREE? (VoxCPM2 Deep Dive)
-Proactive signal action: Create Wiki Signal: YouTube candidate: ElevenLabs Quality for FREE? (VoxCPM2 Deep Dive) STOP Paying for ElevenLabs! (VoxCPM2 is Better) 👉 Try it: <https://huggingface.co/spaces/openbmb/VoxCPM-Demo> 👉 Latest AI News, AI Tools and AI Prompts: <https://franklineh.com> 🔥 Join the newsletter free. No spam. <https://franklineh.com/newsletter> Stop paying for voiceovers because what you are hearing right now is 100% AI-generated and completely free to run on your own hardware! This video deep-dives into VoxCPM 2, a revolutionary 2-billion parameter tokenizer-free TTS model that delivers studio-quality 48kHz audio with insane realism. We explore its evolution from the 0.5B model to the current state-of-the-art version, featuring 30+ language support, advanced voice cloning, and a unique "Voice Design" feature that builds custom voices from simple text descriptions. You’ll learn how to set it up locally with just 8GB of VRAM, use it in "vibe coding" platforms, or try it instantly via Hugging Face. By the end of this guide, you’ll be able to clone any voice with "Ultimate Mode," generate ASMR-style audio, and even integrate these voices into your own apps for e-commerce, gaming, or dubbing. ━━━━━━━━━━ 🔗 SHOW LINKS ━━━━━━━━━━ 👉 Try it: <https://huggingface.co/spaces/openbmb/VoxCPM-Demo> 👉 Model: <https://huggingface.co/openbmb/VoxCPM2> 👉 Github: <https://github.com/OpenBMB/VoxCPM/?tab=readme-ov-file> ━━━━━━━━ 💫 HELPFUL AI LINKS ━━━━━━━━ ▸ Website: <https://franklineh.com> ▸ AI News: h Action instructions: Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. Evidence: [ { "channel": "Franklin AI", "occurred_at": "2026-04-15T16:03:25+00:00", "source": "youtube", "summary": "STOP Paying for ElevenLabs! (VoxCPM2 is Better)\n\n\ud83d\udc49 Try it: https://huggingface.co/spaces/openbmb/VoxCPM-Demo\n\ud83d\udc49 Latest AI News, AI Tools and AI Prompts: https://franklineh.com\n\ud83d\udd25 Join the newsletter free. No spam. https://franklineh.com/newsletter\n\nStop paying for voiceovers because what you are hearing right now is 100% AI-generated and completely free to run on your own hardware! This video deep-dives into VoxCPM 2, a revolutionary 2-billion parameter tokenizer-free TTS model that delivers studio-quality 48kHz audio with insane realism. We explore its evolution from the 0.5B model to the curre", "thumbnail_url": "https://i1.ytimg.com/vi/pjLnczkqJNA/hqdefault.jpg", "title": "ElevenLabs Quality for FREE? (VoxCPM2 Deep Dive)", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=pjLnczkqJNA" } ]
-
-Medium
-proactive
-│
-Done about 18 hours ago
-│
-todo:daemon_simone_todo
-Review
-Inspect
-
-📂
-Workspace
-delete
-proactive_signal
-Create Wiki: YouTube candidate: Cloudflare Browser Run: How to Solve CAPTCHAs & Logins for AI Agents
-Proactive signal action: Create Wiki Signal: YouTube candidate: Cloudflare Browser Run: How to Solve CAPTCHAs & Logins for AI Agents In this video, Harshil is showcasing a massive update for Cloudflare Browser Run: the new Live View feature. One of the biggest hurdles for AI agents is handling sensitive roadblocks like CAPTCHAs, two-factor authentication, or credit card entries. Live View solves this by letting you jump into the agent's browser session in real-time. What we cover: - Real-Time Monitoring: Watch exactly what your AI agent is doing as it navigates the web. - Human-in-the-Loop: I show how I can manually enter my address and credit card info on Wolt while the agent handles the rest of the order. - Seamless Interaction: How to add extra parameters (like more protein!) mid-workflow. - Code Deep-Dive: A look at the createBrowserSession and keepAlive parameters in the Cloudflare Agents SDK. Technical Highlights: - Built with the Cloudflare Agents SDK - Powered by Playwright via the Chrome DevTools Protocol (CDP). - Compatible with agent harnesses like OpenClaw and Hermes Agent. GitHub Repo: <https://github.com/harshil1712/agent-browsing> Blog Post: <https://blog.cloudflare.com/browser-run-for-ai-agents/> Create an account on Cloudflare today for free: <https://dash.cloudflare.com/sign-up> Tools mentioned: <https://developers.cloudflare.com> <https://developers.cloudflare.com/browser-rendering/features/live-view/> <https://developers.cloudflare.com/agents/api-reference/browse-the-web/> <https://developers.cl> Action instructions: Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. Evidence: [ { "channel": "Cloudflare Developers", "occurred_at": "2026-04-15T15:30:07+00:00", "source": "youtube", "summary": "In this video, Harshil is showcasing a massive update for Cloudflare Browser Run: the new Live View feature. One of the biggest hurdles for AI agents is handling sensitive roadblocks like CAPTCHAs, two-factor authentication, or credit card entries. Live View solves this by letting you jump into the agent's browser session in real-time.\n\nWhat we cover:\n- Real-Time Monitoring: Watch exactly what your AI agent is doing as it navigates the web.\n- Human-in-the-Loop: I show how I can manually enter my address and credit card info on Wolt while the agent handles the rest of the order.\n- Seamless Inte", "thumbnail_url": "https://i4.ytimg.com/vi/s5PQE8bklNY/hqdefault.jpg", "title": "Cloudflare Browser Run: How to Solve CAPTCHAs & Logins for AI Agents", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=s5PQE8bklNY" } ]
-
-Medium
-proactive
-│
-Done about 18 hours ago
-│
-todo:daemon_simone_todo
-Review
-Inspect
-
-📂
-Workspace
-delete
-chat_panel
-create a knowledge base called "Iran War" by using deep research with Notebooklm on research...
-create a knowledge base called "Iran War" by using deep research with Notebooklm on research about the current activity in the Iran war over the past 5 days, especially discussing Iran attacks on the gulf states and israel. Once you have that knowledge base, then go ahead and create a comprehensive report along with a infographic and email those both to me
-
-Normal
-immediate
-│
-Done about 18 hours ago
-│
-todo:daemon_simone_todo
-Review
-Inspect
-
-📂
-Workspace
-delete
-proactive_signal
-Create Wiki: YouTube candidate: Completely understand hooks in less than 20 minutes
-Proactive signal action: Create Wiki Signal: YouTube candidate: Completely understand hooks in less than 20 minutes Hooks let you handle events at key points in the Copilot or Claude Code lifecycle. This video shows you how to build them from scratch in under 20 minutes. You'll see how to create hook JSON files, wire up bash scripts, and debug them in VS Code's output panel. And we look at why only one of these hooks might be all you need. 0:00 Introduction to Hooks 0:25 How the Agent Loop Works 2:11 Hook Events Overview 4:48 Setting Up Hooks in VS Code 6:15 Creating Your First Hook 7:52 Testing Hooks and Viewing Output 9:15 Logging Output 11:00 Calling Script Files 12:29 Debugging Permission Errors 13:12 Reading Hook Input 14:40 Injecting Context 17:01 Pre-Tool Use ESLint Gate 19:13 Wrap-Up #ai #githubcopilot #coding Action instructions: Create a task to build a NotebookLM-backed knowledge base. Delegate to the `notebooklm-operator` sub-agent to: (1) create a NotebookLM notebook, (2) run NLM research, (3) generate artifacts via NLM studio (report, infographic) using parallel batch creation, (4) download artifacts, (5) register KB via `kb_register`, (6) ingest report via `wiki_ingest_external_source`. Do NOT use `generate_image` or generic web scraping — NLM handles research and artifact generation end-to-end. Evidence: [ { "channel": "Burke Holland", "occurred_at": "2026-04-14T16:00:39+00:00", "source": "youtube", "summary": "Hooks let you handle events at key points in the Copilot or Claude Code lifecycle. This video shows you how to build them from scratch in under 20 minutes. You'll see how to create hook JSON files, wire up bash scripts, and debug them in VS Code's output panel. And we look at why only one of these hooks might be all you need.\n\n0:00 Introduction to Hooks\n0:25 How the Agent Loop Works\n2:11 Hook Events Overview\n4:48 Setting Up Hooks in VS Code\n6:15 Creating Your First Hook \n7:52 Testing Hooks and Viewing Output\n9:15 Logging Output\n11:00 Calling Script Files\n12:29 Debugging Permission Errors\n13:12", "thumbnail_url": "https://i1.ytimg.com/vi/03CfGf9iw_U/hqdefault.jpg", "title": "Completely understand hooks in less than 20 minutes", "transcript_status": "missing", "url": "https://www.youtube.com/watch?v=03CfGf9iw_U" } ]
-
-Medium
-proactive
-│
-Done 1 day ago
-│
-todo:daemon_simone_todo
-
-###
-
-Take a look at the cron job tab here. I need you to investigate what happen here because we had been working on developing out the cron job for getting Cody to actually use their spare time to be doing code review in our project. This was fully built out and there was a prompt generated but I don't see it in cron job tab here in production so please investigate this see what you can see get back to me if you understand what I'm talking about and if you can find how we ended up that production whether we fully built out the feature and where the cron job was saved if it's not on our cron job page.  Additionally, this entire conversation is interspersed with me investigating that question about building out the Cody feature. So if you can refer to our past chat here, you can see what I was talking about.
 
 So now that we've built the front end of this Discord system for both messages and events, and we've got the back end, which is getting these messages and events, have we done anything with regards to developing intelligence? on how to prioritize these and on what to display and what to elevate because I think we have something about this but an additional feature is that right now the display that we have on the CSI Discord tab, we only want to surface important messages or at least interesting messages. So in other words this isn't meant to be like reading the entire Discord app. As I've mentioned previously, if we want to do that, we can simply go to Discord. But this is supposed to be the screened, pre-screen information from the channels we're watching. So in other words I don't expect expect to see an overwhelming amount of messages in these individual feeds from the individual channels because they're really only something that you think might relate to something. So our process on the on the front end has to be something where we have the back end ingesting all the signals, making some processing decisions on what's relevant in one way or another, and then surfacing those in our database. And then feeding that into our user interface on the tab on the page but also feeding our intelligence system as well. Is this consistent with your understanding? Can we work through whatever we need to do to start making sure that this is fully fleshed out from back end all the way through to front end with intelligence system? As I mentioned, it's my belief that we We now have a front end, we have some back end, we have some intelligence. But now's the idea to start thinking through the whole system about what we want to get out of it. So the first thing to do Can you respond back to me and let me know whether you agree with my assessment and whether this is a good project for us to start working on?
-
-Take a look at this calendar tab. I want each of the cards to potentially to fly out with full untruncated details when you click on them and then collapse back down. Additionally, if you look at Thursday on the calendar, there is the Cody cron job. I believe that it actually did run. So why is it showing in here as  missing.

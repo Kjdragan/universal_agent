@@ -897,11 +897,13 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
         system_schedule = 1 if _is_system_schedule_task(row) else 0
         must_complete = 1 if bool(row.get("must_complete")) else 0
         approval = 1 if str(row.get("project_key") or "") == "approval" else 0
+        # Priority lanes: proactive tasks sort below user-originated tasks
+        is_proactive = 1 if str(row.get("source_kind") or "") in ("proactive_signal", "reflection") else 0
         score = _safe_float(row.get("score"), 0.0)
         priority = _safe_int(row.get("priority"), 1)
         due_sort = str(row.get("due_at") or "9999-12-31T23:59:59+00:00")
         updated_sort = str(row.get("updated_at") or "")
-        return (-is_immediate, -system_schedule, -must_complete, -approval, -score, -priority, due_sort, updated_sort)
+        return (-is_immediate, -system_schedule, -must_complete, -approval, is_proactive, -score, -priority, due_sort, updated_sort)
 
     scored.sort(key=_sort_key)
 
