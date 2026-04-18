@@ -10,6 +10,7 @@ const API_BASE = "/api/dashboard/gateway";
 type CronJob = {
   job_id: string;
   command: string;
+  description?: string | null;
   every_seconds?: number | null;
   cron_expr?: string | null;
   timeout_seconds?: number | null;
@@ -93,7 +94,7 @@ export default function DashboardCronJobsPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ command: string; schedule: string }>({ command: "", schedule: "" });
+  const [editForm, setEditForm] = useState<{ command: string; description: string; schedule: string }>({ command: "", description: "", schedule: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -235,20 +236,23 @@ export default function DashboardCronJobsPage() {
     setEditingId(job.job_id);
     setEditForm({
       command: job.command,
+      description: job.description || "",
       schedule: currentSchedule
     });
   }, []);
 
   const saveEdit = useCallback(async (jobId: string) => {
-    const { command, schedule } = editForm;
+    const { command, description, schedule } = editForm;
     if (!command.trim()) {
       setError("Command cannot be empty.");
       return;
     }
 
-    // Save both command and schedule
-    // We update command first
-    const ok = await updateJob(jobId, { command: command.trim() });
+    // Save command and description
+    const ok = await updateJob(jobId, { 
+      command: command.trim(),
+      description: description.trim() || null
+    });
     if (!ok) return;
 
     // Then schedule if changed (simple check, backend handles parsing)
@@ -261,7 +265,7 @@ export default function DashboardCronJobsPage() {
 
   const cancelEdit = useCallback(() => {
     setEditingId(null);
-    setEditForm({ command: "", schedule: "" });
+    setEditForm({ command: "", description: "", schedule: "" });
   }, []);
 
   return (
@@ -348,11 +352,17 @@ export default function DashboardCronJobsPage() {
                 {editingId === job.job_id ? (
                   <div className="space-y-2">
                     <input
+                      value={editForm.description}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+                      className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-semibold text-foreground outline-none focus:border-primary"
+                      placeholder="Description (optional)"
+                      autoFocus
+                    />
+                    <input
                       value={editForm.command}
                       onChange={(e) => setEditForm(prev => ({ ...prev, command: e.target.value }))}
-                      className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-mono text-foreground outline-none focus:border-primary"
+                      className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs font-mono text-foreground/80 outline-none focus:border-primary"
                       placeholder="Command"
-                      autoFocus
                     />
                     <input
                       value={editForm.schedule}
@@ -364,7 +374,7 @@ export default function DashboardCronJobsPage() {
                   </div>
                 ) : (
                   <>
-                    <p className="font-mono text-sm text-foreground">{job.command}</p>
+                    <p className="font-semibold text-sm text-foreground">{job.description || job.command}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {job.run_at
                         ? `one-shot at ${toLocalDateTime(job.run_at)}`

@@ -284,6 +284,7 @@ class CronJob:
     user_id: str
     workspace_dir: str
     command: str
+    description: Optional[str] = None
     every_seconds: int = 0  # Simple interval (mutually exclusive with cron_expr)
     cron_expr: Optional[str] = None  # 5-field cron expression (e.g., "0 7 * * 1")
     timezone: str = "UTC"  # Timezone for cron expression
@@ -303,6 +304,7 @@ class CronJob:
             "user_id": self.user_id,
             "workspace_dir": self.workspace_dir,
             "command": self.command,
+            "description": self.description,
             "every_seconds": self.every_seconds,
             "cron_expr": self.cron_expr,
             "timezone": self.timezone,
@@ -324,6 +326,7 @@ class CronJob:
             user_id=data.get("user_id", f"cron:{data['job_id']}"),
             workspace_dir=data["workspace_dir"],
             command=data["command"],
+            description=data.get("description"),
             every_seconds=int(data.get("every_seconds", 0)),
             cron_expr=data.get("cron_expr"),
             timezone=data.get("timezone", "UTC"),
@@ -546,6 +549,7 @@ class CronService:
         user_id: str,
         workspace_dir: Optional[str],
         command: str,
+        description: Optional[str] = None,
         every_raw: Optional[str] = None,
         cron_expr: Optional[str] = None,
         timezone: str = "UTC",
@@ -585,6 +589,7 @@ class CronService:
             user_id=user_id or f"cron:{job_id}",
             workspace_dir=workspace,
             command=command,
+            description=description,
             every_seconds=every_seconds,
             cron_expr=cron_expr,
             timezone=timezone,
@@ -605,6 +610,8 @@ class CronService:
         job = self.jobs[job_id]
         if "command" in updates:
             job.command = updates["command"]
+        if "description" in updates:
+            job.description = updates["description"]
         if "enabled" in updates:
             job.enabled = bool(updates["enabled"])
         if "every" in updates or "every_seconds" in updates:

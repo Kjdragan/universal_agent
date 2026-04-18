@@ -25466,6 +25466,7 @@ class _AgentCronCommandInterpretation(BaseModel):
     intent: str = "create"  # create | update | delete | run | enable | disable
     target_job_id: Optional[str] = None  # which job to act on (for non-create intents)
     command: Optional[str] = None  # the agent prompt / command text for the cron job
+    description: Optional[str] = None  # short natural language summary of what the job does
     schedule_time: Optional[str] = None  # NL schedule (e.g. "every day at 7am")
     repeat: Optional[bool] = None
     enabled: Optional[bool] = None
@@ -25496,9 +25497,9 @@ def _build_cron_nl_command_prompt(*, text: str, timezone_name: str, jobs: list[d
         "3. If the user wants to change the command/prompt of an existing job, use intent=`update` "
         "and populate `command` with the new command text.\n"
         "4. If the instruction looks like a new task that doesn't match any existing job, use "
-        "intent=`create` and populate `command` and `schedule_time`.\n"
+        "intent=`create` and populate `command`, `description`, and `schedule_time`.\n"
         "5. For `create`, `command` is REQUIRED and must be the actual agent prompt text "
-        "(not the user's meta-instruction about editing).\n\n"
+        "(not the user's meta-instruction about editing). `description` should be a concise, human-readable summary of what the job does.\n\n"
         f"## Current Time\n{now_utc}\n\n"
         f"## User Timezone\n{timezone_name}\n\n"
         f"## Existing Cron Jobs\n```json\n{jobs_summary}\n```\n\n"
@@ -25510,6 +25511,7 @@ def _build_cron_nl_command_prompt(*, text: str, timezone_name: str, jobs: list[d
         '  "intent": "create|update|delete|run|enable|disable",\n'
         '  "target_job_id": "string or null",\n'
         '  "command": "string or null",\n'
+        '  "description": "string or null",\n'
         '  "schedule_time": "string or null",\n'
         '  "repeat": true/false/null,\n'
         '  "enabled": true/false/null,\n'
@@ -25631,6 +25633,7 @@ async def interpret_cron_nl_command(request: CronNLCommandRequest):
             user_id="cron",
             workspace_dir=_sanitize_workspace_dir_or_400(None),
             command=cmd,
+            description=interpretation.description,
             every_raw=every_raw,
             cron_expr=cron_expr,
             timezone=interpretation.timezone or timezone_name,
@@ -25661,6 +25664,8 @@ async def interpret_cron_nl_command(request: CronNLCommandRequest):
         eff_tz = interpretation.timezone or timezone_name
         if interpretation.command is not None:
             updates["command"] = interpretation.command
+        if interpretation.description is not None:
+            updates["description"] = interpretation.description
         if interpretation.schedule_time is not None:
             every_raw_u, cron_expr_u, run_at_ts_u, delete_after_run_u = (
                 await _resolve_simplified_schedule_update_fields_with_agent(

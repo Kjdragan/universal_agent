@@ -17,8 +17,8 @@ const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
-const DEFAULT_GATEWAY_PROXY_TOTAL_TIMEOUT_MS = 8000;
-const DEFAULT_GATEWAY_PROXY_ATTEMPT_TIMEOUT_MS = 3500;
+const DEFAULT_GATEWAY_PROXY_TOTAL_TIMEOUT_MS = 30000;
+const DEFAULT_GATEWAY_PROXY_ATTEMPT_TIMEOUT_MS = 15000;
 
 function boundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
   const parsed = Number(value);

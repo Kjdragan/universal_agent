@@ -432,6 +432,16 @@ export default function ToDoListDashboardPage() {
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddPending, setQuickAddPending] = useState(false);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!expandedTaskId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpandedTaskId(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [expandedTaskId]);
 
 
   useEffect(() => {
@@ -843,6 +853,7 @@ export default function ToDoListDashboardPage() {
   // ── Sub-renders ───────────────────────────────────────────────────────────────
 
   const renderTaskCard = (item: AgentQueueItem, idx: number, showActions = true, onDelete?: (id: string) => void) => {
+    const isExpanded = expandedTaskId === item.task_id;
     const isPending = actionPendingTaskId === item.task_id;
     const pCls = priorityColorClass(item.priority);
     const boardLane = String(item.board_lane || "");
@@ -859,10 +870,12 @@ export default function ToDoListDashboardPage() {
     const taskHref = taskSourceUrl(item.task_id, item.source_kind, item.url, item.source_ref);
 
     return (
+      <>
       <article
         key={item.task_id}
+        onClick={() => setExpandedTaskId(item.task_id)}
         className={[
-          "group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px]",
+          "group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px] cursor-pointer",
           item.must_complete ? "border-l-2 border-l-kcd-red" : "",
           isProcessing ? "processing-bar border-l-2 border-l-kcd-green" : "",
           (isHumanReview || isAwaitingReview) ? "border-l-2 border-l-kcd-amber" : "",
@@ -890,13 +903,13 @@ export default function ToDoListDashboardPage() {
           <div className="flex items-center mb-2 px-2 py-1 bg-kcd-amber/[0.08] border border-kcd-amber/20 rounded-sm hover:bg-kcd-amber/[0.15] hover:border-kcd-amber/40 transition-colors w-fit">
             {taskHref ? (
               taskHref.startsWith("http") ? (
-                <a href={taskHref} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 no-underline cursor-pointer group/reviewbadge">
+                <a href={taskHref} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5 no-underline cursor-pointer group/reviewbadge">
                   <span className="material-symbols-outlined text-xs text-kcd-amber group-hover/reviewbadge:scale-110 transition-transform">rate_review</span>
                   <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Human Review Needed</span>
                   <span className="material-symbols-outlined text-[10px] text-kcd-amber ml-1">open_in_new</span>
                 </a>
               ) : (
-                <Link href={taskHref} className="flex items-center gap-1.5 no-underline cursor-pointer group/reviewbadge">
+                <Link href={taskHref} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5 no-underline cursor-pointer group/reviewbadge">
                   <span className="material-symbols-outlined text-xs text-kcd-amber group-hover/reviewbadge:scale-110 transition-transform">rate_review</span>
                   <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-amber uppercase">Human Review Needed</span>
                   <span className="material-symbols-outlined text-[10px] text-kcd-amber ml-1">arrow_forward</span>
@@ -928,7 +941,7 @@ export default function ToDoListDashboardPage() {
           </div>
         )}
         {onDelete && (
-          <button onClick={() => onDelete(item.task_id)} disabled={isPending} title="Remove from queue"
+          <button onClick={(e) => { e.stopPropagation(); onDelete(item.task_id); }} disabled={isPending} title="Remove from queue"
             className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
             <span className="material-symbols-outlined text-base">delete</span>
           </button>
@@ -1038,26 +1051,86 @@ export default function ToDoListDashboardPage() {
                 </button>
               );
             })()}
-            <button onClick={() => void handleOpenTaskHistory(item.task_id)} disabled={taskHistoryLoadingId === item.task_id}
+            <button onClick={(e) => { e.stopPropagation(); void handleOpenTaskHistory(item.task_id); }} disabled={taskHistoryLoadingId === item.task_id}
               className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
               {taskHistoryLoadingId === item.task_id ? "Loading…" : "📜 History"}
             </button>
-            <button onClick={() => setSelectedTaskDetails(item)}
+            <button onClick={(e) => { e.stopPropagation(); setSelectedTaskDetails(item); }}
               className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
               🔍 Inspect
             </button>
           </div>
         )}
       </article>
+
+      {/* Expanded fly-out overlay */}
+      {isExpanded && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={(e) => { e.stopPropagation(); setExpandedTaskId(null); }}
+        >
+          <div
+            className="relative w-full max-w-2xl mx-4 rounded-xl border border-white/20 bg-kcd-surface-dim/95 backdrop-blur-lg shadow-2xl p-6 animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setExpandedTaskId(null)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+            <div className="flex flex-wrap items-center gap-2 mb-3 pr-8">
+              <span className="font-mono text-[10px] font-bold text-kcd-text-muted">#{idx + 1}</span>
+              {sourceKindPill(item.source_kind)}
+              {item.must_complete && <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 bg-kcd-red/10 text-kcd-red tracking-wider uppercase">MUST</span>}
+              <div className={`font-mono text-[11px] font-bold ml-auto ${pCls}`}>{priorityText(item.priority)}</div>
+            </div>
+            <h3 className="text-base font-semibold text-kcd-text leading-snug mb-3">
+              {item.title}
+            </h3>
+            {item.description && (
+              <div className="text-[13px] text-kcd-text-muted leading-relaxed whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto scrollbar-thin p-3 bg-black/20 rounded-md border border-white/5">
+                {item.description}
+              </div>
+            )}
+            <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[11px] text-kcd-text-muted bg-white/5 p-2 rounded">
+              {item.project_key && <span>{item.project_key}</span>}
+              {item.delivery_mode && <><span className="opacity-40">│</span><span>{item.delivery_mode}</span></>}
+              {item.session_role && <><span className="opacity-40">│</span><span>{item.session_role}</span></>}
+              {item.assigned_agent_id && <><span className="opacity-40">│</span><span>{item.assigned_agent_id}</span></>}
+              {item.assignment_state && <><span className="opacity-40">│</span><span>{item.assignment_state}</span></>}
+              {item.due_at && <><span className="opacity-40">│</span><span className="text-kcd-amber">Due {item.due_at}</span></>}
+              {item.updated_at && <><span className="opacity-40">│</span><span>Updated {formatTs(item.updated_at)}</span></>}
+            </div>
+            {showActions && (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button onClick={(e) => { e.stopPropagation(); void handleTaskAction(item.task_id, "complete"); setExpandedTaskId(null); }} disabled={isPending}
+                  className="px-3 py-1.5 font-mono text-[11px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border border-kcd-red/20 rounded-md cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40">
+                  🗑 Trash It
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); void handleWakeHeartbeat(item.task_id); setExpandedTaskId(null); }} disabled={wakePending}
+                  className="px-3 py-1.5 font-mono text-[11px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border border-kcd-cyan/20 rounded-md cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
+                  ⚡ {wakePending ? "Queueing…" : "Dispatch"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      </>
     );
   };
 
   const renderCompletedCard = (item: CompletedTaskItem) => {
+    const isExpanded = expandedTaskId === item.task_id;
     const pCls = priorityColorClass(item.priority);
     return (
+      <>
       <article key={`completed-${item.task_id}`}
-        className="group relative rounded-md p-3 transition-all duration-200 bg-kcd-surface-low border border-white/[0.15] hover:bg-kcd-surface-high/80">
-        <button onClick={() => void handleDeleteCompletedTask(item.task_id)} title="Delete"
+        onClick={() => setExpandedTaskId(item.task_id)}
+        className="group relative rounded-md p-3 transition-all duration-200 bg-kcd-surface-low border border-white/[0.15] hover:bg-kcd-surface-high/80 cursor-pointer">
+        <button onClick={(e) => { e.stopPropagation(); void handleDeleteCompletedTask(item.task_id); }} title="Delete"
           className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
           <span className="material-symbols-outlined text-base">delete</span>
         </button>
@@ -1070,8 +1143,8 @@ export default function ToDoListDashboardPage() {
                 if (href) {
                   const isExternal = href.startsWith("http");
                   return isExternal
-                    ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</a>
-                    : <Link href={href} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</Link>;
+                    ? <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</a>
+                    : <Link href={href} onClick={(e) => e.stopPropagation()} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</Link>;
                 }
                 return item.title;
               })()}
@@ -1116,12 +1189,12 @@ export default function ToDoListDashboardPage() {
           <span>Done {formatTs(item.completed_at || item.updated_at)}</span>
           {item.last_assignment?.agent_id && <><span className="opacity-40">│</span><span className="text-kcd-text-dim">{item.last_assignment.agent_id}</span></>}
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-          <button onClick={() => void handleOpenTaskHistory(item.task_id)} disabled={taskHistoryLoadingId === item.task_id}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
+          <button onClick={(e) => { e.stopPropagation(); void handleOpenTaskHistory(item.task_id); }} disabled={taskHistoryLoadingId === item.task_id}
             className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
             {taskHistoryLoadingId === item.task_id ? "Loading…" : "Review"}
           </button>
-          <button onClick={() => setSelectedTaskDetails(item)}
+          <button onClick={(e) => { e.stopPropagation(); setSelectedTaskDetails(item); }}
             className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
             Inspect
           </button>
@@ -1132,7 +1205,8 @@ export default function ToDoListDashboardPage() {
             });
             if (!target) return null;
             return (
-              <button onClick={() => {
+              <button onClick={(e) => {
+                e.stopPropagation();
                 openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
               }}
                 className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
@@ -1142,6 +1216,46 @@ export default function ToDoListDashboardPage() {
           })()}
         </div>
       </article>
+
+      {/* Expanded fly-out overlay for completed cards */}
+      {isExpanded && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={(e) => { e.stopPropagation(); setExpandedTaskId(null); }}
+        >
+          <div
+            className="relative w-full max-w-2xl mx-4 rounded-xl border border-white/20 bg-kcd-surface-dim/95 backdrop-blur-lg shadow-2xl p-6 animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setExpandedTaskId(null)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+            <div className="flex flex-wrap items-center gap-2 mb-3 pr-8">
+              {sourceKindPill(item.source_kind)}
+              <div className={`font-mono text-[11px] font-bold ml-auto ${pCls}`}>{priorityText(item.priority)}</div>
+            </div>
+            <h3 className="text-base font-semibold text-kcd-text leading-snug mb-3">
+              {item.title}
+            </h3>
+            {item.description && (
+              <div className="text-[13px] text-kcd-text-muted leading-relaxed whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto scrollbar-thin p-3 bg-black/20 rounded-md border border-white/5">
+                {item.description}
+              </div>
+            )}
+            <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[11px] text-kcd-text-muted bg-white/5 p-2 rounded">
+              {item.project_key && <span>{item.project_key}</span>}
+              <span className="opacity-40">│</span>
+              <span>Done {formatTs(item.completed_at || item.updated_at)}</span>
+              {item.last_assignment?.agent_id && <><span className="opacity-40">│</span><span className="text-kcd-text-dim">{item.last_assignment.agent_id}</span></>}
+            </div>
+          </div>
+        </div>
+      )}
+      </>
     );
   };
 
