@@ -139,21 +139,38 @@ def finalize_stale_runs(dry_run: bool) -> dict:
             return result
 
         # Mark stale attempts as failed
+        # Determine available columns to avoid schema mismatches
         now = _now_iso()
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(run_attempts)").fetchall()
+        }
         finalized = 0
         for s in stale:
             if s["attempt_id"]:
-                conn.execute(
-                    """
-                    UPDATE run_attempts
-                    SET status = 'failed',
-                        error_message = 'Purged: stale run from proxy downtime',
-                        ended_at = ?
-                    WHERE attempt_id = ?
-                      AND status IN ('running', 'queued', 'blocked')
-                    """,
-                    (now, s["attempt_id"]),
-                )
+                if "error_message" in cols:
+                    conn.execute(
+                        """
+                        UPDATE run_attempts
+                        SET status = 'failed',
+                            error_message = 'Purged: stale run from proxy downtime',
+                            ended_at = ?
+                        WHERE attempt_id = ?
+                          AND status IN ('running', 'queued', 'blocked')
+                        """,
+                        (now, s["attempt_id"]),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE run_attempts
+                        SET status = 'failed',
+                            ended_at = ?
+                        WHERE attempt_id = ?
+                          AND status IN ('running', 'queued', 'blocked')
+                        """,
+                        (now, s["attempt_id"]),
+                    )
                 finalized += 1
         conn.commit()
         result["status"] = "finalized"
