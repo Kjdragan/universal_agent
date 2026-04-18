@@ -19,6 +19,7 @@ function buildHeaders(): Record<string, string> {
 interface CalendarEvent {
   event_id: string;
   title: string;
+  description?: string;
   source: string;
   status: string;
   scheduled_at_epoch: number;
@@ -239,50 +240,203 @@ function EventCard({
   onAction: (event: CalendarEvent, action: string) => void;
   compact?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const badge = sourceBadgeClasses(event.source, event.status);
   const actions = getActionsForEvent(event);
 
+  // Close on Escape key
+  useEffect(() => {
+    if (!expanded) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [expanded]);
+
   return (
-    <div className={`rounded-lg border ${badge} p-3 transition-all hover:brightness-110 ${compact ? "p-2" : ""}`}>
-      <div className="flex items-start gap-2">
-        <span className="text-sm mt-0.5">{sourceIcon(event.source)}</span>
-        <div className="min-w-0 flex-1">
-          <div className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`}>
-            {event.title}
-          </div>
-          <div className="flex items-center gap-2 text-[10px] opacity-80 mt-0.5">
-            <span>{formatTime(event.scheduled_at_local)}</span>
-            <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider ${
-              event.status === "overdue" ? "bg-red-500/30 text-red-200" :
-              event.status === "success" ? "bg-primary/30 text-primary/80" :
-              event.status === "failed" ? "bg-red-400/30 text-red-400/80" :
-              event.status === "missed" ? "bg-amber-500/30 text-amber-200" :
-              "bg-white/10"
-            }`}>
-              {event.status}
-            </span>
-          </div>
-          {/* Streamlined action buttons */}
-          {actions.length > 0 && (
-            <div className="flex items-center gap-0.5 mt-1.5">
-              {actions.map((def) => (
-                <button
-                  key={`${event.event_id}-${def.action}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAction(event, def.action);
-                  }}
-                  title={def.label}
-                  className={`px-1.5 py-0.5 rounded text-[10px] transition-colors border border-transparent ${def.color}`}
-                >
-                  {compact ? def.icon : `${def.icon} ${def.label}`}
-                </button>
-              ))}
+    <>
+      {/* Collapsed card */}
+      <div
+        className={`rounded-lg border ${badge} p-3 transition-all hover:brightness-110 cursor-pointer ${compact ? "p-2" : ""}`}
+        onClick={() => setExpanded(true)}
+      >
+        <div className="flex items-start gap-2">
+          <span className="text-sm mt-0.5">{sourceIcon(event.source)}</span>
+          <div className="min-w-0 flex-1">
+            <div className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`}>
+              {event.title}
             </div>
-          )}
+            <div className="flex items-center gap-2 text-[10px] opacity-80 mt-0.5">
+              <span>{formatTime(event.scheduled_at_local)}</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider ${
+                event.status === "overdue" ? "bg-red-500/30 text-red-200" :
+                event.status === "success" ? "bg-primary/30 text-primary/80" :
+                event.status === "failed" ? "bg-red-400/30 text-red-400/80" :
+                event.status === "missed" ? "bg-amber-500/30 text-amber-200" :
+                "bg-white/10"
+              }`}>
+                {event.status}
+              </span>
+            </div>
+            {/* Streamlined action buttons */}
+            {actions.length > 0 && (
+              <div className="flex items-center gap-0.5 mt-1.5">
+                {actions.map((def) => (
+                  <button
+                    key={`${event.event_id}-${def.action}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAction(event, def.action);
+                    }}
+                    title={def.label}
+                    className={`px-1.5 py-0.5 rounded text-[10px] transition-colors border border-transparent ${def.color}`}
+                  >
+                    {compact ? def.icon : `${def.icon} ${def.label}`}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* Expanded fly-out overlay */}
+      {expanded && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setExpanded(false)}
+        >
+          <div
+            className={`relative w-full max-w-lg mx-4 rounded-xl border ${badge} bg-card/95 backdrop-blur-lg shadow-2xl p-5 animate-in zoom-in-95 slide-in-from-bottom-2 duration-200`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setExpanded(false)}
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+
+            {/* Header */}
+            <div className="flex items-start gap-3 mb-4">
+              <span className="text-xl mt-0.5">{sourceIcon(event.source)}</span>
+              <div className="min-w-0 flex-1 pr-6">
+                <div className="font-bold text-base text-foreground leading-snug">
+                  {event.title}
+                </div>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                    event.status === "overdue" ? "bg-red-500/30 text-red-200" :
+                    event.status === "success" ? "bg-primary/30 text-primary/80" :
+                    event.status === "failed" ? "bg-red-400/30 text-red-400/80" :
+                    event.status === "missed" ? "bg-amber-500/30 text-amber-200" :
+                    event.status === "running" ? "bg-sky-500/30 text-sky-200" :
+                    "bg-white/10 text-foreground/60"
+                  }`}>
+                    {event.status}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
+                    {event.source}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Detail rows */}
+            <div className="space-y-2.5 text-sm">
+              {/* Scheduled time */}
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 mt-0.5">Scheduled</span>
+                <span className="text-foreground/90 font-mono text-xs">
+                  {new Date(event.scheduled_at_local).toLocaleString(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: true,
+                  })}
+                </span>
+              </div>
+
+              {/* Description / Command (full, untruncated) */}
+              {event.description && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 mt-0.5">Command</span>
+                  <div className="text-foreground/80 text-xs leading-relaxed whitespace-pre-wrap break-words max-h-48 overflow-y-auto scrollbar-thin">
+                    {event.description || event.title}
+                  </div>
+                </div>
+              )}
+
+              {/* Cron expression */}
+              {event.cron_expression && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 mt-0.5">Cron</span>
+                  <span className="text-foreground/80 font-mono text-xs bg-white/5 px-2 py-0.5 rounded">
+                    {event.cron_expression}
+                  </span>
+                </div>
+              )}
+
+              {/* Owner */}
+              {event.owner && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 mt-0.5">Owner</span>
+                  <span className="text-foreground/80 text-xs">{event.owner}</span>
+                </div>
+              )}
+
+              {/* Label */}
+              {event.label && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 mt-0.5">Label</span>
+                  <span className="text-foreground/80 text-xs">{event.label}</span>
+                </div>
+              )}
+
+              {/* Meta fields */}
+              {event.meta && Object.keys(event.meta).length > 0 && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 mt-0.5">Meta</span>
+                  <div className="flex-1 text-[11px] text-foreground/70 font-mono bg-white/5 rounded p-2 max-h-32 overflow-y-auto scrollbar-thin">
+                    {Object.entries(event.meta).map(([k, v]) => (
+                      <div key={k} className="flex gap-1.5">
+                        <span className="text-muted-foreground">{k}:</span>
+                        <span className="break-all">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            {actions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-4 pt-3 border-t border-white/10">
+                {actions.map((def) => (
+                  <button
+                    key={`${event.event_id}-expanded-${def.action}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAction(event, def.action);
+                      setExpanded(false);
+                    }}
+                    title={def.label}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border border-white/10 ${def.color}`}
+                  >
+                    {def.icon} {def.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
