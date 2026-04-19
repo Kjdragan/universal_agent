@@ -11,48 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-MODE_EXPLAINER_ONLY = "explainer_only"
-MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
-_CODE_HINT_KEYWORDS = {
-    "code",
-    "coding",
-    "programming",
-    "python",
-    "javascript",
-    "typescript",
-    "react",
-    "nextjs",
-    "next.js",
-    "mcp",
-    "api",
-    "sdk",
-    "cli",
-    "sql",
-    "database",
-    "docker",
-    "kubernetes",
-    "repo",
-    "github",
-    "automation",
-    "agent",
-}
-_NON_CODE_HINT_KEYWORDS = {
-    "recipe",
-    "cooking",
-    "cook",
-    "food",
-    "kitchen",
-    "grill",
-    "charcoal",
-    "souvlaki",
-    "baking",
-    "travel",
-    "vlog",
-    "music",
-    "song",
-    "workout",
-    "fitness",
-}
+from universal_agent.youtube_mode_utils import infer_youtube_mode as _infer_youtube_learning_mode
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -82,17 +41,6 @@ def _split_csv_env(name: str) -> set[str]:
 
 def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
-
-
-def _infer_youtube_learning_mode(*parts: Any) -> str:
-    tokens = " ".join(str(part or "") for part in parts).strip().lower()
-    if not tokens:
-        return MODE_EXPLAINER_ONLY
-    has_code = any(keyword in tokens for keyword in _CODE_HINT_KEYWORDS)
-    has_non_code = any(keyword in tokens for keyword in _NON_CODE_HINT_KEYWORDS)
-    if has_non_code and not has_code:
-        return MODE_EXPLAINER_ONLY
-    return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
 
 
 def _extract_signature_hex(signature_header: str) -> str | None:
@@ -178,127 +126,6 @@ def to_manual_youtube_payload(event: CreatorSignalEvent) -> dict[str, Any] | Non
         "allow_degraded_transcript_only": True,
         "source": "csi_ingester",
     }
-
-
-def _safe_json_preview(value: Any, *, max_chars: int = 6000) -> str:
-    try:
-        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    except Exception:
-        rendered = str(value)
-    if len(rendered) <= max_chars:
-        return rendered
-    return f"{rendered[:max_chars]}...(truncated)"
-
-
-def _category_mix(subject: dict[str, Any]) -> str:
-    totals = subject.get("totals")
-    by_category = {}
-    if isinstance(totals, dict):
-        maybe = totals.get("by_category")
-        if isinstance(maybe, dict):
-            by_category = maybe
-    if not by_category:
-        maybe_direct = subject.get("by_category")
-        if isinstance(maybe_direct, dict):
-            by_category = maybe_direct
-    if not isinstance(by_category, dict) or not by_category:
-        return ""
-    parts: list[str] = []
-    for key in ("ai", "political", "war", "other_interest"):
-        if key in by_category:
-            parts.append(f"{key}={int(by_category.get(key) or 0)}")
-    extras = [(str(k), int(v or 0)) for k, v in by_category.items() if str(k) not in {"ai", "political", "war", "other_interest"}]
-    extras.sort(key=lambda item: item[1], reverse=True)
-    for slug, count in extras[:4]:
-        parts.append(f"{slug}={count}")
-    return ", ".join(parts)
-
-
-def _analytics_message(event: CreatorSignalEvent) -> str:
-    event_type = str(event.event_type or "").strip()
-    subject = event.subject if isinstance(event.subject, dict) else {}
-    occurred_at = str(event.occurred_at or "")
-    lines: list[str] = []
-    lines.append("CSI analytics signal received.")
-    lines.append(f"event_type: {event_type}")
-    lines.append(f"source: {str(event.source or '')}")
-    lines.append(f"event_id: {str(event.event_id or '')}")
-    lines.append(f"occurred_at: {occurred_at}")
-
-    if event_type == "hourly_token_usage_report":
-        totals = subject.get("totals") if isinstance(subject.get("totals"), dict) else {}
-        lines.append(
-            "hourly_tokens: "
-            f"prompt={int(totals.get('prompt_tokens') or 0)} "
-            f"completion={int(totals.get('completion_tokens') or 0)} "
-            f"total={int(totals.get('total_tokens') or 0)}"
-        )
-    elif event_type == "rss_trend_report":
-        totals = subject.get("totals") if isinstance(subject.get("totals"), dict) else {}
-        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
-        lines.append(f"items: {int(totals.get('items') or 0)}")
-        mix = _category_mix(subject)
-        if mix:
-            lines.append(f"category_mix: {mix}")
-        top_themes = subject.get("top_themes")
-        if isinstance(top_themes, list) and top_themes:
-            lines.append(f"top_themes_preview: {_safe_json_preview(top_themes[:6], max_chars=800)}")
-    elif event_type == "threads_trend_report":
-        lines.append(f"report_key: {str(subject.get('report_key') or '')}")
-        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
-        lines.append(f"items: {int(subject.get('total_items') or 0)}")
-        top_terms = subject.get("top_terms")
-        if isinstance(top_terms, list) and top_terms:
-            lines.append(f"top_terms_preview: {_safe_json_preview(top_terms[:8], max_chars=800)}")
-    elif event_type == "global_trend_brief_ready":
-        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
-        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
-        source_totals = subject.get("source_totals") if isinstance(subject.get("source_totals"), dict) else {}
-        lines.append(f"source_totals: {_safe_json_preview(source_totals, max_chars=300)}")
-    elif event_type == "csi_global_brief_review_due":
-        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
-        lines.append(f"slot: {str(subject.get('slot_display') or subject.get('slot') or '')}")
-        lines.append(f"timezone: {str(subject.get('timezone') or '')}")
-    elif event_type.startswith("rss_insight_"):
-        lines.append(f"report_key: {str(subject.get('report_key') or '')}")
-        lines.append(f"items: {int(subject.get('total_items') or 0)}")
-        mix = _category_mix(subject)
-        if mix:
-            lines.append(f"category_mix: {mix}")
-    elif event_type == "category_quality_report":
-        metrics = subject.get("metrics") if isinstance(subject.get("metrics"), dict) else {}
-        lines.append(f"quality_action: {str(subject.get('action') or '')}")
-        lines.append(
-            "quality_metrics: "
-            f"items={int(metrics.get('total_items') or 0)} "
-            f"other_ratio={float(metrics.get('other_interest_ratio') or 0.0):.4f} "
-            f"uncategorized={int(metrics.get('uncategorized_items') or 0)}"
-        )
-    elif event_type.startswith("analysis_task_"):
-        lines.append(f"task_id: {str(subject.get('task_id') or '')}")
-        lines.append(f"request_type: {str(subject.get('request_type') or '')}")
-        lines.append(f"task_status: {str(subject.get('status') or '')}")
-
-    lines.append("")
-    lines.append("subject_json:")
-    lines.append(_safe_json_preview(subject, max_chars=8000))
-    return "\n".join(lines)
-
-
-def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
-    """
-    Map CSI-native analytics/analyst events to an internal UA agent action.
-
-    CSI Redesign (2026-03-15): Disabled. CSI analytics events are no longer
-    dispatched as agent actions. The operational monitoring layer (auto-remediation,
-    SLO, delivery health, specialist loops) was generating excessive noise and
-    burning tokens without producing user value. CSI now operates as a passive
-    trend digest system — interesting findings are stored as digests for the
-    UI to display, not dispatched to agent lanes.
-
-    YouTube playlist processing is unaffected (handled by to_manual_youtube_payload).
-    """
-    return None
 
 
 def _verify_auth(headers: dict[str, str], payload: dict[str, Any]) -> tuple[bool, int, dict[str, Any]]:

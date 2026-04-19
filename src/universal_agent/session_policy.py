@@ -13,7 +13,7 @@ from universal_agent.codebase_policy import normalize_codebase_access
 
 _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|payment)\b", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b(email|gmail|send mail|send an email)\b", re.IGNORECASE)
-_POST_RE = re.compile(r"\b(post|tweet|x\\.com|linkedin|facebook|publish)\b", re.IGNORECASE)
+_POST_RE = re.compile(r"\b(post|tweet|x\.com|linkedin|facebook|publish)\b", re.IGNORECASE)
 _DESTRUCTIVE_RE = re.compile(
     r"\b(rm\s+-rf|shutdown|reboot|format\s+disk|wipe|sudo\s+rm)\b",
     re.IGNORECASE,

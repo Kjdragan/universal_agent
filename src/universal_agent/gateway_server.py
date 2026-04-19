@@ -186,10 +186,13 @@ from universal_agent.codebase_policy import (
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
+from universal_agent.youtube_mode_utils import (
+    youtube_explicitly_non_code,
+    youtube_probably_code,
+)
 from universal_agent.signals_ingest import (
     extract_valid_events,
     process_signals_ingest_payload,
-    to_csi_analytics_action,
     to_manual_youtube_payload,
 )
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
@@ -680,46 +683,6 @@ _TUTORIAL_CODE_EXTENSIONS = {
     ".json",
 }
 _TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
-_TUTORIAL_CODE_HINT_KEYWORDS = {
-    "code",
-    "coding",
-    "programming",
-    "python",
-    "javascript",
-    "typescript",
-    "react",
-    "nextjs",
-    "next.js",
-    "mcp",
-    "api",
-    "sdk",
-    "cli",
-    "sql",
-    "database",
-    "docker",
-    "kubernetes",
-    "repo",
-    "github",
-    "automation",
-    "agent",
-}
-_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
-    "recipe",
-    "cooking",
-    "cook",
-    "food",
-    "kitchen",
-    "grill",
-    "charcoal",
-    "souvlaki",
-    "baking",
-    "travel",
-    "vlog",
-    "music",
-    "song",
-    "workout",
-    "fitness",
-}
 
 
 def _tutorial_implementation_code_files(run_dir: Path) -> list[Path]:
@@ -739,33 +702,24 @@ def _tutorial_implementation_code_files(run_dir: Path) -> list[Path]:
     return code_files
 
 
-def _tutorial_manifest_tokens(manifest: dict[str, Any]) -> str:
-    values = [
+def _tutorial_probably_code(manifest: dict[str, Any]) -> bool:
+    return youtube_probably_code(
         manifest.get("title"),
         manifest.get("description"),
         manifest.get("summary"),
         manifest.get("channel"),
         manifest.get("channel_name"),
-    ]
-    return " ".join(str(value or "") for value in values).strip().lower()
-
-
-def _tutorial_probably_code(manifest: dict[str, Any]) -> bool:
-    tokens = _tutorial_manifest_tokens(manifest)
-    if not tokens:
-        return False
-    has_code = any(keyword in tokens for keyword in _TUTORIAL_CODE_HINT_KEYWORDS)
-    has_non_code = any(keyword in tokens for keyword in _TUTORIAL_NON_CODE_HINT_KEYWORDS)
-    return has_code and not (has_non_code and not has_code)
+    )
 
 
 def _tutorial_explicitly_non_code(manifest: dict[str, Any]) -> bool:
-    tokens = _tutorial_manifest_tokens(manifest)
-    if not tokens:
-        return False
-    has_code = any(keyword in tokens for keyword in _TUTORIAL_CODE_HINT_KEYWORDS)
-    has_non_code = any(keyword in tokens for keyword in _TUTORIAL_NON_CODE_HINT_KEYWORDS)
-    return has_non_code and not has_code
+    return youtube_explicitly_non_code(
+        manifest.get("title"),
+        manifest.get("description"),
+        manifest.get("summary"),
+        manifest.get("channel"),
+        manifest.get("channel_name"),
+    )
 
 
 def _tutorial_key_files(

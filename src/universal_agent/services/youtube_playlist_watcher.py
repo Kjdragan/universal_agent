@@ -32,55 +32,16 @@ from xml.etree import ElementTree as ET
 
 import httpx
 from universal_agent.artifacts import resolve_artifacts_dir
+from universal_agent.youtube_mode_utils import (
+    infer_youtube_mode as _infer_youtube_mode,
+)
 
 logger = logging.getLogger(__name__)
 
 _YOUTUBE_API_PLAYLIST_ITEMS = "https://www.googleapis.com/youtube/v3/playlistItems"
 _YOUTUBE_RSS_FEED = "https://www.youtube.com/feeds/videos.xml"
 _STATE_FILENAME = "youtube_playlist_watcher_state.json"
-MODE_EXPLAINER_ONLY = "explainer_only"
-MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
-_CODE_HINT_KEYWORDS = {
-    "code",
-    "coding",
-    "programming",
-    "python",
-    "javascript",
-    "typescript",
-    "react",
-    "nextjs",
-    "next.js",
-    "mcp",
-    "api",
-    "sdk",
-    "cli",
-    "sql",
-    "database",
-    "docker",
-    "kubernetes",
-    "repo",
-    "github",
-    "automation",
-    "agent",
-}
-_NON_CODE_HINT_KEYWORDS = {
-    "recipe",
-    "cooking",
-    "cook",
-    "food",
-    "kitchen",
-    "grill",
-    "charcoal",
-    "souvlaki",
-    "baking",
-    "travel",
-    "vlog",
-    "music",
-    "song",
-    "workout",
-    "fitness",
-}
 _TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 _TUTORIAL_NOT_READY_STATUSES = {
     "",
@@ -139,17 +100,6 @@ def _save_state(state: dict[str, Any]) -> None:
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _infer_youtube_mode(*parts: Any) -> str:
-    tokens = " ".join(str(part or "") for part in parts).strip().lower()
-    if not tokens:
-        return MODE_EXPLAINER_ONLY
-    has_code = any(keyword in tokens for keyword in _CODE_HINT_KEYWORDS)
-    has_non_code = any(keyword in tokens for keyword in _NON_CODE_HINT_KEYWORDS)
-    if has_non_code and not has_code:
-        return MODE_EXPLAINER_ONLY
-    return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
 
 
 def _tutorial_manifest_video_id(manifest_payload: dict[str, Any]) -> str:

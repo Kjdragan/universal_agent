@@ -12,12 +12,12 @@ Each decision includes the observation, current assessment, and the trigger cond
 
 **Observation (2.2):** CSI analytics events use hardcoded session-key lanes (`csi_trend_analyst`, `csi_data_analyst`) that are separate from the normal session lifecycle. These lanes lack the same lifecycle controls (timeout, cancel, owner enforcement) as web or Telegram sessions.
 
-**Current Assessment:** Acceptable. CSI analytics volume is low, and the hardcoded lanes keep CSI work isolated from interactive sessions.
+**2026-04-19 update:** Superseded. CSI analytics events no longer dispatch through `to_csi_analytics_action()` or hardcoded agent-session lanes. The current direction is passive digest capture plus selected proactive/convergence producers that create Task Hub work only when warranted.
 
-**Trigger for Revisitation:** If CSI analytics work becomes more complex, or if operators need to manage/cancel CSI-driven sessions from the dashboard, route CSI analytics through the same gateway session creation path with a `source=csi` marker rather than using hardcoded session keys.
+**Trigger for Revisitation:** If CSI analytics work becomes more complex, route selected findings through the current Task Hub/proactive producer path with durable artifacts and explicit scoring, not through the retired per-event hook dispatch path.
 
 **Files involved:**
-- `src/universal_agent/signals_ingest.py` — `to_csi_analytics_action()` and session-key construction
+- `src/universal_agent/signals_ingest.py` — signed ingest validation and YouTube playlist handoff
 - `src/universal_agent/gateway_server.py` — CSI action execution pipeline
 
 ---

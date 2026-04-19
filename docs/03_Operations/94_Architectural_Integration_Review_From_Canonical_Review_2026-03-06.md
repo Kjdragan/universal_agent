@@ -92,6 +92,8 @@ This means:
 
 **Type:** Alignment
 
+> **2026-04-19 update:** This observation is historical. CSI analytics events no longer dispatch through `to_csi_analytics_action()` or hardcoded agent-session lanes. The current direction is passive digest capture plus selected proactive/convergence producers that create Task Hub work only when warranted. Do not restore the old per-event CSI hook dispatch path without a new explicit architecture decision.
+
 **Observation:** CSI analytics events arrive via `/api/v1/signals/ingest`, get validated, and then dispatch into the hooks pipeline. This is correct for the delivery path. But the resulting agent actions use hardcoded session-key lanes (`csi_trend_analyst`, `csi_data_analyst`) that are separate from the normal session lifecycle.
 
 This is functional, but it means:
@@ -100,7 +102,7 @@ This is functional, but it means:
 - if CSI analytics volume grows, these special lanes become harder to manage because they lack the same lifecycle controls (timeout, cancel, owner enforcement) as normal sessions
 
 **Investigation path:**
-- `src/universal_agent/signals_ingest.py` — `to_csi_analytics_action()` and session-key construction
+- `src/universal_agent/signals_ingest.py` — signed ingest validation and YouTube playlist handoff
 - `src/universal_agent/gateway_server.py` — how CSI actions enter the execution pipeline
 - `src/universal_agent/hooks_service.py` — internal dispatch
 

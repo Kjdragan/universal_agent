@@ -112,6 +112,45 @@ def test_record_final_outbound_stamps_delivery_even_without_provider_ids(tmp_pat
     assert str(row["final_draft_id"] or "") == ""
 
 
+def test_target_agent_labels_use_exact_map(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    with _connect(db_path) as conn:
+        task_hub.ensure_schema(conn)
+        bridge = EmailTaskBridge(db_conn=conn)
+        coder = bridge.materialize(
+            thread_id="thread-coder",
+            message_id="msg-coder",
+            sender_email="kevin@example.com",
+            subject="For Codie",
+            reply_text="Please handle this.",
+            target_agent="vp.coder.primary",
+        )
+        general = bridge.materialize(
+            thread_id="thread-general",
+            message_id="msg-general",
+            sender_email="kevin@example.com",
+            subject="For Atlas",
+            reply_text="Please handle this.",
+            target_agent="vp.general.primary",
+        )
+        unknown = bridge.materialize(
+            thread_id="thread-unknown",
+            message_id="msg-unknown",
+            sender_email="kevin@example.com",
+            subject="For unknown",
+            reply_text="Please handle this.",
+            target_agent="vp.encoder.primary",
+        )
+        coder_item = task_hub.get_item(conn, coder["task_id"])
+        general_item = task_hub.get_item(conn, general["task_id"])
+        unknown_item = task_hub.get_item(conn, unknown["task_id"])
+
+    assert "agent-cody" in (coder_item or {}).get("labels", [])
+    assert "agent-atlas" in (general_item or {}).get("labels", [])
+    assert "agent-atlas" in (unknown_item or {}).get("labels", [])
+    assert "agent-cody" not in (unknown_item or {}).get("labels", [])
+
+
 def test_reconcile_terminal_email_task_mappings_backfills_completed_rows(tmp_path):
     db_path = tmp_path / "activity_state.db"
     seeded = _seed_email_task(db_path, session_key="hook-reconcile")

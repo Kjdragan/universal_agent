@@ -251,6 +251,7 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `src/universal_agent/hooks_service.py` | Core pipeline orchestration, dispatch queue, retry |
 | `src/universal_agent/gateway_server.py` | Notification CRUD, tutorial dashboard API, dedup constants |
 | `src/universal_agent/youtube_ingest.py` | Transcript fetching via rotating residential proxy (Webshare or DataImpulse) |
+| `src/universal_agent/youtube_mode_utils.py` | Shared concept-only vs code-worthy mode inference used by CSI signal ingest, hooks, gateway tutorial indexing, and playlist watching |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |
