@@ -373,6 +373,8 @@ function SessionsPageInner() {
       const r = await fetch(`${API_BASE}/api/v1/sessions/${encodeURIComponent(sessionId)}`, { headers: buildHeaders() });
       if (r.ok) {
         fetchSessions();
+        // Navigate to the three-panel chat view with this session attached
+        openOrFocusChatWindow({ sessionId, attachMode: "tail", role: "writer" });
       }
     } catch { /* silently fail */ }
     finally { setRehydratingId(null); }
