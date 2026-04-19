@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Youtube, Trash2, Plus, Loader2, RefreshCw, Edit2, PlaySquare, FolderPlus, ListVideo } from "lucide-react";
+import { Youtube, Trash2, Plus, Loader2, RefreshCw, Edit2, PlaySquare, FolderPlus, ListVideo, Search, ChevronDown, ChevronRight } from "lucide-react";
 
 type Channel = {
   channel_id: string;
@@ -24,9 +24,16 @@ export default function CsiWatchlistPage() {
   
   // Inputs
   const [inputVal, setInputVal] = useState("");
-  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [inputMode, setInputMode] = useState<'search' | 'channel' | 'category'>('search');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Category expansion
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+
+  const toggleCategory = (cat: string) => {
+    setExpandedCategories(prev => ({...prev, [cat]: !prev[cat]}));
+  };
 
   // Preview
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
@@ -62,12 +69,13 @@ export default function CsiWatchlistPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inputMode === 'search') return;
     if (!inputVal.trim()) return;
 
     setSubmitting(true);
     setErrorMsg("");
     try {
-      if (isAddingCategory) {
+      if (inputMode === 'category') {
         const resp = await fetch("/api/v1/csi/watchlist/categories", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -200,6 +208,13 @@ export default function CsiWatchlistPage() {
     return a.localeCompare(b);
   });
 
+  const filteredChannels = channels.filter(c => {
+    if (inputMode === 'search' && inputVal.trim() !== '') {
+      return c.channel_name.toLowerCase().includes(inputVal.trim().toLowerCase());
+    }
+    return true;
+  });
+
   return (
     <div className="flex flex-col gap-6 w-full max-w-[1600px] mx-auto h-[calc(100vh-6rem)]">
       {/* Header & Controls */}
@@ -208,7 +223,7 @@ export default function CsiWatchlistPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
               <Youtube className="h-6 w-6 text-red-500" />
-              CSI Watchlist Kanban
+              CSI - Youtube Watchlist
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               Drag channels between categories. Click a channel to preview content natively.
@@ -230,16 +245,24 @@ export default function CsiWatchlistPage() {
             <div className="flex bg-background/50 border border-border/40 rounded-lg p-1">
               <button 
                 type="button"
-                onClick={() => setIsAddingCategory(false)}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${!isAddingCategory ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                onClick={() => setInputMode('search')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${inputMode === 'search' ? 'bg-green-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                <Search className="w-4 h-4 inline-block mr-1.5 mb-0.5" />
+                Search
+              </button>
+              <button 
+                type="button"
+                onClick={() => setInputMode('channel')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${inputMode === 'channel' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 <Youtube className="w-4 h-4 inline-block mr-1.5 mb-0.5" />
                 Channel
               </button>
               <button 
                 type="button"
-                onClick={() => setIsAddingCategory(true)}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${isAddingCategory ? 'bg-indigo-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                onClick={() => setInputMode('category')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${inputMode === 'category' ? 'bg-indigo-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 <FolderPlus className="w-4 h-4 inline-block mr-1.5 mb-0.5" />
                 Category
@@ -247,7 +270,7 @@ export default function CsiWatchlistPage() {
             </div>
             <input
               type="text"
-              placeholder={isAddingCategory ? "Enter new category name..." : "Enter YouTube Channel URL or Handle..."}
+              placeholder={inputMode === 'category' ? "Enter new category name..." : inputMode === 'channel' ? "Enter YouTube Channel URL or Handle..." : "Search channels by name..."}
               value={inputVal}
               onChange={(e) => setInputVal(e.target.value)}
               disabled={submitting}
@@ -255,11 +278,11 @@ export default function CsiWatchlistPage() {
             />
             <button
               type="submit"
-              disabled={submitting || !inputVal.trim()}
-              className={`flex items-center justify-center gap-2 rounded-lg px-5 py-2 text-sm font-medium text-white transition disabled:opacity-50 ${isAddingCategory ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-primary hover:bg-primary/90'}`}
+              disabled={submitting || (inputMode !== 'search' && !inputVal.trim())}
+              className={`flex items-center justify-center gap-2 rounded-lg px-5 py-2 text-sm font-medium text-white transition disabled:opacity-50 ${inputMode === 'category' ? 'bg-indigo-500 hover:bg-indigo-600' : inputMode === 'search' ? 'bg-green-500 hover:bg-green-600' : 'bg-primary hover:bg-primary/90'}`}
             >
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              {isAddingCategory ? "Add Category" : "Add Channel"}
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : inputMode === 'search' ? <Search className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+              {inputMode === 'category' ? "Add Category" : inputMode === 'search' ? "Search channels" : "Add Channel"}
             </button>
           </form>
           {errorMsg && (
@@ -281,9 +304,16 @@ export default function CsiWatchlistPage() {
           <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
             <div className="columns-1 lg:columns-2 xl:columns-3 gap-6 space-y-6">
               {allDomains.map((domain) => {
-                const categoryChannels = channels.filter(c => (c.domain || "uncategorized") === domain)
+                const categoryChannels = filteredChannels.filter(c => (c.domain || "uncategorized") === domain)
                   .sort((a,b) => a.channel_name.localeCompare(b.channel_name));
                 
+                const isSearching = inputMode === 'search' && inputVal.trim() !== '';
+                if (isSearching && categoryChannels.length === 0) {
+                    return null;
+                }
+
+                const isExpanded = isSearching ? true : !!expandedCategories[domain];
+
                 // Formatting domain for display
                 const displayTitle = domain
                   .split("_")
@@ -305,7 +335,10 @@ export default function CsiWatchlistPage() {
                     }`}
                   >
                     {/* Category Header */}
-                    <div className="mb-3 flex items-center justify-between border-b border-border/30 pb-2 group/header">
+                    <div 
+                      className="mb-3 flex items-center justify-between border-b border-border/30 pb-2 group/header cursor-pointer"
+                      onClick={() => !editingCategory && toggleCategory(domain)}
+                    >
                       {editingCategory === domain ? (
                         <input 
                            autoFocus
@@ -314,12 +347,14 @@ export default function CsiWatchlistPage() {
                            onChange={(e) => setEditCategoryVal(e.target.value)}
                            onBlur={() => handleRenameCategory(domain)}
                            onKeyDown={(e) => e.key === 'Enter' && handleRenameCategory(domain)}
+                           onClick={(e) => e.stopPropagation()}
                         />
                       ) : (
                         <div className="flex items-center gap-2 max-w-[70%]">
+                         {isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                          <h2 className="font-semibold text-foreground truncate">{displayTitle}</h2>
                          <button 
-                           onClick={() => { setEditingCategory(domain); setEditCategoryVal(domain); }}
+                           onClick={(e) => { e.stopPropagation(); setEditingCategory(domain); setEditCategoryVal(domain); }}
                            className="opacity-0 group-hover/header:opacity-100 p-1 hover:bg-white/10 rounded text-muted-foreground hover:text-white transition-all"
                          >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -332,7 +367,7 @@ export default function CsiWatchlistPage() {
                           {categoryChannels.length}
                         </span>
                         <button 
-                          onClick={() => handleDeleteCategory(domain)}
+                          onClick={(e) => { e.stopPropagation(); handleDeleteCategory(domain); }}
                           className="opacity-0 group-hover/header:opacity-100 p-1 hover:bg-red-500/20 rounded text-muted-foreground hover:text-red-400 transition-all"
                           title="Delete Category completely"
                         >
@@ -342,6 +377,7 @@ export default function CsiWatchlistPage() {
                     </div>
                     
                     {/* Channel List */}
+                    {isExpanded && (
                     <ul className="flex flex-col gap-2 min-h-[40px]">
                       {categoryChannels.map((ch) => (
                         <li 
@@ -387,6 +423,7 @@ export default function CsiWatchlistPage() {
                           </div>
                       )}
                     </ul>
+                    )}
                   </div>
                 );
               })}
