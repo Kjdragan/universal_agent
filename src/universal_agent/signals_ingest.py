@@ -11,48 +11,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-MODE_EXPLAINER_ONLY = "explainer_only"
-MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
-_CODE_HINT_KEYWORDS = {
-    "code",
-    "coding",
-    "programming",
-    "python",
-    "javascript",
-    "typescript",
-    "react",
-    "nextjs",
-    "next.js",
-    "mcp",
-    "api",
-    "sdk",
-    "cli",
-    "sql",
-    "database",
-    "docker",
-    "kubernetes",
-    "repo",
-    "github",
-    "automation",
-    "agent",
-}
-_NON_CODE_HINT_KEYWORDS = {
-    "recipe",
-    "cooking",
-    "cook",
-    "food",
-    "kitchen",
-    "grill",
-    "charcoal",
-    "souvlaki",
-    "baking",
-    "travel",
-    "vlog",
-    "music",
-    "song",
-    "workout",
-    "fitness",
-}
+from universal_agent.youtube_mode_utils import (
+    MODE_EXPLAINER_ONLY,
+    MODE_EXPLAINER_PLUS_CODE,
+    infer_youtube_mode as _infer_youtube_learning_mode,
+)
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -84,15 +47,6 @@ def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
 
 
-def _infer_youtube_learning_mode(*parts: Any) -> str:
-    tokens = " ".join(str(part or "") for part in parts).strip().lower()
-    if not tokens:
-        return MODE_EXPLAINER_ONLY
-    has_code = any(keyword in tokens for keyword in _CODE_HINT_KEYWORDS)
-    has_non_code = any(keyword in tokens for keyword in _NON_CODE_HINT_KEYWORDS)
-    if has_non_code and not has_code:
-        return MODE_EXPLAINER_ONLY
-    return MODE_EXPLAINER_PLUS_CODE if has_code else MODE_EXPLAINER_ONLY
 
 
 def _extract_signature_hex(signature_header: str) -> str | None:
@@ -225,64 +179,99 @@ def _analytics_message(event: CreatorSignalEvent) -> str:
     lines.append(f"event_id: {str(event.event_id or '')}")
     lines.append(f"occurred_at: {occurred_at}")
 
-    if event_type == "hourly_token_usage_report":
-        totals = subject.get("totals") if isinstance(subject.get("totals"), dict) else {}
-        lines.append(
-            "hourly_tokens: "
-            f"prompt={int(totals.get('prompt_tokens') or 0)} "
-            f"completion={int(totals.get('completion_tokens') or 0)} "
-            f"total={int(totals.get('total_tokens') or 0)}"
-        )
-    elif event_type == "rss_trend_report":
-        totals = subject.get("totals") if isinstance(subject.get("totals"), dict) else {}
-        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
-        lines.append(f"items: {int(totals.get('items') or 0)}")
-        mix = _category_mix(subject)
-        if mix:
-            lines.append(f"category_mix: {mix}")
-        top_themes = subject.get("top_themes")
-        if isinstance(top_themes, list) and top_themes:
-            lines.append(f"top_themes_preview: {_safe_json_preview(top_themes[:6], max_chars=800)}")
-    elif event_type == "threads_trend_report":
-        lines.append(f"report_key: {str(subject.get('report_key') or '')}")
-        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
-        lines.append(f"items: {int(subject.get('total_items') or 0)}")
-        top_terms = subject.get("top_terms")
-        if isinstance(top_terms, list) and top_terms:
-            lines.append(f"top_terms_preview: {_safe_json_preview(top_terms[:8], max_chars=800)}")
-    elif event_type == "global_trend_brief_ready":
-        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
-        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
-        source_totals = subject.get("source_totals") if isinstance(subject.get("source_totals"), dict) else {}
-        lines.append(f"source_totals: {_safe_json_preview(source_totals, max_chars=300)}")
-    elif event_type == "csi_global_brief_review_due":
-        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
-        lines.append(f"slot: {str(subject.get('slot_display') or subject.get('slot') or '')}")
-        lines.append(f"timezone: {str(subject.get('timezone') or '')}")
-    elif event_type.startswith("rss_insight_"):
-        lines.append(f"report_key: {str(subject.get('report_key') or '')}")
-        lines.append(f"items: {int(subject.get('total_items') or 0)}")
-        mix = _category_mix(subject)
-        if mix:
-            lines.append(f"category_mix: {mix}")
-    elif event_type == "category_quality_report":
-        metrics = subject.get("metrics") if isinstance(subject.get("metrics"), dict) else {}
-        lines.append(f"quality_action: {str(subject.get('action') or '')}")
-        lines.append(
-            "quality_metrics: "
-            f"items={int(metrics.get('total_items') or 0)} "
-            f"other_ratio={float(metrics.get('other_interest_ratio') or 0.0):.4f} "
-            f"uncategorized={int(metrics.get('uncategorized_items') or 0)}"
-        )
-    elif event_type.startswith("analysis_task_"):
-        lines.append(f"task_id: {str(subject.get('task_id') or '')}")
-        lines.append(f"request_type: {str(subject.get('request_type') or '')}")
-        lines.append(f"task_status: {str(subject.get('status') or '')}")
+    # Dispatch table: each handler appends event-specific lines in-place.
+    for prefix, handler in _ANALYTICS_HANDLERS:
+        if event_type == prefix or event_type.startswith(prefix):
+            handler(event_type, subject, lines)
+            break
 
     lines.append("")
     lines.append("subject_json:")
     lines.append(_safe_json_preview(subject, max_chars=8000))
     return "\n".join(lines)
+
+
+def _handle_hourly_token_usage(_event_type: str, subject: dict, lines: list[str]) -> None:
+    totals = subject.get("totals") if isinstance(subject.get("totals"), dict) else {}
+    lines.append(
+        "hourly_tokens: "
+        f"prompt={int(totals.get('prompt_tokens') or 0)} "
+        f"completion={int(totals.get('completion_tokens') or 0)} "
+        f"total={int(totals.get('total_tokens') or 0)}"
+    )
+
+
+def _handle_rss_trend_report(_event_type: str, subject: dict, lines: list[str]) -> None:
+    totals = subject.get("totals") if isinstance(subject.get("totals"), dict) else {}
+    lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+    lines.append(f"items: {int(totals.get('items') or 0)}")
+    mix = _category_mix(subject)
+    if mix:
+        lines.append(f"category_mix: {mix}")
+    top_themes = subject.get("top_themes")
+    if isinstance(top_themes, list) and top_themes:
+        lines.append(f"top_themes_preview: {_safe_json_preview(top_themes[:6], max_chars=800)}")
+
+
+def _handle_threads_trend_report(_event_type: str, subject: dict, lines: list[str]) -> None:
+    lines.append(f"report_key: {str(subject.get('report_key') or '')}")
+    lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+    lines.append(f"items: {int(subject.get('total_items') or 0)}")
+    top_terms = subject.get("top_terms")
+    if isinstance(top_terms, list) and top_terms:
+        lines.append(f"top_terms_preview: {_safe_json_preview(top_terms[:8], max_chars=800)}")
+
+
+def _handle_global_trend_brief_ready(_event_type: str, subject: dict, lines: list[str]) -> None:
+    lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
+    lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+    source_totals = subject.get("source_totals") if isinstance(subject.get("source_totals"), dict) else {}
+    lines.append(f"source_totals: {_safe_json_preview(source_totals, max_chars=300)}")
+
+
+def _handle_csi_global_brief_review_due(_event_type: str, subject: dict, lines: list[str]) -> None:
+    lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
+    lines.append(f"slot: {str(subject.get('slot_display') or subject.get('slot') or '')}")
+    lines.append(f"timezone: {str(subject.get('timezone') or '')}")
+
+
+def _handle_rss_insight(_event_type: str, subject: dict, lines: list[str]) -> None:
+    lines.append(f"report_key: {str(subject.get('report_key') or '')}")
+    lines.append(f"items: {int(subject.get('total_items') or 0)}")
+    mix = _category_mix(subject)
+    if mix:
+        lines.append(f"category_mix: {mix}")
+
+
+def _handle_category_quality_report(_event_type: str, subject: dict, lines: list[str]) -> None:
+    metrics = subject.get("metrics") if isinstance(subject.get("metrics"), dict) else {}
+    lines.append(f"quality_action: {str(subject.get('action') or '')}")
+    lines.append(
+        "quality_metrics: "
+        f"items={int(metrics.get('total_items') or 0)} "
+        f"other_ratio={float(metrics.get('other_interest_ratio') or 0.0):.4f} "
+        f"uncategorized={int(metrics.get('uncategorized_items') or 0)}"
+    )
+
+
+def _handle_analysis_task(_event_type: str, subject: dict, lines: list[str]) -> None:
+    lines.append(f"task_id: {str(subject.get('task_id') or '')}")
+    lines.append(f"request_type: {str(subject.get('request_type') or '')}")
+    lines.append(f"task_status: {str(subject.get('status') or '')}")
+
+
+# Ordered dispatch table for _analytics_message.
+# Each entry is (prefix, handler). First match wins; prefix "" is a catch-all.
+_ANALYTICS_HANDLERS: list[tuple[str, callable]] = [
+    ("hourly_token_usage_report", _handle_hourly_token_usage),
+    ("rss_trend_report", _handle_rss_trend_report),
+    ("threads_trend_report", _handle_threads_trend_report),
+    ("global_trend_brief_ready", _handle_global_trend_brief_ready),
+    ("csi_global_brief_review_due", _handle_csi_global_brief_review_due),
+    ("rss_insight_", _handle_rss_insight),
+    ("category_quality_report", _handle_category_quality_report),
+    ("analysis_task_", _handle_analysis_task),
+]
 
 
 def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
