@@ -65,7 +65,7 @@ def memory_index_mode(default: str = "json") -> str:
     """Return canonical index mode used by memory subsystem."""
     if not memory_enabled(default=True):
         return "off"
-    return "vector"
+    return _read_choice("UA_MEMORY_INDEX_MODE", ("json", "vector", "off"), default)
 
 
 def memory_provider(default: str = "auto") -> str:
