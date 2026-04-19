@@ -263,22 +263,23 @@ function EventCard({
         onClick={() => setExpanded(true)}
       >
         <div className="flex items-start gap-2">
-          <span className="text-sm mt-0.5">{sourceIcon(event.source)}</span>
           <div className="min-w-0 flex-1">
-            <div className={`font-semibold truncate ${compact ? "text-xs" : "text-sm"}`}>
+            <div className={`font-semibold line-clamp-2 leading-tight ${compact ? "text-xs" : "text-sm"}`}>
               {event.title}
             </div>
-            <div className="flex items-center gap-2 text-[10px] opacity-80 mt-0.5">
+            <div className="flex items-center gap-2 text-[10px] opacity-80 mt-1">
               <span>{formatTime(event.scheduled_at_local)}</span>
-              <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider ${
-                event.status === "overdue" ? "bg-red-500/30 text-red-200" :
-                event.status === "success" ? "bg-primary/30 text-primary/80" :
-                event.status === "failed" ? "bg-red-400/30 text-red-400/80" :
-                event.status === "missed" ? "bg-amber-500/30 text-amber-200" :
-                "bg-white/10"
-              }`}>
-                {event.status}
-              </span>
+              {event.status !== "scheduled" && (
+                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider ${
+                  event.status === "overdue" ? "bg-red-500/30 text-red-200" :
+                  event.status === "success" ? "bg-primary/30 text-primary/80" :
+                  event.status === "failed" ? "bg-red-400/30 text-red-400/80" :
+                  event.status === "missed" ? "bg-amber-500/30 text-amber-200" :
+                  "bg-white/10"
+                }`}>
+                  {event.status}
+                </span>
+              )}
             </div>
             {/* Streamlined action buttons */}
             {actions.length > 0 && (
@@ -771,9 +772,6 @@ export default function CalendarPage() {
           <h1 className="text-xl font-bold tracking-tight text-foreground">
             <span className="text-primary">⬡</span> Calendar
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Unified scheduling — Cron · Heartbeat · Tasks · Overdue
-          </p>
         </div>
         <div className="flex items-center gap-2">
           {/* Navigation */}
