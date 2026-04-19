@@ -982,7 +982,7 @@ export default function CalendarPage() {
                       }`}
                     >
                       <div className="min-w-0 flex-1 flex flex-col">
-                        <span className={`text-[11px] truncate font-medium ${!isChecked ? "text-muted-foreground line-through" : "text-primary"}`}>
+                        <span className={`text-[11px] truncate font-medium ${!isChecked ? "text-muted-foreground" : "text-primary"}`}>
                           {cat}
                         </span>
                       </div>
