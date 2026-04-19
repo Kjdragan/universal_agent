@@ -77,12 +77,6 @@ def test_finalize_assignments_reopens_in_progress_items_in_legacy_mode() -> None
                 "metadata": {"workflow_manifest": {"final_channel": "chat"}},
             },
         )
-        task_hub.record_task_outbound_delivery(
-            conn,
-            task_id="task:completed-history",
-            channel="chat",
-            message_id="chat_delivery",
-        )
 
         claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:s1")
         assert len(claimed) == 1
