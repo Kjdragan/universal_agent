@@ -86,10 +86,12 @@ _PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
     "task_run",
     "email_hook",
     "todo_dispatcher",
-    # todo_dispatcher prompts contain VP keywords in the system template
-    # (TODO_DISPATCH_PROMPT mentions vp_dispatch_mission, vp.coder.primary, etc.)
-    # VP routing is already handled by the LLM classifier at dispatch time,
-    # so prompt-inferred VP detection would be a false positive here.
+    "chat_panel",
+    # todo_dispatcher and chat_panel prompts contain VP keywords in the system
+    # template (TODO_DISPATCH_PROMPT mentions vp_dispatch_mission,
+    # vp.coder.primary, etc.).  VP routing is already handled by the LLM
+    # classifier at dispatch time, so prompt-inferred VP detection would be
+    # a false positive here.
 }
 _TODO_DISPATCH_VP_FALLBACK_BLOCK = re.compile(
     r"### VP Delegation Fallback \(CRITICAL\):.*?After finishing work, ALWAYS disposition every claimed task via `task_hub_task_action` \(`complete`, `review`, `block`, or `park`\)\.",
