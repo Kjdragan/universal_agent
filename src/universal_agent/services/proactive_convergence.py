@@ -199,6 +199,11 @@ def sync_topic_signatures_from_csi(
         video_id = str(subject.get("video_id") or row["event_id"] or "").strip()
         if not video_id:
             continue
+            
+        # Skip if we already have a topic signature for this video
+        if get_topic_signature(conn, video_id):
+            continue
+            
         topics = _analysis_topics(analysis=analysis, category=str(row["category"] or ""), title=str(subject.get("title") or ""))
         signature = upsert_topic_signature(
             conn,
