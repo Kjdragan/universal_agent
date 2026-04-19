@@ -38,13 +38,14 @@ graph LR
 
 The Memory System bridges to the LLM Wiki Subsystem via `maybe_auto_sync_internal_memory_vault()` (in `wiki/projection.py`). When new memories are written, the internal memory vault is automatically re-derived from canonical memory, session, checkpoint, and run evidence.
 
-This integration is triggered at three points in the memory module:
+This integration is triggered at four points:
 
 | Trigger Point | Location | What Happens |
 | --- | --- | --- |
-| `append_memory_entry` | `memory_store.py` | After appending a new memory entry to daily markdown files |
-| `sync_session` | `orchestrator.py` | After writing a new session entry |
-| `capture_session_rollover` | `orchestrator.py` | After capturing a session rollover |
+| `append_memory_entry` | `memory/memory_store.py` | After appending a new memory entry to daily markdown files |
+| `sync_session` | `memory/orchestrator.py` | After writing a new session entry |
+| `capture_session_rollover` | `memory/orchestrator.py` | After capturing a session rollover |
+| `session_checkpoint_save` | `session_checkpoint.py` | After saving a session checkpoint to the workspace |
 
 **Gating:** Controlled by two environment variables (both must be truthy):
 - `UA_LLM_WIKI_AUTO_SYNC_INTERNAL` (default: off)
