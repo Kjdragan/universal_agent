@@ -59,6 +59,22 @@ function formatTag(tag: string): string {
   return tag.replaceAll("_", " ");
 }
 
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function compactDateTime(iso: string | undefined | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const mon = SHORT_MONTHS[d.getMonth()];
+  const day = d.getDate();
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? "p" : "a";
+  const h12 = h % 12 || 12;
+  const mm = m < 10 ? `0${m}` : `${m}`;
+  return `${mon} ${day} ${h12}:${mm}${ampm}`;
+}
+
 export default function ProactiveSignalsPage() {
   const [cards, setCards] = useState<SignalCard[]>([]);
   const [source, setSource] = useState<(typeof SOURCE_FILTERS)[number]>("all");
@@ -266,6 +282,11 @@ export default function ProactiveSignalsPage() {
                     <span>Confidence {percent(card.confidence_score)}</span>
                     <span>Novelty {percent(card.novelty_score)}</span>
                     <span>Priority {card.priority}</span>
+                    {card.created_at && (
+                      <span className="text-primary/60" title={card.created_at}>
+                        {compactDateTime(card.created_at)}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-3 space-y-1">
                     {card.evidence.slice(0, 4).map((item, index) => (
@@ -308,26 +329,24 @@ export default function ProactiveSignalsPage() {
                   Feedback
                 </button>
                 {card.status === "pending" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => submitFeedback(card.card_id, "rejected")}
-                      disabled={busyId === card.card_id}
-                      className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-400/20 disabled:opacity-50"
-                    >
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteCard(card.card_id)}
-                      disabled={busyId === card.card_id}
-                      title="Silently delete this card without recording feedback"
-                      className="rounded-md border border-border bg-card/60 px-3 py-1.5 text-xs hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
-                    >
-                      Delete
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => submitFeedback(card.card_id, "rejected")}
+                    disabled={busyId === card.card_id}
+                    className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-400/20 disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => deleteCard(card.card_id)}
+                  disabled={busyId === card.card_id}
+                  title="Silently delete this card without recording feedback"
+                  className="rounded-md border border-border bg-card/60 px-3 py-1.5 text-xs hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+                >
+                  Delete
+                </button>
               </div>
 
               {feedbackOpen && (
