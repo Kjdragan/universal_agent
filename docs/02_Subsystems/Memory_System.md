@@ -34,7 +34,27 @@ graph LR
     Agent --> ARC
 ```
 
-## 3. Implementation Details
+## 3. LLM Wiki Integration
+
+The Memory System bridges to the LLM Wiki Subsystem via `maybe_auto_sync_internal_memory_vault()` (in `wiki/projection.py`). When new memories are written, the internal memory vault is automatically re-derived from canonical memory, session, checkpoint, and run evidence.
+
+This integration is triggered at three points in the memory module:
+
+| Trigger Point | Location | What Happens |
+| --- | --- | --- |
+| `append_memory_entry` | `memory_store.py` | After appending a new memory entry to daily markdown files |
+| `sync_session` | `orchestrator.py` | After writing a new session entry |
+| `capture_session_rollover` | `orchestrator.py` | After capturing a session rollover |
+
+**Gating:** Controlled by two environment variables (both must be truthy):
+- `UA_LLM_WIKI_AUTO_SYNC_INTERNAL` (default: off)
+- `UA_LLM_WIKI_ENABLE_INTERNAL_PROJECTION` (default: on)
+
+When disabled, the memory system operates independently without wiki sync. The sync is fault-tolerant — failures are logged but never block memory writes.
+
+See also: **Internal Memory Vault** (Glossary) and LLM Wiki System documentation.
+
+## 4. Implementation Details
 
 ### Core Memory (SQLite)
 
@@ -59,7 +79,7 @@ The central coordinator for saving memories.
 3. **Index**: Updates the `index.json` and recent benchmarks in `MEMORY.md`.
 4. **Vectorize**: (Async) Generates embeddings and upserts to the vector database.
 
-## 4. Auto-Flush Mechanism
+## 5. Auto-Flush Mechanism
 
 To prevent "content blindness" and handle context window limits (typically 200k tokens), the system implements an **Auto-Flush** loop.
 
@@ -72,7 +92,7 @@ To prevent "content blindness" and handle context window limits (typically 200k 
 
 ---
 
-## 5. Configuration & Backend
+## 6. Configuration & Backend
 
 Memory behavior is controlled via environment variables:
 
