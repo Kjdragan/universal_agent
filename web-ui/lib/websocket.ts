@@ -289,9 +289,16 @@ export class AgentWebSocket {
       // Handle connection-specific events
       if (event.type === "connected") {
         console.log("Connection confirmed:", event.data);
-        // Save session_id for resumption
+        const payload = event.data as Record<string, unknown>;
+        const isLobby = payload.lobby === true;
+        // Save session_id for resumption — but only if this is a real session,
+        // not a lobby connection (which has no session yet).
         const sessionId = this.extractSessionId(event.data);
-        if (sessionId) this.setStoredSessionId(sessionId);
+        if (sessionId && !isLobby) {
+          this.setStoredSessionId(sessionId);
+        } else if (isLobby) {
+          console.log("[AgentWebSocket] In lobby mode — no session yet");
+        }
       } else if (event.type === "pong") {
         this.lastPongAt = Date.now();
       } else if (event.type === "query_complete" || event.type === "cancelled") {

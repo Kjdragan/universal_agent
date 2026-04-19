@@ -27898,29 +27898,174 @@ async def websocket_agent_compat(websocket: WebSocket):
     canonical gateway endpoint is ``/api/v1/sessions/{id}/stream``.  This thin
     wrapper extracts the *session_id* from the query string and delegates to
     :func:`websocket_stream`.
+
+    When no *session_id* is provided (fresh browser tab), the connection enters
+    **lobby mode** — a lightweight handler that responds to pings but does not
+    create a session until the user sends their first query.  This prevents
+    phantom idle sessions from cluttering the dashboard.
     """
     raw_session_id = (websocket.query_params.get("session_id") or "").strip()
     if not raw_session_id:
-        # Generate a default session id so brand-new chat windows still work.
-        raw_session_id = f"session_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        # No session_id → lobby mode.  Defer session creation until the user
+        # actually sends a query or execute message.
+        await _websocket_lobby(websocket)
+        return
     await websocket_stream(websocket, raw_session_id)
 
 
-@app.websocket("/api/v1/sessions/{session_id}/stream")
-async def websocket_stream(websocket: WebSocket, session_id: str):
+async def _websocket_lobby(websocket: WebSocket) -> None:
+    """Handle a WebSocket connection with no session_id (lobby mode).
+
+    Instead of eagerly creating a session (which ends up idle on the
+    dashboard), we accept the connection in a lightweight "lobby" state.
+    The client receives a ``connected`` event with ``session_id=""`` and
+    ``lobby=true``.  Only pings are serviced until the user sends a real
+    ``query`` or ``execute`` message, at which point a session is created
+    and the connection is upgraded to full streaming via
+    :func:`websocket_stream`.
+    """
     if _FACTORY_POLICY.gateway_mode == "health_only":
         await websocket.close(code=4403, reason="WebSocket API disabled for LOCAL_WORKER role")
         return
     if not await _require_session_ws_auth(websocket):
         return
+
+    await websocket.accept()
+
+    # Send a lightweight connected event — no real session yet.
+    await websocket.send_json({
+        "type": "connected",
+        "data": {
+            "message": "Connected to Universal Agent (lobby)",
+            "session": {
+                "session_id": "",
+                "workspace": "",
+                "workspace_dir": "",
+                "user_id": "",
+                "run_id": "",
+                "is_live_session": False,
+            },
+            "session_id": "",
+            "workspace_dir": "",
+            "run_id": "",
+            "is_live_session": False,
+            "lobby": True,
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "data": {"message": "Invalid JSON"},
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                continue
+
+            msg_type = msg.get("type", "")
+
+            if msg_type == "ping":
+                await websocket.send_json({
+                    "type": "pong",
+                    "data": {},
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                continue
+
+            if msg_type == "cancel":
+                await websocket.send_json({
+                    "type": "cancelled",
+                    "data": {"message": "Nothing to cancel (lobby mode)"},
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                continue
+
+            if msg_type in {"execute", "query"}:
+                # First real interaction → create session on-demand.
+                session_id = f"session_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+                logger.info(
+                    "Lobby → creating session %s on first %s message",
+                    session_id, msg_type,
+                )
+
+                gateway = get_gateway()
+                user_id = resolve_user_id()
+                try:
+                    session = await gateway.create_session(
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                except Exception:
+                    logger.exception("Lobby: failed to create session %s", session_id)
+                    await websocket.send_json({
+                        "type": "error",
+                        "data": {"message": "Failed to create session"},
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    continue
+
+                session.metadata["user_id"] = session.user_id
+                policy = _session_policy(session)
+                session.metadata["policy"] = _policy_metadata_snapshot(policy)
+                store_session(session)
+                _increment_metric("sessions_created")
+                if _heartbeat_service or _todo_dispatch_service:
+                    _register_session_with_runtime_services(session)
+
+                # Hand off to the full stream handler, replaying the queued
+                # message as the initial_message so it doesn't get lost.
+                await websocket_stream(
+                    websocket, session_id,
+                    initial_message=msg,
+                    skip_accept=True,
+                )
+                return
+
+            # Unknown message type in lobby — ignore silently.
+            logger.debug("Lobby: ignoring message type %r", msg_type)
+
+    except WebSocketDisconnect:
+        logger.debug("Lobby WebSocket disconnected (no session was created)")
+    except Exception:
+        logger.debug("Lobby WebSocket error", exc_info=True)
+
+
+@app.websocket("/api/v1/sessions/{session_id}/stream")
+async def websocket_stream(
+    websocket: WebSocket,
+    session_id: str,
+    *,
+    initial_message: dict | None = None,
+    skip_accept: bool = False,
+):
+    if not skip_accept:
+        # Normal entry from a direct WebSocket route — run full checks.
+        if _FACTORY_POLICY.gateway_mode == "health_only":
+            await websocket.close(code=4403, reason="WebSocket API disabled for LOCAL_WORKER role")
+            return
+        if not await _require_session_ws_auth(websocket):
+            return
     try:
         session_id = validate_session_id(session_id)
     except ValueError:
         await websocket.close(code=4000, reason="Invalid session id format")
         return
     connection_id = f"gw_{session_id}_{time.time()}"
-    # Register connection with session_id
-    await manager.connect(connection_id, websocket, session_id)
+    if skip_accept:
+        # Lobby handoff — socket is already accepted; register without accept.
+        manager.active_connections[connection_id] = websocket
+        if session_id not in manager.session_connections:
+            manager.session_connections[session_id] = set()
+        manager.session_connections[session_id].add(connection_id)
+        _set_session_connections(session_id, len(manager.session_connections.get(session_id, set())))
+    else:
+        # Register connection with session_id (calls websocket.accept())
+        await manager.connect(connection_id, websocket, session_id)
     
     gateway = get_gateway()
     session = get_session(session_id)
@@ -28045,10 +28190,30 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             )
 
     try:
+        # If the lobby handed off an initial_message, process it first
+        # by injecting it into a queue that the loop will consume.
+        _initial_queue: list[dict] = [initial_message] if initial_message else []
+
         while True:
-            data = await websocket.receive_text()
+            if _initial_queue:
+                msg = _initial_queue.pop(0)
+            else:
+                data = await websocket.receive_text()
+                try:
+                    msg = json.loads(data)
+                except json.JSONDecodeError:
+                    await manager.send_json(
+                        connection_id,
+                        {
+                            "type": "error",
+                            "data": {"message": "Invalid JSON"},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        },
+                        session_id=session_id,
+                    )
+                    continue
+
             try:
-                msg = json.loads(data)
                 msg_type = msg.get("type", "")
                 if msg_type != "ping":
                     logger.info("WS message received (session=%s): %s", session_id, msg_type)
@@ -28555,16 +28720,6 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         session_id=session_id,
                     )
 
-            except json.JSONDecodeError:
-                await manager.send_json(
-                    connection_id,
-                    {
-                        "type": "error",
-                        "data": {"message": "Invalid JSON"},
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    },
-                    session_id=session_id,
-                )
             except Exception as e:
                 logger.error(f"Error handling message: {e}")
                 await manager.send_json(
