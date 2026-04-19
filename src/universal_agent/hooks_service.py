@@ -2494,6 +2494,28 @@ class HooksService:
             metadata=metadata,
         )
 
+    def _emit_manual_simone_handoff_completion(
+        self,
+        *,
+        session_id: str,
+        session_key: str,
+        execution_summary: dict[str, Any],
+    ) -> None:
+        agent_response = str(execution_summary.get("response_text") or "Simone processed the feedback.").strip()
+        self._emit_notification(
+            kind="simone_handoff_completed",
+            title="Simone Handoff Completed",
+            message=agent_response,
+            session_id=session_id,
+            severity="success",
+            requires_action=False,
+            metadata={
+                "source": "simone_handoff",
+                "session_key": session_key,
+                "hook_session_id": session_id,
+            },
+        )
+
     def _record_email_task_hook_triage(
         self,
         *,
@@ -5015,6 +5037,12 @@ class HooksService:
                     session_id=session_id,
                     session_key=session_key,
                     workspace_root=session_workspace,
+                )
+            if str(action.name or "").strip() == "ManualSimoneHandoff":
+                self._emit_manual_simone_handoff_completion(
+                    session_id=session_id,
+                    session_key=session_key,
+                    execution_summary=execution_summary,
                 )
             if str(action.name or "").strip() == "AgentMailInbound" and session_key:
                 self._record_email_task_hook_triage(

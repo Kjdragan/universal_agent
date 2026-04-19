@@ -220,11 +220,11 @@ function StatCard({
   pulse?: boolean;
 }) {
   return (
-    <div className={`tactical-panel rounded-lg p-4 flex items-center gap-3 min-w-0 transition-all hover:scale-[1.02]`}>
-      <div className={`text-2xl ${pulse ? "animate-pulse" : ""}`}>{icon}</div>
+    <div className={`tactical-panel rounded-lg p-3 flex items-center gap-3 min-w-0 transition-all hover:scale-[1.02]`}>
+      <div className={`text-xl ${pulse ? "animate-pulse" : ""}`}>{icon}</div>
       <div className="min-w-0">
-        <div className={`text-2xl font-bold tabular-nums ${accent}`}>{value}</div>
-        <div className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium truncate">{label}</div>
+        <div className={`text-xl font-bold tabular-nums ${accent}`}>{value}</div>
+        <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium truncate">{label}</div>
       </div>
     </div>
   );
@@ -512,6 +512,7 @@ export default function CalendarPage() {
   const [showCommandBar, setShowCommandBar] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [nudging, setNudging] = useState(false);
+  const [hiddenRepeatingEvents, setHiddenRepeatingEvents] = useState<Set<string>>(new Set());
 
   /* ─── Computed date range ────────────────── */
   const range = useMemo(() => {
@@ -671,6 +672,9 @@ export default function CalendarPage() {
       map.set(formatDateKey(day), []);
     }
     for (const event of events) {
+      if (event.source === "cron" && event.cron_expression && hiddenRepeatingEvents.has(event.title)) {
+        continue;
+      }
       const key = formatDateKey(event.scheduled_at_local);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(event);
@@ -679,7 +683,17 @@ export default function CalendarPage() {
       bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
     }
     return map;
-  }, [events, weekDays]);
+  }, [events, weekDays, hiddenRepeatingEvents]);
+
+  const repeatingEvents = useMemo(() => {
+    const map = new Map<string, CalendarEvent>();
+    for (const e of events) {
+      if (e.source === "cron" && e.cron_expression) {
+        if (!map.has(e.title)) map.set(e.title, e);
+      }
+    }
+    return Array.from(map.values());
+  }, [events]);
 
   /* ─── Navigation ─────────────────────────── */
   const shiftWindow = (days: number) => {
@@ -794,34 +808,6 @@ export default function CalendarPage() {
         <span className="font-mono text-[10px]">{tz}</span>
       </div>
 
-      {/* ─── STAT CARDS ──────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard
-          label="Scheduled Today"
-          value={stats.scheduled_today}
-          accent="text-primary"
-          icon="📅"
-        />
-        <StatCard
-          label="Active Cron"
-          value={stats.active_cron}
-          accent="text-primary"
-          icon="⏰"
-        />
-        <StatCard
-          label="Pending Tasks"
-          value={stats.pending_tasks}
-          accent="text-accent"
-          icon="📋"
-        />
-        <StatCard
-          label="Overdue"
-          value={stats.overdue_tasks}
-          accent={stats.overdue_tasks > 0 ? "text-red-400" : "text-primary"}
-          icon={stats.overdue_tasks > 0 ? "🔴" : "✅"}
-          pulse={stats.overdue_tasks > 0}
-        />
-      </div>
 
       {error && (
         <div className="tactical-panel rounded-lg p-3 border-red-500/40 text-red-300 text-xs">
@@ -912,6 +898,77 @@ export default function CalendarPage() {
 
         {/* RIGHT: Sidebar */}
         <div className="hidden lg:flex flex-col w-80 shrink-0 gap-3 overflow-y-auto scrollbar-thin">
+          {/* Stats List */}
+          <div className="flex flex-col gap-2">
+            <StatCard
+              label="Scheduled Today"
+              value={stats.scheduled_today}
+              accent="text-primary"
+              icon="📅"
+            />
+            <StatCard
+              label="Active Cron"
+              value={stats.active_cron}
+              accent="text-primary"
+              icon="⏰"
+            />
+            <StatCard
+              label="Pending Tasks"
+              value={stats.pending_tasks}
+              accent="text-accent"
+              icon="📋"
+            />
+            <StatCard
+              label="Overdue"
+              value={stats.overdue_tasks}
+              accent={stats.overdue_tasks > 0 ? "text-red-400" : "text-primary"}
+              icon={stats.overdue_tasks > 0 ? "🔴" : "✅"}
+              pulse={stats.overdue_tasks > 0}
+            />
+          </div>
+
+          {/* Repeating Events Toggle List */}
+          {repeatingEvents.length > 0 && (
+            <div className="tactical-panel rounded-lg p-3 space-y-2">
+              <div className="text-xs font-bold text-primary uppercase tracking-wider">
+                🔄 Repeating Events
+              </div>
+              <div className="text-[10px] text-muted-foreground mb-2">
+                Toggle to show/hide in the calendar view
+              </div>
+              <div className="space-y-1 max-h-64 overflow-y-auto scrollbar-thin">
+                {repeatingEvents.map((evt) => {
+                  const isHidden = hiddenRepeatingEvents.has(evt.title);
+                  return (
+                    <div
+                      key={evt.title}
+                      onClick={() => {
+                        const next = new Set(hiddenRepeatingEvents);
+                        if (isHidden) next.delete(evt.title);
+                        else next.add(evt.title);
+                        setHiddenRepeatingEvents(next);
+                      }}
+                      className={`flex items-center justify-between rounded border px-2 py-1.5 cursor-pointer transition-colors ${
+                        isHidden 
+                          ? "border-muted/20 bg-muted/5 hover:bg-muted/10 opacity-60" 
+                          : "border-primary/20 bg-primary/5 hover:bg-primary/10"
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1 flex flex-col">
+                        <span className={`text-[11px] truncate font-medium ${isHidden ? "text-muted-foreground line-through" : "text-primary"}`}>
+                          {evt.title}
+                        </span>
+                        <span className="text-[9px] text-muted-foreground font-mono">{evt.cron_expression}</span>
+                      </div>
+                      <div className={`ml-2 shrink-0 w-6 h-3 rounded-full flex items-center p-0.5 transition-colors ${isHidden ? "bg-muted-foreground/30" : "bg-primary"}`}>
+                        <div className={`w-2 h-2 rounded-full bg-white transition-transform ${isHidden ? "translate-x-0" : "translate-x-3"}`} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {/* Overdue Panel */}
           {overdue.length > 0 && (
             <div className="tactical-panel rounded-lg p-3 border-red-500/30 space-y-2">
