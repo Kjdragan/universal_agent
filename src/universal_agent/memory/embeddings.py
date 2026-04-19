@@ -56,16 +56,24 @@ class OpenAIEmbeddings(EmbeddingProvider):
         "text-embedding-ada-002": 1536,
     }
 
+    # Default to the real OpenAI endpoint for embeddings.
+    # OPENAI_BASE_URL may point to a chat-only proxy (e.g. api.z.ai)
+    # that does NOT support /embeddings.
+    _OPENAI_EMBEDDINGS_BASE_URL = "https://api.openai.com/v1"
+
     def __init__(self, model: str = "text-embedding-3-small", api_key: Optional[str] = None):
         self.model = model
-        self._api_key = api_key or os.getenv("OPENAI_API_KEY")
+        # Prefer a dedicated embedding key over the main OPENAI_API_KEY,
+        # which may be a Z.ai proxy key that doesn't support /embeddings.
+        self._api_key = api_key or os.getenv("UA_EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self._base_url = os.getenv("UA_EMBEDDING_BASE_URL", self._OPENAI_EMBEDDINGS_BASE_URL)
         self._client: Optional["OpenAI"] = None  # type: ignore
 
     def _get_client(self):
         if self._client is None:
             from openai import OpenAI
 
-            self._client = OpenAI(api_key=self._api_key)
+            self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
         return self._client
 
     @property
