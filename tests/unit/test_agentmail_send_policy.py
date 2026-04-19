@@ -145,10 +145,10 @@ def test_target_agent_labels_use_exact_map(tmp_path):
         general_item = task_hub.get_item(conn, general["task_id"])
         unknown_item = task_hub.get_item(conn, unknown["task_id"])
 
-    assert "agent-cody" in (coder_item or {}).get("labels", [])
+    assert "agent-codie" in (coder_item or {}).get("labels", [])
     assert "agent-atlas" in (general_item or {}).get("labels", [])
     assert "agent-atlas" in (unknown_item or {}).get("labels", [])
-    assert "agent-cody" not in (unknown_item or {}).get("labels", [])
+    assert "agent-codie" not in (unknown_item or {}).get("labels", [])
 
 
 def test_reconcile_terminal_email_task_mappings_backfills_completed_rows(tmp_path):
