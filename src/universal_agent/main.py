@@ -8708,7 +8708,7 @@ async def setup_session(
         mcp_servers_config["agentmail"] = agentmail_mcp_config
 
     options = ClaudeAgentOptions(
-        model=resolve_claude_code_model(default="sonnet"),
+        model=resolve_claude_code_model(default="opus"),
         agents=__load_programmatic_agents(src_dir),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/

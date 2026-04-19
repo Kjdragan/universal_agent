@@ -86,6 +86,10 @@ _PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
     "task_run",
     "email_hook",
     "todo_dispatcher",
+    # todo_dispatcher prompts contain VP keywords in the system template
+    # (TODO_DISPATCH_PROMPT mentions vp_dispatch_mission, vp.coder.primary, etc.)
+    # VP routing is already handled by the LLM classifier at dispatch time,
+    # so prompt-inferred VP detection would be a false positive here.
 }
 _TODO_DISPATCH_VP_FALLBACK_BLOCK = re.compile(
     r"### VP Delegation Fallback \(CRITICAL\):.*?After finishing work, ALWAYS disposition every claimed task via `task_hub_task_action` \(`complete`, `review`, `block`, or `park`\)\.",
@@ -475,6 +479,20 @@ def _strip_email_triage_boilerplate(text: Any) -> str:
 def _allow_prompt_inferred_vp_routing_for_hooks() -> bool:
     source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
     return source not in _PROMPT_INFERRED_VP_BLOCKED_SOURCES
+
+
+# Run kinds that should never trigger prompt-inferred VP routing in hooks.
+# This mirrors the gateway-level _PROMPT_INFERRED_VP_BLOCKED_RUN_KINDS but
+# is checked inside the subprocess hooks where UA_RUN_SOURCE may be stale
+# (set at subprocess spawn time, not refreshed per turn).
+_VP_BLOCKED_RUN_KINDS_FOR_HOOKS = {
+    "todo_execution",
+    "email_triage",
+    "heartbeat",
+    "heartbeat_email_wake",
+    "heartbeat_cron_wake",
+    "hook",
+}
 
 
 _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS = (
@@ -2078,6 +2096,7 @@ class AgentHookSet:
         vp_inference_prompt = _strip_prompt_vp_boilerplate(prompt_for_inference)
         self._requires_vp_tool_path = (
             _allow_prompt_inferred_vp_routing_for_hooks()
+            and current_run_kind not in _VP_BLOCKED_RUN_KINDS_FOR_HOOKS
             and _looks_like_explicit_vp_intent(vp_inference_prompt)
             and not self._is_vp_worker_lane
         )
