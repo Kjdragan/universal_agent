@@ -3,9 +3,14 @@ from __future__ import annotations
 import os
 
 ZAI_MODEL_MAP = {
+    # Models validated against the Z.AI Anthropic-compatible endpoint
+    # (https://api.z.ai/api/anthropic).  The /api/anthropic endpoint does NOT
+    # support all model codes; e.g. "glm-5.1" requires the newer /api/paas/v4
+    # endpoint or explicit ANTHROPIC_DEFAULT_*_MODEL env var configuration.
+    # Ref: https://docs.z.ai/scenario-example/develop-tools/claude.md
     "haiku": "glm-4.5-air",
     "sonnet": "glm-5-turbo",    # Maps to Z.AI standard model
-    "opus": "glm-5.1",          # Maps to Z.AI advanced model
+    "opus": "glm-5-turbo",      # Same as sonnet for now; upgrade when endpoint supports glm-5.1
 }
 
 def resolve_model(tier: str = "opus") -> str:

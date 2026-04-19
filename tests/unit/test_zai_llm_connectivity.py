@@ -54,7 +54,7 @@ def test_zai_sonnet_connectivity():
 
 @pytest.mark.llm
 def test_zai_opus_connectivity():
-    """glm-5-turbo (opus tier) — same model as sonnet, validates routing consistency."""
+    """glm-5-turbo (opus tier) — same as sonnet; validates routing consistency."""
     model = ZAI_MODEL_MAP["opus"]
     text = _ping(model)
     assert "Connectivity" in text, f"{model!r} returned unexpected: {text!r}"
