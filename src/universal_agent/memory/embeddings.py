@@ -97,8 +97,15 @@ class SentenceTransformerEmbeddings(EmbeddingProvider):
     def _get_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
+            import warnings
 
-            self._model = SentenceTransformer(self.model_name, device=self.device)
+            try:
+                # Attempt to load from cache without network (prevents HF 429 rate limits on startup)
+                self._model = SentenceTransformer(self.model_name, device=self.device, local_files_only=True)
+            except Exception as e:
+                warnings.warn(f"Failed to load {self.model_name} from local cache: {e}. Falling back to network.")
+                self._model = SentenceTransformer(self.model_name, device=self.device)
+                
             self._dims = self._model.get_sentence_embedding_dimension()
         return self._model
 
