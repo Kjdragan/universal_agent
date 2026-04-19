@@ -49,7 +49,7 @@ skill — you are packaging a task into a format that maximizes the chance of su
 
 ## Process
 
-### Phase 1: Capture Intent (2-5 minutes, no more)
+### Phase 1: Capture Intent (5 minutes)
 
 Extract from the user — or infer from context — these four things:
 
@@ -64,7 +64,7 @@ context during execution. Don't interview them to death — the whole point is s
 > **Anti-pattern: The Over-Interview.** If you find yourself asking more than 3 questions,
 > stop. You have enough to build a v0. The agent executing the skill will figure out the rest.
 
-### Phase 2: Quick Context Scan (5 minutes max)
+### Phase 2: Quick Context Scan (10 minutes max)
 
 Before scaffolding, do a fast reconnaissance — not deep research:
 
@@ -74,7 +74,7 @@ Before scaffolding, do a fast reconnaissance — not deep research:
 
 You're looking for things that would cause the executing agent to fail. Don't go deep.
 
-> **Anti-pattern: The Research Rabbit Hole.** If your context scan takes more than 5 minutes,
+> **Anti-pattern: The Research Rabbit Hole.** If your context scan takes more than 10 minutes,
 > you're doing too much. Ship the v0 and let the executing agent discover what it needs.
 
 ### Phase 3: Scaffold the Task-Skill
@@ -197,8 +197,8 @@ After successful execution:
 
 ## NEVER Do
 
-- **NEVER spend more than 10 minutes on Phase 1-3 combined.** The whole point is speed.
-  A v0 that ships in 10 minutes beats a v2 that ships in 2 hours.
+- **NEVER spend more than 20 minutes on Phase 1-3 combined.** The whole point is speed.
+  A v0 that ships in 20 minutes beats a v2 that ships in 2 hours.
 - **NEVER write a task-skill longer than 100 lines for a first attempt.** If you need more,
   put it in references/ — keep the SKILL.md lean and scannable.
 - **NEVER pre-engineer scripts for a v0.** Let the executing agent write its own approach
@@ -232,7 +232,7 @@ as polished skills. They just need to orchestrate them toward a specific goal.
 ```
 User says "do X"
     ↓
-Capture intent (2 min) → Context scan (5 min) → Scaffold SKILL.md (3 min)
+Capture intent (5 min) → Context scan (10 min) → Scaffold SKILL.md (5 min)
     ↓
 Execute directly or dispatch to VP
     ↓
@@ -241,8 +241,8 @@ Check success criteria
 Pass? → Archive/promote    Fail? → Add anti-pattern → retry (max 3x)
 ```
 
-Total time from "do X" to first execution attempt: **~10 minutes.**
+Total time from "do X" to first execution attempt: **~20 minutes.**
 
 That's the promise of Task Forge: any non-trivial task, structured and executing,
-in 10 minutes or less. The skill format isn't overhead — it's the fastest path
+in under 20 minutes. The skill format isn't overhead — it's the fastest path
 to both getting it done and getting it done *well*.
