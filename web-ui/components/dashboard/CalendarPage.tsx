@@ -721,7 +721,7 @@ export default function CalendarPage() {
       if (event.source === "heartbeat" && !checkedCategories.has("Heartbeats")) {
         continue;
       }
-      if (event.source === "cron" && event.cron_expression) {
+      if (event.source === "cron") {
         const cat = event.description || event.title || "Unknown Cron";
         if (!checkedCategories.has(cat)) continue;
       }
@@ -739,7 +739,7 @@ export default function CalendarPage() {
     const cats = new Set<string>();
     cats.add("Heartbeats");
     for (const e of events) {
-      if (e.source === "cron" && e.cron_expression) {
+      if (e.source === "cron") {
         cats.add(e.description || e.title || "Unknown Cron");
       }
     }
