@@ -1893,6 +1893,11 @@ class OpsConfigRequest(BaseModel):
     base_hash: Optional[str] = None
 
 
+class OpsPreferencesUpdateRequest(BaseModel):
+    preferences: dict = {}
+
+
+
 class OpsConfigPatchRequest(BaseModel):
     patch: dict = {}
     base_hash: Optional[str] = None
@@ -12508,6 +12513,7 @@ async def _calendar_apply_event_action(
     event_id: str,
     run_at: Optional[str],
     timezone_name: str,
+    note: Optional[str] = None,
 ) -> dict[str, Any]:
     action_norm = action.strip().lower()
     if source == "cron":
@@ -12525,6 +12531,11 @@ async def _calendar_apply_event_action(
         if action_norm == "resume":
             updated = _cron_service.update_job(source_ref, {"enabled": True})
             return {"status": "ok", "action": action_norm, "job": updated.to_dict()}
+        if action_norm == "update_category":
+            if note is not None:
+                updated = _cron_service.update_job(source_ref, {"description": note})
+                return {"status": "ok", "action": action_norm, "job": updated.to_dict()}
+            return {"status": "error", "reason": "note (category description) is required"}
         if action_norm == "disable":
             updated = _cron_service.update_job(source_ref, {"enabled": False})
             return {"status": "ok", "action": action_norm, "job": updated.to_dict()}
@@ -26612,6 +26623,7 @@ async def ops_calendar_event_action(
         event_id=event_id,
         run_at=payload.run_at,
         timezone_name=tz_name,
+        note=payload.note,
     )
     return {
         "event_id": event_id,
@@ -27514,6 +27526,37 @@ async def ops_channels_logout(request: Request, channel_id: str):
     config["channels"] = channels_cfg
     write_ops_config(config)
     return {"status": "disabled", "channel": normalized}
+
+
+@app.get("/api/v1/ops/preferences")
+async def ops_preferences_get(request: Request):
+    _require_ops_auth(request)
+    conn = _runtime_db_connect()
+    try:
+        row = conn.execute("SELECT preferences_json FROM user_preferences WHERE user_id = 'default'").fetchone()
+        prefs = json.loads(row[0]) if row else {}
+    finally:
+        conn.close()
+    return {"preferences": prefs}
+
+
+@app.patch("/api/v1/ops/preferences")
+async def ops_preferences_patch(request: Request, payload: OpsPreferencesUpdateRequest):
+    _require_ops_auth(request)
+    conn = _runtime_db_connect()
+    try:
+        row = conn.execute("SELECT preferences_json FROM user_preferences WHERE user_id = 'default'").fetchone()
+        current = json.loads(row[0]) if row else {}
+        updated = {**current, **payload.preferences}
+        conn.execute(
+            "INSERT INTO user_preferences (user_id, preferences_json, updated_at) VALUES ('default', ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET preferences_json=excluded.preferences_json, updated_at=excluded.updated_at",
+            (json.dumps(updated), datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"preferences": updated}
 
 
 @app.get("/api/v1/ops/config")

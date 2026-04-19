@@ -152,6 +152,7 @@ const CRON_ACTIONS: ActionDef[] = [
   { action: "pause", icon: "⏸", label: "Pause", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["disabled"] },
   { action: "resume", icon: "▶", label: "Resume", color: "text-primary hover:bg-primary/20", showWhen: ["disabled"] },
   { action: "disable", icon: "⏻", label: "Disable", color: "text-muted-foreground hover:bg-muted-foreground/20", hideWhen: ["disabled"] },
+  { action: "update_category", icon: "✏️", label: "Edit Category", color: "text-primary hover:bg-primary/20" },
   { action: "open_logs", icon: "📋", label: "Logs", color: "text-primary hover:bg-primary/20" },
   { action: "open_session", icon: "💬", label: "Session", color: "text-primary hover:bg-primary/20" },
 ];
@@ -494,7 +495,6 @@ function OverdueCard({
 export default function CalendarPage() {
   /* ─── State ─────────────────────────────── */
   const [view, setView] = useState<ViewMode>("week");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [anchorDate, setAnchorDate] = useState<Date>(new Date());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -512,7 +512,8 @@ export default function CalendarPage() {
   const [showCommandBar, setShowCommandBar] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [nudging, setNudging] = useState(false);
-  const [hiddenRepeatingEvents, setHiddenRepeatingEvents] = useState<Set<string>>(new Set());
+  const [checkedCategories, setCheckedCategories] = useState<Set<string>>(new Set());
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
 
   /* ─── Computed date range ────────────────── */
   const range = useMemo(() => {
@@ -535,7 +536,7 @@ export default function CalendarPage() {
         view,
         start: range.start.toISOString(),
         end: range.end.toISOString(),
-        source: sourceFilter,
+        source: "all",
         timezone_name: browserTz,
       });
       const r = await fetch(`${API_BASE}/api/v1/ops/calendar/events?${params.toString()}`, {
@@ -554,11 +555,51 @@ export default function CalendarPage() {
     } finally {
       setLoading(false);
     }
-  }, [range.start, range.end, sourceFilter, view]);
+  }, [range.start, range.end, view]);
+
+  const fetchPreferences = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/preferences`, { headers: buildHeaders() });
+      if (r.ok) {
+        const data = await r.json();
+        const categories = data.preferences?.calendar_checked_categories;
+        if (Array.isArray(categories)) {
+          setCheckedCategories(new Set(categories));
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load preferences", e);
+    } finally {
+      setPreferencesLoaded(true);
+    }
+  }, []);
+
+  const toggleCategory = useCallback(async (category: string) => {
+    setCheckedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      
+      const arr = Array.from(next);
+      // Fire-and-forget sync to backend
+      fetch(`${API_BASE}/api/v1/ops/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({ preferences: { calendar_checked_categories: arr } })
+      }).catch(e => console.error("Failed to save preference", e));
+
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
+    fetchPreferences();
+  }, [fetchPreferences]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) return;
     fetchCalendar();
-  }, [fetchCalendar]);
+  }, [fetchCalendar, preferencesLoaded]);
 
   // Auto-poll every 30 seconds
   useEffect(() => {
@@ -575,6 +616,10 @@ export default function CalendarPage() {
         const requested = prompt("Reschedule for when? (e.g. 'in 30m', 'tomorrow 9am', or ISO timestamp)");
         if (!requested || !requested.trim()) return;
         payload.run_at = requested.trim();
+      } else if (action === "update_category") {
+        const requested = prompt("Enter new category/description for this job:");
+        if (requested === null) return;
+        payload.note = requested.trim();
       }
 
       const r = await fetch(
@@ -626,6 +671,7 @@ export default function CalendarPage() {
         dismiss: "Task dismissed",
         reopen: "Task reopened",
         prod_agent: "Agent nudged — heartbeats prodded",
+        update_category: "Category updated",
       };
       setToast({ message: labels[action] || `Action '${action}' completed`, type: "success" });
       await fetchCalendar();
@@ -672,8 +718,12 @@ export default function CalendarPage() {
       map.set(formatDateKey(day), []);
     }
     for (const event of events) {
-      if (event.source === "cron" && event.cron_expression && hiddenRepeatingEvents.has(event.title)) {
+      if (event.source === "heartbeat" && !checkedCategories.has("Heartbeats")) {
         continue;
+      }
+      if (event.source === "cron" && event.cron_expression) {
+        const cat = event.description || event.title || "Unknown Cron";
+        if (!checkedCategories.has(cat)) continue;
       }
       const key = formatDateKey(event.scheduled_at_local);
       if (!map.has(key)) map.set(key, []);
@@ -683,30 +733,28 @@ export default function CalendarPage() {
       bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
     }
     return map;
-  }, [events, weekDays, hiddenRepeatingEvents]);
+  }, [events, weekDays, checkedCategories]);
 
-  const repeatingEvents = useMemo(() => {
-    const map = new Map<string, CalendarEvent>();
+  const filterCategories = useMemo(() => {
+    const cats = new Set<string>();
+    cats.add("Heartbeats");
     for (const e of events) {
       if (e.source === "cron" && e.cron_expression) {
-        if (!map.has(e.title)) map.set(e.title, e);
+        cats.add(e.description || e.title || "Unknown Cron");
       }
     }
-    return Array.from(map.values());
+    return Array.from(cats).sort((a, b) => {
+      // Heartbeats at the bottom
+      if (a === "Heartbeats") return 1;
+      if (b === "Heartbeats") return -1;
+      return a.localeCompare(b);
+    });
   }, [events]);
 
   /* ─── Navigation ─────────────────────────── */
   const shiftWindow = (days: number) => {
     setAnchorDate((prev) => addDays(prev, days));
   };
-
-  const filters: { value: SourceFilter; label: string; color: string }[] = [
-    { value: "all", label: "All Sources", color: "text-foreground/80 border-muted-foreground/40" },
-    { value: "cron", label: "Cron Jobs", color: "text-primary border-primary/40" },
-    { value: "heartbeat", label: "Heartbeats", color: "text-sky-300 border-sky-500/40" },
-    { value: "task", label: "Tasks", color: "text-accent border-accent/25" },
-    { value: "overdue", label: `Overdue${stats.overdue_tasks > 0 ? ` (${stats.overdue_tasks})` : ""}`, color: "text-red-300 border-red-500/40" },
-  ];
 
   const rangeLabel = view === "day"
     ? formatDayLabel(range.start)
@@ -815,22 +863,8 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* ─── SOURCE FILTER TOOLBAR ───────────── */}
+      {/* ─── LEGEND TOOLBAR ───────────── */}
       <div className="flex flex-wrap items-center gap-1.5">
-        {filters.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => setSourceFilter(f.value)}
-            className={`px-3 py-1 rounded-full border text-[11px] font-semibold transition-all ${
-              sourceFilter === f.value
-                ? `${f.color} bg-white/10 ring-1 ring-white/10`
-                : "border-transparent text-muted-foreground hover:text-foreground/80 hover:bg-white/5"
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-        {/* Legend dots */}
         <div className="ml-auto flex items-center gap-3 text-[10px] text-muted-foreground">
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400" />heartbeat</span>
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-primary" />cron</span>
@@ -927,41 +961,35 @@ export default function CalendarPage() {
             />
           </div>
 
-          {/* Repeating Events Toggle List */}
-          {repeatingEvents.length > 0 && (
+          {/* Event Visibility Toggle List */}
+          {filterCategories.length > 0 && (
             <div className="tactical-panel rounded-lg p-3 space-y-2">
-              <div className="text-xs font-bold text-primary uppercase tracking-wider">
-                🔄 Repeating Events
+              <div className="text-xs font-bold text-primary uppercase tracking-wider flex items-center justify-between">
+                <span>👁️ Event Visibility</span>
               </div>
               <div className="text-[10px] text-muted-foreground mb-2">
-                Toggle to show/hide in the calendar view
+                Toggle categories to show/hide in the calendar view
               </div>
               <div className="space-y-1 max-h-64 overflow-y-auto scrollbar-thin">
-                {repeatingEvents.map((evt) => {
-                  const isHidden = hiddenRepeatingEvents.has(evt.title);
+                {filterCategories.map((cat) => {
+                  const isChecked = checkedCategories.has(cat);
                   return (
                     <div
-                      key={evt.title}
-                      onClick={() => {
-                        const next = new Set(hiddenRepeatingEvents);
-                        if (isHidden) next.delete(evt.title);
-                        else next.add(evt.title);
-                        setHiddenRepeatingEvents(next);
-                      }}
+                      key={cat}
+                      onClick={() => toggleCategory(cat)}
                       className={`flex items-center justify-between rounded border px-2 py-1.5 cursor-pointer transition-colors ${
-                        isHidden 
+                        !isChecked 
                           ? "border-muted/20 bg-muted/5 hover:bg-muted/10 opacity-60" 
                           : "border-primary/20 bg-primary/5 hover:bg-primary/10"
                       }`}
                     >
                       <div className="min-w-0 flex-1 flex flex-col">
-                        <span className={`text-[11px] truncate font-medium ${isHidden ? "text-muted-foreground line-through" : "text-primary"}`}>
-                          {evt.title}
+                        <span className={`text-[11px] truncate font-medium ${!isChecked ? "text-muted-foreground line-through" : "text-primary"}`}>
+                          {cat}
                         </span>
-                        <span className="text-[9px] text-muted-foreground font-mono">{evt.cron_expression}</span>
                       </div>
-                      <div className={`ml-2 shrink-0 w-6 h-3 rounded-full flex items-center p-0.5 transition-colors ${isHidden ? "bg-muted-foreground/30" : "bg-primary"}`}>
-                        <div className={`w-2 h-2 rounded-full bg-white transition-transform ${isHidden ? "translate-x-0" : "translate-x-3"}`} />
+                      <div className={`ml-2 shrink-0 w-6 h-3 rounded-full flex items-center p-0.5 transition-colors ${!isChecked ? "bg-muted-foreground/30" : "bg-primary"}`}>
+                        <div className={`w-2 h-2 rounded-full bg-white transition-transform ${!isChecked ? "translate-x-0" : "translate-x-3"}`} />
                       </div>
                     </div>
                   );

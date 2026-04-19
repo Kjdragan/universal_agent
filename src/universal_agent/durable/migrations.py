@@ -219,6 +219,12 @@ CREATE INDEX IF NOT EXISTS idx_vp_events_mission ON vp_events(mission_id, create
 CREATE INDEX IF NOT EXISTS idx_vp_events_vp ON vp_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_vp ON vp_session_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_type ON vp_session_events(event_type, created_at);
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id TEXT PRIMARY KEY,
+  preferences_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
