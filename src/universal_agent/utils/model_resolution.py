@@ -10,7 +10,7 @@ ZAI_MODEL_MAP = {
     # Ref: https://docs.z.ai/scenario-example/develop-tools/claude.md
     "haiku": "glm-4.5-air",
     "sonnet": "glm-5-turbo",    # Maps to Z.AI standard model
-    "opus": "glm-5-turbo",      # Same as sonnet for now; upgrade when endpoint supports glm-5.1
+    "opus": "glm-5.1",          # Z.AI flagship model (NOT glm-5-1 — dash breaks it)
 }
 
 def resolve_model(tier: str = "opus") -> str:
