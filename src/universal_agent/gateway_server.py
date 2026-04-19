@@ -13673,9 +13673,10 @@ async def lifespan(app: FastAPI):
         else:
             await _cron_service.start()
         try:
+            _ensure_autonomous_daily_briefing_job()
             _ensure_csi_convergence_cron_job()
         except Exception as exc:
-            logger.warning("Failed ensuring CSI convergence cron job: %s", exc)
+            logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
@@ -16485,6 +16486,84 @@ def _proactive_review_recipient(fallback: str = "") -> str:
         or os.getenv("UA_NOTIFICATION_EMAIL", "").strip()
         or "kevinjdragan@gmail.com"
     )
+
+
+def _autonomous_daily_briefing_enabled() -> bool:
+    return os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _autonomous_daily_briefing_command() -> str:
+    return "\n".join(
+        [
+            "Generate the daily autonomous operations briefing for the last 24 hours.",
+            "Focus only on work executed without direct user prompting (scheduled/proactive flows).",
+            "Include:",
+            "- tasks completed",
+            "- tasks attempted and failed",
+            "- links/paths to artifacts produced",
+            "- items requiring user decisions",
+            "Write a concise markdown report to UA_ARTIFACTS_DIR/autonomous-briefings/<today>/DAILY_BRIEFING.md.",
+            "Then provide a short summary suitable for dashboard notification text.",
+        ]
+    )
+
+
+def _find_cron_job_by_system_job(system_job: str) -> Any:
+    if not _cron_service:
+        return None
+    try:
+        jobs = _cron_service.list_jobs()
+    except Exception:
+        jobs = []
+    for job in jobs:
+        metadata = getattr(job, "metadata", None)
+        if isinstance(metadata, dict) and str(metadata.get("system_job") or "") == system_job:
+            return job
+    return None
+
+
+def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
+    if not _cron_service or not _autonomous_daily_briefing_enabled():
+        return None
+    cron_expr = (
+        os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_CRON", AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON).strip()
+        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON
+    )
+    timezone_name = (
+        os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_TIMEZONE", AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE).strip()
+        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE
+    )
+    workspace_dir = str(WORKSPACES_DIR / "cron_autonomous_daily_briefing")
+    metadata = {
+        "system_job": AUTONOMOUS_DAILY_BRIEFING_JOB_KEY,
+        "autonomous": True,
+        "briefing": True,
+        "source": "system",
+        "session_id": "autonomous_daily_briefing",
+    }
+    updates = {
+        "user_id": "cron_system",
+        "workspace_dir": workspace_dir,
+        "command": _autonomous_daily_briefing_command(),
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "enabled": True,
+        "metadata": metadata,
+    }
+    existing = _find_cron_job_by_system_job(AUTONOMOUS_DAILY_BRIEFING_JOB_KEY)
+    if existing is not None:
+        updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
+        return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
+    job = _cron_service.add_job(
+        user_id="cron_system",
+        workspace_dir=workspace_dir,
+        command=_autonomous_daily_briefing_command(),
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        enabled=True,
+        metadata=metadata,
+    )
+    return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
 
 
 def _csi_convergence_cron_enabled() -> bool:

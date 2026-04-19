@@ -1533,6 +1533,29 @@ def _task_expected_final_channel(task: dict[str, Any]) -> str:
     return "email"
 
 
+def _completion_reason_claims_email_delivery(reason_text: str) -> bool:
+    lowered = str(reason_text or "").strip().lower()
+    if not lowered:
+        return False
+    if not any(token in lowered for token in ("email", "emailed", "e-mail", "mail", "agentmail", "gmail")):
+        return False
+    return any(token in lowered for token in ("sent", "send", "deliver", "delivered", "emailed", "with both", "attach"))
+
+
+def _task_requires_verified_final_delivery(task: dict[str, Any], *, reason_text: str = "") -> bool:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    manifest = metadata.get("workflow_manifest") if isinstance(metadata.get("workflow_manifest"), dict) else {}
+    final_channel = str(manifest.get("final_channel") or "").strip().lower()
+    delivery_mode = str(manifest.get("delivery_mode") or metadata.get("delivery_mode") or "").strip().lower()
+    if final_channel == "email":
+        return True
+    if delivery_mode in {"standard_report", "enhanced_report", "interactive_email"}:
+        return True
+    if str(task.get("source_kind") or "").strip().lower() == "email":
+        return True
+    return _completion_reason_claims_email_delivery(reason_text)
+
+
 def _task_canonical_executor(task: dict[str, Any]) -> str:
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     manifest = metadata.get("workflow_manifest") if isinstance(metadata.get("workflow_manifest"), dict) else {}
@@ -2899,9 +2922,13 @@ def perform_task_action(
     elif action_norm == "complete":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         dispatch_meta = dict(metadata.get("dispatch") or {})
-        expected_channel = _task_expected_final_channel({**item, "metadata": metadata})
-        requires_verified_delivery = expected_channel == "email"
-        if requires_verified_delivery and not _task_has_verified_final_delivery(conn, {**item, "metadata": metadata}):
+        task_for_verification = {**item, "metadata": metadata}
+        expected_channel = _task_expected_final_channel(task_for_verification)
+        requires_verified_delivery = _task_requires_verified_final_delivery(
+            task_for_verification,
+            reason_text=reason_text,
+        )
+        if requires_verified_delivery and not _task_has_verified_final_delivery(conn, task_for_verification):
             dispatch_meta["last_disposition"] = "review"
             dispatch_meta["last_disposition_reason"] = reason_text or "completion_claim_missing_email_delivery"
             dispatch_meta["completion_unverified"] = True
