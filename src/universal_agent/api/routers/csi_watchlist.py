@@ -15,24 +15,88 @@ router = APIRouter(prefix="/api/v1/csi/watchlist", tags=["csi", "watchlist"])
 # Defaults exactly like csi_bridge, but mapped safely
 _DEFAULT_WATCHLIST_FILE = "/var/lib/universal-agent/csi/channels_watchlist.json"
 
-# Fallback for classification if we can't import
-# we will try to import source_manager
-try:
-    import sys
-    # Add CSI_Ingester/development to path if needed to load source_manager
-    csi_dev_path = Path("/opt/universal_agent/CSI_Ingester/development")
-    if csi_dev_path.exists() and str(csi_dev_path) not in sys.path:
-        sys.path.append(str(csi_dev_path))
-    from csi_ingester.store.source_manager import _classify_channel_name
-except ImportError:
-    logger.warning("Could not import _classify_channel_name from CSI_Ingester. Using fallback classification.")
-    def _classify_channel_name(name: str) -> str:
-        name_lower = name.lower()
-        if any(x in name_lower for x in ["ai", "gpt", "llm", "claude"]): return "ai_models"
-        if any(x in name_lower for x in ["code", "dev", "python"]): return "ai_coding"
-        if any(x in name_lower for x in ["war", "military", "conflict"]): return "conflict"
-        if any(x in name_lower for x in ["tech", "linux"]): return "technology"
-        return "other_signal"
+# ── 10-Category LLM Channel Classifier ──────────────────────────────────────
+
+_VALID_CATEGORIES = [
+    "ai_coding_and_agents",
+    "ai_models_and_research",
+    "ai_news_and_business",
+    "software_engineering",
+    "geopolitics_and_conflict",
+    "longform_interviews",
+    "cooking",
+    "personal_health",
+    "other_signal",
+    "noise",
+]
+
+_CLASSIFY_SYSTEM = """You are a taxonomy classifier for YouTube channels. Categorize the channel into EXACTLY ONE of the following categories:
+1. ai_coding_and_agents — Channels focused on coding with AI, AI agents, AI dev tools
+2. ai_models_and_research — Channels covering AI models, papers, ML research
+3. ai_news_and_business — AI industry news, business strategy, AI startups
+4. software_engineering — General software dev, web dev, DevOps, system design
+5. geopolitics_and_conflict — Military analysis, geopolitics, conflict reporting
+6. longform_interviews — Interview/podcast-style shows with long-form discussions
+7. cooking — Cooking, recipes, food content
+8. personal_health — Fitness, health, wellness, biohacking
+9. other_signal — Valuable content that doesn't fit the above categories
+10. noise — Low-value, clickbait, or irrelevant content
+
+Respond with ONLY a JSON object: {"category": "<exact_category_string>"}"""
+
+
+async def _classify_channel_llm(
+    channel_name: str,
+    description: str = "",
+    transcript_samples: list[str] | None = None,
+) -> tuple[str, str]:
+    """Classify a channel using LLM. Returns (category, method)."""
+    try:
+        from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+
+        content_parts = [f"Channel name: {channel_name}"]
+        if description:
+            content_parts.append(f"Channel description: {description[:500]}")
+        method = "metadata"
+
+        if transcript_samples:
+            content_parts.append("Recent video content samples:")
+            for sample in transcript_samples[:5]:
+                content_parts.append(f"- {sample[:300]}")
+            method = "transcript"
+
+        raw = await _call_llm(
+            system=_CLASSIFY_SYSTEM,
+            user="\n".join(content_parts),
+            max_tokens=100,
+        )
+        result = _parse_json_response(raw)
+        category = result.get("category", "other_signal")
+
+        if category not in _VALID_CATEGORIES:
+            category = "other_signal"
+
+        return category, method
+
+    except Exception as e:
+        logger.warning("LLM channel classification failed, using keyword fallback: %s", e)
+        return _classify_channel_keyword(channel_name), "keyword_fallback"
+
+
+def _classify_channel_keyword(name: str) -> str:
+    """Fast keyword fallback when LLM is unavailable."""
+    name_lower = name.lower()
+    if any(x in name_lower for x in ["agent", "cursor", "copilot", "code", "dev", "python", "coding"]):
+        return "ai_coding_and_agents"
+    if any(x in name_lower for x in ["ai", "gpt", "llm", "claude", "machine learning", "neural"]):
+        return "ai_models_and_research"
+    if any(x in name_lower for x in ["war", "military", "conflict", "geopolit"]):
+        return "geopolitics_and_conflict"
+    if any(x in name_lower for x in ["cook", "recipe", "chef", "food", "kitchen"]):
+        return "cooking"
+    if any(x in name_lower for x in ["health", "fitness", "workout", "diet"]):
+        return "personal_health"
+    return "other_signal"
 
 
 class AddChannelRequest(BaseModel):
@@ -81,7 +145,7 @@ async def get_watchlist():
         # Enrich with classification if missing
         for ch in channels:
             if not ch.get("domain"):
-                ch["domain"] = _classify_channel_name(ch.get("channel_name", ""))
+                ch["domain"] = _classify_channel_keyword(ch.get("channel_name", ""))
                 
         return {"channels": channels, "categories": categories}
     except Exception as e:
@@ -223,23 +287,56 @@ async def add_channel(request: AddChannelRequest):
         if any(ch.get("channel_id") == channel_id for ch in channels):
             raise HTTPException(status_code=409, detail="Channel already in watchlist")
             
+        # Fetch 3 recent video titles for better classification signal
+        recent_titles: list[str] = []
+        if api_key:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "https://www.googleapis.com/youtube/v3/search",
+                        params={
+                            "part": "snippet",
+                            "channelId": channel_id,
+                            "order": "date",
+                            "type": "video",
+                            "maxResults": 3,
+                            "key": api_key,
+                        },
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        for item in resp.json().get("items", []):
+                            t = item.get("snippet", {}).get("title", "")
+                            if t:
+                                recent_titles.append(t)
+            except Exception as exc:
+                logger.debug("Could not fetch recent videos for classification: %s", exc)
+
+        # Classify via LLM using channel name + recent video titles
+        category, classify_method = await _classify_channel_llm(
+            channel_title,
+            description="",
+            transcript_samples=recent_titles or None,
+        )
+        if recent_titles:
+            classify_method = "recent_titles"
+        
         new_channel = {
             "channel_id": channel_id,
             "channel_name": channel_title,
             "video_count": 1,
             "rss_feed_url": f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
-            "youtube_url": f"https://www.youtube.com/channel/{channel_id}"
+            "youtube_url": f"https://www.youtube.com/channel/{channel_id}",
+            "domain": category,
+            "_categorization_method": classify_method,
         }
         
-        # Insert at top or bottom? Default structure adds at bottom
         channels.append(new_channel)
         
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             
-        new_channel["domain"] = _classify_channel_name(channel_title)
-            
-        return {"success": True, "message": "Channel added", "channel": new_channel}
+        return {"success": True, "message": f"Channel added ({category} via {classify_method})", "channel": new_channel}
         
     except HTTPException:
         raise
@@ -353,6 +450,7 @@ async def patch_channel(channel_id: str, request: ChannelPatchRequest):
         for ch in channels:
             if ch.get("channel_id") == channel_id:
                 ch["domain"] = request.domain
+                ch["_categorization_method"] = "manual"
                 updated = True
                 break
                 
@@ -367,5 +465,77 @@ async def patch_channel(channel_id: str, request: ChannelPatchRequest):
         raise
     except Exception as e:
         logger.error(f"Error patching channel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ReclassifyRequest(BaseModel):
+    channel_id: str
+    transcript_samples: list[str] = []
+
+
+@router.post("/reclassify")
+async def reclassify_channel(request: ReclassifyRequest):
+    """Re-classify a channel using transcript samples (called when transcripts arrive)."""
+    path = get_watchlist_path()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        channel = None
+        for ch in data.get("channels", []):
+            if ch.get("channel_id") == request.channel_id:
+                channel = ch
+                break
+
+        if not channel:
+            raise HTTPException(status_code=404, detail="Channel not found")
+
+        old_domain = channel.get("domain", "other_signal")
+        old_method = channel.get("_categorization_method", "unknown")
+
+        # Skip re-classification for manually assigned categories
+        if old_method == "manual":
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Channel was manually categorized",
+                "domain": old_domain,
+            }
+
+        new_category, method = await _classify_channel_llm(
+            channel.get("channel_name", ""),
+            description="",
+            transcript_samples=request.transcript_samples or None,
+        )
+
+        changed = new_category != old_domain
+        channel["domain"] = new_category
+        channel["_categorization_method"] = method
+
+        if changed:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info(
+                "Re-classified channel %s: %s -> %s (via %s)",
+                channel.get("channel_name"),
+                old_domain,
+                new_category,
+                method,
+            )
+
+        return {
+            "success": True,
+            "changed": changed,
+            "old_domain": old_domain,
+            "new_domain": new_category,
+            "method": method,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reclassifying channel: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

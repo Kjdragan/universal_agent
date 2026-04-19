@@ -174,6 +174,38 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _try_reclassify_channel(
+    *,
+    channel_id: str,
+    transcript_samples: list[str],
+    gateway_base: str,
+    token: str,
+) -> None:
+    """Best-effort POST to gateway to re-classify a channel now that we have transcript data.
+    Non-blocking — failures are logged and silently ignored."""
+    url = f"{gateway_base.rstrip('/')}/api/v1/csi/watchlist/reclassify"
+    payload = json.dumps({
+        "channel_id": channel_id,
+        "transcript_samples": transcript_samples,
+    }).encode("utf-8")
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    try:
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            if result.get("changed"):
+                print(
+                    f"RECLASSIFY channel_id={channel_id} "
+                    f"{result.get('old_domain')} -> {result.get('new_domain')} "
+                    f"method={result.get('method')}"
+                )
+    except Exception as exc:
+        # Non-fatal — watchlist reclassification is best-effort
+        print(f"RECLASSIFY_SKIP channel_id={channel_id} error={exc}")
+
+
 def _analyze_with_claude(
     *,
     title: str,
@@ -596,6 +628,16 @@ def main() -> int:
             analysis_json=analysis_json,
             content_schema=content_schema_json,
         )
+
+        # ── Post-enrichment: trigger watchlist re-classification if transcript arrived ──
+        if transcript_status == "ok" and channel_id and summary_text:
+            _try_reclassify_channel(
+                channel_id=channel_id,
+                transcript_samples=[summary_text[:500]],
+                gateway_base=transcript_endpoints[0].rsplit("/api/v1/youtube", 1)[0]
+                if transcript_endpoints else "http://127.0.0.1:8002",
+                token=transcript_token,
+            )
 
         category_counts[category] += 1
         processed += 1
