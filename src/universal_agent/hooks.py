@@ -467,6 +467,22 @@ def _strip_prompt_vp_boilerplate(text: Any) -> str:
     return _TODO_DISPATCH_VP_FALLBACK_BLOCK.sub("", candidate).strip()
 
 
+def _prompt_is_todo_dispatch_template(text: str) -> bool:
+    """Detect the TODO_DISPATCH_PROMPT template wrapper in the prompt.
+
+    The template contains VP keywords (vp_dispatch_mission, vp.coder.primary)
+    as instructional boilerplate, NOT as user VP intent.  When detected, VP
+    inference should be unconditionally skipped.
+    """
+    if not text:
+        return False
+    # Check for distinctive markers that only appear in TODO_DISPATCH_PROMPT
+    return (
+        "Pipeline Orchestrator" in text
+        and "== EXECUTION MANIFEST ==" in text
+    )
+
+
 def _strip_email_triage_boilerplate(text: Any) -> str:
     candidate = str(text or "").strip()
     if not candidate:
@@ -2099,6 +2115,7 @@ class AgentHookSet:
         self._requires_vp_tool_path = (
             _allow_prompt_inferred_vp_routing_for_hooks()
             and current_run_kind not in _VP_BLOCKED_RUN_KINDS_FOR_HOOKS
+            and not _prompt_is_todo_dispatch_template(prompt_text)
             and _looks_like_explicit_vp_intent(vp_inference_prompt)
             and not self._is_vp_worker_lane
         )
