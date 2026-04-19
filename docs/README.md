@@ -99,6 +99,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Task Hub Dashboard Read Path Performance (2026-04-16)](03_Operations/113_Task_Hub_Dashboard_Read_Path_Performance_2026-04-16.md)**: Root cause and invariant for keeping dashboard GET endpoints from rebuilding Task Hub or proactive signal state during navigation.
 - **[CODIE Proactive Pipeline Audit Report (2026-04-16)](03_Operations/114_CODIE_Proactive_Pipeline_Audit_Report_2026-04-16.md)**: Detailed report assessing a manual CODIE proactive cleanup pipeline execution, brittle routing refactoring (PR #103), and system health observations.
 - **[Proactive Automation Current State Audit (2026-04-18)](03_Operations/115_Proactive_Automation_Current_State_Audit_2026-04-18.md)**: Code-verified audit of proactive generation, signal curation, reflection, cron registration, tutorial builds, artifact surfacing, and current impediments preventing 24/7 proactive throughput.
+- **[CSI Convergence Proactivity Repair Handoff (2026-04-19)](03_Operations/116_CSI_Convergence_Proactivity_Repair_Handoff_2026-04-19.md)**: Shareable handoff for the CSI convergence repair pass — blockers fixed, files changed, runtime contract, verification evidence, and live-validation next steps.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

@@ -114,7 +114,7 @@ from universal_agent.heartbeat_service import (
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
     _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
 )
-from universal_agent.cron_service import CronService, parse_run_at
+from universal_agent.cron_service import CronJob, CronService, parse_run_at
 from universal_agent.ops_service import OpsService
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.ops_config import (
@@ -2242,6 +2242,19 @@ class ProactiveTopicSignatureExtractRequest(BaseModel):
     use_llm_match: bool = True
     window_hours: Optional[int] = 72
     min_channels: Optional[int] = 2
+
+
+def _primary_convergence_result(results: Any) -> Optional[dict[str, Any]]:
+    """Return the preferred single-object convergence result for API compatibility."""
+    if not isinstance(results, list) or not results:
+        return None
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        if str(task.get("source_kind") or "").strip() == "convergence_detection":
+            return result
+    return next((result for result in results if isinstance(result, dict)), None)
 
 
 class DashboardEventPresetCreateRequest(BaseModel):
@@ -13659,6 +13672,10 @@ async def lifespan(app: FastAPI):
             _spawn_background_task(_run_after_deployment_window("cron_service", _cron_service.start))
         else:
             await _cron_service.start()
+        try:
+            _ensure_csi_convergence_cron_job()
+        except Exception as exc:
+            logger.warning("Failed ensuring CSI convergence cron job: %s", exc)
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
@@ -16470,6 +16487,63 @@ def _proactive_review_recipient(fallback: str = "") -> str:
     )
 
 
+def _csi_convergence_cron_enabled() -> bool:
+    return os.getenv("UA_CSI_CONVERGENCE_CRON_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_csi_convergence_cron_job() -> None:
+    if not _cron_service or not _csi_convergence_cron_enabled():
+        return
+    job_id = "csi_convergence_sync"
+    command = "!script universal_agent.scripts.csi_convergence_sync"
+    cron_expr = os.getenv("UA_CSI_CONVERGENCE_CRON_EXPR", "*/30 * * * *").strip() or "*/30 * * * *"
+    timezone_name = os.getenv("UA_CSI_CONVERGENCE_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
+    workspace_dir = str(WORKSPACES_DIR / "cron_csi_convergence_sync")
+    metadata = {
+        "source": "system",
+        "system_job": job_id,
+        "autonomous": True,
+        "proactive_producer": "csi_convergence",
+        "session_id": "cron_csi_convergence_sync",
+    }
+    existing = _cron_service.get_job(job_id)
+    if existing is not None:
+        _cron_service.update_job(
+            job_id,
+            {
+                "user_id": "system",
+                "workspace_dir": workspace_dir,
+                "command": command,
+                "description": "Sync CSI topic signatures and queue high-confidence convergence intelligence tasks.",
+                "cron_expr": cron_expr,
+                "timezone": timezone_name,
+                "timeout_seconds": int(os.getenv("UA_CSI_CONVERGENCE_CRON_TIMEOUT_SECONDS", "900") or 900),
+                "enabled": True,
+                "metadata": metadata,
+            },
+        )
+        return
+    job = CronJob(
+        job_id=job_id,
+        user_id="system",
+        workspace_dir=workspace_dir,
+        command=command,
+        description="Sync CSI topic signatures and queue high-confidence convergence intelligence tasks.",
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        timeout_seconds=int(os.getenv("UA_CSI_CONVERGENCE_CRON_TIMEOUT_SECONDS", "900") or 900),
+        enabled=True,
+        metadata=metadata,
+    )
+    job.schedule_next(time.time())
+    _cron_service.jobs[job_id] = job
+    _cron_service.store.save_jobs(_cron_service.jobs.values())
+    try:
+        _cron_service._emit_event({"type": "cron_job_created", "job": job.to_dict()})
+    except Exception:
+        pass
+
+
 def _proactive_calendar_context(enabled: bool) -> dict[str, Any]:
     if not enabled:
         return {"ok": False, "reason": "disabled", "events": []}
@@ -16827,7 +16901,7 @@ async def dashboard_proactive_convergence_signature(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
-            convergence = (
+            convergence_results = (
                 detect_and_queue_convergence(
                     conn,
                     signature=signature,
@@ -16835,11 +16909,16 @@ async def dashboard_proactive_convergence_signature(
                     min_channels=max(2, int(payload.min_channels or 2)),
                 )
                 if payload.detect
-                else None
+                else []
             )
         finally:
             conn.close()
-    return {"status": "ok", "signature": signature, "convergence": convergence}
+    return {
+        "status": "ok",
+        "signature": signature,
+        "convergence": _primary_convergence_result(convergence_results),
+        "convergences": convergence_results,
+    }
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/convergence/extract")
@@ -16870,16 +16949,16 @@ async def dashboard_proactive_convergence_extract(
     try:
         signature = upsert_topic_signature(conn, **extracted)
         if not payload.detect:
-            convergence = None
+            convergence_results = []
         elif payload.use_llm_match:
-            convergence = await detect_and_queue_convergence_llm(
+            convergence_results = await detect_and_queue_convergence_llm(
                 conn,
                 signature=signature,
                 window_hours=max(1, int(payload.window_hours or 72)),
                 min_channels=max(2, int(payload.min_channels or 2)),
             )
         else:
-            convergence = detect_and_queue_convergence(
+            convergence_results = detect_and_queue_convergence(
                 conn,
                 signature=signature,
                 window_hours=max(1, int(payload.window_hours or 72)),
@@ -16887,7 +16966,12 @@ async def dashboard_proactive_convergence_extract(
             )
     finally:
         conn.close()
-    return {"status": "ok", "signature": signature, "convergence": convergence}
+    return {
+        "status": "ok",
+        "signature": signature,
+        "convergence": _primary_convergence_result(convergence_results),
+        "convergences": convergence_results,
+    }
 
 
 @app.get("/api/v1/dashboard/csi/reports")

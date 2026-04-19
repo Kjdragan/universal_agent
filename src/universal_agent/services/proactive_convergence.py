@@ -241,27 +241,57 @@ def detect_and_queue_convergence(
     window_hours: int = 72,
     min_channels: int = 2,
 ) -> list[dict[str, Any]]:
-    ensure_schema(conn)
-    candidates = _recent_other_channel_signatures(conn, signature=signature, window_hours=window_hours)
-    
+    """Synchronously detect concrete convergence and abstract insights."""
+    coro = _detect_and_queue_convergence_async(
+        conn,
+        signature=signature,
+        window_hours=window_hours,
+        min_channels=min_channels,
+    )
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        loop = None
-        
-    created_events = []
-        
-    async def _run_tracks():
-        track_a_future = track_a_concrete_convergence(signature, candidates)
-        track_b_future = track_b_ideation_synthesis([signature] + candidates[:19])
-        return await asyncio.gather(track_a_future, track_b_future)
-        
-    if loop and loop.is_running():
+        return asyncio.run(coro)
+    if loop.is_running():
         import nest_asyncio
+
         nest_asyncio.apply()
-        matched_a, insights_b = loop.run_until_complete(_run_tracks())
-    else:
-        matched_a, insights_b = asyncio.run(_run_tracks())
+        return loop.run_until_complete(coro)
+    return loop.run_until_complete(coro)
+
+
+async def detect_and_queue_convergence_llm(
+    conn: sqlite3.Connection,
+    *,
+    signature: dict[str, Any],
+    window_hours: int = 72,
+    min_channels: int = 2,
+) -> list[dict[str, Any]]:
+    """Async API used by gateway endpoints that already run inside an event loop."""
+    return await _detect_and_queue_convergence_async(
+        conn,
+        signature=signature,
+        window_hours=window_hours,
+        min_channels=min_channels,
+    )
+
+
+async def _detect_and_queue_convergence_async(
+    conn: sqlite3.Connection,
+    *,
+    signature: dict[str, Any],
+    window_hours: int = 72,
+    min_channels: int = 2,
+) -> list[dict[str, Any]]:
+    ensure_schema(conn)
+    candidates = _recent_other_channel_signatures(conn, signature=signature, window_hours=window_hours)
+
+    created_events = []
+
+    matched_a, insights_b = await asyncio.gather(
+        track_a_concrete_convergence(signature, candidates),
+        track_b_ideation_synthesis([signature] + candidates[:19]),
+    )
 
     # Process Track A
     channels_a = {

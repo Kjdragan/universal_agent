@@ -339,6 +339,8 @@ function sourceKindPill(kind?: string) {
     csi: "bg-kcd-text-muted/10 text-kcd-text-muted",
     "convergence-brief": "bg-kcd-green/10 text-kcd-green",
     "insight-brief": "bg-kcd-amber/10 text-kcd-amber",
+    convergence_detection: "bg-kcd-green/10 text-kcd-green",
+    insight_detection: "bg-kcd-amber/10 text-kcd-amber",
   };
   const cls = colorMap[k] ?? "bg-kcd-text-muted/10 text-kcd-text-muted";
   return (

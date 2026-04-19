@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-18
+**Last updated:** 2026-04-19
 
 ## Development (development/)
 
@@ -90,6 +90,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 113 | Task Hub Dashboard Read Path Performance — root cause and invariant for keeping dashboard GET endpoints from rebuilding Task Hub or proactive signal state during navigation |
 | 114 | CODIE Proactive Pipeline Audit Report — detailed report assessing a manual CODIE proactive cleanup pipeline execution, brittle routing refactoring (PR #103), and system health observations |
 | 115 | Proactive Automation Current State Audit — code-verified current-state report for proactive generation, signal curation, reflection, cron registration, tutorial builds, artifact surfacing, and impediments preventing 24/7 proactive throughput |
+| 116 | CSI Convergence Proactivity Repair Handoff — shareable implementation context for the CSI convergence repair pass, including fixed blockers, runtime contract, verification evidence, and live-validation next steps |
 
 ## CSI Subsystem (04_CSI/)
 

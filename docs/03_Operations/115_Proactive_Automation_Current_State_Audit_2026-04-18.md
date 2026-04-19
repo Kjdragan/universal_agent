@@ -277,6 +277,100 @@ Run one controlled smoke per lane:
 | CODIE cleanup | Scheduled cleanup -> draft PR artifact -> review email |
 | Review feedback | Review email -> reply `1 useful` -> feedback stored -> no normal email task |
 
+## Addendum: CSI Convergence Follow-Up Reviewed On 2026-04-19
+
+After this audit, another implementation pass added or documented a CSI convergence lane in `docs/04_CSI/CSI_Convergence_Intelligence_Pipeline.md`. I reviewed that document with a subagent and then verified the source paths locally.
+
+### What Changed
+
+The CSI convergence service now contains a real two-track producer foundation:
+
+- `proactive_topic_signatures` and `proactive_convergence_events` schemas are created by `ensure_schema(...)` in `src/universal_agent/services/proactive_convergence.py`.
+- `sync_topic_signatures_from_csi(...)` reads CSI `youtube_channel_rss` analysis rows, upserts topic signatures, and calls `detect_and_queue_convergence(...)`.
+- Track A runs a fast overlap filter plus an LLM semantic match and requires `signal_strength >= 8`.
+- Track B runs an LLM ideation pass over recent signatures and can create abstract insight tasks.
+- `create_convergence_brief_task(...)` and `create_insight_brief_task(...)` create Task Hub rows plus proactive artifacts.
+
+Source evidence:
+
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L59
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L160
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L237
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L340
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L419
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L477
+- file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L540
+
+### What Is Better Than Before
+
+This is a useful move in the right direction. It creates a proper proactive producer that can turn external signal convergence into Task Hub execution work. It also fits the desired architecture better than reflection-only ideation because the producer has concrete inputs, deterministic source records, idempotent event IDs, and clear evidence paths.
+
+My updated view: CSI convergence should become one of the primary proactive producers. Reflection should not be the main engine for useful work generation. Reflection is useful for self-improvement and backlog thinking, but CSI has real external signal flow and should produce higher-quality proactive candidates.
+
+### What Is Still Broken Or Unproven
+
+The CSI convergence pass does not erase the prior audit findings. It narrows one producer gap, but the runtime chain is still not proven end to end.
+
+| Issue | Current status | Evidence |
+| --- | --- | --- |
+| No always-on producer trigger found | Addressed with `src/universal_agent/scripts/csi_convergence_sync.py` and gateway startup registration of fixed Chron job `csi_convergence_sync` | file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/csi_convergence_sync.py#L1 |
+| Gateway extract endpoint imports missing symbol | Addressed by restoring async `detect_and_queue_convergence_llm(...)` | file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_convergence.py#L263 |
+| Endpoint return-shape drift | Addressed by returning both `convergence` and `convergences` | file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L16916 |
+| UI pill key mismatch | Addressed by mapping `convergence_detection` and `insight_detection` | file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/todolist/page.tsx#L342 |
+| Documentation overstates active status | Addressed in `docs/04_CSI/CSI_Convergence_Intelligence_Pipeline.md` | file:///home/kjdragan/lrepos/universal_agent/docs/04_CSI/CSI_Convergence_Intelligence_Pipeline.md#L3 |
+
+Fresh verification:
+
+```bash
+uv run pytest tests/unit/test_proactive_convergence.py -q
+# 6 passed
+
+uv run pytest tests/gateway/test_proactive_artifacts_endpoint.py -q
+# 6 passed
+
+uv run python -m compileall src/universal_agent/services/proactive_convergence.py src/universal_agent/gateway_server.py src/universal_agent/scripts/csi_convergence_sync.py
+# compiled successfully
+```
+
+### Recommended CSI-First Proactivity Design
+
+The right architecture is not to create another proactive system. Use the current pieces, but make the contracts explicit:
+
+```mermaid
+flowchart LR
+    CSI["CSI Ingester / csi.db"] --> Sync["CSI convergence sync runner"]
+    Sync --> Sig["proactive_topic_signatures"]
+    Sig --> TrackA["Track A: LLM-gated convergence"]
+    Sig --> TrackB["Track B: LLM abstract insight"]
+    TrackA --> Cand["Proactive artifact candidate"]
+    TrackB --> Cand
+    Cand --> Hub["Task Hub task"]
+    Hub --> Todo["ToDo dispatcher"]
+    Todo --> Atlas["ATLAS brief execution"]
+    Atlas --> Review["Review email / digest"]
+    Review --> Feedback["Preference feedback"]
+    Feedback --> TrackA
+    Feedback --> TrackB
+```
+
+Design rules:
+
+1. **One producer runner per source family.** CSI convergence should have a dedicated scheduled or post-enrichment runner. It should not depend on dashboard GET requests.
+2. **Candidate first, task second.** Convergence findings should first become proactive artifact candidates with full evidence. Only high-confidence candidates should become open Task Hub tasks automatically.
+3. **Task Hub remains execution, not inventory.** The artifact registry should store every produced intelligence candidate; Task Hub should contain the subset that should be acted on.
+4. **Use canonical source kinds.** Pick `convergence_detection` and `insight_detection` as backend source kinds, then make UI, tests, docs, and reports match them.
+5. **Budget and quota by producer.** CSI convergence should have its own daily cap, separate from reflection, so a noisy CSI day does not exhaust all proactive generation and reflection does not consume CSI capacity.
+6. **Make feedback tune surfacing, not generation.** Explicit rejection should lower ranking and email priority; it should not disable CSI generation unless repeated negative feedback is specific and strong.
+7. **Every producer emits metrics.** Each run should record seen rows, signatures upserted, candidates generated, tasks queued, skipped-by-threshold, LLM failures, and dispatch nudges.
+
+### Next Fix Order
+
+1. Live-smoke the `csi_convergence_sync` Chron job against the real CSI database.
+2. Add run metrics to the dashboard or Ops API: seen rows, signatures upserted, tasks queued, skipped-by-threshold, and LLM failures.
+3. Add a browser/UI smoke for source-kind pill rendering once the local dashboard is running.
+4. Add producer-specific budget controls if real CSI volume is noisy.
+5. Only after live volume is observed, tune the `signal_strength >= 8` threshold.
+
 ## Bottom Line
 
 The prior work did not disappear. Most of the pieces exist. The gap is that they are not connected as a continuously running production loop:

@@ -181,37 +181,43 @@ def test_proactive_convergence_signature_endpoint_queues_brief(monkeypatch, tmp_
     monkeypatch.setattr(gateway_server, "OPS_JWT_SECRET", "")
     _disable_lifespan(monkeypatch)
 
-    with TestClient(gateway_server.app) as client:
-        first = client.post(
-            "/api/v1/dashboard/proactive-artifacts/convergence/signature",
-            json={
-                "video_id": "video-a",
-                "channel_id": "channel-a",
-                "channel_name": "Channel A",
-                "ingested_at": "2026-04-15T10:00:00+00:00",
-                "primary_topics": ["MCP servers"],
-                "detect": False,
-            },
-        )
-        assert first.status_code == 200
+    match_response = '{"matches":[{"video_id":"video-a","reason":"same MCP agent tooling topic"}],"signal_strength":9}'
+    insight_response = '{"insights":[]}'
 
-        second = client.post(
-            "/api/v1/dashboard/proactive-artifacts/convergence/signature",
-            json={
-                "video_id": "video-b",
-                "channel_id": "channel-b",
-                "channel_name": "Channel B",
-                "video_title": "Why MCP matters",
-                "video_url": "https://youtube.test/b",
-                "ingested_at": "2026-04-15T11:00:00+00:00",
-                "primary_topics": ["MCP servers"],
-                "key_claims": ["MCP is central for agent tool integration."],
-            },
-        )
-        assert second.status_code == 200
-        body = second.json()
-        assert body["convergence"]["event"]["primary_topic"] == "MCP servers"
-        assert body["convergence"]["artifact"]["artifact_type"] == "convergence_brief_task"
+    with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+        mock_llm.side_effect = [match_response, insight_response]
+        with TestClient(gateway_server.app) as client:
+            first = client.post(
+                "/api/v1/dashboard/proactive-artifacts/convergence/signature",
+                json={
+                    "video_id": "video-a",
+                    "channel_id": "channel-a",
+                    "channel_name": "Channel A",
+                    "ingested_at": "2026-04-15T10:00:00+00:00",
+                    "primary_topics": ["MCP servers"],
+                    "detect": False,
+                },
+            )
+            assert first.status_code == 200
+
+            second = client.post(
+                "/api/v1/dashboard/proactive-artifacts/convergence/signature",
+                json={
+                    "video_id": "video-b",
+                    "channel_id": "channel-b",
+                    "channel_name": "Channel B",
+                    "video_title": "Why MCP matters",
+                    "video_url": "https://youtube.test/b",
+                    "ingested_at": "2026-04-15T11:00:00+00:00",
+                    "primary_topics": ["MCP servers"],
+                    "key_claims": ["MCP is central for agent tool integration."],
+                },
+            )
+            assert second.status_code == 200
+            body = second.json()
+            assert body["convergence"]["event"]["primary_topic"] == "MCP servers"
+            assert body["convergence"]["artifact"]["artifact_type"] == "convergence_brief_task"
+            assert body["convergences"][0]["task"]["source_kind"] == "convergence_detection"
 
 
 def test_proactive_convergence_extract_endpoint_uses_llm(monkeypatch, tmp_path):
@@ -224,10 +230,11 @@ def test_proactive_convergence_extract_endpoint_uses_llm(monkeypatch, tmp_path):
         '{"primary_topics":["MCP servers"],"secondary_topics":["agent tools"],'
         '"key_claims":["MCP connects agents to tools."],"content_type":"analysis"}'
     )
-    match_response = '{"matches":[{"video_id":"video-a","reason":"same MCP agent tooling topic"}]}'
+    match_response = '{"matches":[{"video_id":"video-a","reason":"same MCP agent tooling topic"}],"signal_strength":9}'
+    insight_response = '{"insights":[]}'
 
     with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
-        mock_llm.side_effect = [signature_response, signature_response, match_response]
+        mock_llm.side_effect = [signature_response, signature_response, match_response, insight_response]
         with TestClient(gateway_server.app) as client:
             first = client.post(
                 "/api/v1/dashboard/proactive-artifacts/convergence/extract",
