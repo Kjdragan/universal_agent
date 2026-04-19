@@ -97,7 +97,7 @@ These are the authoritative references for each subsystem. When any other docume
 
 | Doc | Subject |
 |-----|----|
-| CSI_Master_Architecture.md | **Canonical living doc** — domain taxonomy, SQLite source management, quality scoring, adapter architecture, batch processing, delivery, subsystem boundaries. Supersedes scattered CSI docs for architecture reference |
+| CSI_Master_Architecture.md | **Canonical living doc** — domain taxonomy, SQLite source management, quality scoring, adapter architecture, batch processing, delivery, passive UA ingest boundary for RSS/channel analytics, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference |
 | CSI_Convergence_Intelligence_Pipeline.md | **Canonical living doc** — dual-track detection architecture (concrete vs abstract tracks), generating convergence-brief and insight-brief tasks, ingestion hooks, and domain taxonomy |
 
 ## Deployment Canonical Docs (deployment/)

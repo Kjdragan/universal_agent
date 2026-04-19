@@ -119,7 +119,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 4C. [CSI Subsystem](04_CSI)
 
-- **[CSI Master Architecture & Design](04_CSI/CSI_Master_Architecture.md)**: Canonical living document for the Creator Signal Intelligence subsystem — domain taxonomy, source management (SQLite), quality scoring, adapter architecture, batch processing, delivery contracts, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference.
+- **[CSI Master Architecture & Design](04_CSI/CSI_Master_Architecture.md)**: Canonical living document for the Creator Signal Intelligence subsystem — domain taxonomy, source management (SQLite), quality scoring, adapter architecture, batch processing, delivery contracts, passive UA ingest boundary for RSS/channel analytics, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference.
 - **[CSI Convergence Intelligence Pipeline](04_CSI/CSI_Convergence_Intelligence_Pipeline.md)**: Canonical living document for the dual-track detection architecture, generating concrete convergence-brief and abstract insight-brief tasks from ingested video schemas.
 
 ### 5. [API Reference](04_API_Reference)

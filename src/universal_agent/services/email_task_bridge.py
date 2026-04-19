@@ -36,6 +36,10 @@ _EMAIL_TASK_TRIAGE_PENDING_LABELS = ["email-task", "triage-pending"]
 _EMAIL_TASK_EXTERNAL_REVIEW_LABELS = ["email-task", "external-untriaged"]
 _EMAIL_TASK_QUARANTINED_LABEL = "quarantined"
 _EMAIL_TASK_REVIEW_REQUIRED_LABEL = "review-required"
+_AGENT_LABEL_MAP = {
+    "vp.coder.primary": "agent-cody",
+    "vp.general.primary": "agent-atlas",
+}
 
 # Mapping from target_agent identifiers to agent labels.
 # Default fallback is "agent-atlas" for any unmapped agent key.
@@ -426,7 +430,7 @@ class EmailTaskBridge:
 
         # Add VP agent-specific label when the email targets a specific VP
         if target_agent and target_agent not in ("simone", "simone_first"):
-            agent_label = _AGENT_LABEL_MAP.get(target_agent, "agent-atlas")
+            agent_label = _AGENT_LABEL_MAP.get(str(target_agent).strip().lower(), "agent-atlas")
             if agent_label not in email_labels:
                 email_labels.append(agent_label)
 
@@ -1054,5 +1058,4 @@ class EmailTaskBridge:
         except Exception as exc:
             logger.warning("📧→📋 Task Hub upsert failed for task_id=%s: %s", task_id, exc)
             return {}
-
 

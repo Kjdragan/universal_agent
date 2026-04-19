@@ -35,6 +35,10 @@ from universal_agent.workflow_admission import (
     WorkflowTrigger,
 )
 from universal_agent.youtube_ingest import normalize_video_target
+from universal_agent.youtube_mode_utils import (
+    youtube_explicitly_non_code,
+    youtube_probably_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,46 +66,6 @@ EMAIL_HANDLER_CANONICAL = "email-handler"
 EMAIL_HANDLER_ROUTE_ALIASES = {EMAIL_HANDLER_CANONICAL}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 YOUTUBE_TUTORIAL_BOOTSTRAP_SCRIPT_NAMES = {"create_new_repo.sh", "deletethisrepo.sh"}
-YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS = {
-    "code",
-    "coding",
-    "programming",
-    "python",
-    "javascript",
-    "typescript",
-    "react",
-    "nextjs",
-    "next.js",
-    "mcp",
-    "api",
-    "sdk",
-    "cli",
-    "sql",
-    "database",
-    "docker",
-    "kubernetes",
-    "repo",
-    "github",
-    "automation",
-    "agent",
-}
-YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS = {
-    "recipe",
-    "cooking",
-    "cook",
-    "food",
-    "kitchen",
-    "grill",
-    "charcoal",
-    "souvlaki",
-    "baking",
-    "travel",
-    "vlog",
-    "music",
-    "song",
-    "workout",
-    "fitness",
-}
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_LOCAL = "/home/kjdragan/YoutubeCodeExamples"
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT_VPS = str((resolve_artifacts_dir() / "tutorial_repos").resolve())
 YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {
@@ -299,14 +263,7 @@ def _manual_youtube_bool(value: Any, *, default: bool) -> bool:
 
 
 def _manual_youtube_probably_code(*parts: Any) -> bool:
-    tokens = " ".join(str(part or "") for part in parts).strip().lower()
-    if not tokens:
-        return False
-    has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
-    has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
-    if has_non_code and not has_code:
-        return False
-    return has_code
+    return youtube_probably_code(*parts)
 
 
 def build_manual_youtube_action(
@@ -2684,19 +2641,13 @@ class HooksService:
 
     @staticmethod
     def _tutorial_manifest_explicitly_non_code(manifest_payload: dict[str, Any]) -> bool:
-        values = [
+        return youtube_explicitly_non_code(
             manifest_payload.get("title"),
             manifest_payload.get("description"),
             manifest_payload.get("summary"),
             manifest_payload.get("channel"),
             manifest_payload.get("channel_name"),
-        ]
-        tokens = " ".join(str(value or "") for value in values).strip().lower()
-        if not tokens:
-            return False
-        has_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_CODE_HINT_KEYWORDS)
-        has_non_code = any(keyword in tokens for keyword in YOUTUBE_TUTORIAL_NON_CODE_HINT_KEYWORDS)
-        return has_non_code and not has_code
+        )
 
     def _tutorial_key_files_for_notification(
         self,

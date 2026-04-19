@@ -13,6 +13,12 @@ Creator Signal Intelligence (CSI) is the external data collection and analysis s
 - **Produces** domain-focused intelligence briefs and reports
 - **Delivers** findings to UA via signed HTTP, Telegram, and the dashboard CSI tab
 
+Current UA ingest boundary:
+
+- YouTube playlist events may dispatch into the UA tutorial pipeline.
+- CSI RSS/channel analytics are passive by default: UA stores digest/convergence evidence for dashboard and proactive artifact surfaces rather than dispatching every analytics event into an agent lane.
+- Selected high-confidence convergence/proactive artifacts may still become Task Hub work through the newer proactive producer path.
+
 ## 2. Domain Taxonomy
 
 The 9-domain taxonomy classifies all signals:

@@ -6,7 +6,6 @@ import time
 from universal_agent.signals_ingest import (
     extract_valid_events,
     process_signals_ingest_payload,
-    to_csi_analytics_action,
     to_manual_youtube_payload,
 )
 
@@ -169,7 +168,7 @@ def test_to_manual_youtube_payload_skips_rss_event():
     assert mapped is None
 
 
-def test_to_csi_analytics_action_maps_trend_report():
+def test_csi_analytics_payload_is_validation_only():
     payload = _valid_payload()
     payload["events"][0]["source"] = "csi_analytics"
     payload["events"][0]["event_type"] = "rss_trend_report"
@@ -179,25 +178,6 @@ def test_to_csi_analytics_action_maps_trend_report():
         "totals": {"items": 4, "by_category": {"ai": 3, "other_interest": 1}},
     }
     event = extract_valid_events(payload)[0]
-    action = to_csi_analytics_action(event)
-    assert action is not None
-    assert action["to"] == "csi-trend-analyst"
-    assert action["session_key"] == "csi_trend_analyst"
-    assert "rss_trend_report" in action["message"]
 
-
-def test_to_csi_analytics_action_routes_token_report_to_data_analyst():
-    payload = _valid_payload()
-    payload["events"][0]["source"] = "csi_analytics"
-    payload["events"][0]["event_type"] = "hourly_token_usage_report"
-    payload["events"][0]["subject"] = {"totals": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
-    event = extract_valid_events(payload)[0]
-    action = to_csi_analytics_action(event)
-    assert action is not None
-    assert action["to"] == "data-analyst"
-
-
-def test_to_csi_analytics_action_skips_playlist_source():
-    event = extract_valid_events(_valid_payload())[0]
-    action = to_csi_analytics_action(event)
-    assert action is None
+    assert event.source == "csi_analytics"
+    assert event.event_type == "rss_trend_report"
