@@ -43,7 +43,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 2. [Subsystems](02_Subsystems)
 
-- **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory & Auto-Flush.
+- **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory, Auto-Flush, and LLM Wiki internal-vault sync integration (four trigger points across `memory_store`, `orchestrator`, and `session_checkpoint`).
 - **[Lossless Memory](02_Subsystems/Lossless_Memory.md)**: Opt-in DAG-based context compression and SQLite history store.
 - **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Heartbeat supervision only — health checks, mediation, and role-isolated heartbeat runtimes separate from Task Hub execution.
 - **[Proactive Pipeline](02_Subsystems/Proactive_Pipeline.md)**: End-to-end autonomous task execution — trusted email triage, Task Hub scoring, dedicated ToDo execution, delivery-mode heuristics, delegation lifecycle, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily proactive budget, priority lanes, autonomous morning briefing, 3x daily hybrid intelligence reports (7am/12pm/4pm), system utilization tracking, LLM-powered analysis, outcome tracking with implicit preference feedback, auto-investigation of failures, and memory integration.
