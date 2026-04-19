@@ -11821,7 +11821,7 @@ def _calendar_project_cron_events(
                 "owner_id": str(job.user_id),
                 "session_id": str(workspace_session_id or metadata.get("session_id") or ""),
                 "channel": str(metadata.get("channel") or "cron"),
-                "title": str(metadata.get("title") or f"Chron: {str(job.command)[:40]}"),
+                "title": str(job.description or metadata.get("title") or f"Chron: {str(job.command)[:40]}"),
                 "description": str(job.command),
                 "category": str(metadata.get("priority") or "normal"),
                 "color_key": "cron",

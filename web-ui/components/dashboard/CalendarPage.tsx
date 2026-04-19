@@ -152,7 +152,7 @@ const CRON_ACTIONS: ActionDef[] = [
   { action: "pause", icon: "⏸", label: "Pause", color: "text-amber-300 hover:bg-amber-500/20", hideWhen: ["disabled"] },
   { action: "resume", icon: "▶", label: "Resume", color: "text-primary hover:bg-primary/20", showWhen: ["disabled"] },
   { action: "disable", icon: "⏻", label: "Disable", color: "text-muted-foreground hover:bg-muted-foreground/20", hideWhen: ["disabled"] },
-  { action: "update_category", icon: "✏️", label: "Edit Category", color: "text-primary hover:bg-primary/20" },
+  { action: "update_category", icon: "✏️", label: "Edit Description", color: "text-primary hover:bg-primary/20" },
   { action: "open_logs", icon: "📋", label: "Logs", color: "text-primary hover:bg-primary/20" },
   { action: "open_session", icon: "💬", label: "Session", color: "text-primary hover:bg-primary/20" },
 ];
@@ -617,7 +617,7 @@ export default function CalendarPage() {
         if (!requested || !requested.trim()) return;
         payload.run_at = requested.trim();
       } else if (action === "update_category") {
-        const requested = prompt("Enter new category/description for this job:");
+        const requested = prompt("Enter new description for this job:");
         if (requested === null) return;
         payload.note = requested.trim();
       }
@@ -722,7 +722,7 @@ export default function CalendarPage() {
         continue;
       }
       if (event.source === "cron") {
-        const cat = event.description || event.title || "Unknown Cron";
+        const cat = event.title || event.description || "Unknown Cron";
         if (!checkedCategories.has(cat)) continue;
       }
       const key = formatDateKey(event.scheduled_at_local);
@@ -740,7 +740,7 @@ export default function CalendarPage() {
     cats.add("Heartbeats");
     for (const e of events) {
       if (e.source === "cron") {
-        cats.add(e.description || e.title || "Unknown Cron");
+        cats.add(e.title || e.description || "Unknown Cron");
       }
     }
     return Array.from(cats).sort((a, b) => {
