@@ -201,7 +201,7 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 
 Read endpoints must not rebuild the Task Hub dispatch queue. They read the latest stored queue snapshot so sidebar navigation and polling do not perform expensive scoring/write work while holding the activity-store lock. Use `/api/v1/dashboard/todolist/dispatch-queue/rebuild` or dispatcher/write paths when a queue rebuild is intentionally required.
 
-Queue and history responses surface `canonical_execution_session_id`, `canonical_execution_run_id`, and `canonical_execution_workspace` as distinct fields. The dashboard treats `session_id` as the attach target for the normal agent workspace view and treats `run_id` as the durable evidence/file-browsing key.
+Queue, completed, and history responses surface `canonical_execution_session_id`, `canonical_execution_run_id`, and `canonical_execution_workspace` as distinct fields. The dashboard treats `session_id` as the attach target for the normal agent workspace view and treats `run_id` as the durable evidence/file-browsing key. Run-only workspace views must load `/api/v1/runs/{run_id}` and `/api/v1/runs/{run_id}/files` through the dashboard gateway proxy when the Web UI is deployed separately from the gateway; direct same-origin calls can fail auth and appear as empty workspaces.
 
 ### 5.2 Write Endpoints
 

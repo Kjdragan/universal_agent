@@ -579,6 +579,7 @@ function FileViewer() {
 }
 
 const API_BASE = "";
+const GATEWAY_API_BASE = "/api/dashboard/gateway";
 
 function encodeWorkspacePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
@@ -595,7 +596,7 @@ function buildDurableFileListUrl(
   path: string,
 ): string {
   if (session?.run_id) {
-    const base = `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files`;
+    const base = `${GATEWAY_API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files`;
     return path ? `${base}?path=${encodeURIComponent(path)}` : base;
   }
   const sessionId = String(session?.session_id || "").trim();
@@ -608,7 +609,7 @@ function buildDurableFileUrl(
   path: string,
 ): string {
   if (session?.run_id) {
-    return `${API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files/${encodeWorkspacePath(path)}`;
+    return `${GATEWAY_API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files/${encodeWorkspacePath(path)}`;
   }
   const sessionId = String(session?.session_id || "").trim();
   if (!sessionId) return "";
@@ -1645,7 +1646,7 @@ function ChatInterface() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/runs/${encodeURIComponent(currentSession.run_id || "")}`, {
+        const res = await fetch(`${GATEWAY_API_BASE}/api/v1/runs/${encodeURIComponent(currentSession.run_id || "")}`, {
           cache: "no-store",
         });
         if (!res.ok) return;

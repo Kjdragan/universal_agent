@@ -91,6 +91,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 114 | CODIE Proactive Pipeline Audit Report — detailed report assessing a manual CODIE proactive cleanup pipeline execution, brittle routing refactoring (PR #103), and system health observations |
 | 115 | Proactive Automation Current State Audit — code-verified current-state report for proactive generation, signal curation, reflection, cron registration, tutorial builds, artifact surfacing, and impediments preventing 24/7 proactive throughput |
 | 116 | CSI Convergence Proactivity Repair Handoff — shareable implementation context for the CSI convergence repair pass, including fixed blockers, runtime contract, verification evidence, and live-validation next steps |
+| 117 | ClaudeDevs X Intelligence Lane Deferred Design — deferred design note for a dedicated Claude Code intelligence lane monitoring `@ClaudeDevs`, including source-access findings, tiering, KB/wiki expectations, mirror fallback, and resume checklist |
 
 ## CSI Subsystem (04_CSI/)
 

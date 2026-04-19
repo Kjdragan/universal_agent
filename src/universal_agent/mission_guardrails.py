@@ -25,6 +25,8 @@ _FINAL_PATTERNS = (
 _EMAIL_ACTION_PATTERNS = (
     # "email me", "gmail me", "e-mail me"
     re.compile(r"\b(gmail|e-?mail)\s+me\b", re.IGNORECASE),
+    # "email it to me", "email them to me", "email the report to me"
+    re.compile(r"\b(gmail|e-?mail)\s+(it|them|this|that|the\s+\w+)\s+to\s+me\b", re.IGNORECASE),
     # "send (me)? (a|the|this)? email/gmail"
     re.compile(r"\b(send|deliver|forward)\b.{0,20}\b(gmail|e-?mail)\b", re.IGNORECASE),
     # "via email", "by email", "over email"

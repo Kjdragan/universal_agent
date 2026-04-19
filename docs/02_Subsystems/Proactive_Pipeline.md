@@ -284,6 +284,7 @@ Important invariants:
 - Final report email comes from the canonical Task Hub lifecycle only.
 - Automation-owned prompts must not trigger inferred VP routing just because the prompt text mentions a VP slug; only real user intent can do that.
 - `standard_report` and `enhanced_report` send one final email with executive summary in the body and the full artifact attached when available.
+- Completion claims for email/report work are verified against the AgentMail/outbound-delivery ledger. If an agent claims `complete` but no final email/draft marker exists, Task Hub routes the item to `review` with `completion_unverified=true` and records `completion_claim_missing_email_delivery`.
 
 ### 3.9 Tracked Chat Canonical Flow
 
@@ -759,6 +760,8 @@ async def task_hub_task_action_wrapper(args):
 | `approve` | Sign off on VP-completed task |
 
 **Enforcement rule**: a `todo_execution` turn is only considered valid if it ends with one of these lifecycle mutations. If Simone successfully dispatches a VP mission but forgets `task_hub_task_action(action='delegate', ...)`, the gateway auto-links the returned `mission_id` into Task Hub delegation. Pure prose like “mission queued” with no durable mutation is invalid and the task is reopened or routed to review instead of being left `in_progress` / `seized`. There is one narrow server-side repair path for final-delivery work: if the run satisfied the email-delivery contract, recorded a durable outbound-delivery side effect, and never wrote any Task Hub lifecycle action at all, the gateway now synthesizes `complete` on the claimed task instead of reopening it. If outbound final-delivery side effects already occurred but the run still cannot be safely auto-completed, retry is suppressed and the task is routed to review instead of being reopened.
+
+**Anti-hallucination exit hatch:** Agents are explicitly allowed and expected to use `review`, `block`, or `park` when they cannot finish. These actions must include the concrete failure reason, missing dependency, or next step in the note so the card itself explains why it is not complete. For email/report workflows, explicit `complete` is accepted only after the AgentMail/outbound-delivery ledger proves that final delivery happened; otherwise Task Hub routes the item to `review` with `completion_unverified=true`.
 
 **Execution-lane contract**: `todo_execution` work is already claimed before Simone sees it. The outer durable object is one **Task Hub work item**. Internal decomposition inside the run remains transient: Simone may still use sanctioned Claude delegation such as `Task(research-specialist, ...)` or `Agent(report-writer, ...)` when the work item's execution manifest requires the golden research/report path. `TaskStop` remains blocked because it collides with Task Hub lifecycle ownership.
 

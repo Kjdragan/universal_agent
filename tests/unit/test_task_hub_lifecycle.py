@@ -74,7 +74,14 @@ def test_finalize_assignments_reopens_in_progress_items_in_legacy_mode() -> None
                 "status": task_hub.TASK_STATUS_OPEN,
                 "must_complete": True,
                 "agent_ready": True,
+                "metadata": {"workflow_manifest": {"final_channel": "chat"}},
             },
+        )
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="task:completed-history",
+            channel="chat",
+            message_id="chat_delivery",
         )
 
         claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id="heartbeat:s1")
@@ -865,6 +872,7 @@ def test_completed_list_and_task_history_include_session_links() -> None:
                 "status": task_hub.TASK_STATUS_OPEN,
                 "must_complete": True,
                 "agent_ready": True,
+                "metadata": {"workflow_manifest": {"final_channel": "chat"}},
             },
         )
         claimed = task_hub.claim_next_dispatch_tasks(
@@ -877,6 +885,12 @@ def test_completed_list_and_task_history_include_session_links() -> None:
         )
         assert len(claimed) == 1
         assignment_id = str(claimed[0]["assignment_id"])
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="task:completed-history",
+            channel="chat",
+            message_id="chat_delivery",
+        )
         task_hub.perform_task_action(
             conn,
             task_id="task:completed-history",
@@ -909,5 +923,118 @@ def test_completed_list_and_task_history_include_session_links() -> None:
         assert assignments[0]["workflow_run_id"] == "run-heartbeat-1"
         assert assignments[0]["workflow_attempt_id"] == "attempt-heartbeat-1"
         assert assignments[0]["provider_session_id"] == "sess-history"
+    finally:
+        conn.close()
+
+
+def test_complete_email_delivery_task_without_outbound_marker_routes_to_review() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:email-without-delivery",
+                "source_kind": "convergence_detection",
+                "source_ref": "conv",
+                "title": "Email report task",
+                "description": "Generate and email a report",
+                "project_key": "proactive",
+                "priority": 3,
+                "labels": ["agent-ready"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": True,
+                "metadata": {
+                    "workflow_manifest": {
+                        "workflow_kind": "research_report_email",
+                        "delivery_mode": "standard_report",
+                        "final_channel": "email",
+                        "canonical_executor": "simone_first",
+                    }
+                },
+            },
+        )
+        claimed = task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id="todo:daemon_simone_todo",
+            workflow_run_id="run-missing-email",
+            provider_session_id="daemon_simone_todo",
+        )
+        assert len(claimed) == 1
+
+        updated = task_hub.perform_task_action(
+            conn,
+            task_id="task:email-without-delivery",
+            action="complete",
+            reason="I emailed Kevin the report",
+            agent_id="todo:daemon_simone_todo",
+        )
+
+        assert updated["status"] == task_hub.TASK_STATUS_REVIEW
+        dispatch = ((updated.get("metadata") or {}).get("dispatch") or {})
+        assert dispatch["completion_unverified"] is True
+        assert dispatch["completion_blocked_reason"] == "missing_verified_email_delivery"
+        history = task_hub.get_task_history(conn, task_id="task:email-without-delivery", limit=20)
+        assert history["assignments"][0]["state"] == "completed"
+        assert history["assignments"][0]["result_summary"] == "completion_claim_missing_email_delivery"
+        assert any(
+            row["decision"] == "review" and row["reason"] == "completion_claim_missing_email_delivery"
+            for row in history["evaluations"]
+        )
+    finally:
+        conn.close()
+
+
+def test_complete_email_delivery_task_with_outbound_marker_completes() -> None:
+    conn = _conn()
+    try:
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "task:email-with-delivery",
+                "source_kind": "convergence_detection",
+                "source_ref": "conv",
+                "title": "Email report task",
+                "description": "Generate and email a report",
+                "project_key": "proactive",
+                "priority": 3,
+                "labels": ["agent-ready"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": True,
+                "metadata": {
+                    "workflow_manifest": {
+                        "workflow_kind": "research_report_email",
+                        "delivery_mode": "standard_report",
+                        "final_channel": "email",
+                        "canonical_executor": "simone_first",
+                    }
+                },
+            },
+        )
+        task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id="todo:daemon_simone_todo",
+            workflow_run_id="run-with-email",
+            provider_session_id="daemon_simone_todo",
+        )
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="task:email-with-delivery",
+            channel="agentmail",
+            message_id="msg_123",
+        )
+
+        updated = task_hub.perform_task_action(
+            conn,
+            task_id="task:email-with-delivery",
+            action="complete",
+            reason="I emailed Kevin the report",
+            agent_id="todo:daemon_simone_todo",
+        )
+
+        assert updated["status"] == task_hub.TASK_STATUS_COMPLETED
+        dispatch = ((updated.get("metadata") or {}).get("dispatch") or {})
+        assert dispatch["completion_unverified"] is False
     finally:
         conn.close()

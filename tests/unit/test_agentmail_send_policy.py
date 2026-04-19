@@ -117,6 +117,12 @@ def test_reconcile_terminal_email_task_mappings_backfills_completed_rows(tmp_pat
     seeded = _seed_email_task(db_path, session_key="hook-reconcile")
 
     with _connect(db_path) as conn:
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id=seeded["task_id"],
+            channel="agentmail",
+            message_id="msg-unit-test",
+        )
         task_hub.perform_task_action(
             conn,
             task_id=seeded["task_id"],

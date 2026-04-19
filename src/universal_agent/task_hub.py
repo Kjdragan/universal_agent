@@ -2899,6 +2899,40 @@ def perform_task_action(
     elif action_norm == "complete":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         dispatch_meta = dict(metadata.get("dispatch") or {})
+        expected_channel = _task_expected_final_channel({**item, "metadata": metadata})
+        requires_verified_delivery = expected_channel == "email"
+        if requires_verified_delivery and not _task_has_verified_final_delivery(conn, {**item, "metadata": metadata}):
+            dispatch_meta["last_disposition"] = "review"
+            dispatch_meta["last_disposition_reason"] = reason_text or "completion_claim_missing_email_delivery"
+            dispatch_meta["completion_unverified"] = True
+            dispatch_meta["completion_blocked_reason"] = "missing_verified_email_delivery"
+            metadata["dispatch"] = dispatch_meta
+            _complete_active_assignments_for_task(
+                conn,
+                task_id=task_id,
+                result_summary="completion_claim_missing_email_delivery",
+                ended_at=now_iso,
+            )
+            conn.execute(
+                "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+                (TASK_STATUS_REVIEW, "needs_review", _json_dumps(metadata), now_iso, task_id),
+            )
+            _record_evaluation(
+                conn,
+                task_id=task_id,
+                agent_id=agent_id,
+                decision="review",
+                reason="completion_claim_missing_email_delivery",
+                score=_safe_float(item.get("score"), 0.0),
+                score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+                judge_payload={
+                    "source": "completion_delivery_verification",
+                    "expected_channel": expected_channel,
+                    "agent_claim": reason_text,
+                },
+            )
+            conn.commit()
+            return get_item(conn, task_id) or item
         dispatch_meta["last_disposition"] = "completed"
         dispatch_meta["last_disposition_reason"] = reason_text or "manual_complete"
         dispatch_meta["completion_unverified"] = False

@@ -205,10 +205,17 @@ async def test_todolist_completed_and_history_endpoints_include_links(monkeypatc
                     "status": task_hub.TASK_STATUS_OPEN,
                     "must_complete": True,
                     "agent_ready": True,
+                    "metadata": {"workflow_manifest": {"final_channel": "chat"}},
                 },
             )
             claimed = task_hub.claim_next_dispatch_tasks(conn, limit=1, agent_id=f"heartbeat:{sid}")
             assignment_id = str(claimed[0]["assignment_id"])
+            task_hub.record_task_outbound_delivery(
+                conn,
+                task_id="task:history-endpoint",
+                channel="chat",
+                message_id="chat_delivery",
+            )
             task_hub.perform_task_action(
                 conn,
                 task_id="task:history-endpoint",

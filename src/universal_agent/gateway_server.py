@@ -20544,6 +20544,11 @@ async def dashboard_todolist_completed(limit: int = 60):
     for row in rows:
         item = dict(row) if isinstance(row, dict) else {}
         assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
+        item["canonical_execution_session_id"] = str(
+            assignment.get("session_id") or assignment.get("provider_session_id") or ""
+        ) or None
+        item["canonical_execution_run_id"] = str(assignment.get("workflow_run_id") or "") or None
+        item["canonical_execution_workspace"] = str(assignment.get("workspace_dir") or "") or None
         links = _task_history_links_for_session(
             str(assignment.get("session_id") or ""),
             workspace_dir=str(assignment.get("workspace_dir") or ""),
