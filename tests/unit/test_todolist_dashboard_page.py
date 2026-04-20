@@ -16,7 +16,7 @@ def test_todolist_dashboard_uses_gateway_api_path():
 
 def test_todolist_dashboard_includes_history_and_completed_sections():
     content = _PAGE.read_text(encoding="utf-8")
-    assert "Task History" in content
+    assert "Work Item History" in content
     assert "/api/v1/dashboard/todolist/tasks/" in content
     assert "/history?limit=120" in content
 

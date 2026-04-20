@@ -1024,7 +1024,7 @@ export default function ToDoListDashboardPage() {
         </div>
         {showActions && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => void handleTaskAction(item.task_id, "complete")} disabled={isPending}
+            <button onClick={() => void handleTaskAction(item.task_id, "park")} disabled={isPending}
               className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border-none rounded-sm cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40">
               🗑 Trash It
             </button>
@@ -1110,7 +1110,7 @@ export default function ToDoListDashboardPage() {
             </div>
             {showActions && (
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button onClick={(e) => { e.stopPropagation(); void handleTaskAction(item.task_id, "complete"); setExpandedTaskId(null); }} disabled={isPending}
+                <button onClick={(e) => { e.stopPropagation(); void handleTaskAction(item.task_id, "park"); setExpandedTaskId(null); }} disabled={isPending}
                   className="px-3 py-1.5 font-mono text-[11px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border border-kcd-red/20 rounded-md cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40">
                   🗑 Trash It
                 </button>
@@ -1596,86 +1596,7 @@ export default function ToDoListDashboardPage() {
 
 
 
-        {/* ── Summary Cards ── */}
-        <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {[
-            { label: `Dispatch Eligible${dispatchThreshold > 0 ? ` (≥${dispatchThreshold})` : ""}`, value: overview?.queue_health?.dispatch_eligible || 0, sub: `${overview?.queue_health?.dispatch_queue_size || 0} in queue`, cls: "text-kcd-text" },
-            { label: "Active Agents", value: agentActivity?.active_agents || 0, sub: `${(agentActivity?.active_assignments || []).length} assignments`, cls: "text-kcd-cyan" },
-            { label: "Backlog Open", value: agentActivity?.backlog_open || 0, sub: "total queued", cls: "text-kcd-text" },
-            { label: "Approvals Pending", value: approvalsHighlight?.pending_count || 0, sub: "awaiting decision", cls: "text-kcd-amber" },
-            { label: "Completion Rate", value: completionRate24h !== null ? `${completionRate24h}%` : "—", sub: "24h completed / rejected", cls: completionRate24h !== null ? (completionRate24h >= 70 ? "text-kcd-green" : completionRate24h >= 40 ? "text-kcd-amber" : "text-kcd-red") : "text-kcd-text-muted" },
-          ].map((card, i) => (
-            <article key={card.label}
-              className={`backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-3 hover:border-kcd-cyan/20 hover:shadow-glow-cyan transition-all duration-300 group animate-fade-in-stagger [animation-delay:${i * 80}ms]`}>
-              <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0">{card.label}</p>
-              <p className={`text-xl font-semibold mt-1 m-0 transition-colors group-hover:brightness-110 ${card.cls}`}>{card.value}</p>
-              <p className="text-[10px] text-kcd-text-muted mt-1 m-0">{card.sub}</p>
-            </article>
-          ))}
-        </section>
-
-        {/* ── Dispatcher Health ── */}
-        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-lg text-kcd-cyan">lan</span>
-              <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-cyan uppercase m-0">Dispatcher Health</h2>
-            </div>
-            <div className="font-mono text-[10px] text-kcd-text-muted">
-              ToDo driver separate from heartbeat
-            </div>
-          </div>
-          <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-4">
-            {[
-              {
-                label: "Last Wake",
-                value: formatTs(todoDispatch?.last_wake_requested_at || null) || "Never",
-                sub: todoDispatch?.last_wake_requested_session_id || "No session",
-                cls: todoDispatch?.sleeping_session_warning ? "text-kcd-amber" : "text-kcd-text",
-              },
-              {
-                label: "Last Claim",
-                value: todoDispatch?.last_claimed_at ? `${todoDispatch?.last_claimed_task_count || 0} task(s)` : "No claim yet",
-                sub: todoDispatch?.last_claimed_at ? `${formatTs(todoDispatch?.last_claimed_at || null)} · ${todoDispatch?.last_claimed_session_id || "unknown"}` : "Waiting for eligible work",
-                cls: "text-kcd-cyan",
-              },
-              {
-                label: "Last Result",
-                value: lastResultDisplay,
-                sub: todoDispatch?.last_result_detail ? `${lastResultSub} · ${todoDispatch.last_result_detail}` : lastResultSub,
-                cls: lastResultClass,
-              },
-              {
-                label: "Wake Queue",
-                value: `${todoDispatch?.pending_wake_count || 0} pending`,
-                sub: `${todoDispatch?.registered_session_count || 0} registered · ${todoDispatch?.busy_session_count || 0} busy`,
-                cls: Number(todoDispatch?.pending_wake_count || 0) > 0 ? "text-kcd-amber" : "text-kcd-text",
-              },
-            ].map((card) => (
-              <article key={card.label} className="rounded-md border border-white/[0.06] bg-kcd-surface-high/60 p-3">
-                <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0">{card.label}</p>
-                <p className={`text-[15px] font-semibold mt-1 m-0 ${card.cls}`}>{card.value}</p>
-                <p className="text-[10px] text-kcd-text-muted mt-1 m-0">{card.sub}</p>
-              </article>
-            ))}
-          </div>
-          {(todoDispatchAlerts.length > 0 || heartbeatAlerts.length > 0) && (
-            <div className="mt-3 flex flex-col gap-1">
-              {todoDispatchAlerts.map((alert, idx) => (
-                <div key={`todo-alert-${idx}`} className="font-mono text-[10px] text-kcd-amber">
-                  ToDo: {alert}
-                </div>
-              ))}
-              {heartbeatAlerts.map((alert, idx) => (
-                <div key={`heartbeat-alert-${idx}`} className="font-mono text-[10px] text-kcd-text-muted">
-                  Heartbeat: {alert}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* ── NOW: Current Assignments ── */}
+        {/* ── NOW: Current Assignments (priority — moved to top) ── */}
         <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
           <span className="material-symbols-outlined text-lg text-kcd-cyan">bolt</span>
@@ -1708,13 +1629,36 @@ export default function ToDoListDashboardPage() {
         )}
       </section>
 
-      {/* ── Agent Efficiency Strip ── */}
-      <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg px-4 py-2.5 flex flex-wrap items-center gap-4">
-        <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Agent Efficiency</span>
-        <div className="flex flex-wrap gap-4 font-mono text-[11px]">
-          <span className="text-kcd-text-muted">1h: <strong className="text-kcd-text">{agentMetrics1h?.seized || 0}</strong> seized · <strong className="text-kcd-cyan">{agentMetrics1h?.completed || 0}</strong> done · <strong className="text-kcd-red">{agentMetrics1h?.rejected || 0}</strong> rejected</span>
-          <span className="text-kcd-text-muted">24h: <strong className="text-kcd-text">{agentMetrics24h?.seized || 0}</strong> seized · <strong className="text-kcd-cyan">{agentMetrics24h?.completed || 0}</strong> done · <strong className="text-kcd-red">{agentMetrics24h?.rejected || 0}</strong> rejected</span>
+      {/* ── Consolidated Dispatcher & Stats Strip ── */}
+      <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 font-mono text-[11px]">
+          <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Dispatcher</span>
+          <span className="text-kcd-text-muted">{formatTs(todoDispatch?.last_wake_requested_at || null) || "No wake"}</span>
+          <span className="text-kcd-text-muted">Claim: <strong className={todoDispatch?.last_claimed_at ? "text-kcd-cyan" : "text-kcd-text-muted"}>{todoDispatch?.last_claimed_at ? `${todoDispatch?.last_claimed_task_count || 0} task(s)` : "none"}</strong></span>
+          <span className="text-kcd-text-muted">Result: <strong className={lastResultClass}>{lastResultDisplay}</strong></span>
+          <span className="text-kcd-text-muted">Wake Q: <strong className={Number(todoDispatch?.pending_wake_count || 0) > 0 ? "text-kcd-amber" : "text-kcd-text"}>{todoDispatch?.pending_wake_count || 0}</strong></span>
+          <span className="h-3 w-px bg-white/10 mx-1" />
+          <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Stats</span>
+          <span className="text-kcd-text-muted">Eligible: <strong className="text-kcd-text">{overview?.queue_health?.dispatch_eligible || 0}</strong></span>
+          <span className="text-kcd-text-muted">Agents: <strong className="text-kcd-cyan">{agentActivity?.active_agents || 0}</strong></span>
+          <span className="text-kcd-text-muted">Backlog: <strong className="text-kcd-text">{agentActivity?.backlog_open || 0}</strong></span>
+          <span className="text-kcd-text-muted">Approvals: <strong className="text-kcd-amber">{approvalsHighlight?.pending_count || 0}</strong></span>
+          <span className="text-kcd-text-muted">Rate: <strong className={completionRate24h !== null ? (completionRate24h >= 70 ? "text-kcd-green" : completionRate24h >= 40 ? "text-kcd-amber" : "text-kcd-red") : "text-kcd-text-muted"}>{completionRate24h !== null ? `${completionRate24h}%` : "—"}</strong></span>
+          <span className="h-3 w-px bg-white/10 mx-1" />
+          <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Efficiency</span>
+          <span className="text-kcd-text-muted">1h: <strong className="text-kcd-text">{agentMetrics1h?.seized || 0}</strong>s · <strong className="text-kcd-cyan">{agentMetrics1h?.completed || 0}</strong>d · <strong className="text-kcd-red">{agentMetrics1h?.rejected || 0}</strong>r</span>
+          <span className="text-kcd-text-muted">24h: <strong className="text-kcd-text">{agentMetrics24h?.seized || 0}</strong>s · <strong className="text-kcd-cyan">{agentMetrics24h?.completed || 0}</strong>d · <strong className="text-kcd-red">{agentMetrics24h?.rejected || 0}</strong>r</span>
         </div>
+        {(todoDispatchAlerts.length > 0 || heartbeatAlerts.length > 0) && (
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {todoDispatchAlerts.map((alert, idx) => (
+              <span key={`todo-alert-${idx}`} className="font-mono text-[10px] text-kcd-amber">⚠ {alert}</span>
+            ))}
+            {heartbeatAlerts.map((alert, idx) => (
+              <span key={`hb-alert-${idx}`} className="font-mono text-[10px] text-kcd-text-muted">♥ {alert}</span>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* ── Kanban Time Horizon Board ── */}

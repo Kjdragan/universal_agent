@@ -281,34 +281,34 @@ def test_workflow_admission_queue_retry_and_needs_review(tmp_path: Path):
     assert retry_row["status"] == "failed"
 
 
-def test_workflow_admission_retries_sqlite_lock_during_admit(tmp_path: Path, monkeypatch):
+def test_workflow_admission_propagates_sqlite_lock_during_admit(tmp_path: Path, monkeypatch):
+    """Verify that DB lock errors propagate so the async caller can retry.
+
+    ``_run_with_retry`` was refactored to single-attempt execution.
+    Lock-retry is now handled at the async caller level (hooks_service)
+    using ``await asyncio.sleep()`` to avoid blocking the event loop.
+    """
+    import pytest as _pytest
+
     service = _service(tmp_path)
     original_upsert_run = workflow_admission_module.upsert_run
-    call_count = {"value": 0}
 
-    def flaky_upsert_run(*args, **kwargs):
-        if call_count["value"] == 0:
-            call_count["value"] += 1
-            raise sqlite3.OperationalError("database is locked")
-        return original_upsert_run(*args, **kwargs)
+    def locked_upsert_run(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(workflow_admission_module, "upsert_run", flaky_upsert_run)
+    monkeypatch.setattr(workflow_admission_module, "upsert_run", locked_upsert_run)
 
-    decision = service.admit(
-        WorkflowTrigger(
-            run_kind="youtube_tutorial_hook",
-            trigger_source="webhook",
-            dedup_key="video-lock-1",
-            payload_json='{"video_id":"video-lock-1"}',
-            priority=1,
-            run_policy="automation_ephemeral",
-            interrupt_policy="attach_if_same_dedup_key",
-        ),
-        entrypoint="test_entrypoint",
-        workspace_dir=str((tmp_path / "run_lock_retry").resolve()),
-    )
-
-    assert decision.action == "start_new_run"
-    assert decision.run_id
-    assert decision.attempt_id
-    assert call_count["value"] == 1
+    with _pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        service.admit(
+            WorkflowTrigger(
+                run_kind="youtube_tutorial_hook",
+                trigger_source="webhook",
+                dedup_key="video-lock-1",
+                payload_json='{"video_id":"video-lock-1"}',
+                priority=1,
+                run_policy="automation_ephemeral",
+                interrupt_policy="attach_if_same_dedup_key",
+            ),
+            entrypoint="test_entrypoint",
+            workspace_dir=str((tmp_path / "run_lock_retry").resolve()),
+        )
