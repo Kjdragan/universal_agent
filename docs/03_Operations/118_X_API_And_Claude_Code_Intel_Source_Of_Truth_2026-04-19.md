@@ -34,6 +34,7 @@ Live validation status on 2026-04-19:
 - `src/universal_agent/scripts/x_oauth2_bootstrap.py` now implements the official OAuth2 Authorization Code + PKCE bootstrap. It generated an authorization URL with scopes `tweet.read users.read offline.access` and persisted PKCE state under `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/oauth2/pending_oauth2.json`.
 - Kevin completed OAuth2 authorization successfully. `X_OAUTH2_ACCESS_TOKEN` and `X_OAUTH2_REFRESH_TOKEN` were stored in Infisical `development`, `production`, and `local`.
 - After OAuth2 success, direct endpoint diagnostics still returned `403`. X's detailed response said: `When authenticating requests to the Twitter API v2 endpoints, you must use keys and tokens from a Twitter developer App that is attached to a Project.` This means the current remaining blocker is X Developer Portal project/app attachment or API product entitlement, not Universal Agent code or missing tokens.
+- On 2026-04-20, Kevin moved the app into the Pay Per Use package in the X Developer Console. The next packet-only smoke test succeeded: `GET /2/users/by/username/ClaudeDevs` returned `200`, `GET /2/users/2024518793679294464/tweets` returned `200`, and the lane wrote a successful packet with 5 new posts and 5 actions at `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/2026-04-20/050815__ClaudeDevs/`.
 
 Code-verified implementation points:
 

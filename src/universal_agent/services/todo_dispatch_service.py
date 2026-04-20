@@ -368,7 +368,12 @@ Specifically:
       generalizable, progressive disclosure)
    c. Write the results to `task-skills/<task-name>/quality_gate.md` using the template in the
       Task Forge skill. This file IS the proof the audit happened — do NOT skip it.
-   d. If any check fails, fix the skill's structure before completing the task.
+      The template includes a Meta-Improvements section — fill it with any observations that
+      would improve Task Forge ITSELF for all future runs (not just this skill).
+   d. If you identified pipeline-level improvements, ALSO append them to
+      `task-skills/_meta/improvement_log.md` (create the file if it doesn't exist, using
+      the seed template from `.claude/skills/task-forge/templates/improvement_log_seed.md`).
+   e. If any check fails, fix the skill's structure before completing the task.
    You CANNOT just claim "passed quality gate" — you must produce the artifact.
 5. Phase 5c (Skill Improvement) is OPTIONAL — only if the user's task description includes
    phrases like "and evaluate", "polish", "improve", or "production-quality". When triggered:

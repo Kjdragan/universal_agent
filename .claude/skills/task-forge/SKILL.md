@@ -268,16 +268,60 @@ Date: <date>
 - <repeatable patterns discovered>
 - <things every skill of this type should know>
 - <common pitfalls for this category of task>
+
+## Meta-Improvements
+<!-- CRITICAL: This is the autonomous recursive learning loop.
+     Review your Process Patterns and Development Context above.
+     Ask yourself: do any of these observations improve the PIPELINE ITSELF?
+     If so, document them here AND append to task-skills/_meta/improvement_log.md -->
+
+### Pipeline-Level Observations
+- <observations that would improve Task Forge for ALL future skills, not just this one>
+- <new universal patterns discovered> (e.g., "always check for X before Y")
+- <friction points in the Task Forge process itself>
+
+### Proposed Changes
+- <specific improvement to Task Forge SKILL.md, quality_gate template, or dispatch prompt>
+- <which Phase would benefit, and what the change would look like>
+
+(If no pipeline-level improvements were identified, write "None identified this run."
+That's fine — not every run produces meta-insights. But you MUST ask the question.)
 ```
 
-This artifact serves a triple purpose:
+This artifact serves a quadruple purpose:
 1. **Proof of audit** — proves the quality gate actually ran, not just self-certified
 2. **Skill-specific memory** — what was discovered about THIS task (edge cases, file
    locations, environment quirks) travels with the skill for future runs
 3. **Meta-skill learning** — process patterns that apply to building ANY skill of this
-   type feed back into the skill-building practice itself. Each skill you build
-   teaches you to build better skills. This is the deepest layer of the recursive
-   learning loop.
+   type feed back into the skill-building practice itself
+4. **Pipeline evolution** — the Meta-Improvements section is how the pipeline improves
+   itself. Observations that would benefit ALL future skills get escalated here and
+   accumulated in `task-skills/_meta/improvement_log.md` for periodic incorporation
+   into the Task Forge SKILL.md itself. This closes the recursive learning loop:
+   **the pipeline that builds skills also builds itself.**
+
+#### Step 4: Escalate meta-improvements
+
+After writing the quality_gate.md, check the Meta-Improvements section you just wrote.
+If you identified pipeline-level improvements (not "None identified"), append them to
+`task-skills/_meta/improvement_log.md` using this format:
+
+```markdown
+## <date> — from <task-name>
+- **Observation:** <what you noticed>
+- **Proposed change:** <specific edit to Task Forge SKILL.md or dispatch prompt>
+- **Which Phase:** <Phase N>
+- **Status:** proposed
+```
+
+This file accumulates across runs. It is the institutional memory of the pipeline itself.
+Periodically, these proposals get reviewed and merged into the Task Forge SKILL.md,
+completing the loop: observations → proposals → codified improvements → better runs.
+
+> [!IMPORTANT]
+> You are not just building a skill. You are building the system that builds skills.
+> Every run is an opportunity to make the next run better. The Meta-Improvements section
+> is how that happens without requiring a human to notice and intervene.
 
 #### If checks fail
 
