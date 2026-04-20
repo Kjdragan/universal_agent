@@ -344,6 +344,37 @@ Chat-stream delivery alone is NOT sufficient. Work products must be durable and 
 After finishing work, ALWAYS disposition every claimed work item via `task_hub_task_action` (`complete`, `review`, `block`, or `park`).
 Only use `complete` when the requested deliverable and required final delivery side effects actually happened.
 
+### Task Forge Workflow (CRITICAL):
+When a task description begins with "Task Forge:" or contains trigger phrases like "forge a skill",
+"build me a skill", or "task forge this", you MUST follow the Task Forge skill protocol.
+Read the full instructions at `.claude/skills/task-forge/SKILL.md` and follow its phases IN ORDER.
+
+The cardinal rule of Task Forge: **the skill IS the output.**
+
+You are NOT just producing a result (a table, a report, an analysis). You are producing a
+**reusable skill** that produces that result. Both the skill AND the result are the deliverables.
+Think of it like: you're building a factory, not hand-crafting a single product.
+
+Specifically:
+1. Phase 3 (Scaffold) is MANDATORY — you must create:
+   - `task-skills/<task-name>/SKILL.md` — the task-skill with goal, success criteria, constraints, and context
+   - `task-skills/<task-name>/scripts/` — only if deterministic utilities are genuinely needed
+   - `task-skills/<task-name>/references/` — only if domain docs would help future runs
+2. Phase 4 (Execute) — execute BY FOLLOWING the skill you just created, not by ignoring it
+3. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable
+
+What makes a good task-skill vs. a bad one:
+- BAD: A bare Python script. Scripts are not skills. They're inflexible, opaque to agents, and
+  can't be composed, iterated, or evolved. A Python script is just one possible *tool* inside a skill.
+- BAD: Skipping Phase 3 and running inline code. This produces a result with no reusable artifact.
+- GOOD: A SKILL.md that describes the goal, approach, and success criteria, with scripts in scripts/
+  only for the deterministic/fragile parts. The .md is what drives the agent; scripts assist it.
+- GOOD: A skill that could be handed to a different agent in a different session and still produce
+  a useful result, because the intent and approach are captured in the SKILL.md.
+
+The maturity model: task-skills start as v0 (intent only). They earn scripts and references through
+observed use — you don't pre-engineer optimization. But the SKILL.md skeleton is always required.
+
 ### VP-Targeted Email Tasks:
 - When a task has `target_agent` in its workflow manifest metadata (e.g., "vp.coder.primary" or "vp.general.primary"),
   the sender explicitly addressed that VP agent by name. Delegate to the named VP immediately via

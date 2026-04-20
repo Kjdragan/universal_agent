@@ -79,11 +79,17 @@ You're looking for things that would cause the executing agent to fail. Don't go
 
 ### Phase 3: Scaffold the Task-Skill
 
+> [!IMPORTANT]
+> **The skill IS the output.** You are not just producing a result (a table, a report). You are
+> producing a **reusable skill** that produces that result. Both the skill AND the result matter.
+> Think of it as: you're building a factory, not hand-crafting a single product. Skipping this
+> phase to run inline code is explicitly prohibited — it defeats the entire purpose of Task Forge.
+
 Create the task-skill in the workspace:
 
 ```
 task-skills/<task-name>/
-├── SKILL.md              ← The task-skill (REQUIRED)
+├── SKILL.md              ← The task-skill (REQUIRED — this is the PRIMARY output)
 ├── scripts/              ← Only if you found deterministic utilities needed
 └── references/           ← Only if domain docs would help the executing agent
 ```
@@ -134,6 +140,16 @@ description: <one-line description of what this task-skill does>
 **That's a complete v0 task-skill.** Don't over-engineer it. If you're writing more than
 50 lines for a v0, you're probably over-planning.
 
+#### What makes a good skill vs. a bad one
+
+A bare Python script is NOT a skill. Scripts are inflexible, opaque to agents, and can't be
+composed, iterated, or evolved. The SKILL.md is what drives the agent — it describes the *what*
+and *why*. Scripts are optional tools that assist with the *how*.
+
+A good task-skill can be handed to a different agent in a different session and still produce a
+useful result, because the intent, approach, and success criteria are captured in the SKILL.md.
+A bare script can only be re-run identically — it can't adapt, compose, or evolve.
+
 #### When to add scripts/
 
 Add a `scripts/` directory only when:
@@ -142,6 +158,7 @@ Add a `scripts/` directory only when:
 - The task involves a non-obvious command sequence that's easy to get wrong
 
 Scripts should be **self-contained and runnable**. Include usage instructions in the SKILL.md.
+The script is a tool inside the skill, not a replacement for the skill.
 
 #### When to add references/
 
@@ -197,6 +214,12 @@ After successful execution:
 
 ## NEVER Do
 
+- **NEVER skip Phase 3 (scaffolding).** Running inline code without creating a SKILL.md
+  is the cardinal sin of Task Forge. The skill is the output, not just the result.
+  Even for simple tasks, write the SKILL.md — it takes 5 minutes and creates a reusable asset.
+- **NEVER produce a bare Python script as the deliverable.** A script is not a skill.
+  If the task needs a script, it goes in `scripts/` inside the task-skill directory,
+  referenced by the SKILL.md. The .md drives the process; the script assists it.
 - **NEVER spend more than 20 minutes on Phase 1-3 combined.** The whole point is speed.
   A v0 that ships in 20 minutes beats a v2 that ships in 2 hours.
 - **NEVER write a task-skill longer than 100 lines for a first attempt.** If you need more,
