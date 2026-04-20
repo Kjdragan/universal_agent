@@ -860,6 +860,7 @@ is advisory, never blocks heartbeat execution.
 | [`decomposition_agent.py`](../../src/universal_agent/services/decomposition_agent.py) | LLM-powered task decomposition into 2-5 subtasks |
 | [`task_hub_bridge.py`](../../src/universal_agent/tools/task_hub_bridge.py) | Agent-facing MCP tools: `task_hub_task_action` (lifecycle), `task_hub_decompose` (split into subtasks) |
 | [`feature_flags.py`](../../src/universal_agent/feature_flags.py) | `heartbeat_enabled()`, `cron_enabled()` — master switches |
+| [`services/claude_code_intel.py`](../../src/universal_agent/services/claude_code_intel.py) | Dedicated X API `@ClaudeDevs` producer — writes Claude Code Intel packets, updates the local KB source index, and queues Tier 3/4 Task Hub follow-up |
 
 ### Memory Files
 
@@ -876,6 +877,7 @@ is advisory, never blocks heartbeat execution.
 |------|------|
 | [`nightly_wiki_agent.py`](../../src/universal_agent/scripts/nightly_wiki_agent.py) | Nightly proactive wiki creation — selects pending signal cards, dispatches VP missions to build NLM-backed knowledge bases (cron: 03:15 CST) |
 | [`briefings_agent.py`](../../src/universal_agent/scripts/briefings_agent.py) | Morning autonomous briefing — fetches telemetry and nightly wiki output, generates daily briefing report (cron: 06:30 CST) |
+| [`claude_code_intel_sync.py`](../../src/universal_agent/scripts/claude_code_intel_sync.py) | Twice-daily Claude Code X intelligence poller — runs through Chron, uses `X_BEARER_TOKEN`, and produces durable packets under `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/` |
 | [`schedule_nightly_wiki.py`](../../src/universal_agent/scripts/schedule_nightly_wiki.py) | One-time setup script that registers the nightly wiki and morning briefing cron jobs via CronService |
 
 ### Dashboard / API Files
@@ -1488,6 +1490,9 @@ The following `source_kind` values trigger outcome recording:
 | `proactive_signal` | Signal card promotion |
 | `reflection` | Reflection engine ideation |
 | `convergence_detection` | Cross-channel signal convergence |
+| `claude_code_update` | Claude Code X intelligence packet inventory |
+| `claude_code_demo_task` | Code-worthy Claude Code X update queued for CODIE demo/repo follow-up |
+| `claude_code_kb_update` | Strategic Claude Code X update queued for KB/migration analysis |
 | `csi` | CSI ingester pipeline |
 | `brainstorm` | Ideation mode brainstorming |
 | `calendar_bridge` | Calendar-driven proactive tasks |

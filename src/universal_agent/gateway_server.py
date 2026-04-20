@@ -13640,6 +13640,7 @@ async def lifespan(app: FastAPI):
         try:
             _ensure_autonomous_daily_briefing_job()
             _ensure_csi_convergence_cron_job()
+            _ensure_claude_code_intel_cron_job()
         except Exception as exc:
             logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
@@ -16579,6 +16580,50 @@ def _ensure_csi_convergence_cron_job() -> None:
         enabled=True,
         metadata=metadata,
     )
+    job.schedule_next(time.time())
+    _cron_service.jobs[job_id] = job
+    _cron_service.store.save_jobs(_cron_service.jobs.values())
+    try:
+        _cron_service._emit_event({"type": "cron_job_created", "job": job.to_dict()})
+    except Exception:
+        pass
+
+
+def _claude_code_intel_cron_enabled() -> bool:
+    return os.getenv("UA_CLAUDE_CODE_INTEL_CRON_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_claude_code_intel_cron_job() -> None:
+    if not _cron_service or not _claude_code_intel_cron_enabled():
+        return
+    job_id = "claude_code_intel_sync"
+    command = "!script universal_agent.scripts.claude_code_intel_sync"
+    cron_expr = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_EXPR", "0 8,16 * * *").strip() or "0 8,16 * * *"
+    timezone_name = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
+    workspace_dir = str(WORKSPACES_DIR / "cron_claude_code_intel_sync")
+    metadata = {
+        "source": "system",
+        "system_job": job_id,
+        "autonomous": True,
+        "proactive_producer": "claude_code_intel",
+        "session_id": "cron_claude_code_intel_sync",
+    }
+    updates = {
+        "user_id": "system",
+        "workspace_dir": workspace_dir,
+        "command": command,
+        "description": "Poll @ClaudeDevs through the X API and queue Claude Code intelligence follow-up work.",
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "timeout_seconds": int(os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS", "900") or 900),
+        "enabled": True,
+        "metadata": metadata,
+    }
+    existing = _cron_service.get_job(job_id)
+    if existing is not None:
+        _cron_service.update_job(job_id, updates)
+        return
+    job = CronJob(job_id=job_id, **updates)
     job.schedule_next(time.time())
     _cron_service.jobs[job_id] = job
     _cron_service.store.save_jobs(_cron_service.jobs.values())

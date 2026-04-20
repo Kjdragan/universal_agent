@@ -908,17 +908,36 @@ _HEREDOC_RE = re.compile(
     re.DOTALL,
 )
 
+# Match `python -c "..."` or `python3 -c '...'` (including `uv run python -c`).
+# We use a greedy match that captures the *last* matching quote on the assumption
+# the -c payload is the final argument (which it almost always is).
+_PYTHON_C_DOUBLE = re.compile(
+    r"""python3?\s+-c\s+".*""",
+    re.DOTALL,
+)
+_PYTHON_C_SINGLE = re.compile(
+    r"""python3?\s+-c\s+'.*'""",
+    re.DOTALL,
+)
+
 
 def _strip_heredoc_bodies(command: str) -> str:
-    """Return *command* with heredoc bodies removed.
+    """Return *command* with data payloads removed for content-matching.
 
     Content-matching hooks (Composio SDK, Playwright, PDF conversion) must
     pattern-match against the **executable** portion of a Bash command, not
-    against data payloads that happen to be piped via heredoc.  Without this
-    stripping, a heredoc containing skill-description JSON with words like
-    "playwright" or "pdf" triggers false-positive denials.
+    against data payloads that happen to be piped via heredoc or inline Python
+    code.  Without this stripping, payloads containing words like "playwright"
+    or "pdf" (e.g. skill name lists) trigger false-positive denials.
+
+    Strips:
+    - Heredoc bodies (<<MARKER ... MARKER)
+    - Python -c inline code (python3 -c "..." or python3 -c '...')
     """
-    return _HEREDOC_RE.sub("", command)
+    result = _HEREDOC_RE.sub("", command)
+    result = _PYTHON_C_DOUBLE.sub("python3 -c ", result)
+    result = _PYTHON_C_SINGLE.sub("python3 -c ", result)
+    return result
 
 
 def _build_bash_command_update(command_source: str, tool_input: dict, updated_command: str) -> dict:
@@ -2328,6 +2347,16 @@ class AgentHookSet:
         command, command_source, tool_input = _extract_bash_command(input_data)
         if not command.strip():
             return {}
+
+        # ── python → python3 rewrite ──────────────────────────────────
+        # Many environments (including our VPS) have python3 but no
+        # 'python' symlink.  Rewrite bare 'python' invocations so the
+        # model doesn't waste a tool call hitting 'command not found'.
+        if re.search(r'(?<![\w/])python(?!3)\b', command):
+            rewritten_py = re.sub(r'(?<![\w/])python(?!3)\b', 'python3', command)
+            command = rewritten_py
+            # We'll continue with the rewritten command below and
+            # it will be emitted in the final _build_bash_command_update.
 
         try:
             prefix_parts: list[str] = []

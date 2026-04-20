@@ -1,0 +1,683 @@
+"""Claude Code intelligence lane backed by the X API.
+
+The lane is intentionally read-only. It polls a configured X account, writes a
+durable packet for every run, deduplicates by stable X post ID, and queues
+Task Hub follow-up only for posts that look implementation-worthy.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from universal_agent import task_hub
+from universal_agent.artifacts import resolve_artifacts_dir
+from universal_agent.services.proactive_artifacts import (
+    ARTIFACT_STATUS_CANDIDATE,
+    ARTIFACT_STATUS_PRODUCED,
+    make_artifact_id,
+    upsert_artifact,
+)
+
+
+DEFAULT_HANDLE = "ClaudeDevs"
+DEFAULT_MAX_RESULTS = 25
+SOURCE_KIND_UPDATE = "claude_code_update"
+SOURCE_KIND_DEMO_TASK = "claude_code_demo_task"
+SOURCE_KIND_KB_UPDATE = "claude_code_kb_update"
+LANE_SLUG = "claude_code_intel"
+KB_SLUG = "claude-code-intelligence"
+
+_TRUTHY = {"1", "true", "yes", "on"}
+_URL_RE = re.compile(r"https?://[^\s<>)\"']+", re.IGNORECASE)
+_VERSION_RE = re.compile(r"\bv?\d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9_.-]+)?\b")
+
+_TIER4_TERMS = {
+    "breaking",
+    "migration",
+    "migrate",
+    "deprecated",
+    "deprecation",
+    "security",
+    "vulnerability",
+    "outage",
+    "hotfix",
+    "bug",
+    "regression",
+}
+_TIER3_TERMS = {
+    "api",
+    "sdk",
+    "mcp",
+    "hook",
+    "plugin",
+    "demo",
+    "example",
+    "repo",
+    "build",
+    "workflow",
+    "tool",
+    "feature",
+    "release",
+}
+_TIER2_TERMS = {
+    "docs",
+    "documentation",
+    "guide",
+    "changelog",
+    "release notes",
+    "blog",
+    "deep dive",
+    "update",
+    "learn",
+    "skill",
+}
+
+
+@dataclass(frozen=True)
+class ClaudeCodeIntelConfig:
+    handle: str = DEFAULT_HANDLE
+    max_results: int = DEFAULT_MAX_RESULTS
+    queue_task_hub: bool = True
+    request_timeout_seconds: float = 20.0
+    artifacts_root: Path | None = None
+
+    @classmethod
+    def from_env(cls) -> "ClaudeCodeIntelConfig":
+        return cls(
+            handle=(os.getenv("UA_CLAUDE_CODE_INTEL_X_HANDLE") or DEFAULT_HANDLE).strip().lstrip("@") or DEFAULT_HANDLE,
+            max_results=_bounded_int(os.getenv("UA_CLAUDE_CODE_INTEL_MAX_RESULTS"), DEFAULT_MAX_RESULTS, low=5, high=100),
+            queue_task_hub=str(os.getenv("UA_CLAUDE_CODE_INTEL_QUEUE_TASKS", "1")).strip().lower() in _TRUTHY,
+            request_timeout_seconds=float(os.getenv("UA_CLAUDE_CODE_INTEL_TIMEOUT_SECONDS", "20") or 20),
+        )
+
+
+@dataclass
+class ClaudeCodeIntelRun:
+    ok: bool
+    generated_at: str
+    handle: str
+    user_id: str = ""
+    packet_dir: str = ""
+    new_post_count: int = 0
+    seen_post_count: int = 0
+    action_count: int = 0
+    queued_task_count: int = 0
+    artifact_id: str = ""
+    error: str = ""
+    actions: list[dict[str, Any]] = field(default_factory=list)
+
+
+def resolve_lane_root(artifacts_root: Path | None = None) -> Path:
+    return (artifacts_root or resolve_artifacts_dir()) / "proactive" / LANE_SLUG
+
+
+def resolve_reference_kb_root(artifacts_root: Path | None = None) -> Path:
+    return (artifacts_root or resolve_artifacts_dir()) / "knowledge-bases" / KB_SLUG
+
+
+def get_x_bearer_token() -> str:
+    """Return the configured X API bearer token without logging or printing it."""
+    for key in ("X_BEARER_TOKEN", "BEARER_TOKEN"):
+        value = str(os.getenv(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def run_sync(
+    *,
+    config: ClaudeCodeIntelConfig | None = None,
+    bearer_token: str | None = None,
+    conn: sqlite3.Connection | None = None,
+    client: httpx.Client | None = None,
+) -> ClaudeCodeIntelRun:
+    cfg = config or ClaudeCodeIntelConfig.from_env()
+    generated_at = _now_iso()
+    lane_root = resolve_lane_root(cfg.artifacts_root)
+    packet_dir = _new_packet_dir(lane_root, handle=cfg.handle, generated_at=generated_at)
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    if conn is not None and conn.row_factory is None:
+        conn.row_factory = sqlite3.Row
+    state_path = lane_root / "state.json"
+    state = _load_state(state_path)
+    token = bearer_token if bearer_token is not None else get_x_bearer_token()
+    run = ClaudeCodeIntelRun(ok=False, generated_at=generated_at, handle=cfg.handle, packet_dir=str(packet_dir))
+
+    user_payload: dict[str, Any] = {}
+    posts_payload: dict[str, Any] = {}
+    new_posts: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
+
+    try:
+        if not token:
+            raise RuntimeError("missing X_BEARER_TOKEN")
+        owns_client = client is None
+        http_client = client or httpx.Client(timeout=cfg.request_timeout_seconds)
+        try:
+            user_payload = fetch_user_by_username(http_client, token=token, username=cfg.handle)
+            user_id = str((user_payload.get("data") or {}).get("id") or "").strip()
+            if not user_id:
+                raise RuntimeError("X user lookup response did not include data.id")
+            since_id = str(state.get("last_seen_post_id") or "").strip() or None
+            posts_payload = fetch_user_posts(http_client, token=token, user_id=user_id, max_results=cfg.max_results, since_id=since_id)
+        finally:
+            if owns_client:
+                http_client.close()
+
+        posts = normalize_posts(posts_payload)
+        seen_ids = {str(v) for v in state.get("seen_post_ids", []) if str(v)}
+        new_posts = [post for post in posts if str(post.get("id") or "") not in seen_ids]
+        actions = [classify_post(post, handle=cfg.handle) for post in new_posts]
+        queued = 0
+        artifact_id = ""
+        write_reference_kb_update(
+            packet_dir=packet_dir,
+            handle=cfg.handle,
+            actions=actions,
+            posts=new_posts,
+            artifacts_root=cfg.artifacts_root,
+        )
+        _write_packet_files(
+            packet_dir=packet_dir,
+            generated_at=generated_at,
+            handle=cfg.handle,
+            user_payload=user_payload,
+            posts_payload=posts_payload,
+            new_posts=new_posts,
+            actions=actions,
+            error="",
+        )
+        if conn is not None:
+            artifact_id = register_packet_artifact(conn, packet_dir=packet_dir, handle=cfg.handle, actions=actions, new_posts=new_posts)
+            if cfg.queue_task_hub:
+                queued = queue_follow_up_tasks(conn, handle=cfg.handle, packet_dir=packet_dir, actions=actions)
+        _save_state(
+            state_path,
+            _next_state(state=state, handle=cfg.handle, user_id=str((user_payload.get("data") or {}).get("id") or ""), posts=posts, generated_at=generated_at),
+        )
+        run.ok = True
+        run.user_id = str((user_payload.get("data") or {}).get("id") or "")
+        run.new_post_count = len(new_posts)
+        run.seen_post_count = len(posts)
+        run.action_count = len(actions)
+        run.queued_task_count = queued
+        run.artifact_id = artifact_id
+        run.actions = actions
+        return run
+    except Exception as exc:
+        error = str(exc)
+        write_reference_kb_update(
+            packet_dir=packet_dir,
+            handle=cfg.handle,
+            actions=actions,
+            posts=new_posts,
+            artifacts_root=cfg.artifacts_root,
+        )
+        _write_packet_files(
+            packet_dir=packet_dir,
+            generated_at=generated_at,
+            handle=cfg.handle,
+            user_payload=user_payload,
+            posts_payload=posts_payload,
+            new_posts=new_posts,
+            actions=actions,
+            error=error,
+        )
+        run.error = error
+        return run
+
+
+def fetch_user_by_username(client: httpx.Client, *, token: str, username: str) -> dict[str, Any]:
+    resp = client.get(
+        f"https://api.x.com/2/users/by/username/{username}",
+        headers=_auth_headers(token),
+        params={"user.fields": "created_at,description,entities,public_metrics,verified,verified_type"},
+    )
+    return _json_response(resp)
+
+
+def fetch_user_posts(
+    client: httpx.Client,
+    *,
+    token: str,
+    user_id: str,
+    max_results: int = DEFAULT_MAX_RESULTS,
+    since_id: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, str] = {
+        "max_results": str(max(5, min(int(max_results or DEFAULT_MAX_RESULTS), 100))),
+        "tweet.fields": "id,text,created_at,public_metrics,entities,conversation_id,referenced_tweets,attachments",
+        "expansions": "author_id,attachments.media_keys,referenced_tweets.id",
+        "user.fields": "id,name,username,verified,public_metrics",
+        "media.fields": "media_key,type,url,preview_image_url,alt_text",
+        "exclude": "retweets",
+    }
+    if since_id:
+        params["since_id"] = since_id
+    resp = client.get(f"https://api.x.com/2/users/{user_id}/tweets", headers=_auth_headers(token), params=params)
+    return _json_response(resp)
+
+
+def normalize_posts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        post_id = str(item.get("id") or "").strip()
+        if not post_id:
+            continue
+        out.append(dict(item))
+    return out
+
+
+def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE) -> dict[str, Any]:
+    post_id = str(post.get("id") or "").strip()
+    text = str(post.get("text") or "").strip()
+    lowered = text.lower()
+    links = extract_links(post)
+    matched_terms = sorted({term for term in _TIER2_TERMS | _TIER3_TERMS | _TIER4_TERMS if term in lowered})
+    tier = 1
+    reasons = ["informational Claude Code update"]
+    if links or _VERSION_RE.search(text) or any(term in lowered for term in _TIER2_TERMS):
+        tier = 2
+        reasons.append("reference material or version/update signal")
+    if any(term in lowered for term in _TIER3_TERMS):
+        tier = max(tier, 3)
+        reasons.append("implementation or demo opportunity")
+    if any(term in lowered for term in _TIER4_TERMS):
+        tier = max(tier, 4)
+        reasons.append("migration, safety, or breakage risk")
+    action_type = {
+        1: "digest",
+        2: "kb_update",
+        3: "demo_task",
+        4: "strategic_follow_up",
+    }.get(tier, "digest")
+    return {
+        "post_id": post_id,
+        "url": f"https://x.com/{handle.strip().lstrip('@') or DEFAULT_HANDLE}/status/{post_id}" if post_id else "",
+        "created_at": str(post.get("created_at") or ""),
+        "text": text,
+        "tier": tier,
+        "action_type": action_type,
+        "links": links,
+        "matched_terms": matched_terms,
+        "reasons": reasons,
+    }
+
+
+def extract_links(post: dict[str, Any]) -> list[str]:
+    links: list[str] = []
+    entities = post.get("entities")
+    if isinstance(entities, dict):
+        for item in entities.get("urls") or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("expanded_url", "unwound_url", "url"):
+                value = str(item.get(key) or "").strip()
+                if value:
+                    links.append(value)
+                    break
+    links.extend(_URL_RE.findall(str(post.get("text") or "")))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for link in links:
+        clean = link.rstrip(".,)")
+        if clean and clean not in seen:
+            seen.add(clean)
+            deduped.append(clean)
+    return deduped
+
+
+def register_packet_artifact(
+    conn: sqlite3.Connection,
+    *,
+    packet_dir: Path,
+    handle: str,
+    actions: list[dict[str, Any]],
+    new_posts: list[dict[str, Any]],
+) -> str:
+    max_tier = max([int(action.get("tier") or 0) for action in actions] or [0])
+    status = ARTIFACT_STATUS_CANDIDATE if max_tier >= 2 else ARTIFACT_STATUS_PRODUCED
+    title = f"Claude Code Intel packet: @{handle}"
+    summary = (
+        f"Captured {len(new_posts)} new @{handle} X posts; max tier {max_tier}."
+        if new_posts
+        else f"Captured an @{handle} X API poll with no new posts."
+    )
+    artifact = upsert_artifact(
+        conn,
+        artifact_id=make_artifact_id(
+            source_kind=SOURCE_KIND_UPDATE,
+            source_ref=str(packet_dir),
+            artifact_type="claude_code_intel_packet",
+            title=title,
+        ),
+        artifact_type="claude_code_intel_packet",
+        source_kind=SOURCE_KIND_UPDATE,
+        source_ref=str(packet_dir),
+        title=title,
+        summary=summary,
+        status=status,
+        priority=max(1, min(max_tier or 1, 4)),
+        artifact_path=str(packet_dir / "digest.md"),
+        topic_tags=["claude-code", "x-api", "claudedevs"],
+        metadata={"packet_dir": str(packet_dir), "new_post_count": len(new_posts), "max_tier": max_tier},
+    )
+    return str(artifact.get("artifact_id") or "")
+
+
+def queue_follow_up_tasks(
+    conn: sqlite3.Connection,
+    *,
+    handle: str,
+    packet_dir: Path,
+    actions: list[dict[str, Any]],
+) -> int:
+    task_hub.ensure_schema(conn)
+    queued = 0
+    for action in actions:
+        tier = int(action.get("tier") or 0)
+        if tier < 3:
+            continue
+        post_id = str(action.get("post_id") or "").strip()
+        if not post_id:
+            continue
+        source_kind = SOURCE_KIND_DEMO_TASK if tier == 3 else SOURCE_KIND_KB_UPDATE
+        task_id = f"{source_kind}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
+        title = (
+            f"Build Claude Code demo from @{handle} update"
+            if tier == 3
+            else f"Analyze strategic Claude Code update from @{handle}"
+        )
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": task_id,
+                "source_kind": source_kind,
+                "source_ref": post_id,
+                "title": title,
+                "description": _task_description(handle=handle, packet_dir=packet_dir, action=action),
+                "project_key": "proactive",
+                "priority": max(1, min(tier, 4)),
+                "labels": ["agent-ready", "claude-code-intel", "x-api", "codie" if tier == 3 else "atlas"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": True,
+                "trigger_type": "heartbeat_poll",
+                "metadata": {
+                    "source": LANE_SLUG,
+                    "post_id": post_id,
+                    "post_url": action.get("url") or "",
+                    "packet_dir": str(packet_dir),
+                    "tier": tier,
+                    "action_type": action.get("action_type") or "",
+                    "links": action.get("links") or [],
+                    "preferred_vp": "vp.coder.primary" if tier == 3 else "vp.general.primary",
+                    "knowledge_base_slug": KB_SLUG,
+                    "workflow_manifest": {
+                        "workflow_kind": "code_change" if tier == 3 else "research",
+                        "delivery_mode": "interactive_chat",
+                        "requires_pdf": False,
+                        "final_channel": "chat",
+                        "canonical_executor": "simone_first",
+                        "repo_mutation_allowed": tier == 3,
+                    },
+                },
+            },
+        )
+        upsert_artifact(
+            conn,
+            artifact_type="claude_code_follow_up_task",
+            source_kind=source_kind,
+            source_ref=post_id,
+            title=title,
+            summary=f"Queued Tier {tier} Claude Code intelligence follow-up for @{handle} post {post_id}.",
+            status=ARTIFACT_STATUS_CANDIDATE,
+            priority=max(1, min(tier, 4)),
+            source_url=str(action.get("url") or ""),
+            artifact_path=str(packet_dir / "digest.md"),
+            topic_tags=["claude-code", "x-api", "task-hub"],
+            metadata={"task_id": task_id, "packet_dir": str(packet_dir), "tier": tier},
+        )
+        queued += 1
+    return queued
+
+
+def write_reference_kb_update(
+    *,
+    packet_dir: Path,
+    handle: str,
+    actions: list[dict[str, Any]],
+    posts: list[dict[str, Any]],
+    artifacts_root: Path | None = None,
+) -> Path:
+    kb_root = resolve_reference_kb_root(artifacts_root)
+    kb_root.mkdir(parents=True, exist_ok=True)
+    index_path = kb_root / "source_index.md"
+    lines = [
+        "# Claude Code Intelligence Source Index",
+        "",
+        "This local reference index is maintained by the Claude Code X intelligence lane.",
+        "Canonical design and implementation docs live under `docs/`.",
+        "",
+        f"- Latest packet: `{packet_dir}`",
+        f"- Source handle: `@{handle}`",
+        f"- New posts in latest packet: `{len(posts)}`",
+        "",
+        "## Latest Actions",
+        "",
+    ]
+    if not actions:
+        lines.append("- No new action-worthy posts in the latest packet.")
+    for action in actions:
+        lines.append(
+            f"- Tier {action.get('tier')}: [{action.get('post_id')}]({action.get('url')}) "
+            f"`{action.get('action_type')}`"
+        )
+        for link in action.get("links") or []:
+            lines.append(f"  - {link}")
+    index_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return index_path
+
+
+def _task_description(*, handle: str, packet_dir: Path, action: dict[str, Any]) -> str:
+    links = "\n".join(f"- {link}" for link in action.get("links") or []) or "- None found in the post payload."
+    return "\n".join(
+        [
+            f"Process a Tier {action.get('tier')} Claude Code intelligence item from X account @{handle}.",
+            "",
+            f"Post URL: {action.get('url') or '(missing)'}",
+            f"Packet: {packet_dir}",
+            "",
+            "Post text:",
+            str(action.get("text") or "").strip(),
+            "",
+            "Referenced links:",
+            links,
+            "",
+            "Expected output:",
+            "- Read the packet files before acting.",
+            "- Study referenced docs/articles if links are present.",
+            "- Update the Claude Code intelligence knowledge base notes when durable knowledge is learned.",
+            "- For Tier 3 items, build a small private demo or implementation plan if the capability is code-worthy.",
+            "- Do not post to X. This lane is read-only unless explicitly re-authorized.",
+        ]
+    )
+
+
+def _write_packet_files(
+    *,
+    packet_dir: Path,
+    generated_at: str,
+    handle: str,
+    user_payload: dict[str, Any],
+    posts_payload: dict[str, Any],
+    new_posts: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+    error: str,
+) -> None:
+    _write_json(packet_dir / "raw_user.json", user_payload)
+    _write_json(packet_dir / "raw_posts.json", posts_payload)
+    _write_json(packet_dir / "new_posts.json", new_posts)
+    _write_json(packet_dir / "actions.json", actions)
+    (packet_dir / "source_links.md").write_text(_source_links_markdown(actions), encoding="utf-8")
+    (packet_dir / "triage.md").write_text(_triage_markdown(actions=actions, error=error), encoding="utf-8")
+    (packet_dir / "digest.md").write_text(_digest_markdown(handle=handle, actions=actions, new_posts=new_posts, error=error), encoding="utf-8")
+    manifest = {
+        "lane": LANE_SLUG,
+        "handle": handle,
+        "generated_at": generated_at,
+        "ok": not bool(error),
+        "error": error,
+        "new_post_count": len(new_posts),
+        "action_count": len(actions),
+        "files": [
+            "raw_user.json",
+            "raw_posts.json",
+            "new_posts.json",
+            "source_links.md",
+            "triage.md",
+            "actions.json",
+            "digest.md",
+        ],
+    }
+    _write_json(packet_dir / "manifest.json", manifest)
+
+
+def _digest_markdown(*, handle: str, actions: list[dict[str, Any]], new_posts: list[dict[str, Any]], error: str) -> str:
+    lines = [f"# Claude Code Intel Digest: @{handle}", ""]
+    if error:
+        lines.extend(["## Status", "", f"Source failure: `{error}`", ""])
+        return "\n".join(lines).rstrip() + "\n"
+    lines.extend(["## Summary", "", f"- New posts: `{len(new_posts)}`", f"- Actions: `{len(actions)}`", ""])
+    if not actions:
+        lines.append("No new posts were found in this poll.")
+    for action in actions:
+        lines.extend(
+            [
+                f"## Tier {action.get('tier')} - {action.get('action_type')}",
+                "",
+                f"- Post: {action.get('url') or action.get('post_id')}",
+                f"- Reasons: {', '.join(action.get('reasons') or [])}",
+                "",
+                str(action.get("text") or "").strip(),
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _source_links_markdown(actions: list[dict[str, Any]]) -> str:
+    lines = ["# Source Links", ""]
+    found = False
+    for action in actions:
+        for link in action.get("links") or []:
+            lines.append(f"- {link}")
+            found = True
+    if not found:
+        lines.append("- No external links found.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _triage_markdown(*, actions: list[dict[str, Any]], error: str) -> str:
+    lines = ["# Triage", ""]
+    if error:
+        lines.append(f"- Source failure: `{error}`")
+        return "\n".join(lines).rstrip() + "\n"
+    if not actions:
+        lines.append("- Tier 0: no new posts.")
+    for action in actions:
+        lines.extend(
+            [
+                f"- Tier {action.get('tier')}: `{action.get('action_type')}` for post `{action.get('post_id')}`",
+                f"  - Matched terms: {', '.join(action.get('matched_terms') or []) or '(none)'}",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}", "User-Agent": "universal-agent-claude-code-intel/1.0"}
+
+
+def _json_response(resp: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {}
+    if resp.status_code >= 400:
+        detail = ""
+        if isinstance(payload, dict):
+            detail = str(payload.get("title") or payload.get("detail") or payload.get("errors") or "").strip()
+        raise RuntimeError(f"X API request failed: HTTP {resp.status_code}{(': ' + detail) if detail else ''}")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _new_packet_dir(root: Path, *, handle: str, generated_at: str) -> Path:
+    dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    date = dt.strftime("%Y-%m-%d")
+    stamp = dt.strftime("%H%M%S")
+    safe_handle = re.sub(r"[^A-Za-z0-9_.-]+", "-", handle.strip().lstrip("@")) or DEFAULT_HANDLE
+    return root / "packets" / date / f"{stamp}__{safe_handle}"
+
+
+def _load_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"seen_post_ids": []}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"seen_post_ids": []}
+    return parsed if isinstance(parsed, dict) else {"seen_post_ids": []}
+
+
+def _save_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, state)
+
+
+def _next_state(*, state: dict[str, Any], handle: str, user_id: str, posts: list[dict[str, Any]], generated_at: str) -> dict[str, Any]:
+    existing = [str(v) for v in state.get("seen_post_ids", []) if str(v)]
+    ids = [str(post.get("id") or "").strip() for post in posts if str(post.get("id") or "").strip()]
+    merged = list(dict.fromkeys(ids + existing))[:1000]
+    next_state = dict(state)
+    next_state.update(
+        {
+            "handle": handle,
+            "user_id": user_id,
+            "last_success_at": generated_at,
+            "last_seen_post_id": ids[0] if ids else str(state.get("last_seen_post_id") or ""),
+            "seen_post_ids": merged,
+        }
+    )
+    return next_state
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True), encoding="utf-8")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _bounded_int(raw: Any, default: int, *, low: int, high: int) -> int:
+    try:
+        value = int(raw)
+    except Exception:
+        value = default
+    return max(low, min(value, high))

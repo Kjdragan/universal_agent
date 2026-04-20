@@ -1,10 +1,12 @@
-# ClaudeDevs X Intelligence Lane Deferred Design (2026-04-19)
+# ClaudeDevs X Intelligence Lane Design Handoff (2026-04-19)
+
+> Status update 2026-04-19: this document is now the historical design handoff. The live source of truth for the implemented lane is [118_X_API_And_Claude_Code_Intel_Source_Of_Truth_2026-04-19.md](118_X_API_And_Claude_Code_Intel_Source_Of_Truth_2026-04-19.md).
 
 ## Purpose
 
-This note preserves the design discussion for a future proactive `@ClaudeDevs` X monitoring lane. Development is intentionally deferred until a working xAI key or a more stable source path is available.
+This note preserves the design discussion for a proactive `@ClaudeDevs` X monitoring lane. Initial development resumed on 2026-04-19 using the X API bearer-token path rather than the earlier mirror-first fallback.
 
-The goal is to avoid losing the discussion and to make the next implementation pass easy to resume.
+The goal is to preserve the original decision context. Current implementation details belong in doc 118.
 
 ## Requested Capability
 
@@ -221,4 +223,3 @@ curl -L --max-time 25 -s \
 6. Add tiered triage.
 7. Add KB update path.
 8. Add Task Hub generation only after packet and triage are stable.
-

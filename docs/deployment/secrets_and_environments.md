@@ -112,6 +112,21 @@ UA_GATEWAY_URL="http://127.0.0.1:8002"
 - **Machine slug:** `vps-hq-production`
 - **Heartbeat/Cron:** Enabled in Infisical — this is the live system
 
+### X API / Claude Code Intel Secrets
+
+The Claude Code intelligence lane uses X API app-only read access to poll `@ClaudeDevs`.
+
+| Secret | Required for current lane? | Notes |
+|---|---:|---|
+| `X_BEARER_TOKEN` | Yes | App-only read token used by `src/universal_agent/services/claude_code_intel.py` |
+| `CLIENT_ID` / `CLIENT_SECRET` | No | Generic OAuth2 names for official X tooling compatibility |
+| `X_OAUTH2_CLIENT_ID` / `X_OAUTH2_CLIENT_SECRET` | No | Namespaced OAuth2 aliases for future user-context flows |
+| `X_OAUTH_CONSUMER_SECRET` | No | OAuth1 secret only; incomplete without `X_OAUTH_CONSUMER_KEY` |
+| `X_OAUTH_ACCESS_TOKEN` / `X_OAUTH_ACCESS_TOKEN_SECRET` | No | Future OAuth1 user-context support |
+| `X_OAUTH_CALLBACK_HOST` / `X_OAUTH_CALLBACK_PORT` / `X_OAUTH_CALLBACK_PATH` | No | Local callback metadata for future OAuth tooling |
+
+Current implementation is read-only and must not use posting endpoints without a separate approval-gated design. See [X API And Claude Code Intel Source Of Truth](../03_Operations/118_X_API_And_Claude_Code_Intel_Source_Of_Truth_2026-04-19.md).
+
 ## Deploy Workflow Contract
 
 The single production workflow, `.github/workflows/deploy.yml`, follows this sequence:
