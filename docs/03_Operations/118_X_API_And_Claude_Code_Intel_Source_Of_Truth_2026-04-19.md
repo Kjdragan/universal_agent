@@ -28,15 +28,22 @@ Live validation status on 2026-04-19:
 - The lane still wrote a failure packet with `manifest.json` `ok=false`, which is the intended no-silent-failure behavior.
 - Next operational step is to resolve X Developer Console access/credits/app permissions, then rerun the same packet-only smoke test.
 - Later on 2026-04-19, Kevin supplied the full X app credential set for app `main_nerfed1.py` (`app_id=28327271`, active, read/write, access token owner `@PaintersWayne`). The credential set was stored in Infisical `development`, `production`, and `local`.
-- A second packet-only smoke test after storing the full credential set still returned `403 Client Forbidden` on `GET /2/users/by/username/ClaudeDevs`, which points to X API product access/credits/app entitlement rather than a missing Infisical key.
+- A second packet-only smoke test after storing the full credential set still returned `403 Client Forbidden` on `GET /2/users/by/username/ClaudeDevs`.
+- The implementation now attempts app-only bearer first, then OAuth2 user token if `X_OAUTH2_ACCESS_TOKEN` exists, then OAuth1 user context if the OAuth1 key/token set exists.
+- A third packet-only smoke test tried app-only bearer and OAuth1 user context; both returned `403 Client Forbidden`.
+- `src/universal_agent/scripts/x_oauth2_bootstrap.py` now implements the official OAuth2 Authorization Code + PKCE bootstrap. It generated an authorization URL with scopes `tweet.read users.read offline.access` and persisted PKCE state under `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/oauth2/pending_oauth2.json`.
+- Kevin completed OAuth2 authorization successfully. `X_OAUTH2_ACCESS_TOKEN` and `X_OAUTH2_REFRESH_TOKEN` were stored in Infisical `development`, `production`, and `local`.
+- After OAuth2 success, direct endpoint diagnostics still returned `403`. X's detailed response said: `When authenticating requests to the Twitter API v2 endpoints, you must use keys and tokens from a Twitter developer App that is attached to a Project.` This means the current remaining blocker is X Developer Portal project/app attachment or API product entitlement, not Universal Agent code or missing tokens.
 
 Code-verified implementation points:
 
 - `src/universal_agent/services/claude_code_intel.py` defines the lane constants, env-backed config, packet root, local KB root, X bearer token lookup, and main `run_sync()` flow. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L32`.
 - The poller resolves the user via `GET /2/users/by/username/{username}`, then fetches posts from `GET /2/users/{id}/tweets` with rich post/user/media fields. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L233` and `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L242`.
+- The poller uses auth fallback order: app-only bearer, OAuth2 user access token, OAuth1 user context. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L633`.
 - Every run writes the packet files `raw_user.json`, `raw_posts.json`, `new_posts.json`, `source_links.md`, `triage.md`, `actions.json`, `digest.md`, and `manifest.json`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L514`.
 - Tier 3 and Tier 4 items are queued into Task Hub; Tier 1 and Tier 2 remain packet/artifact/KB inventory only. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L376`.
 - The cron entry point is `python -m universal_agent.scripts.claude_code_intel_sync`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_sync.py#L18`.
+- The OAuth2 bootstrap entry point is `python -m universal_agent.scripts.x_oauth2_bootstrap`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/x_oauth2_bootstrap.py#L18`.
 - Gateway startup auto-registers `claude_code_intel_sync` when Chron is enabled. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L13641` and `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L16592`.
 
 ## Runtime Flow
@@ -111,6 +118,11 @@ The current lane only needs `X_BEARER_TOKEN` for read-only app-only polling. The
 | `CLIENT_SECRET` | Generic OAuth2 client secret for official X tooling compatibility |
 | `X_OAUTH2_CLIENT_ID` | Namespaced OAuth2 client ID |
 | `X_OAUTH2_CLIENT_SECRET` | Namespaced OAuth2 client secret |
+| `X_OAUTH2_ACCESS_TOKEN` | OAuth2 user-context access token created by the PKCE flow |
+| `X_OAUTH2_REFRESH_TOKEN` | OAuth2 refresh token created only when `offline.access` is authorized |
+| `X_OAUTH2_EXPIRES_AT` | Unix timestamp for the current OAuth2 access token expiry |
+| `X_OAUTH2_SCOPE` | Authorized OAuth2 scope string |
+| `X_OAUTH2_TOKEN_TYPE` | OAuth2 token type, expected `bearer` |
 | `X_OAUTH_CONSUMER_KEY` | OAuth1 consumer/API key |
 | `X_OAUTH_CONSUMER_SECRET` | OAuth1 consumer secret; not enough by itself for OAuth1 |
 | `X_OAUTH_ACCESS_TOKEN` | OAuth1 user access token |
@@ -119,7 +131,7 @@ The current lane only needs `X_BEARER_TOKEN` for read-only app-only polling. The
 | `X_OAUTH_CALLBACK_PORT` | Local callback port, currently `8976` |
 | `X_OAUTH_CALLBACK_PATH` | Local callback path, currently `/oauth/callback` |
 
-The OAuth1 consumer-key gap was resolved on 2026-04-19. OAuth2 access/refresh tokens are still not implemented; the stored OAuth2 client ID/client secret are enough to start an OAuth2 authorization flow, but not enough by themselves to call user-context endpoints.
+The OAuth1 consumer-key gap was resolved on 2026-04-19. OAuth2 client ID/client secret are enough to start an OAuth2 authorization flow, but not enough by themselves to call user-context endpoints. The `x_oauth2_bootstrap.py` script exchanges the browser authorization callback for `X_OAUTH2_ACCESS_TOKEN` and `X_OAUTH2_REFRESH_TOKEN`.
 
 ## Configuration
 
@@ -145,6 +157,20 @@ Packet-only manual run:
 ```bash
 PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_sync --no-task-hub
 ```
+
+OAuth2 bootstrap:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.x_oauth2_bootstrap authorize-url
+```
+
+Open the printed authorization URL in the browser, authorize the app, then exchange the callback URL:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.x_oauth2_bootstrap exchange --callback-url '<PASTE_CALLBACK_URL>'
+```
+
+The exchange stores `X_OAUTH2_ACCESS_TOKEN`, `X_OAUTH2_REFRESH_TOKEN`, `X_OAUTH2_EXPIRES_AT`, `X_OAUTH2_SCOPE`, and `X_OAUTH2_TOKEN_TYPE` to Infisical `development`, `production`, and `local` by default.
 
 ## Tiering Contract
 

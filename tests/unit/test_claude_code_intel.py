@@ -11,6 +11,8 @@ from universal_agent.services.claude_code_intel import (
     ClaudeCodeIntelConfig,
     classify_post,
     extract_links,
+    fetch_user_by_username_with_fallbacks,
+    _oauth1_headers,
     run_sync,
 )
 
@@ -139,3 +141,41 @@ def test_run_sync_writes_failure_packet_when_token_missing(tmp_path: Path) -> No
     manifest = json.loads((packet / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["ok"] is False
     assert (tmp_path / "knowledge-bases" / "claude-code-intelligence" / "source_index.md").exists()
+
+
+def test_oauth2_user_token_fallback_after_app_bearer_forbidden(monkeypatch) -> None:
+    monkeypatch.setenv("X_OAUTH2_ACCESS_TOKEN", "user-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization", "")
+        if auth == "Bearer app-token":
+            return httpx.Response(403, json={"title": "Client Forbidden"})
+        if auth == "Bearer user-token":
+            return httpx.Response(200, json={"data": {"id": "12345", "username": "ClaudeDevs"}})
+        return httpx.Response(401, json={"title": "Unauthorized"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    payload = fetch_user_by_username_with_fallbacks(client, token="app-token", username="ClaudeDevs")
+
+    assert payload["data"]["id"] == "12345"
+    assert payload["_ua_auth_mode"] == "oauth2_user"
+
+
+def test_oauth1_header_is_constructed_when_credentials_exist(monkeypatch) -> None:
+    monkeypatch.setenv("X_OAUTH_CONSUMER_KEY", "consumer-key")
+    monkeypatch.setenv("X_OAUTH_CONSUMER_SECRET", "consumer-secret")
+    monkeypatch.setenv("X_OAUTH_ACCESS_TOKEN", "access-token")
+    monkeypatch.setenv("X_OAUTH_ACCESS_TOKEN_SECRET", "access-secret")
+
+    headers = _oauth1_headers(
+        "GET",
+        "https://api.x.com/2/users/by/username/ClaudeDevs",
+        params={"user.fields": "created_at"},
+    )
+
+    assert headers is not None
+    assert headers["Authorization"].startswith("OAuth ")
+    assert "oauth_consumer_key=\"consumer-key\"" in headers["Authorization"]
+    assert "oauth_token=\"access-token\"" in headers["Authorization"]
+    assert "consumer-secret" not in headers["Authorization"]
+    assert "access-secret" not in headers["Authorization"]

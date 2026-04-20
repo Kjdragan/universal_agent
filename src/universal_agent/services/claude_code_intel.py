@@ -8,14 +8,17 @@ Task Hub follow-up only for posts that look implementation-worthy.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -107,6 +110,7 @@ class ClaudeCodeIntelRun:
     generated_at: str
     handle: str
     user_id: str = ""
+    auth_mode: str = ""
     packet_dir: str = ""
     new_post_count: int = 0
     seen_post_count: int = 0
@@ -159,17 +163,25 @@ def run_sync(
     actions: list[dict[str, Any]] = []
 
     try:
-        if not token:
-            raise RuntimeError("missing X_BEARER_TOKEN")
+        if not token and not _has_user_auth_fallback():
+            raise RuntimeError("missing X_BEARER_TOKEN or X user-context auth")
         owns_client = client is None
         http_client = client or httpx.Client(timeout=cfg.request_timeout_seconds)
         try:
-            user_payload = fetch_user_by_username(http_client, token=token, username=cfg.handle)
+            user_payload = fetch_user_by_username_with_fallbacks(http_client, token=token, username=cfg.handle)
+            auth_mode = str(user_payload.pop("_ua_auth_mode", "") or "")
             user_id = str((user_payload.get("data") or {}).get("id") or "").strip()
             if not user_id:
                 raise RuntimeError("X user lookup response did not include data.id")
             since_id = str(state.get("last_seen_post_id") or "").strip() or None
-            posts_payload = fetch_user_posts(http_client, token=token, user_id=user_id, max_results=cfg.max_results, since_id=since_id)
+            posts_payload = fetch_user_posts_with_fallbacks(
+                http_client,
+                token=token,
+                user_id=user_id,
+                max_results=cfg.max_results,
+                since_id=since_id,
+            )
+            auth_mode = str(posts_payload.pop("_ua_auth_mode", "") or auth_mode)
         finally:
             if owns_client:
                 http_client.close()
@@ -207,6 +219,7 @@ def run_sync(
         )
         run.ok = True
         run.user_id = str((user_payload.get("data") or {}).get("id") or "")
+        run.auth_mode = auth_mode
         run.new_post_count = len(new_posts)
         run.seen_post_count = len(posts)
         run.action_count = len(actions)
@@ -246,6 +259,12 @@ def fetch_user_by_username(client: httpx.Client, *, token: str, username: str) -
     return _json_response(resp)
 
 
+def fetch_user_by_username_with_fallbacks(client: httpx.Client, *, token: str, username: str) -> dict[str, Any]:
+    url = f"https://api.x.com/2/users/by/username/{username}"
+    params = {"user.fields": "created_at,description,entities,public_metrics,verified,verified_type"}
+    return _get_json_with_auth_fallbacks(client, url=url, params=params, app_bearer_token=token)
+
+
 def fetch_user_posts(
     client: httpx.Client,
     *,
@@ -266,6 +285,32 @@ def fetch_user_posts(
         params["since_id"] = since_id
     resp = client.get(f"https://api.x.com/2/users/{user_id}/tweets", headers=_auth_headers(token), params=params)
     return _json_response(resp)
+
+
+def fetch_user_posts_with_fallbacks(
+    client: httpx.Client,
+    *,
+    token: str,
+    user_id: str,
+    max_results: int = DEFAULT_MAX_RESULTS,
+    since_id: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, str] = {
+        "max_results": str(max(5, min(int(max_results or DEFAULT_MAX_RESULTS), 100))),
+        "tweet.fields": "id,text,created_at,public_metrics,entities,conversation_id,referenced_tweets,attachments",
+        "expansions": "author_id,attachments.media_keys,referenced_tweets.id",
+        "user.fields": "id,name,username,verified,public_metrics",
+        "media.fields": "media_key,type,url,preview_image_url,alt_text",
+        "exclude": "retweets",
+    }
+    if since_id:
+        params["since_id"] = since_id
+    return _get_json_with_auth_fallbacks(
+        client,
+        url=f"https://api.x.com/2/users/{user_id}/tweets",
+        params=params,
+        app_bearer_token=token,
+    )
 
 
 def normalize_posts(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -613,17 +658,119 @@ def _auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "User-Agent": "universal-agent-claude-code-intel/1.0"}
 
 
+def _get_json_with_auth_fallbacks(
+    client: httpx.Client,
+    *,
+    url: str,
+    params: dict[str, str],
+    app_bearer_token: str,
+) -> dict[str, Any]:
+    candidates: list[tuple[str, dict[str, str]]] = []
+    if str(app_bearer_token or "").strip():
+        candidates.append(("app_bearer", _auth_headers(app_bearer_token)))
+    oauth2_token = str(os.getenv("X_OAUTH2_ACCESS_TOKEN") or "").strip()
+    if oauth2_token:
+        candidates.append(("oauth2_user", _auth_headers(oauth2_token)))
+    oauth1_headers = _oauth1_headers("GET", url, params=params)
+    if oauth1_headers:
+        candidates.append(("oauth1_user", oauth1_headers))
+
+    if not candidates:
+        raise RuntimeError("missing X auth credentials")
+
+    auth_failures: list[str] = []
+    last_payload: dict[str, Any] = {}
+    for auth_mode, headers in candidates:
+        resp = client.get(url, headers=headers, params=params)
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {}
+        if resp.status_code < 400:
+            out = payload if isinstance(payload, dict) else {}
+            out["_ua_auth_mode"] = auth_mode
+            return out
+        last_payload = payload if isinstance(payload, dict) else {}
+        detail = _x_error_detail(last_payload)
+        auth_failures.append(f"{auth_mode}: HTTP {resp.status_code}{(': ' + detail) if detail else ''}")
+        if resp.status_code not in {401, 403}:
+            raise RuntimeError(f"X API request failed: HTTP {resp.status_code}{(': ' + detail) if detail else ''}")
+
+    raise RuntimeError("X API auth attempts failed: " + "; ".join(auth_failures))
+
+
+def _has_user_auth_fallback() -> bool:
+    if str(os.getenv("X_OAUTH2_ACCESS_TOKEN") or "").strip():
+        return True
+    return all(
+        str(os.getenv(key) or "").strip()
+        for key in (
+            "X_OAUTH_CONSUMER_KEY",
+            "X_OAUTH_CONSUMER_SECRET",
+            "X_OAUTH_ACCESS_TOKEN",
+            "X_OAUTH_ACCESS_TOKEN_SECRET",
+        )
+    )
+
+
+def _oauth1_headers(method: str, url: str, *, params: dict[str, str] | None = None) -> dict[str, str] | None:
+    consumer_key = str(os.getenv("X_OAUTH_CONSUMER_KEY") or "").strip()
+    consumer_secret = str(os.getenv("X_OAUTH_CONSUMER_SECRET") or "").strip()
+    access_token = str(os.getenv("X_OAUTH_ACCESS_TOKEN") or "").strip()
+    access_token_secret = str(os.getenv("X_OAUTH_ACCESS_TOKEN_SECRET") or "").strip()
+    if not all((consumer_key, consumer_secret, access_token, access_token_secret)):
+        return None
+
+    oauth_params = {
+        "oauth_consumer_key": consumer_key,
+        "oauth_nonce": hashlib.sha256(f"{time.time_ns()}:{os.getpid()}".encode()).hexdigest()[:32],
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(time.time())),
+        "oauth_token": access_token,
+        "oauth_version": "1.0",
+    }
+    split = urlsplit(url)
+    base_url = f"{split.scheme}://{split.netloc}{split.path}"
+    signature_params: dict[str, str] = {}
+    signature_params.update(params or {})
+    signature_params.update(oauth_params)
+    encoded_pairs = [
+        (quote(str(key), safe=""), quote(str(value), safe=""))
+        for key, value in signature_params.items()
+    ]
+    parameter_string = "&".join(f"{key}={value}" for key, value in sorted(encoded_pairs))
+    signature_base = "&".join(
+        [
+            method.upper(),
+            quote(base_url, safe=""),
+            quote(parameter_string, safe=""),
+        ]
+    )
+    signing_key = f"{quote(consumer_secret, safe='')}&{quote(access_token_secret, safe='')}"
+    digest = hmac.new(signing_key.encode(), signature_base.encode(), "sha1").digest()
+    import base64
+
+    oauth_params["oauth_signature"] = base64.b64encode(digest).decode()
+    header_value = "OAuth " + ", ".join(
+        f'{quote(key, safe="")}="{quote(value, safe="")}"'
+        for key, value in sorted(oauth_params.items())
+    )
+    return {"Authorization": header_value, "User-Agent": "universal-agent-claude-code-intel/1.0"}
+
+
 def _json_response(resp: httpx.Response) -> dict[str, Any]:
     try:
         payload = resp.json()
     except Exception:
         payload = {}
     if resp.status_code >= 400:
-        detail = ""
-        if isinstance(payload, dict):
-            detail = str(payload.get("title") or payload.get("detail") or payload.get("errors") or "").strip()
+        detail = _x_error_detail(payload if isinstance(payload, dict) else {})
         raise RuntimeError(f"X API request failed: HTTP {resp.status_code}{(': ' + detail) if detail else ''}")
     return payload if isinstance(payload, dict) else {}
+
+
+def _x_error_detail(payload: dict[str, Any]) -> str:
+    return str(payload.get("title") or payload.get("detail") or payload.get("errors") or payload.get("error") or "").strip()
 
 
 def _new_packet_dir(root: Path, *, handle: str, generated_at: str) -> Path:
