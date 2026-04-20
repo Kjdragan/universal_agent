@@ -127,13 +127,10 @@ export function GlobalSidebar({
         />
       )}
 
-      {/* Desktop hover trigger strip — invisible 16px zone on left edge */}
+      {/* Desktop hover trigger strip — invisible zone on left edge.
+         pointer-events:none so it never blocks clicks on sidebar links. */}
       <div
-        className="hidden md:block fixed inset-y-0 left-0 w-4 z-50"
-        onMouseEnter={() => {
-          if (sidebarTimeoutRef.current) clearTimeout(sidebarTimeoutRef.current);
-          setSidebarHovered(true);
-        }}
+        className="hidden md:block fixed inset-y-0 left-0 w-4 z-50 pointer-events-none"
       />
 
       <aside
