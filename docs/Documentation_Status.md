@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-19 (Task Forge doc #119 added)
+**Last updated:** 2026-04-20 (Test Strategy doc #121 added)
 
 ## Development (development/)
 
@@ -95,6 +95,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 118 | X API And Claude Code Intel Source Of Truth — canonical implementation reference for X API development, `@ClaudeDevs` polling, Infisical keys, packet outputs, local Claude Code intelligence KB index, Task Hub tiering, and cron registration |
 | 119 | Task Forge: Autonomous Skill Generation Pipeline — **canonical source of truth** for the meta-skill that converts human intent into structured, reusable task-skills; 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote), skill maturity model (v0→v3), dispatch integration, hook hardening, skill-creator cooperative relationship, recursive learning loop philosophy |
 | 120 | ClaudeDevs X Intel VPS Runtime Audit — read-only production audit of the first 19-post `@ClaudeDevs` cron packet, downstream Simone work products, Task Hub/artifact state, email verification, tier-count discrepancy, and recommendations for the Claude Code intelligence wiki pipeline |
+| 121 | Test Strategy and Regression Prevention — **canonical source of truth** for test suite layout (1211 unit tests), mandatory pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, maintenance checklist, and the April 20 stabilization history |
 
 ## CSI Subsystem (04_CSI/)
 

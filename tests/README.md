@@ -2,51 +2,66 @@
 
 ## 🛡️ The Safety Net (Start Here)
 
-For most development, you only need to run the **Stabilization Suite**. This ensures that the Terminal Direct and Gateway modes are chemically stable.
+The **unit test suite** is the primary regression gate. It runs **1211 tests in ~7 minutes** and is the most important command to run before shipping.
 
 ```bash
-# ⚡ Run Verification (Smoke Tests - <30s)
-./run_verification.sh
+# ⚡ THE pre-ship command — run this before every /ship
+uv run pytest tests/unit/ -q --ignore=tests/unit/test_zai_llm_connectivity.py
 
-# 🐢 Run Full Parity (Golden Tests - ~3m)
-./run_verification.sh --full
+# Expected: 1211 passed, 0 failed
 ```
+
+> **Note**: `test_zai_llm_connectivity.py` requires live API tokens. Include it when tokens are refreshed.
 
 ## 📂 Directory Structure
 
-We have organized the testing suite to separate "Contract/Stability" tests from "Implementation Details".
-
 ```text
 tests/
-├── stabilization/          # 🚨 CRITICAL: The primary safety net. verifying Direct vs Gateway parity.
-│   ├── test_smoke_direct.py
-│   └── test_smoke_gateway.py
-│
-├── gateway/                # Implementation details of the Gateway Server & Session Manager
-├── durable/                # Durable State, Ledger, and Persistence logic
-├── letta/                  # Letta Memory System integration
-├── integration/            # End-to-End flows (e.g., Composio, Web UI, Full Workspace)
-└── unit/                   # Helper functions and small components
+├── conftest.py                  # Root — Logfire suppression + ContextVar isolation (autouse)
+├── unit/              (156 files) # 🚨 PRIMARY: Hooks, guardrails, Task Hub, heartbeat, workspace
+├── gateway/            (52 files) # Gateway server integration (subprocess-based)
+├── stabilization/       (3 files) # Direct vs Gateway parity smoke tests
+├── durable/             (7 files) # Durable state, ledger, persistence
+├── integration/        (10 files) # E2E flows (Composio, Web UI, workspace)
+├── memory/             (14 files) # Letta memory system
+├── api/                 (9 files) # API endpoint tests
+├── delegation/          (5 files) # VP delegation
+├── discord/             (2 files) # Discord intelligence
+├── letta/              (10 files) # Letta subsystem
+├── bot/                 (2 files) # Bot tests
+├── contract/            (1 file)  # Contract tests
+├── skills/              (2 files) # Skill tests
+└── reproduction/        (1 file)  # Bug reproductions
 ```
 
 ## Running Component Tests
 
-If you are working on a specific subsystem, run tests through the project-managed environment. Prefer `uv run pytest` or the `make` targets rather than bare `pytest`, so you don't accidentally use the wrong interpreter.
-
 ```bash
-# Gateway Logic
-uv run pytest tests/gateway/ -v
+# Unit tests (primary safety net)
+uv run pytest tests/unit/ -q
 
-# Durable Execution logic
+# Gateway integration
+uv run pytest tests/gateway/ -x -vv
+
+# Durable execution logic
 uv run pytest tests/durable/ -v
 
-# Memory System
+# Memory system
 uv run pytest tests/letta/ -v
 
-# Whole suite
-make test
+# Research pipeline drift detection (41 tests)
+uv run pytest tests/unit/test_research_pipeline_drift.py -v
+
+# Full suite (~15-20 min)
+uv run pytest tests/ -q --ignore=tests/unit/test_zai_llm_connectivity.py
 ```
+
+## Test Isolation
+
+The root `conftest.py` provides an autouse fixture that resets the workspace `ContextVar` between every test. This prevents the most common class of ordering-dependent failures.
+
+See [docs/03_Operations/121_Test_Strategy_And_Regression_Prevention_2026-04-20.md](../docs/03_Operations/121_Test_Strategy_And_Regression_Prevention_2026-04-20.md) for the full testing strategy, common failure patterns, and maintenance guidelines.
 
 ## CI Integration
 
-Our CI pipeline runs the **Stabilization Smoke Tests** on every commit to ensure no regression in the core startup loops.
+The CI/CD pipeline currently does not include a test gate. Tests must be run **manually before `/ship`**. Adding an automated test step to `.github/workflows/deploy.yml` is a recommended future improvement.
