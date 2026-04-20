@@ -277,6 +277,14 @@ async def test_todo_pipeline_explicit_completion_stays_completed_and_visible(mon
     await service._process_session(session)
 
     with _db_connect(db_path) as conn:
+        # Record outbound delivery proof before completing — the email
+        # verification gate requires this to allow completion.
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="email:completed-flow",
+            channel="agentmail",
+            message_id="msg-completed-flow-001",
+        )
         task_hub.perform_task_action(
             conn,
             task_id="email:completed-flow",

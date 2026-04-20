@@ -1553,6 +1553,12 @@ def _task_requires_verified_final_delivery(task: dict[str, Any], *, reason_text:
         return True
     if str(task.get("source_kind") or "").strip().lower() == "email":
         return True
+    # Only use the NLP heuristic when the task has NO explicit delivery channel.
+    # If final_channel is explicitly set to a non-email value (e.g. "chat"),
+    # the agent mentioning "email" in its free-text reason should not override
+    # the structural metadata and force email verification.
+    if final_channel:
+        return False
     return _completion_reason_claims_email_delivery(reason_text)
 
 
@@ -1584,8 +1590,10 @@ def _task_has_verified_final_delivery(conn: sqlite3.Connection, task: dict[str, 
 
 
 def _task_can_self_verify_after_delivery(conn: sqlite3.Connection, task: dict[str, Any]) -> bool:
-    if _task_canonical_executor(task) != "simone_first":
-        return False
+    # Any task with a verified final delivery can self-verify,
+    # regardless of executor.  The previous simone_first restriction
+    # caused non-simone tasks (Task Forge, proactive) to be parked
+    # even when their delivery was provably complete.
     return _task_has_verified_final_delivery(conn, task)
 
 
@@ -2929,37 +2937,60 @@ def perform_task_action(
             reason_text=reason_text,
         )
         if requires_verified_delivery and not _task_has_verified_final_delivery(conn, task_for_verification):
-            dispatch_meta["last_disposition"] = "review"
-            dispatch_meta["last_disposition_reason"] = reason_text or "completion_claim_missing_email_delivery"
-            dispatch_meta["completion_unverified"] = True
-            dispatch_meta["completion_blocked_reason"] = "missing_verified_email_delivery"
-            metadata["dispatch"] = dispatch_meta
-            _complete_active_assignments_for_task(
-                conn,
-                task_id=task_id,
-                result_summary="completion_claim_missing_email_delivery",
-                ended_at=now_iso,
-            )
-            conn.execute(
-                "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-                (TASK_STATUS_REVIEW, "needs_review", _json_dumps(metadata), now_iso, task_id),
-            )
-            _record_evaluation(
-                conn,
-                task_id=task_id,
-                agent_id=agent_id,
-                decision="review",
-                reason="completion_claim_missing_email_delivery",
-                score=_safe_float(item.get("score"), 0.0),
-                score_confidence=_safe_float(item.get("score_confidence"), 0.0),
-                judge_payload={
-                    "source": "completion_delivery_verification",
-                    "expected_channel": expected_channel,
-                    "agent_claim": reason_text,
-                },
-            )
-            conn.commit()
-            return get_item(conn, task_id) or item
+            # Fallback: before parking in needs_review, check if the task has
+            # a verified outbound delivery on ANY channel (e.g. agent delivered
+            # via chat but the gate expected email).  If proven delivery exists
+            # on a different channel, allow completion instead of parking.
+            _has_any_outbound = False
+            _fb_dispatch = dict((task_for_verification.get("metadata") or {}).get("dispatch") or {})
+            _fb_outbound = dict(_fb_dispatch.get("outbound_delivery") or {})
+            _fb_marker = str(_fb_outbound.get("sent_at") or _fb_outbound.get("message_id") or "").strip()
+            if _fb_marker:
+                _has_any_outbound = True
+            if not _has_any_outbound:
+                _has_any_outbound = _email_side_effects_detected(conn, task_id)
+            if _has_any_outbound:
+                logger.info(
+                    "Task Hub complete action: task %s has verified outbound delivery on alternate channel; "
+                    "auto-completing instead of parking in needs_review (expected_channel=%s, agent_claim=%s)",
+                    task_id,
+                    expected_channel,
+                    (reason_text or "")[:120],
+                )
+                # Fall through to the normal completion path below
+                pass
+            else:
+                dispatch_meta["last_disposition"] = "review"
+                dispatch_meta["last_disposition_reason"] = reason_text or "completion_claim_missing_email_delivery"
+                dispatch_meta["completion_unverified"] = True
+                dispatch_meta["completion_blocked_reason"] = "missing_verified_email_delivery"
+                metadata["dispatch"] = dispatch_meta
+                _complete_active_assignments_for_task(
+                    conn,
+                    task_id=task_id,
+                    result_summary="completion_claim_missing_email_delivery",
+                    ended_at=now_iso,
+                )
+                conn.execute(
+                    "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+                    (TASK_STATUS_REVIEW, "needs_review", _json_dumps(metadata), now_iso, task_id),
+                )
+                _record_evaluation(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    decision="review",
+                    reason="completion_claim_missing_email_delivery",
+                    score=_safe_float(item.get("score"), 0.0),
+                    score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+                    judge_payload={
+                        "source": "completion_delivery_verification",
+                        "expected_channel": expected_channel,
+                        "agent_claim": reason_text,
+                    },
+                )
+                conn.commit()
+                return get_item(conn, task_id) or item
         dispatch_meta["last_disposition"] = "completed"
         dispatch_meta["last_disposition_reason"] = reason_text or "manual_complete"
         dispatch_meta["completion_unverified"] = False

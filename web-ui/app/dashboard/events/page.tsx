@@ -255,7 +255,8 @@ export default function DashboardEventsPage() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("");
+  const [checkedSources, setCheckedSources] = useState<Set<string>>(new Set());
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [severityFilter, setSeverityFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [kindFilter, setKindFilter] = useState("");
@@ -263,7 +264,6 @@ export default function DashboardEventsPage() {
   const [actionableOnly, setActionableOnly] = useState(false);
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [hideTransient, setHideTransient] = useState(false);
-  const [hideSystemNoise, setHideSystemNoise] = useState(true);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -307,18 +307,18 @@ export default function DashboardEventsPage() {
   const buildFilterParams = useCallback(
     (includeActionable = true): URLSearchParams => {
       const params = new URLSearchParams();
-      if (sourceFilter) params.set("source_domain", sourceFilter);
+      // No source_domain param — we fetch all sources and filter client-side via checkedSources
       if (severityFilter) params.set("severity", severityFilter);
       if (statusFilter) params.set("status", statusFilter);
       if (kindFilter) params.set("kind", kindFilter);
       if (includeActionable && actionableOnly) params.set("requires_action", "true");
       if (pinnedOnly) params.set("pinned", "true");
-      params.set("all_noise", (!hideSystemNoise).toString());
+      params.set("all_noise", "true");
       const bounds = buildTimeBounds();
       if (bounds.since) params.set("since", bounds.since);
       return params;
     },
-    [actionableOnly, buildTimeBounds, kindFilter, pinnedOnly, severityFilter, sourceFilter, statusFilter, hideSystemNoise],
+    [actionableOnly, buildTimeBounds, kindFilter, pinnedOnly, severityFilter, statusFilter],
   );
 
   const loadAudit = useCallback(async (eventId: string) => {
@@ -404,12 +404,14 @@ export default function DashboardEventsPage() {
     /transient/i,
   ], []);
 
-  const _SYSTEM_NOISE_SOURCES = useMemo(() => new Set(["continuity", "system"]), []);
-
   const filteredItems = useMemo(() => {
     let result = items;
-    if (hideSystemNoise) {
-      result = result.filter((item) => !_SYSTEM_NOISE_SOURCES.has(item.source_domain));
+    // Additive pill filter: only show events whose source_domain is checked
+    if (checkedSources.size > 0) {
+      result = result.filter((item) => checkedSources.has(item.source_domain));
+    } else {
+      // Nothing checked = nothing shown (build-up model)
+      result = [];
     }
     if (hideTransient) {
       result = result.filter((item) => {
@@ -421,7 +423,7 @@ export default function DashboardEventsPage() {
       });
     }
     return result;
-  }, [items, hideTransient, hideSystemNoise, _TRANSIENT_PATTERNS, _SYSTEM_NOISE_SOURCES]);
+  }, [items, hideTransient, checkedSources, _TRANSIENT_PATTERNS]);
 
   const [copyBusy, setCopyBusy] = useState(false);
 
@@ -430,7 +432,7 @@ export default function DashboardEventsPage() {
     setCopyBusy(true);
     try {
       const lines: string[] = [
-        `# UA Events Digest (${filteredItems.length} events, filter: ${timeWindow}${sourceFilter ? ` source=${sourceFilter}` : ""}${severityFilter ? ` severity=${severityFilter}` : ""})`,
+        `# UA Events Digest (${filteredItems.length} events, filter: ${timeWindow} sources=[${Array.from(checkedSources).join(",")}]${severityFilter ? ` severity=${severityFilter}` : ""})`,
         `# Exported: ${new Date().toISOString()}`,
         "",
       ];
@@ -460,7 +462,7 @@ export default function DashboardEventsPage() {
     } finally {
       setCopyBusy(false);
     }
-  }, [filteredItems, timeWindow, sourceFilter, severityFilter]);
+  }, [filteredItems, timeWindow, checkedSources, severityFilter]);
 
   const deleteAllNotifications = useCallback(async () => {
     const targetCount = items.length;
@@ -560,11 +562,70 @@ export default function DashboardEventsPage() {
     }
   }, []);
 
+  // Fetch event source preferences on mount (before loading events)
+  const fetchEventPreferences = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/preferences`, { cache: "no-store" });
+      if (r.ok) {
+        const data = await r.json();
+        const sources = data.preferences?.events_checked_sources;
+        if (Array.isArray(sources) && sources.length > 0) {
+          setCheckedSources(new Set(sources as string[]));
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load event preferences", e);
+    } finally {
+      setPreferencesLoaded(true);
+    }
+  }, []);
+
+  const toggleSource = useCallback((source: string) => {
+    setCheckedSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(source)) next.delete(source);
+      else next.add(source);
+      const arr = Array.from(next);
+      // Fire-and-forget sync to backend
+      fetch(`${API_BASE}/api/v1/ops/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences: { events_checked_sources: arr } }),
+      }).catch((e) => console.error("Failed to save event preference", e));
+      return next;
+    });
+  }, []);
+
+  const selectAllSources = useCallback(() => {
+    const allSet = new Set(SOURCE_ORDER);
+    setCheckedSources(allSet);
+    fetch(`${API_BASE}/api/v1/ops/preferences`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences: { events_checked_sources: SOURCE_ORDER } }),
+    }).catch((e) => console.error("Failed to save event preference", e));
+  }, []);
+
+  const deselectAllSources = useCallback(() => {
+    setCheckedSources(new Set());
+    fetch(`${API_BASE}/api/v1/ops/preferences`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences: { events_checked_sources: [] } }),
+    }).catch((e) => console.error("Failed to save event preference", e));
+  }, []);
+
   useEffect(() => {
+    void fetchEventPreferences();
+  }, [fetchEventPreferences]);
+
+  // Wait for preferences before loading events
+  useEffect(() => {
+    if (!preferencesLoaded) return;
     void loadEvents({ append: false });
     void loadCounters();
     void loadActivityMetrics();
-  }, [loadActivityMetrics, loadEvents, loadCounters]);
+  }, [loadActivityMetrics, loadEvents, loadCounters, preferencesLoaded]);
 
   useEffect(() => {
     void loadPresets();
@@ -749,10 +810,15 @@ export default function DashboardEventsPage() {
   const selectedCanary = useMemo(() => parseDeliveryHealthPanelState(selected), [selected]);
   const selectedHeartbeatBadges = useMemo(() => heartbeatMediationBadges(selected), [selected]);
 
-  const sourceOptions = useMemo(() => {
-    const values = new Set<string>();
-    for (const row of items) values.add(String(row.source_domain || "system"));
-    return [...values].sort();
+  // Compute per-source counts for the pill badges
+  const sourceCountsFromItems = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const source of SOURCE_ORDER) counts[source] = 0;
+    for (const row of items) {
+      const sd = String(row.source_domain || "system");
+      counts[sd] = (counts[sd] || 0) + 1;
+    }
+    return counts;
   }, [items]);
 
   const kindOptions = useMemo(() => {
@@ -767,17 +833,17 @@ export default function DashboardEventsPage() {
   }, [loadEvents, loadingMore, nextCursor]);
 
   const currentPresetFilters = useCallback((): Record<string, unknown> => ({
-    source_domain: sourceFilter || "",
+    source_domain: "",
     severity: severityFilter || "",
     status: statusFilter || "",
     kind: kindFilter || "",
     time_window: timeWindow,
     actionable_only: actionableOnly,
     pinned_only: pinnedOnly,
-  }), [actionableOnly, kindFilter, pinnedOnly, severityFilter, sourceFilter, statusFilter, timeWindow]);
+  }), [actionableOnly, kindFilter, pinnedOnly, severityFilter, statusFilter, timeWindow]);
 
   const applyPresetFilters = useCallback((filters: Record<string, unknown>) => {
-    setSourceFilter(String(filters.source_domain || ""));
+    // Source filtering is now handled by pills (checkedSources), not presets
     setSeverityFilter(String(filters.severity || ""));
     setStatusFilter(String(filters.status || ""));
     setKindFilter(String(filters.kind || ""));
@@ -1074,18 +1140,6 @@ export default function DashboardEventsPage() {
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <select
-            value={sourceFilter}
-            onChange={(event) => setSourceFilter(event.target.value)}
-            className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
-          >
-            <option value="">All Sources</option>
-            {sourceOptions.map((source) => (
-              <option key={source} value={source}>
-                {source}
-              </option>
-            ))}
-          </select>
-          <select
             value={severityFilter}
             onChange={(event) => setSeverityFilter(event.target.value)}
             className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
@@ -1159,41 +1213,53 @@ export default function DashboardEventsPage() {
             />
             Hide transient
           </label>
-          <label className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[12px] text-primary/80">
-            <input
-              type="checkbox"
-              checked={hideSystemNoise}
-              onChange={(event) => setHideSystemNoise(event.target.checked)}
-            />
-            Hide system
-          </label>
         </div>
 
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mr-1">Sources</span>
           {SOURCE_ORDER.map((source) => {
-            const bucket = counters.by_source[source] || { unread: 0, actionable: 0, total: 0 };
-            const selected = sourceFilter === source;
+            const isChecked = checkedSources.has(source);
+            const count = sourceCountsFromItems[source] || 0;
             return (
               <button
                 key={`src-chip-${source}`}
                 type="button"
-                onClick={() => setSourceFilter((prev) => (prev === source ? "" : source))}
-                className={`rounded border px-2 py-1 text-[11px] transition-colors ${SOURCE_STYLES[source] || SOURCE_STYLES.system} ${selected ? "ring-1 ring-primary/40" : "opacity-80 hover:opacity-100"}`}
-                title={`unread: ${bucket.unread} | actionable: ${bucket.actionable} | total: ${bucket.total}`}
-                aria-pressed={selected}
+                onClick={() => toggleSource(source)}
+                className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all ${isChecked
+                  ? `${SOURCE_STYLES[source] || SOURCE_STYLES.system} ring-1 ring-primary/40 shadow-sm`
+                  : "border-border/40 bg-background/30 text-muted-foreground/60 hover:bg-background/50 hover:text-foreground/80"
+                }`}
+                title={`${source}: ${count} event(s) in current window`}
+                aria-pressed={isChecked}
               >
-                {source}
+                {source}{count > 0 ? ` (${count})` : ""}
               </button>
             );
           })}
+          <span className="mx-1 h-4 w-px bg-border/40" />
           <button
             type="button"
-            onClick={() => setSourceFilter("")}
-            className={`rounded border px-2 py-1 text-[11px] transition-colors ${sourceFilter === "" ? "border-primary/40 bg-primary/10 text-primary/80 ring-1 ring-primary/40" : "border-border bg-background/60 text-foreground/80 hover:bg-card/70"}`}
-            title={`Show all sources • unread: ${counters.totals.unread} | actionable: ${counters.totals.actionable} | total: ${counters.totals.total}`}
-            aria-pressed={sourceFilter === ""}
+            onClick={selectAllSources}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all ${
+              checkedSources.size === SOURCE_ORDER.length
+                ? "border-primary/40 bg-primary/15 text-primary ring-1 ring-primary/40"
+                : "border-border/40 bg-background/30 text-muted-foreground/60 hover:bg-primary/10 hover:text-primary/80"
+            }`}
+            title="Select all source categories"
           >
-            all
+            All
+          </button>
+          <button
+            type="button"
+            onClick={deselectAllSources}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all ${
+              checkedSources.size === 0
+                ? "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground ring-1 ring-muted-foreground/30"
+                : "border-border/40 bg-background/30 text-muted-foreground/60 hover:bg-muted-foreground/10 hover:text-foreground/80"
+            }`}
+            title="Clear all source categories"
+          >
+            None
           </button>
         </div>
 
@@ -1223,7 +1289,11 @@ export default function DashboardEventsPage() {
         <div className="space-y-1 overflow-y-auto pr-1 scrollbar-thin">
           {filteredItems.length === 0 && (
             <div className="rounded border border-border bg-background/40 px-3 py-4 text-sm text-muted-foreground">
-              {(hideTransient || hideSystemNoise) && items.length > 0 ? `${items.length - filteredItems.length} event(s) hidden by active filters.` : "No notifications/events found."}
+              {checkedSources.size === 0
+                ? "Select source categories above to view events."
+                : hideTransient && items.length > 0
+                  ? `${items.length - filteredItems.length} event(s) hidden by active filters.`
+                  : "No notifications/events found for selected sources."}
             </div>
           )}
           {filteredItems.map((item) => {
