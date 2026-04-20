@@ -302,13 +302,14 @@ All Task Forge executions produce TWO deliverables:
 
 Both must be persisted before the task is dispositioned in Task Hub.
 
-### Hook Hardening (2026-04-19)
+### Hook Hardening (2026-04-20)
 
 The following hook changes support reliable Task Forge execution:
 
 | Hook | Change | Why |
 |------|--------|-----|
-| `_strip_heredoc_bodies()` | Extended regex from `\s*\n` to `[^\n]*\n` after marker | Handles `cat <<'EOF' \| python` pattern where pipe commands follow the heredoc marker |
+| `on_pre_tool_use_task_forge_completion_gate` | **NEW** — blocks `task_hub_task_action(complete)` unless `SKILL.md` and `quality_gate.md` exist | Run #3 proved prompt instructions alone are insufficient; model reads them and shortcuts |
+| `_strip_heredoc_bodies()` | Extended regex from `\s*\n` to `[^\n]*\n` after marker | Handles `cat <<'EOF' \| python` pattern |
 | `_strip_heredoc_bodies()` | Added `python -c` inline code stripping | Skill names in Python literals triggered false-positive Bash denials |
 | `on_pre_bash_inject_workspace_env` | Added `python` → `python3` rewrite | VPS has `python3` but no `python` symlink |
 | `_prompt_is_todo_dispatch_template()` | New function (prior session) | Prevents VP routing hooks from blocking Task Forge dispatch boilerplate |
@@ -380,7 +381,8 @@ The philosophical foundation for Task Forge is documented in a separate treatise
 |-----|------|----------|-------------|---------|----------|--------------|-------|
 | #1 | 2026-04-19 | 160 min | ~40 (partial) | ❌ Skipped | N/A | ❌ Chat-only | Pre-hardening baseline |
 | #2 | 2026-04-20 | 6 min | 87 (complete) | ✅ Created | ⚠️ Self-certified | ✅ Persisted | Post-hardening; quality gate claimed but no artifact |
-| #3 | Pending | — | — | — | — | — | Testing quality gate artifact requirement |
+| #3 | 2026-04-20 | 2.7 min | N/A | ❌ Skipped | ❌ Skipped | ❌ None | Read instructions, shortcut anyway — proved need for hook enforcement |
+| #4 | Pending | — | — | — | — | — | Testing completion gate hook |
 
 ### Automated Checks
 - Task Forge trigger detection tested via `TODO_DISPATCH_PROMPT` pattern matching

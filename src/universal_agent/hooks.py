@@ -1949,6 +1949,118 @@ class AgentHookSet:
         return {}
 
     # =========================================================================
+    # TASK FORGE ENFORCEMENT
+    # =========================================================================
+
+    async def on_pre_tool_use_task_forge_completion_gate(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """PreToolUse Hook: Enforce Task Forge artifact requirements before task completion.
+
+        When a task description starts with 'Task Forge:', the agent MUST produce:
+        1. task-skills/<name>/SKILL.md (Phase 3 scaffold)
+        2. task-skills/<name>/quality_gate.md (Phase 5b audit)
+
+        If either is missing when the agent tries to complete the task via
+        task_hub_task_action, the completion is BLOCKED and the agent is forced
+        back to create the missing artifacts.
+
+        This hook exists because prompt instructions alone are insufficient —
+        Run #3 proved the model reads the instructions and shortcuts anyway.
+        """
+        tool_name = str(input_data.get("tool_name", "") or "")
+        tool_input = input_data.get("tool_input", {}) or {}
+        if not isinstance(tool_input, dict):
+            return {}
+
+        # Only intercept task_hub_task_action
+        base_name = tool_name.rsplit("__", 1)[-1] if "__" in tool_name else tool_name
+        if base_name != "task_hub_task_action":
+            return {}
+
+        # Only block 'complete' — allow review, block, park, etc.
+        action = str(tool_input.get("action", "") or "").strip().lower()
+        if action != "complete":
+            return {}
+
+        # Check if this is a Task Forge task by examining the task description
+        # from tool_input or from the prompt itself
+        task_desc = str(
+            tool_input.get("reason", "")
+            or tool_input.get("note", "")
+            or ""
+        ).lower()
+        prompt_lower = self._current_turn_prompt.lower()
+
+        # Detect Task Forge by checking if the prompt contains a Task Forge work item
+        is_task_forge = "task forge:" in prompt_lower or "task forge:" in task_desc
+
+        if not is_task_forge:
+            return {}
+
+        # Check for required artifacts in the workspace
+        workspace = get_current_workspace() or self.workspace_dir or ""
+        if not workspace:
+            return {}
+
+        ws_path = Path(workspace)
+        task_skills_dir = ws_path / "task-skills"
+
+        missing = []
+
+        # Check for SKILL.md anywhere under task-skills/
+        skill_md_found = False
+        if task_skills_dir.is_dir():
+            skill_md_found = any(task_skills_dir.rglob("SKILL.md"))
+        if not skill_md_found:
+            missing.append("task-skills/<name>/SKILL.md (Phase 3: scaffold the task-skill)")
+
+        # Check for quality_gate.md anywhere under task-skills/
+        quality_gate_found = False
+        if task_skills_dir.is_dir():
+            quality_gate_found = any(task_skills_dir.rglob("quality_gate.md"))
+        if not quality_gate_found:
+            missing.append("task-skills/<name>/quality_gate.md (Phase 5b: quality gate audit)")
+
+        if not missing:
+            return {}  # All artifacts present — allow completion
+
+        missing_list = "\n".join(f"  - {m}" for m in missing)
+        emit_status_event(
+            f"Hook: blocked Task Forge completion — missing {len(missing)} artifact(s)",
+            level="WARNING",
+            prefix="Hook",
+        )
+        logfire.warning(
+            "task_forge_completion_blocked",
+            missing_artifacts=missing,
+            workspace=str(workspace),
+            tool_use_id=str(tool_use_id),
+        )
+
+        return {
+            "systemMessage": (
+                f"⚠️ BLOCKED: Cannot complete a Task Forge task without required artifacts.\n\n"
+                f"Missing:\n{missing_list}\n\n"
+                f"Task Forge contract: **the skill IS the output.** You must:\n"
+                f"1. Create `task-skills/<task-name>/SKILL.md` with goal, success criteria, context\n"
+                f"2. Execute by following the SKILL.md you created\n"
+                f"3. Save results to `work_products/`\n"
+                f"4. Read `.claude/skills/skill-creator/SKILL.md` for quality standards\n"
+                f"5. Write audit results to `task-skills/<task-name>/quality_gate.md`\n\n"
+                f"Only THEN can you complete this task. Go create the missing artifacts now."
+            ),
+            "decision": "block",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Task Forge completion blocked: missing {', '.join(missing)}"
+                ),
+            },
+        }
+
+    # =========================================================================
     # SKILL HINTS (The "Smart" part user requested)
     # =========================================================================
 
