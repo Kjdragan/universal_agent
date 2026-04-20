@@ -362,6 +362,10 @@ Specifically:
    - `task-skills/<task-name>/references/` — only if domain docs would help future runs
 2. Phase 4 (Execute) — execute BY FOLLOWING the skill you just created, not by ignoring it
 3. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable
+4. Phase 5b (Skill Quality Gate) is MANDATORY — after execution succeeds, audit the skill
+   against the skill-creator's structural standards (`.claude/skills/skill-creator/SKILL.md`,
+   "Skill Writing Guide" section). The result being correct is not enough — the skill itself must
+   be structurally sound, generalizable, and not a thin wrapper around a hardcoded script.
 
 What makes a good task-skill vs. a bad one:
 - BAD: A bare Python script. Scripts are not skills. They're inflexible, opaque to agents, and

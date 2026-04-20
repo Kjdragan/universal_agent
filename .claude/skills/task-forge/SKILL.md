@@ -198,9 +198,44 @@ After execution, check the result against the success criteria from the SKILL.md
 > **The key insight:** Each failure makes the skill smarter. You're not just retrying —
 > you're encoding knowledge into the skill so the next attempt is structurally better.
 
+### Phase 5b: Skill Quality Gate
+
+After the result passes Phase 5, evaluate **the skill itself** — not its output.
+The result might be correct, but the skill that produced it might be garbage (a thin .md
+wrapper around a hardcoded script). A good result from a bad skill is a one-time win;
+a good result from a good skill is a reusable capability.
+
+Run this self-audit against the skill-creator's writing guide (`.claude/skills/skill-creator/SKILL.md`,
+"Skill Writing Guide" section). Check:
+
+| Check | What to look for | Fail if... |
+|-------|-----------------|------------|
+| **Structure** | SKILL.md has frontmatter (name, description), Goal, Success Criteria, Context | Missing any of these core sections |
+| **Not a script wrapper** | The SKILL.md describes *what* and *why*, not just "run this script" | The entire SKILL.md is basically "run scripts/do_thing.py" |
+| **Composable** | References existing skills where relevant, uses context pointers | Reinvents capabilities that exist as skills |
+| **Generalizable** | Could a different agent in a different session follow this and succeed? | Only works because of hardcoded paths or session-specific knowledge |
+| **Progressive disclosure** | SKILL.md is lean (<100 lines); heavy content in references/ | Everything crammed into one massive file |
+
+**If the skill passes all checks:** Proceed to Phase 6.
+
+**If the skill fails any checks:**
+1. Identify the structural weakness
+2. Improve the SKILL.md (refactor script-wrapper into proper goal/approach/criteria; add
+   missing sections; extract hardcoded values into context pointers)
+3. This is a **one-time quality improvement pass** — don't re-execute the whole task,
+   just fix the skill's structure so it's reusable
+4. Note: this is NOT the full skill-creator eval suite (test cases, baselines, benchmarks).
+   That level of rigor is for v2+ skills that have proven they're worth the investment.
+   This is a lightweight structural audit.
+
+> **Why this matters:** The whole point of Task Forge is that the skill is the output.
+> A structurally sound skill compounds in value — it can be rerun, composed, evolved.
+> A structurally weak skill is just a script execution with extra steps. The quality gate
+> ensures we're actually building the institutional knowledge flywheel, not just running code.
+
 ### Phase 6: Archive or Promote
 
-After successful execution:
+After successful execution and quality gate:
 
 - **One-off task?** Archive to `task-skills/archive/<task-name>/` for future reference
 - **Might recur?** Leave in `task-skills/` for easy re-use
@@ -209,6 +244,10 @@ After successful execution:
   2. Optimize the description for triggering (follow skill-creator guidance)
   3. Symlink from `.agents/skills/` if needed for UA discovery
   4. Update capabilities registry
+- **Worth polishing?** If the skill is graduating to permanent status AND you want to
+  invest in making it robust, hand it off to the skill-creator's full eval/iterate loop
+  (`.claude/skills/skill-creator/SKILL.md`). That's where test cases, baselines, benchmarking,
+  and description optimization live. Task Forge creates the v0; skill-creator polishes it to v2+.
 
 ---
 
@@ -230,7 +269,9 @@ After successful execution:
   problem is the task definition, not the execution — escalate.
 - **NEVER confuse Task Forge with the skill-creator.** Skill-creator is for building
   polished, permanent skills with eval suites and benchmarks. Task Forge is for getting
-  things done NOW with the option to refine later.
+  things done NOW with the option to refine later. However, Task Forge's Phase 5b (Skill
+  Quality Gate) borrows the skill-creator's *structural standards* as a lightweight check.
+  If a task-skill graduates to permanent status, hand it to the skill-creator for full polish.
 
 ---
 
@@ -259,13 +300,16 @@ Capture intent (5 min) → Context scan (10 min) → Scaffold SKILL.md (5 min)
     ↓
 Execute directly or dispatch to VP
     ↓
-Check success criteria
+Check success criteria (Phase 5)
     ↓
-Pass? → Archive/promote    Fail? → Add anti-pattern → retry (max 3x)
+Pass? → Skill Quality Gate (Phase 5b) → Archive/promote/polish
+Fail? → Add anti-pattern → retry (max 3x)
 ```
 
 Total time from "do X" to first execution attempt: **~20 minutes.**
+Skill Quality Gate adds ~5 minutes for a structural audit.
 
 That's the promise of Task Forge: any non-trivial task, structured and executing,
-in under 20 minutes. The skill format isn't overhead — it's the fastest path
+in under 25 minutes — producing both a result AND a reusable skill.
+The skill format isn't overhead — it's the fastest path
 to both getting it done and getting it done *well*.
