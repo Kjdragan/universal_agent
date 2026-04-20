@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-19
+**Last updated:** 2026-04-19 (Task Forge doc #119 added)
 
 ## Development (development/)
 
@@ -93,6 +93,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 116 | CSI Convergence Proactivity Repair Handoff — shareable implementation context for the CSI convergence repair pass, including fixed blockers, runtime contract, verification evidence, and live-validation next steps |
 | 117 | ClaudeDevs X Intelligence Lane Design Handoff — historical design note for a dedicated Claude Code intelligence lane monitoring `@ClaudeDevs`, including source-access findings, tiering, KB/wiki expectations, mirror fallback, and resume checklist |
 | 118 | X API And Claude Code Intel Source Of Truth — canonical implementation reference for X API development, `@ClaudeDevs` polling, Infisical keys, packet outputs, local Claude Code intelligence KB index, Task Hub tiering, and cron registration |
+| 119 | Task Forge: Autonomous Skill Generation Pipeline — **canonical source of truth** for the meta-skill that converts human intent into structured, reusable task-skills; 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote), skill maturity model (v0→v3), dispatch integration, hook hardening, skill-creator cooperative relationship, recursive learning loop philosophy |
 
 ## CSI Subsystem (04_CSI/)
 
