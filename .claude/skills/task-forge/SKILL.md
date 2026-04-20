@@ -234,7 +234,7 @@ Use the `Write` tool to save `task-skills/<task-name>/quality_gate.md` with this
 # Quality Gate: <task-name>
 Date: <date>
 
-## Checklist
+## Structural Checklist
 - [x] Structure: <1-line justification>
 - [x] Not a script wrapper: <1-line justification>
 - [ ] Composable: <1-line explanation of gap>
@@ -242,17 +242,42 @@ Date: <date>
 - [x] Progressive disclosure: <1-line justification>
 
 ## Improvements Made
-- <what you fixed, if anything>
+- <what you fixed in the skill structure, if anything>
 
-## Observations for Future Runs
-- <anti-patterns noticed, things that would help v1>
+## Development Context
+<!-- This is where you capture what you LEARNED while building this skill.
+     Future agents running or iterating on this skill inherit this knowledge. -->
+
+### What Was Discovered
+- <file locations, directory structures, edge cases found during execution>
+- <tools that worked well vs. tools that caused friction>
+- <data format quirks, parsing issues, API behaviors>
+
+### Environment & Dependencies
+- <system state that matters: python version, available CLIs, path conventions>
+- <hook interactions: any Bash denials, redirects, or rewrites encountered>
+
+### What Worked / What Didn't
+- <approaches that succeeded on first try vs. required iteration>
+- <anti-patterns encountered during development>
+
+## Process Patterns for Future Skill-Building
+<!-- These are GENERALIZABLE lessons — patterns that apply not just to THIS skill
+     but to building skills of this TYPE. This is the recursive learning loop:
+     each skill you build teaches you to build better skills. -->
+- <repeatable patterns discovered>
+- <things every skill of this type should know>
+- <common pitfalls for this category of task>
 ```
 
-This artifact serves a dual purpose:
+This artifact serves a triple purpose:
 1. **Proof of audit** — proves the quality gate actually ran, not just self-certified
-2. **Institutional memory** — observations and anti-patterns from THIS run feed into
-   future runs. This is the recursive learning loop in action: each run's audit improves
-   the next run's skill.
+2. **Skill-specific memory** — what was discovered about THIS task (edge cases, file
+   locations, environment quirks) travels with the skill for future runs
+3. **Meta-skill learning** — process patterns that apply to building ANY skill of this
+   type feed back into the skill-building practice itself. Each skill you build
+   teaches you to build better skills. This is the deepest layer of the recursive
+   learning loop.
 
 #### If checks fail
 
