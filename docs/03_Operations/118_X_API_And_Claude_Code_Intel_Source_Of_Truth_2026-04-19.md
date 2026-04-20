@@ -27,6 +27,8 @@ Live validation status on 2026-04-19:
 - X returned `403 Client Forbidden`, so the current app/bearer token is not authorized for even user lookup yet.
 - The lane still wrote a failure packet with `manifest.json` `ok=false`, which is the intended no-silent-failure behavior.
 - Next operational step is to resolve X Developer Console access/credits/app permissions, then rerun the same packet-only smoke test.
+- Later on 2026-04-19, Kevin supplied the full X app credential set for app `main_nerfed1.py` (`app_id=28327271`, active, read/write, access token owner `@PaintersWayne`). The credential set was stored in Infisical `development`, `production`, and `local`.
+- A second packet-only smoke test after storing the full credential set still returned `403 Client Forbidden` on `GET /2/users/by/username/ClaudeDevs`, which points to X API product access/credits/app entitlement rather than a missing Infisical key.
 
 Code-verified implementation points:
 
@@ -99,10 +101,17 @@ The current lane only needs `X_BEARER_TOKEN` for read-only app-only polling. The
 | Secret | Use |
 | --- | --- |
 | `X_BEARER_TOKEN` | Read-only X API app auth used by this lane |
+| `X_APP_NAME` / `X_API_APP_NAME` | X Developer Console app name, currently `main_nerfed1.py` |
+| `X_APP_ID` / `X_API_APP_ID` | X Developer Console app ID, currently `28327271` |
+| `X_APP_STATUS` | X Developer Console app status, currently `ACTIVE` |
+| `X_APP_DESCRIPTION` | App description from X Developer Console |
+| `X_APP_PERMISSIONS` | App permissions, currently read/write |
+| `X_ACCESS_TOKEN_OWNER` | Account owning the generated OAuth1 access token, currently `@PaintersWayne` |
 | `CLIENT_ID` | Generic OAuth2 client ID for official X tooling compatibility |
 | `CLIENT_SECRET` | Generic OAuth2 client secret for official X tooling compatibility |
 | `X_OAUTH2_CLIENT_ID` | Namespaced OAuth2 client ID |
 | `X_OAUTH2_CLIENT_SECRET` | Namespaced OAuth2 client secret |
+| `X_OAUTH_CONSUMER_KEY` | OAuth1 consumer/API key |
 | `X_OAUTH_CONSUMER_SECRET` | OAuth1 consumer secret; not enough by itself for OAuth1 |
 | `X_OAUTH_ACCESS_TOKEN` | OAuth1 user access token |
 | `X_OAUTH_ACCESS_TOKEN_SECRET` | OAuth1 user access token secret |
@@ -110,7 +119,7 @@ The current lane only needs `X_BEARER_TOKEN` for read-only app-only polling. The
 | `X_OAUTH_CALLBACK_PORT` | Local callback port, currently `8976` |
 | `X_OAUTH_CALLBACK_PATH` | Local callback path, currently `/oauth/callback` |
 
-Known gap: `X_OAUTH_CONSUMER_KEY` was not provided. That blocks full OAuth1 user-context usage, but it does not block read-only bearer-token polling.
+The OAuth1 consumer-key gap was resolved on 2026-04-19. OAuth2 access/refresh tokens are still not implemented; the stored OAuth2 client ID/client secret are enough to start an OAuth2 authorization flow, but not enough by themselves to call user-context endpoints.
 
 ## Configuration
 

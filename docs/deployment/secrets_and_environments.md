@@ -119,9 +119,13 @@ The Claude Code intelligence lane uses X API app-only read access to poll `@Clau
 | Secret | Required for current lane? | Notes |
 |---|---:|---|
 | `X_BEARER_TOKEN` | Yes | App-only read token used by `src/universal_agent/services/claude_code_intel.py` |
+| `X_APP_NAME` / `X_API_APP_NAME` | No | X Developer Console app name |
+| `X_APP_ID` / `X_API_APP_ID` | No | X Developer Console app ID |
+| `X_APP_STATUS` / `X_APP_DESCRIPTION` | No | App metadata for operator visibility |
+| `X_APP_PERMISSIONS` / `X_ACCESS_TOKEN_OWNER` | No | OAuth access-token context |
 | `CLIENT_ID` / `CLIENT_SECRET` | No | Generic OAuth2 names for official X tooling compatibility |
 | `X_OAUTH2_CLIENT_ID` / `X_OAUTH2_CLIENT_SECRET` | No | Namespaced OAuth2 aliases for future user-context flows |
-| `X_OAUTH_CONSUMER_SECRET` | No | OAuth1 secret only; incomplete without `X_OAUTH_CONSUMER_KEY` |
+| `X_OAUTH_CONSUMER_KEY` / `X_OAUTH_CONSUMER_SECRET` | No | OAuth1 app credentials for future user-context flows |
 | `X_OAUTH_ACCESS_TOKEN` / `X_OAUTH_ACCESS_TOKEN_SECRET` | No | Future OAuth1 user-context support |
 | `X_OAUTH_CALLBACK_HOST` / `X_OAUTH_CALLBACK_PORT` / `X_OAUTH_CALLBACK_PATH` | No | Local callback metadata for future OAuth tooling |
 
