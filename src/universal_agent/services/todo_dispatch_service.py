@@ -333,6 +333,14 @@ If the work item genuinely cannot proceed, use Task Hub as the exit hatch instea
 - use `park` when the task should be deferred without retrying now
 Always include the concrete failure reason, missing dependency, or next step in the note.
 
+### Work Product Persistence (CRITICAL):
+For any non-trivial deliverable (tables, reports, inventories, analyses, generated content), you MUST:
+1. Save the deliverable as a markdown file in the session workspace's `work_products/` directory
+   (e.g., `work_products/skill_inventory.md`, `work_products/analysis_report.md`).
+2. Use the `Write` tool to persist the file BEFORE delivering it in the chat stream.
+3. Always save the final, polished version — not intermediate drafts.
+Chat-stream delivery alone is NOT sufficient. Work products must be durable and inspectable after the session ends.
+
 After finishing work, ALWAYS disposition every claimed work item via `task_hub_task_action` (`complete`, `review`, `block`, or `park`).
 Only use `complete` when the requested deliverable and required final delivery side effects actually happened.
 
