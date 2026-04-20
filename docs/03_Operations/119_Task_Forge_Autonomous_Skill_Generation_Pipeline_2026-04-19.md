@@ -382,15 +382,17 @@ The philosophical foundation for Task Forge is documented in a separate treatise
 | #1 | 2026-04-19 | 160 min | ~40 (partial) | ❌ Skipped | N/A | ❌ Chat-only | Pre-hardening baseline |
 | #2 | 2026-04-20 | 6 min | 87 (complete) | ✅ Created | ⚠️ Self-certified | ✅ Persisted | Post-hardening; quality gate claimed but no artifact |
 | #3 | 2026-04-20 | 2.7 min | N/A | ❌ Skipped | ❌ Skipped | ❌ None | Read instructions, shortcut anyway — proved need for hook enforcement |
-| #4 | Pending | — | — | — | — | — | Testing completion gate hook |
+| #4 | 2026-04-20 | 5.4 min | 82 (complete) | ✅ Created | ✅ Artifact produced | ✅ Persisted | Full pipeline success: SKILL.md + quality_gate.md + work product + task hub disposition |
+| #5 | Pending | — | — | — | — | — | Testing Phase 5c (optional skill improvement pass) |
 
 ### Automated Checks
 - Task Forge trigger detection tested via `TODO_DISPATCH_PROMPT` pattern matching
 - Hook hardening tested via existing hook test suite
 - `python` → `python3` rewrite verified via regex in `on_pre_bash_inject_workspace_env`
 - Heredoc regex verified to handle `<<'EOF' | python` pattern
+- Completion gate hook (`on_pre_tool_use_task_forge_completion_gate`) deployed — blocks `complete` without artifacts
 
 ### Known Gaps
 - Summary extraction for ~10 skills with YAML block scalar descriptions (`|`, `>`) produces truncated summaries
-- Full eval/iterate loop (skill-creator integration) not yet tested end-to-end
-- Quality gate artifact production not yet verified in a live run
+- Phase 5c (skill improvement pass) not yet tested — opt-in via user keywords
+- Completion gate hook not yet battle-tested (Run #4 passed organically without triggering the hook)

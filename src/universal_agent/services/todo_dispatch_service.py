@@ -370,6 +370,10 @@ Specifically:
       Task Forge skill. This file IS the proof the audit happened — do NOT skip it.
    d. If any check fails, fix the skill's structure before completing the task.
    You CANNOT just claim "passed quality gate" — you must produce the artifact.
+5. Phase 5c (Skill Improvement) is OPTIONAL — only if the user's task description includes
+   phrases like "and evaluate", "polish", "improve", or "production-quality". When triggered,
+   re-read skill-creator/SKILL.md for polish standards, improve the task-skill's description
+   and structure, and append a "Phase 5c" section to quality_gate.md. Skip if not requested.
 
 What makes a good task-skill vs. a bad one:
 - BAD: A bare Python script. Scripts are not skills. They're inflexible, opaque to agents, and

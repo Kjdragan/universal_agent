@@ -294,6 +294,42 @@ This artifact serves a triple purpose:
 > The audit artifact itself becomes part of the skill's DNA — future developers and agents
 > can read it to understand what worked, what didn't, and what to watch for.
 
+### Phase 5c: Skill Improvement Pass (OPTIONAL — user-requested only)
+
+> [!NOTE]
+> This phase is **not automatic**. It runs only when the user's task description includes
+> phrases like "and evaluate", "polish the skill", "improve it", "run skill-creator eval",
+> or "make it production-quality". If not requested, skip to Phase 6.
+
+When triggered, hand the forged skill off to the skill-creator's eval/iterate loop for
+a single improvement pass. This is the bridge between a v0 task-skill and a polished v1+.
+
+#### What to do:
+
+1. **Re-read** `.claude/skills/skill-creator/SKILL.md` — specifically the "Skill Writing Guide"
+   and "Writing Patterns" sections. These are the polish standards.
+
+2. **Self-evaluate** the task-skill against skill-creator standards:
+   - Is the description "pushy" enough for reliable triggering?
+   - Does the SKILL.md follow progressive disclosure (metadata → body → bundled resources)?
+   - Are there hardcoded values that should be parameterized?
+   - Could the skill benefit from a `references/` file for domain context?
+
+3. **Improve the skill** — make concrete edits to `task-skills/<task-name>/SKILL.md`:
+   - Sharpen the description for better trigger matching
+   - Extract any inline scripts into `scripts/` if they're reusable
+   - Add `references/` for domain knowledge that shouldn't live in the SKILL.md body
+   - Ensure frontmatter description follows the "pushy" pattern from skill-creator
+
+4. **Update quality_gate.md** — append a `## Phase 5c: Improvement Pass` section documenting:
+   - What was improved and why
+   - Before/after of any description changes
+   - Whether the skill is now ready for promotion to `.claude/skills/`
+
+> **When to skip:** If the task is clearly one-off and the user didn't ask for polish,
+> skip this phase entirely. Task Forge's default is "ship the v0, iterate if it matters."
+> This phase exists for when the user explicitly wants to invest in quality upfront.
+
 ### Phase 6: Archive or Promote
 
 After successful execution and quality gate:
