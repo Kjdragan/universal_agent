@@ -1242,6 +1242,17 @@ class AgentHookSet:
             except ValueError:
                 pass  # Not in memory dir, continue with normal checks
 
+            # Whitelist task-skills/ and work_products/ for Task Forge operations.
+            # These are the canonical output directories for forged skills and deliverables.
+            # Without this, agents waste a tool call getting denied → recovering to session workspace.
+            for tf_dir_name in ("task-skills", "work_products"):
+                tf_dir = (repo_root / tf_dir_name).resolve()
+                try:
+                    path_obj.relative_to(tf_dir)
+                    return {}  # Allow writes to Task Forge output directories
+                except ValueError:
+                    pass
+
         # Special-case: `write_text_file` is explicitly designed to write
         # to either the run workspace *or* the durable artifacts root. It performs its
         # own allowlist enforcement in the tool implementation, so we must not rewrite its

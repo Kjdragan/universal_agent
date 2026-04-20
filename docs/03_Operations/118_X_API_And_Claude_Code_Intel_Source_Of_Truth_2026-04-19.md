@@ -82,6 +82,64 @@ flowchart TD
     Triage -->|4 strategic/migration| Strategic["Queue claude_code_kb_update"]
 ```
 
+## Deeper Source Expansion Requirement
+
+`@ClaudeDevs` posts are trigger events, not complete source material. The system must not treat the post text alone as the knowledge base update when the post contains links, videos, media, code references, release notes, documentation pages, GitHub repositories, package versions, or event pages.
+
+The required evidence expansion path is:
+
+```mermaid
+flowchart TD
+    Post["X post"] --> Extract["Extract expanded URLs, media refs, versions, repo/package names"]
+    Extract --> Fetch["Fetch linked docs/articles/repos/code when accessible"]
+    Fetch --> Preserve["Preserve raw source snapshots under packet linked_sources/"]
+    Preserve --> Analyze["Analyze source content for capabilities, migration notes, examples, risks"]
+    Analyze --> Wiki["Write source-backed pages into claude-code-intelligence vault"]
+    Analyze --> Tasks{"Code-worthy or strategic?"}
+    Tasks -->|Tier 3| Demo["Queue demo/repo Task Hub work"]
+    Tasks -->|Tier 4| Migration["Queue migration/remediation analysis"]
+    Tasks -->|Tier 1/2| Inventory["Digest + KB inventory"]
+```
+
+For every linked source that can be reached, the packet should eventually include:
+
+| File | Purpose |
+| --- | --- |
+| `linked_sources.json` | Structured URL/media/repo/package references extracted from X and later fetches |
+| `linked_sources/<hash>/source.md` | Clean markdown/content extraction for the source |
+| `linked_sources/<hash>/metadata.json` | URL, fetch status, content type, title, final URL, retrieved time |
+| `linked_sources/<hash>/analysis.md` | Agent analysis: what changed, why it matters, implementation implications, risks |
+| `implementation_opportunities.md` | Cross-source list of demos/repos/experiments worth building |
+
+This matters because the strategic value is usually behind the post: release notes, docs pages, code examples, package changes, GitHub repositories, event pages, and media. A future agent must follow the evidence chain before creating durable Claude Code knowledge.
+
+## Claude Code Knowledge Vault Target
+
+The current implementation writes a lightweight index at:
+
+```text
+<UA_ARTIFACTS_DIR>/knowledge-bases/claude-code-intelligence/source_index.md
+```
+
+The next implementation step must create the real external LLM wiki vault at:
+
+```text
+<UA_ARTIFACTS_DIR>/knowledge-vaults/claude-code-intelligence/
+```
+
+The vault should follow the canonical LLM Wiki external structure:
+
+| Vault path | Contents |
+| --- | --- |
+| `raw/` | Immutable X post/source snapshots |
+| `sources/` | Source pages for X posts, linked docs, GitHub repos, package pages, videos, event pages |
+| `concepts/` | Capabilities such as native binary packaging, cache-miss warnings, Opus 4.7 safety prompt handling |
+| `entities/` | Claude Code, Opus versions, packages, tools, repositories, accounts, organizations |
+| `analyses/` | Synthesis pages, implementation guidance, migration notes, demo plans |
+| `assets/` | Downloaded or referenced media metadata and safe copied assets |
+
+Agents implementing Claude Code features should query this vault before relying on model-cutoff knowledge.
+
 ## X API Reference Map
 
 Always begin with the machine-readable index:
@@ -185,6 +243,24 @@ The exchange stores `X_OAUTH2_ACCESS_TOKEN`, `X_OAUTH2_REFRESH_TOKEN`, `X_OAUTH2
 
 Tiering is heuristic in the first implementation. It is intentionally conservative about Task Hub pressure: only Tier 3 and Tier 4 items become executable tasks.
 
+## Replay And Backfill Contract
+
+The first successful packet was run with `--no-task-hub`, so its five posts were marked seen but not queued into Task Hub. Do not delete state to force replay. Instead, the next build should add an idempotent replay command:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_replay_packet \
+  --packet-dir <UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/YYYY-MM-DD/HHMMSS__ClaudeDevs
+```
+
+Replay responsibilities:
+
+- read `actions.json` and `raw_posts.json`
+- populate the external wiki vault
+- fetch/analyze linked sources when possible
+- queue Tier 3/4 Task Hub tasks idempotently by post ID
+- register proactive artifacts for packet, source analyses, and queued tasks
+- never create duplicate tasks for the same post ID/source kind
+
 ## Safety Boundary
 
 This lane must not publish to X. The `POST /2/tweets` endpoint exists and requires user-context write auth, but the Claude Code intelligence lane is read-only unless Kevin explicitly re-authorizes a posting workflow.
@@ -193,8 +269,8 @@ When implementing future posting or interaction features, require a separate des
 
 ## Current Limitations
 
-- No OAuth2 refresh-token flow is implemented yet.
-- No media download or image/video understanding is implemented yet.
-- Linked article ingestion is not yet automated; links are collected into `source_links.md` and Task Hub follow-up descriptions.
+- OAuth2 refresh-token support exists in `x_oauth2_bootstrap.py`, but the cron lane does not yet auto-refresh expired OAuth2 access tokens before polling.
+- Media download or image/video understanding is not implemented yet.
+- Linked source ingestion is not yet automated; links are collected into `source_links.md` and Task Hub follow-up descriptions.
 - The local KB index is a lightweight source index, not a full NotebookLM-backed external knowledge base yet.
 - The first tiering model is keyword-based. A future pass should add an LLM classifier once enough real packets exist.
