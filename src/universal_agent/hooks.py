@@ -904,7 +904,7 @@ def _extract_bash_command(input_data: dict) -> tuple[str, str, dict]:
 
 
 _HEREDOC_RE = re.compile(
-    r"<<-?\s*['\"]?(\w+)['\"]?\s*\n.*?\n\1\b",
+    r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\1\b",
     re.DOTALL,
 )
 

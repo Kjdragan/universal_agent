@@ -1,6 +1,6 @@
 # Task Forge: Autonomous Skill Generation Pipeline
 
-**Canonical Source of Truth** — Last updated: 2026-04-19
+**Canonical Source of Truth** — Last updated: 2026-04-20
 
 > Task Forge is the system that converts raw human intent into structured, reusable skills
 > that agents can execute. **The skill IS the output, not just the result.**
@@ -56,7 +56,7 @@ flowchart TB
     end
 
     subgraph Outputs
-        TASK_SKILL["task-skills/<name>/<br/>├─ SKILL.md<br/>├─ scripts/<br/>└─ references/"]
+        TASK_SKILL["task-skills/<name>/<br/>├─ SKILL.md<br/>├─ quality_gate.md<br/>├─ scripts/<br/>└─ references/"]
         WORK_PRODUCT["work_products/<br/>result.md"]
         PERM_SKILL[".claude/skills/<name>/"]
     end
@@ -85,13 +85,14 @@ flowchart TB
 | Archived task-skills | `task-skills/archive/<task-name>/` | One-off skills after completion |
 | Promoted skills | `.claude/skills/<task-name>/` | Graduated permanent skills |
 | Work products | `<session>/work_products/` | Execution output artifacts |
+| Quality gate audit | `task-skills/<task-name>/quality_gate.md` | Proof of Phase 5b audit |
 
 ### Source Files Modified
 
 | File | What Changed |
 |------|-------------|
 | [`todo_dispatch_service.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py) | `TODO_DISPATCH_PROMPT` — Task Forge Workflow section, Work Product Persistence section |
-| [`hooks.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/hooks.py) | `_strip_heredoc_bodies()` — extended to strip `python -c` inline code; `on_pre_bash_inject_workspace_env` — `python` → `python3` rewrite |
+| [`hooks.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/hooks.py) | `_strip_heredoc_bodies()` — heredoc regex handles `<<MARKER | cmd` pattern; `python -c` inline code stripping; `on_pre_bash_inject_workspace_env` — `python` → `python3` rewrite |
 | [`.claude/skills/task-forge/SKILL.md`](file:///home/kjdragan/lrepos/universal_agent/.claude/skills/task-forge/SKILL.md) | Full skill definition with all 7 phases |
 
 ---
@@ -211,10 +212,18 @@ Check result against success criteria from the SKILL.md:
 - **All criteria met** → Proceed to Phase 5b
 - **Some failed** → Add anti-pattern to SKILL.md → Re-execute (max 3x)
 
-### Phase 5b: Skill Quality Gate (NEW — 2026-04-19)
+### Phase 5b: Skill Quality Gate (Updated 2026-04-20)
 
 After the result passes, audit **the skill itself** using the skill-creator's writing guide
-(`.claude/skills/skill-creator/SKILL.md`, "Skill Writing Guide" section):
+(`.claude/skills/skill-creator/SKILL.md`, "Skill Writing Guide" section).
+
+> **Quality gate must produce a traceable artifact.** The agent cannot just claim "passed quality
+> gate" — it must write the audit results to `task-skills/<task-name>/quality_gate.md`.
+
+**Three required steps:**
+
+1. **Read** `.claude/skills/skill-creator/SKILL.md` (mandatory tool call)
+2. **Evaluate** 5 structural checks:
 
 | Check | What to look for | Fail if... |
 |-------|-----------------|------------|
@@ -224,11 +233,15 @@ After the result passes, audit **the skill itself** using the skill-creator's wr
 | **Generalizable** | Another agent could follow it | Hardcoded paths/session-specific |
 | **Progressive disclosure** | Lean SKILL.md (<100 lines) | Everything in one file |
 
-**If any check fails:** One improvement pass to fix structure (don't re-execute the task).
+3. **Write** results to `task-skills/<task-name>/quality_gate.md` including:
+   - Checklist with pass/fail per check and 1-line justification
+   - Improvements made (if any checks failed)
+   - Observations for future runs (anti-patterns, v1 suggestions)
 
-> **Why this matters:** A correct result from a bad skill is a one-time win. A correct result
-> from a good skill is a reusable capability. The quality gate ensures we build the institutional
-> knowledge flywheel, not just run code with extra steps.
+The `quality_gate.md` serves as both **proof of audit** and **institutional memory** — observations
+from this run feed into future runs, starting the recursive learning loop.
+
+**If any check fails:** One improvement pass to fix structure, then update quality_gate.md.
 
 ### Phase 6: Archive or Promote
 
@@ -295,8 +308,9 @@ The following hook changes support reliable Task Forge execution:
 
 | Hook | Change | Why |
 |------|--------|-----|
-| `_strip_heredoc_bodies()` | Extended to strip `python -c` inline code | Skill names like 'playwright-cli' in Python list literals triggered false-positive Bash denials |
-| `on_pre_bash_inject_workspace_env` | Added `python` → `python3` rewrite | VPS has `python3` but no `python` symlink; model wasted tool calls on 'command not found' |
+| `_strip_heredoc_bodies()` | Extended regex from `\s*\n` to `[^\n]*\n` after marker | Handles `cat <<'EOF' \| python` pattern where pipe commands follow the heredoc marker |
+| `_strip_heredoc_bodies()` | Added `python -c` inline code stripping | Skill names in Python literals triggered false-positive Bash denials |
+| `on_pre_bash_inject_workspace_env` | Added `python` → `python3` rewrite | VPS has `python3` but no `python` symlink |
 | `_prompt_is_todo_dispatch_template()` | New function (prior session) | Prevents VP routing hooks from blocking Task Forge dispatch boilerplate |
 
 ---
@@ -360,16 +374,21 @@ The philosophical foundation for Task Forge is documented in a separate treatise
 
 ## 10. Verification
 
+### Run History
+
+| Run | Date | Duration | Skills Found | Phase 3 | Phase 5b | Work Product | Notes |
+|-----|------|----------|-------------|---------|----------|--------------|-------|
+| #1 | 2026-04-19 | 160 min | ~40 (partial) | ❌ Skipped | N/A | ❌ Chat-only | Pre-hardening baseline |
+| #2 | 2026-04-20 | 6 min | 87 (complete) | ✅ Created | ⚠️ Self-certified | ✅ Persisted | Post-hardening; quality gate claimed but no artifact |
+| #3 | Pending | — | — | — | — | — | Testing quality gate artifact requirement |
+
 ### Automated Checks
 - Task Forge trigger detection tested via `TODO_DISPATCH_PROMPT` pattern matching
 - Hook hardening tested via existing hook test suite
 - `python` → `python3` rewrite verified via regex in `on_pre_bash_inject_workspace_env`
-
-### Manual Verification
-- Tier 1 test (Skill Inventory): Completed 2026-04-19, produced working output
-- Tier 2 tests: Pending — medium-complexity multi-step tasks
-- Quality Gate validation: Pending — verify Phase 5b catches structural issues
+- Heredoc regex verified to handle `<<'EOF' | python` pattern
 
 ### Known Gaps
 - Summary extraction for ~10 skills with YAML block scalar descriptions (`|`, `>`) produces truncated summaries
 - Full eval/iterate loop (skill-creator integration) not yet tested end-to-end
+- Quality gate artifact production not yet verified in a live run

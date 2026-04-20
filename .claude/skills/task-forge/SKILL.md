@@ -205,8 +205,18 @@ The result might be correct, but the skill that produced it might be garbage (a 
 wrapper around a hardcoded script). A good result from a bad skill is a one-time win;
 a good result from a good skill is a reusable capability.
 
-Run this self-audit against the skill-creator's writing guide (`.claude/skills/skill-creator/SKILL.md`,
-"Skill Writing Guide" section). Check:
+> [!IMPORTANT]
+> **The quality gate must produce a traceable artifact.** You cannot just claim "passed
+> quality gate" in your completion note. You must actually perform the audit and write the
+> results to `task-skills/<task-name>/quality_gate.md`. This file IS the proof.
+
+#### Step 1: Read the skill-creator writing guide
+
+You MUST `Read` the file `.claude/skills/skill-creator/SKILL.md` and review the "Skill Writing
+Guide" section. This is not optional — it's the standard you're auditing against. Without reading
+it, you're guessing at quality, not measuring it.
+
+#### Step 2: Evaluate each check
 
 | Check | What to look for | Fail if... |
 |-------|-----------------|------------|
@@ -216,22 +226,48 @@ Run this self-audit against the skill-creator's writing guide (`.claude/skills/s
 | **Generalizable** | Could a different agent in a different session follow this and succeed? | Only works because of hardcoded paths or session-specific knowledge |
 | **Progressive disclosure** | SKILL.md is lean (<100 lines); heavy content in references/ | Everything crammed into one massive file |
 
-**If the skill passes all checks:** Proceed to Phase 6.
+#### Step 3: Write the quality gate artifact
 
-**If the skill fails any checks:**
+Use the `Write` tool to save `task-skills/<task-name>/quality_gate.md` with this format:
+
+```markdown
+# Quality Gate: <task-name>
+Date: <date>
+
+## Checklist
+- [x] Structure: <1-line justification>
+- [x] Not a script wrapper: <1-line justification>
+- [ ] Composable: <1-line explanation of gap>
+- [x] Generalizable: <1-line justification>
+- [x] Progressive disclosure: <1-line justification>
+
+## Improvements Made
+- <what you fixed, if anything>
+
+## Observations for Future Runs
+- <anti-patterns noticed, things that would help v1>
+```
+
+This artifact serves a dual purpose:
+1. **Proof of audit** — proves the quality gate actually ran, not just self-certified
+2. **Institutional memory** — observations and anti-patterns from THIS run feed into
+   future runs. This is the recursive learning loop in action: each run's audit improves
+   the next run's skill.
+
+#### If checks fail
+
 1. Identify the structural weakness
-2. Improve the SKILL.md (refactor script-wrapper into proper goal/approach/criteria; add
-   missing sections; extract hardcoded values into context pointers)
-3. This is a **one-time quality improvement pass** — don't re-execute the whole task,
+2. Improve the SKILL.md (refactor, add missing sections, extract hardcoded values)
+3. Update the quality_gate.md with what you fixed under "Improvements Made"
+4. This is a **one-time quality improvement pass** — don't re-execute the whole task,
    just fix the skill's structure so it's reusable
-4. Note: this is NOT the full skill-creator eval suite (test cases, baselines, benchmarks).
-   That level of rigor is for v2+ skills that have proven they're worth the investment.
-   This is a lightweight structural audit.
 
 > **Why this matters:** The whole point of Task Forge is that the skill is the output.
 > A structurally sound skill compounds in value — it can be rerun, composed, evolved.
 > A structurally weak skill is just a script execution with extra steps. The quality gate
 > ensures we're actually building the institutional knowledge flywheel, not just running code.
+> The audit artifact itself becomes part of the skill's DNA — future developers and agents
+> can read it to understand what worked, what didn't, and what to watch for.
 
 ### Phase 6: Archive or Promote
 
