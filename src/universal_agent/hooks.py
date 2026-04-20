@@ -903,6 +903,24 @@ def _extract_bash_command(input_data: dict) -> tuple[str, str, dict]:
     return "", "none", tool_input
 
 
+_HEREDOC_RE = re.compile(
+    r"<<-?\s*['\"]?(\w+)['\"]?\s*\n.*?\n\1\b",
+    re.DOTALL,
+)
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Return *command* with heredoc bodies removed.
+
+    Content-matching hooks (Composio SDK, Playwright, PDF conversion) must
+    pattern-match against the **executable** portion of a Bash command, not
+    against data payloads that happen to be piped via heredoc.  Without this
+    stripping, a heredoc containing skill-description JSON with words like
+    "playwright" or "pdf" triggers false-positive denials.
+    """
+    return _HEREDOC_RE.sub("", command)
+
+
 def _build_bash_command_update(command_source: str, tool_input: dict, updated_command: str) -> dict:
     if command_source == "tool_input":
         updated = dict(tool_input)
@@ -1559,7 +1577,7 @@ class AgentHookSet:
                 }
             if normalized_tool_name == "bash":
                 command, _, _ = _extract_bash_command(input_data)
-                lowered_command = command.lower()
+                lowered_command = _strip_heredoc_bodies(command).lower()
                 if any(marker in lowered_command for marker in _YOUTUBE_INLINE_FETCH_MARKERS):
                     logfire.info(
                         "youtube_bash_blocked_prefer_skill",
@@ -1922,7 +1940,7 @@ class AgentHookSet:
         Python/SDK calls through Bash.
         """
         command, _, _ = _extract_bash_command(input_data)
-        command_lower = command.lower()
+        command_lower = _strip_heredoc_bodies(command).lower()
 
         # Detect Composio SDK usage patterns that should use MCP instead
         composio_sdk_patterns = [
@@ -1971,7 +1989,7 @@ class AgentHookSet:
         HTML -> PDF should use Chrome headless (Playwright) only when HTML is explicit.
         """
         command, _, _ = _extract_bash_command(input_data)
-        command_lower = command.lower()
+        command_lower = _strip_heredoc_bodies(command).lower()
 
         if "playwright" not in command_lower:
             return {}
@@ -2005,7 +2023,7 @@ class AgentHookSet:
         Catches chrome --headless, wkhtmltopdf, and weasyprint invocations.
         """
         command, _, _ = _extract_bash_command(input_data)
-        command_lower = command.lower()
+        command_lower = _strip_heredoc_bodies(command).lower()
 
         if "pdf" not in command_lower:
             return {}
