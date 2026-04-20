@@ -383,7 +383,20 @@ The philosophical foundation for Task Forge is documented in a separate treatise
 | #2 | 2026-04-20 | 6 min | 87 (complete) | ✅ Created | ⚠️ Self-certified | ✅ Persisted | Post-hardening; quality gate claimed but no artifact |
 | #3 | 2026-04-20 | 2.7 min | N/A | ❌ Skipped | ❌ Skipped | ❌ None | Read instructions, shortcut anyway — proved need for hook enforcement |
 | #4 | 2026-04-20 | 5.4 min | 82 (complete) | ✅ Created | ✅ Artifact produced | ✅ Persisted | Full pipeline success: SKILL.md + quality_gate.md + work product + task hub disposition |
-| #5 | Pending | — | — | — | — | — | Testing Phase 5c (optional skill improvement pass) |
+| #5 | 2026-04-20 | 5.4 min | 61 (top-level) | ✅ Created | ✅ Artifact + 5c | ✅ 15KB | First Phase 5c success: description 5→9 triggers, added Approach section, quality thresholds, v0→v1 documented |
+
+### Universal Improvement Patterns (Phase 5c)
+
+Observed across Runs #4-5, these patterns are now codified in Task Forge's Phase 5c as a
+checklist that applies to ALL forged skills:
+
+| Pattern | Learned From | Generalized As |
+|---------|-------------|----------------|
+| Preserve ephemeral code | Run #4-5: Python extraction scripts lived only in bash history | Save reusable execution logic to `scripts/` |
+| Specify reproducible methodology | Run #4 found 82 skills, Run #5 found 61 (different counting methods) | Define methodology precisely enough for consistent cross-run results |
+| Tighten scope definitions | "What counts as a skill?" was ambiguous (top-level vs all unique) | Define key terms unambiguously in the SKILL.md |
+| Track skill maturity | No versioning between Run #4 and #5 improvements | Label versions (v0→v1) in quality_gate.md when improvements are made |
+| Externalize domain knowledge | Category taxonomies embedded inline in work product | Move domain knowledge to `references/` for independent updates |
 
 ### Automated Checks
 - Task Forge trigger detection tested via `TODO_DISPATCH_PROMPT` pattern matching
@@ -393,6 +406,7 @@ The philosophical foundation for Task Forge is documented in a separate treatise
 - Completion gate hook (`on_pre_tool_use_task_forge_completion_gate`) deployed — blocks `complete` without artifacts
 
 ### Known Gaps
-- Summary extraction for ~10 skills with YAML block scalar descriptions (`|`, `>`) produces truncated summaries
-- Phase 5c (skill improvement pass) not yet tested — opt-in via user keywords
-- Completion gate hook not yet battle-tested (Run #4 passed organically without triggering the hook)
+- Completion gate hook not yet battle-tested (Runs #4-5 passed organically without triggering the hook)
+- Phase 5c universal patterns not yet verified in a non-inventory task (Tier 2/3 prompts)
+- No automated regression test for Phase 5c checklist completeness
+

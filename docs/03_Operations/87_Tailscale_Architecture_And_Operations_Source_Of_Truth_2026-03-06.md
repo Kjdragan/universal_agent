@@ -1,5 +1,7 @@
 # 87. Tailscale Architecture and Operations Source of Truth (2026-03-06)
 
+**Last updated:** 2026-04-20 (admin API secrets provisioning, hostname mapping clarification, ACL troubleshooting runbook)
+
 ## Deployment Status Note
 
 For application deployment, the canonical path is now GitHub Actions branch-driven CI/CD:
@@ -52,6 +54,24 @@ The practical consequence is:
 - `uaonvps` should be tagged `tag:vps`
 - operator workstation access to VPS nodes should be granted explicitly through Tailscale SSH policy rather than by tagging a workstation as a VPS
 
+### Device Hostname Mapping (Critical)
+
+> [!IMPORTANT]
+> The VPS has **two different hostnames** depending on the layer you inspect:
+> - **Raw OS hostname**: `srv1360701` (the Hostinger-assigned server name)
+> - **Tailscale MagicDNS alias**: `uaonvps` (the human-friendly name configured in Tailscale admin)
+>
+> `tailscale status --json` reports peers by their **raw hostname** (`srv1360701`), while `tailscale status` (text mode) shows the **MagicDNS name** (`uaonvps`).
+> The `device_roles.json` file uses `srv1360701` because the admin API indexes devices by raw hostname.
+> SSH and preflight scripts should use `uaonvps` (the MagicDNS name).
+
+| Context | Use This Name |
+|---------|---------------|
+| `device_roles.json` / admin API | `srv1360701` |
+| SSH commands / preflight scripts | `uaonvps` |
+| `tailscale status --json` peers | `srv1360701` |
+| `tailscale ping` / `tailscale ssh` | `uaonvps` |
+
 This role model is now tracked in repo-managed files:
 - `infrastructure/tailscale/device_roles.json`
 - `infrastructure/tailscale/tailnet-policy.hujson`
@@ -61,7 +81,40 @@ Live tailnet management helpers are:
 - `scripts/tailscale_apply_policy.py`
 
 These scripts are intended to keep the live tailnet aligned with the canonical role map and SSH policy.
-Their current control-plane credential source is Infisical path `prod:/tailscale` because the project could not create an additional `infra-admin` environment at the time of implementation.
+
+### Admin API Credentials (Infisical)
+
+The admin scripts require two secrets, stored in Infisical (`production` environment):
+
+| Secret | Status | Value |
+|--------|--------|-------|
+| `TAILSCALE_TAILNET` | ✅ Provisioned (2026-04-20) | `kjdragan.github` |
+| `TAILSCALE_ADMIN_API_TOKEN` | ✅ Provisioned (2026-04-20) | `tskey-api-kCGdExQ38r11CNTRL-...` (ua-admin-automation) |
+
+To generate the API token:
+1. Go to https://login.tailscale.com/admin/settings/keys
+2. Click "Generate API key"
+3. Set a descriptive name (e.g., `ua-admin-automation`)
+4. Copy the key and provision it:
+   ```bash
+   export INFISICAL_TOKEN=$(infisical login --method=universal-auth \
+     --client-id=$INFISICAL_CLIENT_ID \
+     --client-secret=$INFISICAL_CLIENT_SECRET --plain 2>/dev/null)
+   infisical secrets set TAILSCALE_ADMIN_API_TOKEN="tskey-api-..." \
+     --env=production --projectId=$INFISICAL_PROJECT_ID \
+     --token="$INFISICAL_TOKEN" --silent
+   ```
+
+To run the admin scripts with Infisical-injected credentials:
+```bash
+export INFISICAL_TOKEN=$(infisical login --method=universal-auth \
+  --client-id=$INFISICAL_CLIENT_ID \
+  --client-secret=$INFISICAL_CLIENT_SECRET --plain 2>/dev/null)
+infisical run --env=production --projectId=$INFISICAL_PROJECT_ID \
+  --token="$INFISICAL_TOKEN" --silent -- \
+  python scripts/tailscale_apply_policy.py \
+    --policy-file infrastructure/tailscale/tailnet-policy.hujson --dry-run
+```
 
 ## Canonical Remote Host Standard
 
@@ -322,6 +375,55 @@ The canonical remediation order is:
 2. apply the repo-managed policy overlay from `infrastructure/tailscale/tailnet-policy.hujson`
 3. only use public-IP allowlisting in the VPS host firewall as a fallback path
 
+## ACL / SSH Troubleshooting Runbook (Added 2026-04-20)
+
+> [!TIP]
+> Before assuming an ACL issue is real, **verify the current state first**. Many Tailscale SSH issues are transient (session re-auth, tag sync delays, node key rotation) and may self-resolve.
+
+### Step-by-Step Diagnostic Sequence
+
+```bash
+# 1. Check local Tailscale is connected
+tailscale status
+
+# 2. Check device tags and peer state (JSON gives full detail)
+tailscale status --json | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+self_node = data.get('Self', {})
+print(f'Self: {self_node.get(\"HostName\")} tags={self_node.get(\"Tags\", [])}')
+for nid, peer in data.get('Peer', {}).items():
+    print(f'Peer: {peer.get(\"HostName\")} tags={peer.get(\"Tags\", [])} online={peer.get(\"Online\")}')
+"
+
+# 3. Verify the target user exists on the VPS
+ssh root@uaonvps "id ua"
+
+# 4. Test Tailscale SSH as the target user
+tailscale ssh ua@uaonvps "whoami"
+
+# 5. Run the preflight script
+UA_SSH_AUTH_MODE=tailscale_ssh bash scripts/tailscale_vps_preflight.sh ua@uaonvps
+
+# 6. Check Tailscale SSH is enabled on the VPS
+ssh root@uaonvps "tailscale up --ssh"
+```
+
+### Key Diagnostic Findings from April 2026 Incident
+
+1. **Tags were already in place** — `mint-desktop` had `tag:operator-workstation`, `srv1360701` had `tag:vps`
+2. **SSH was already working** — both `root@uaonvps` and `ua@uaonvps` connected successfully
+3. **The issue was transient** — likely caused by a temporary Tailscale session re-authentication or tag sync delay
+4. **Lesson**: Always verify current state with CLI commands before investing in code remediation. Many ACL reports are false positives from transient conditions.
+
+### Common False Positive Patterns
+
+| Symptom | Likely Cause | Verify With |
+|---------|-------------|-------------|
+| Heartbeat reports SSH denied | Transient Tailscale session re-auth | `tailscale ssh ua@uaonvps whoami` |
+| Tags appear missing | `tailscale status --json` shows raw hostname, not MagicDNS | Check `Tags` field in JSON output |
+| Agent reports ACL blocking | Point-in-time failure during node key rotation | Run preflight script 5 minutes later |
+
 ## Security and Operations Posture
 
 The current Tailscale posture is:
@@ -347,8 +449,10 @@ The current Tailscale posture is:
 4. **Runbook convergence**
    - older runbooks still contain direct `100.x` SSH examples and should eventually defer more explicitly to the canonical tailnet-first workflow
 
-5. **Automation bootstrap**
-   - the live policy scripts require a Tailscale admin API token stored centrally in Infisical and should not depend on one workstation being the source of truth
+5. **Automation bootstrap** *(Resolved 2026-04-20)*
+   - ~~the live policy scripts require a Tailscale admin API token stored centrally in Infisical~~
+   - `TAILSCALE_TAILNET` is now provisioned in Infisical (`development` and `production` environments)
+   - `TAILSCALE_ADMIN_API_TOKEN` is now provisioned in Infisical (`development` and `production` environments) — key name: `ua-admin-automation`
 
 ## Source Files That Define Current Truth
 

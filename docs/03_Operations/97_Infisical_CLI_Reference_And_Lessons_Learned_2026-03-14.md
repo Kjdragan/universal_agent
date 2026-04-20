@@ -1,5 +1,7 @@
 # Infisical CLI Reference and Lessons Learned
 
+**Last updated:** 2026-04-20 (machine-auth lessons, environment slug gotcha, Tailscale secrets)
+
 > Source of truth for using Infisical CLI in the Universal Agent project — authentication, secret management, environment setup, and agent integration patterns.
 
 ## Quick Reference
@@ -144,6 +146,8 @@ At startup, `src/universal_agent/infisical_loader.py` calls `initialize_runtime_
 | `ANTHROPIC_API_KEY` | Claude API | Agent runtime |
 | `UA_OPS_TOKEN` | Ops API authentication | Gateway server |
 | `NOTEBOOKLM_AUTH_COOKIE_HEADER` | NLM API cookies | NLM MCP server |
+| `TAILSCALE_TAILNET` | Tailnet name (`kjdragan.github`) | Tailscale admin scripts |
+| `TAILSCALE_ADMIN_API_TOKEN` | Tailscale admin API key | `tailscale_apply_policy.py`, `tailscale_set_device_tags.py` |
 
 ### For Agents and Agentic Tools (Me)
 
@@ -222,6 +226,71 @@ For first-time desktop setup:
 4. Verify: `infisical secrets get AGENTMAIL_API_KEY --env=development --plain --silent`
 
 No `.env` file needed for agent work — the CLI handles auth via cached browser login.
+
+### 9. Machine-Auth Pattern for Agentic Scripts (Added 2026-04-20)
+
+> [!IMPORTANT]
+> When running as an agent (non-interactive), the browser-based `infisical login` session is typically expired. Use the **universal-auth** pattern with machine identity credentials.
+
+The three bootstrap env vars are always available in the shell on both desktop and VPS:
+- `INFISICAL_CLIENT_ID`
+- `INFISICAL_CLIENT_SECRET`
+- `INFISICAL_PROJECT_ID`
+
+Correct pattern for getting a token and using it:
+```bash
+# Step 1: Get an access token
+export INFISICAL_TOKEN=$(infisical login --method=universal-auth \
+  --client-id=$INFISICAL_CLIENT_ID \
+  --client-secret=$INFISICAL_CLIENT_SECRET --plain 2>/dev/null)
+
+# Step 2: Use the token for any operation
+# GET a secret:
+infisical secrets get MY_SECRET --env=production \
+  --projectId=$INFISICAL_PROJECT_ID --token="$INFISICAL_TOKEN" --plain --silent
+
+# SET a secret:
+infisical secrets set MY_KEY="my_value" --env=production \
+  --projectId=$INFISICAL_PROJECT_ID --token="$INFISICAL_TOKEN" --silent
+
+# RUN a command with all secrets injected:
+infisical run --env=production --projectId=$INFISICAL_PROJECT_ID \
+  --token="$INFISICAL_TOKEN" --silent -- python3 my_script.py
+```
+
+> [!WARNING]
+> When the CLI session is expired, `infisical secrets get` **silently triggers an interactive login flow** instead of returning an error. If output is empty, that's likely what happened. Always use `--token` to force machine-auth.
+
+### 10. Environment Slug Names Are Strict (Added 2026-04-20)
+
+Infisical environment slugs in this project are:
+
+| Correct Slug | ❌ Wrong Slug |
+|-------------|---------------|
+| `development` | `dev` |
+| `production` | `prod` |
+| `staging` | (does not exist in this project) |
+
+Using `--env=prod` instead of `--env=production` returns a cryptic 404 error:
+```
+error: Folder with path '/' in environment 'prod' was not found
+```
+
+**Always use the full slug name.**
+
+### 11. `infisical secrets` (No Subcommand) Hangs or Returns Empty
+
+The bare `infisical secrets` command (listing all secrets) renders a full table to stdout. When piped through JSON parsing or when run without `--token` in an expired session, it can:
+- Appear to hang (waiting for interactive auth)
+- Return empty output
+- Print the table format which is not valid JSON
+
+For machine-readable listing, use:
+```bash
+# Correct: export as JSON with explicit auth
+infisical export --env=production --format=json \
+  --projectId=$INFISICAL_PROJECT_ID --token="$INFISICAL_TOKEN"
+```
 
 ## Related Files
 

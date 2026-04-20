@@ -301,30 +301,50 @@ This artifact serves a triple purpose:
 > phrases like "and evaluate", "polish the skill", "improve it", "run skill-creator eval",
 > or "make it production-quality". If not requested, skip to Phase 6.
 
-When triggered, hand the forged skill off to the skill-creator's eval/iterate loop for
-a single improvement pass. This is the bridge between a v0 task-skill and a polished v1+.
+When triggered, apply the skill-creator's quality standards for a single improvement pass.
+This is the bridge between a v0 task-skill and a polished v1+.
 
-#### What to do:
+#### Step 1: Re-read the standard
 
-1. **Re-read** `.claude/skills/skill-creator/SKILL.md` — specifically the "Skill Writing Guide"
-   and "Writing Patterns" sections. These are the polish standards.
+Read `.claude/skills/skill-creator/SKILL.md` — specifically the "Skill Writing Guide"
+and "Writing Patterns" sections. These are the polish standards you're measuring against.
 
-2. **Self-evaluate** the task-skill against skill-creator standards:
-   - Is the description "pushy" enough for reliable triggering?
-   - Does the SKILL.md follow progressive disclosure (metadata → body → bundled resources)?
-   - Are there hardcoded values that should be parameterized?
-   - Could the skill benefit from a `references/` file for domain context?
+#### Step 2: Self-evaluate against skill-creator standards
 
-3. **Improve the skill** — make concrete edits to `task-skills/<task-name>/SKILL.md`:
-   - Sharpen the description for better trigger matching
-   - Extract any inline scripts into `scripts/` if they're reusable
-   - Add `references/` for domain knowledge that shouldn't live in the SKILL.md body
-   - Ensure frontmatter description follows the "pushy" pattern from skill-creator
+- Is the description "pushy" enough for reliable triggering?
+- Does the SKILL.md follow progressive disclosure (metadata → body → bundled resources)?
+- Are there hardcoded values that should be parameterized?
+- Could the skill benefit from a `references/` file for domain context?
 
-4. **Update quality_gate.md** — append a `## Phase 5c: Improvement Pass` section documenting:
-   - What was improved and why
-   - Before/after of any description changes
-   - Whether the skill is now ready for promotion to `.claude/skills/`
+#### Step 3: Apply universal improvement patterns
+
+These patterns were learned from observing real Task Forge runs. Apply each one
+as a checklist — they catch the most common v0 weaknesses:
+
+| Pattern | What to check | Why it matters |
+|---------|--------------|----------------|
+| **Preserve ephemeral code** | Did you write scripts during Phase 4 execution (Python extraction, bash pipelines) that lived only in the tool-call stream? Save reusable logic to `scripts/`. | Ephemeral code dies with the session. Scripts in `scripts/` survive and make the skill re-executable without re-discovery. |
+| **Specify reproducible methodology** | Does the Approach section define the methodology precisely enough that a different agent in a different session would produce *consistent* results? | Vague approaches like "scan the directory" produce different outputs each run. Explicit methodology (what to count, how to deduplicate, what constitutes a match) ensures reproducibility. |
+| **Tighten scope definitions** | Are key terms defined unambiguously? (e.g., "what counts as a skill?", "what's a duplicate?", "what's the boundary of the dataset?") | Undefined scope leads to count discrepancies, missed items, or over-counting across runs. |
+| **Track skill maturity** | Note the version (v0 → v1) when improvements are made. The quality_gate.md should record what changed between versions. | Version history makes the maturity model concrete, not just aspirational. Future agents can see what was tried and what worked. |
+| **Externalize domain knowledge** | Is there domain knowledge embedded in the SKILL.md body that should be in `references/`? (e.g., category taxonomies, threshold values, API schemas) | Domain knowledge in `references/` can be updated independently of the skill logic. It also keeps the SKILL.md lean (<100 lines). |
+
+#### Step 4: Make concrete improvements
+
+Edit `task-skills/<task-name>/SKILL.md` with the improvements identified above:
+- Sharpen the description for better trigger matching
+- Save any reusable scripts to `scripts/`
+- Add `references/` for domain knowledge
+- Tighten scope definitions and methodology
+- Ensure frontmatter description follows the "pushy" pattern from skill-creator
+
+#### Step 5: Document the improvement
+
+Append a `## Phase 5c: Improvement Pass` section to `quality_gate.md`:
+- What was improved and why (cite which universal pattern applied)
+- Before/after of any description or structural changes
+- Version label (v0 → v1)
+- Whether the skill is now ready for promotion to `.claude/skills/`
 
 > **When to skip:** If the task is clearly one-off and the user didn't ask for polish,
 > skip this phase entirely. Task Forge's default is "ship the v0, iterate if it matters."
