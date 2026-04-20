@@ -9,7 +9,8 @@ def _reset_env(monkeypatch) -> None:
     monkeypatch.delenv("UA_PRIMARY_EMAIL", raising=False)
     monkeypatch.delenv("UA_SECONDARY_EMAILS", raising=False)
     monkeypatch.delenv("UA_EMAIL_ALIASES", raising=False)
-    monkeypatch.delenv("UA_IDENTITY_REGISTRY_PATH", raising=False)
+    # Prevent loading from the real project identity_registry.json
+    monkeypatch.setenv("UA_IDENTITY_REGISTRY_PATH", "/nonexistent/identity_registry.json")
     clear_identity_registry_cache()
 
 

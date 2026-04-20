@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from universal_agent import task_hub
+from universal_agent.tools import task_hub_bridge
 from universal_agent.tools.task_hub_bridge import _task_hub_task_action_impl
 
 
@@ -37,7 +38,7 @@ async def test_task_hub_claim_alias_seizes_open_task(monkeypatch, tmp_path):
             },
         )
 
-    monkeypatch.setattr("universal_agent.tools.task_hub_bridge.get_activity_db_path", lambda: db_path)
+    monkeypatch.setattr(task_hub_bridge, "get_activity_db_path", lambda: db_path)
 
     result = await _task_hub_task_action_impl(
         {
@@ -69,7 +70,7 @@ async def test_task_hub_claim_alias_is_idempotent_for_in_progress_task(monkeypat
             },
         )
 
-    monkeypatch.setattr("universal_agent.tools.task_hub_bridge.get_activity_db_path", lambda: db_path)
+    monkeypatch.setattr(task_hub_bridge, "get_activity_db_path", lambda: db_path)
 
     result = await _task_hub_task_action_impl(
         {

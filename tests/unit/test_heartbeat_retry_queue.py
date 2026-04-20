@@ -148,7 +148,11 @@ async def test_run_heartbeat_failure_schedules_exponential_retry(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_run_heartbeat_schedules_continuation_after_successful_task_hub_claim(monkeypatch, tmp_path):
+async def test_run_heartbeat_completes_without_continuation_when_dispatch_moved(monkeypatch, tmp_path):
+    """After dispatch was moved to todo_dispatch_service, the heartbeat no longer
+    claims tasks directly.  Verify that a successful heartbeat run does NOT
+    schedule a continuation retry (dispatch_claimed_count is always 0).
+    """
     import universal_agent.heartbeat_service as hb
     from universal_agent import task_hub
     from universal_agent.gateway import GatewaySession
@@ -166,11 +170,6 @@ async def test_run_heartbeat_schedules_continuation_after_successful_task_hub_cl
         task_hub,
         "get_dispatch_queue",
         lambda conn, **kwargs: {"queue_build_id": "q_test", "eligible_total": 1, "items": []},
-    )
-    monkeypatch.setattr(
-        task_hub,
-        "claim_next_dispatch_tasks",
-        lambda conn, **kwargs: [{"assignment_id": "asg-1", "task_id": "task-1", "eligible": True}],
     )
     monkeypatch.setattr(
         task_hub,
@@ -200,8 +199,6 @@ async def test_run_heartbeat_schedules_continuation_after_successful_task_hub_cl
     )
     persisted = hb.HeartbeatState.from_dict(json.loads(state_path.read_text(encoding="utf-8")))
 
-    assert persisted.retry_kind == "continuation"
-    assert persisted.retry_attempt == 1
-    assert persisted.retry_reason == "task_hub_followup"
-    assert persisted.last_retry_delay_seconds == 1.0
-    assert persisted.next_retry_at >= persisted.last_run + 0.9
+    # dispatch_claimed_count is always 0 now — no continuation scheduled
+    assert persisted.retry_kind is None
+    assert persisted.retry_attempt == 0

@@ -200,6 +200,7 @@ def test_select_client_returns_cli_for_cli_mode(tmp_path: Path):
     loop = VpWorkerLoop.__new__(VpWorkerLoop)
     loop.vp_id = "vp.coder.primary"
     loop.profile = profile
+    loop._client = None
     loop._default_client = MagicMock(spec=VpClient)
 
     mission_cli = {
@@ -274,6 +275,7 @@ def test_select_client_returns_cli_for_general_vp_cli_mode():
     loop = VpWorkerLoop.__new__(VpWorkerLoop)
     loop.vp_id = "vp.general.primary"
     loop.profile = profile
+    loop._client = None
     loop._default_client = MagicMock(spec=VpClient)
 
     mission_cli = {

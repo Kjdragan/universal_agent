@@ -1,6 +1,7 @@
 import sqlite3
 
 from universal_agent import main as agent_main
+from universal_agent.session_ctx import SessionContext, set_ctx, reset_ctx
 
 
 def _set_runtime_step(phase: str = "replay") -> sqlite3.Connection:
@@ -19,19 +20,6 @@ def _set_runtime_step(phase: str = "replay") -> sqlite3.Connection:
         ("step-1", phase),
     )
     return conn
-
-
-def _install_step(conn: sqlite3.Connection, step_id: str = "step-1") -> tuple:
-    old_conn = agent_main.runtime_db_conn
-    old_step = agent_main.current_step_id
-    agent_main.runtime_db_conn = conn
-    agent_main.current_step_id = step_id
-    return old_conn, old_step
-
-
-def _restore_globals(old_conn, old_step) -> None:
-    agent_main.runtime_db_conn = old_conn
-    agent_main.current_step_id = old_step
 
 
 def test_should_not_trigger_without_env(monkeypatch):
@@ -81,7 +69,12 @@ def test_crash_rejects_stage_mismatch(monkeypatch):
 
 def test_crash_matches_phase_and_step(monkeypatch):
     conn = _set_runtime_step(phase="replay")
-    old_conn, old_step = _install_step(conn, "step-1")
+    ctx = SessionContext(
+        run_id="test-run",
+        current_step_id="step-1",
+        runtime_db_conn=conn,
+    )
+    token = set_ctx(ctx)
     try:
         monkeypatch.setenv("UA_TEST_CRASH_AFTER_PHASE", "replay")
         monkeypatch.setenv("UA_TEST_CRASH_AFTER_STEP", "step-1")
@@ -95,5 +88,5 @@ def test_crash_matches_phase_and_step(monkeypatch):
         assert should_crash is True
         assert context["current_phase"] == "replay"
     finally:
-        _restore_globals(old_conn, old_step)
+        reset_ctx(token)
         conn.close()

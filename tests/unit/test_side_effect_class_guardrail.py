@@ -7,6 +7,7 @@ import pytest
 from universal_agent import main as agent_main
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.session_ctx import SessionContext, set_ctx, reset_ctx
 
 
 def _setup_conn() -> sqlite3.Connection:
@@ -65,15 +66,14 @@ async def test_invalid_side_effect_class_defaults_to_external(monkeypatch):
     )
     conn.commit()
 
-    old_runtime = agent_main.runtime_db_conn
-    old_ledger = agent_main.tool_ledger
-    old_run_id = agent_main.run_id
-    old_step_id = agent_main.current_step_id
+    ctx = SessionContext(
+        run_id=run_id,
+        current_step_id=step_id,
+        runtime_db_conn=conn,
+        tool_ledger=ledger,
+    )
+    token = set_ctx(ctx)
     try:
-        agent_main.runtime_db_conn = conn
-        agent_main.tool_ledger = ledger
-        agent_main.run_id = run_id
-        agent_main.current_step_id = step_id
         agent_main._invalid_side_effect_warnings.clear()
 
         result = await agent_main.on_pre_tool_use_ledger(
@@ -82,10 +82,7 @@ async def test_invalid_side_effect_class_defaults_to_external(monkeypatch):
             {},
         )
     finally:
-        agent_main.runtime_db_conn = old_runtime
-        agent_main.tool_ledger = old_ledger
-        agent_main.run_id = old_run_id
-        agent_main.current_step_id = old_step_id
+        reset_ctx(token)
         conn.close()
 
     assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"

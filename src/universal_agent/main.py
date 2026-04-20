@@ -5074,6 +5074,7 @@ def _should_trigger_test_crash(
     stage: str,
     tool_input: Optional[dict] = None,
 ) -> tuple[bool, dict[str, Optional[str]]]:
+    current_step_id = None
     _ctx = _get_ctx()
     if _ctx is not None:
         current_step_id = _ctx.current_step_id
@@ -5138,6 +5139,7 @@ def _maybe_crash_after_tool(
     stage: str,
     tool_input: Optional[dict] = None,
 ) -> None:
+    current_step_id = None
     _ctx = _get_ctx()
     if _ctx is not None:
         current_step_id = _ctx.current_step_id
@@ -5181,6 +5183,7 @@ def _maybe_crash_after_tool(
 
 
 def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
+    tool_ledger = None
     _ctx = _get_ctx()
     if _ctx is not None:
         tool_ledger = _ctx.tool_ledger
@@ -5706,6 +5709,8 @@ def _persist_subagent_output(
     output: Any,
     output_str: str,
 ) -> Optional[dict[str, str]]:
+    run_id = None
+    current_step_id = None
     _ctx = _get_ctx()
     if _ctx is not None:
         current_step_id = _ctx.current_step_id

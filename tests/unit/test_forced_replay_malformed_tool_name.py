@@ -7,6 +7,7 @@ from universal_agent import main as agent_main
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run_status
+from universal_agent.session_ctx import SessionContext, set_ctx, reset_ctx
 
 
 def _setup_conn() -> sqlite3.Connection:
@@ -61,27 +62,20 @@ def test_forced_replay_malformed_tool_name_does_not_mark_waiting():
         },
     }
 
-    original_state = (
-        agent_main.runtime_db_conn,
-        agent_main.tool_ledger,
-        agent_main.run_id,
-        agent_main.current_step_id,
-        agent_main.forced_tool_queue,
-        agent_main.forced_tool_active_ids,
-        agent_main.forced_tool_mode_active,
+    ctx = SessionContext(
+        run_id=run_id,
+        current_step_id=step_id,
+        runtime_db_conn=conn,
+        tool_ledger=ledger,
+        forced_tool_queue=[expected],
+        forced_tool_active_ids={},
+        forced_tool_mode_active=True,
     )
+    token = set_ctx(ctx)
     try:
-        agent_main.runtime_db_conn = conn
-        agent_main.tool_ledger = ledger
-        agent_main.run_id = run_id
-        agent_main.current_step_id = step_id
-        agent_main.forced_tool_queue = [expected]
-        agent_main.forced_tool_active_ids = {}
-        agent_main.forced_tool_mode_active = True
-
         malformed_name = (
             "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL-<arg_key>tools</arg_key>"
-            "<arg_value>[{\"tool_slug\":\"GMAIL_SEND_EMAIL\",\"arguments\":{}}]</arg_value>"
+            '<arg_value>[{"tool_slug":"GMAIL_SEND_EMAIL","arguments":{}}]</arg_value>'
         )
         result = asyncio.run(
             agent_main.on_pre_tool_use_ledger(
@@ -92,15 +86,7 @@ def test_forced_replay_malformed_tool_name_does_not_mark_waiting():
         )
         assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
         assert get_run_status(conn, run_id) == "running"
-        assert len(agent_main.forced_tool_queue) == 1
+        assert len(ctx.forced_tool_queue) == 1
     finally:
-        (
-            agent_main.runtime_db_conn,
-            agent_main.tool_ledger,
-            agent_main.run_id,
-            agent_main.current_step_id,
-            agent_main.forced_tool_queue,
-            agent_main.forced_tool_active_ids,
-            agent_main.forced_tool_mode_active,
-        ) = original_state
+        reset_ctx(token)
         conn.close()

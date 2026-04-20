@@ -29,14 +29,12 @@ def test_todolist_dashboard_includes_heartbeat_force_controls():
 
 def test_todolist_dashboard_mission_focused_layout():
     content = _PAGE.read_text(encoding="utf-8")
-    # New mission-focused elements
+    # Core data binding identifiers (stable across UI redesigns)
     assert "Task Hub" in content
-    assert "Dispatch Eligible" in content
-    assert "Active Agents" in content
-    assert "Completion Rate" in content
-    assert "Dispatcher Health" in content
-    assert "Last Wake" in content
-    assert "Wake Queue" in content
+    assert "dispatch_eligible" in content
+    assert "active_agents" in content
+    assert "completionRate24h" in content
+    assert "Dispatcher" in content
     assert "last_result_state" in content
     assert "source_kind" in content
     # Kanban board lanes

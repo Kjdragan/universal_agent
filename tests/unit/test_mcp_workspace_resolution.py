@@ -40,11 +40,14 @@ def test_resolve_workspace_falls_back_to_latest_run_workspace(monkeypatch, tmp_p
     (newer / "run_manifest.json").write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(mcp_server, "PROJECT_ROOT", str(tmp_path))
+    # DEFAULT_WORKSPACES_ROOT is computed at import-time, so must also be patched
+    monkeypatch.setattr(mcp_server, "DEFAULT_WORKSPACES_ROOT", workspaces_root.resolve())
     monkeypatch.setattr(mcp_server, "_ctx_get_workspace", lambda: None)
     monkeypatch.delenv("CURRENT_RUN_WORKSPACE", raising=False)
     monkeypatch.delenv("CURRENT_SESSION_WORKSPACE", raising=False)
     monkeypatch.delenv("CURRENT_RUN_WORKSPACE_FILE", raising=False)
     monkeypatch.delenv("CURRENT_SESSION_WORKSPACE_FILE", raising=False)
+    monkeypatch.delenv("UA_WORKSPACES_DIR", raising=False)
 
     os.utime(older, (1, 1))
     os.utime(newer, None)

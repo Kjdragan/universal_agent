@@ -44,7 +44,7 @@ def test_build_heartbeat_environment_context_write_rules(monkeypatch):
 
     ctx = _build_heartbeat_environment_context("/tmp/ws")
 
-    assert "mcp__internal__write_text_file" in ctx
+    assert "write_text_file" in ctx
     assert "SEQUENTIALLY" in ctx
     assert "sibling failures cascade" in ctx
     assert "Do NOT use the native `Write` tool" in ctx

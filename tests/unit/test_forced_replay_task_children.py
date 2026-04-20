@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from universal_agent import main as agent_main
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.session_ctx import SessionContext, set_ctx, reset_ctx
 
 
 def _setup_conn() -> sqlite3.Connection:
@@ -53,20 +54,16 @@ def test_forced_replay_allows_task_children():
         "tool_input": {"subagent_type": "report", "prompt": "do work"},
     }
 
-    original_state = (
-        agent_main.tool_ledger,
-        agent_main.run_id,
-        agent_main.current_step_id,
-        agent_main.forced_tool_queue,
-        agent_main.forced_tool_active_ids,
+    ctx = SessionContext(
+        run_id=run_id,
+        current_step_id=step_id,
+        runtime_db_conn=conn,
+        tool_ledger=ledger,
+        forced_tool_queue=[expected],
+        forced_tool_active_ids={"tool-use-task": expected},
     )
+    token = set_ctx(ctx)
     try:
-        agent_main.tool_ledger = ledger
-        agent_main.run_id = run_id
-        agent_main.current_step_id = step_id
-        agent_main.forced_tool_queue = [expected]
-        agent_main.forced_tool_active_ids = {"tool-use-task": expected}
-
         result = asyncio.run(
             agent_main.on_pre_tool_use_ledger(
                 {
@@ -97,10 +94,4 @@ def test_forced_replay_allows_task_children():
         )
         assert result == {}
     finally:
-        (
-            agent_main.tool_ledger,
-            agent_main.run_id,
-            agent_main.current_step_id,
-            agent_main.forced_tool_queue,
-            agent_main.forced_tool_active_ids,
-        ) = original_state
+        reset_ctx(token)

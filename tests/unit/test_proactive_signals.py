@@ -182,7 +182,8 @@ def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tm
 
     assert counts["youtube"] >= 1
     assert counts["topic_signatures"] >= 1
-    assert repeated["topic_signatures"] >= 1
+    # Second sync is idempotent — no new signatures upserted
+    assert repeated["topic_signatures"] == 0
     assert signature is not None
     assert tutorial_tasks >= 1
     assert any(item["source_kind"] == "proactive_signal" for item in artifacts)

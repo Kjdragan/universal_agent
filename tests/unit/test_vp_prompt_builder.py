@@ -78,7 +78,8 @@ def test_vp_prompt_includes_required_sections():
     assert "MEMORY MANAGEMENT" in prompt
     assert "MEMORY CONTEXT" in prompt
     assert "CURRENT_SESSION_WORKSPACE" in prompt
-    assert "SKILLS" in prompt
+    # Note: skills_xml is folded into the CAPABILITY DOMAINS section now,
+    # not rendered as a standalone "SKILLS" heading.
     assert "research-specialist" in prompt
 
 

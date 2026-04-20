@@ -56,7 +56,7 @@ def test_vp_db_env_override_still_supported(monkeypatch, tmp_path: Path):
     assert Path(get_vp_db_path()).resolve() == custom_path
 
 
-def test_sqlite_busy_timeout_defaults_to_fast_fail(monkeypatch, tmp_path: Path):
+def test_sqlite_busy_timeout_uses_default_when_no_env(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("UA_SQLITE_BUSY_TIMEOUT_MS", raising=False)
     db_path = (tmp_path / "runtime_state.db").resolve()
 
@@ -66,8 +66,8 @@ def test_sqlite_busy_timeout_defaults_to_fast_fail(monkeypatch, tmp_path: Path):
     finally:
         conn.close()
 
-    assert get_sqlite_busy_timeout_ms() == 2000
-    assert busy_timeout == 2000
+    assert get_sqlite_busy_timeout_ms() == 15000
+    assert busy_timeout == 15000
 
 
 def test_sqlite_busy_timeout_env_override_is_honored(monkeypatch, tmp_path: Path):

@@ -385,8 +385,8 @@ def test_trigger_type_defaults_to_heartbeat_poll() -> None:
 def test_decomposed_subtasks_get_default_trigger_type() -> None:
     """trigger_type defaults to 'heartbeat_poll' via the SQL column DEFAULT.
 
-    decompose_task includes trigger_type in the subtask dict, but upsert_item
-    currently relies on the SQL schema default. Both subtasks get heartbeat_poll.
+    decompose_task now correctly passes through explicit trigger_type values.
+    If omitted, upsert_item relies on the SQL schema default of 'heartbeat_poll'.
     """
     conn = _conn()
     try:
@@ -402,7 +402,9 @@ def test_decomposed_subtasks_get_default_trigger_type() -> None:
 
         first = task_hub.get_item(conn, children[0]["task_id"])
         second = task_hub.get_item(conn, children[1]["task_id"])
-        assert first is not None and first.get("trigger_type") == "heartbeat_poll"
+        # Explicit trigger_type is preserved
+        assert first is not None and first.get("trigger_type") == "immediate"
+        # Omitted trigger_type falls back to SQL column default
         assert second is not None and second.get("trigger_type") == "heartbeat_poll"
     finally:
         conn.close()
