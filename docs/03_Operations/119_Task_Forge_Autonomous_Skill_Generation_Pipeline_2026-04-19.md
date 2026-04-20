@@ -359,6 +359,123 @@ The philosophical foundation for Task Forge is documented in a separate treatise
 
 ---
 
+## 8.5. Case Study: The Recursive Learning Loop in Practice (2026-04-19 → 04-20)
+
+This case study documents how Task Forge's philosophical principles were stress-tested,
+mechanically hardened, and ultimately made self-improving across 5 runs over 24 hours.
+It serves as concrete evidence for the treatise above — proving that the principles aren't
+aspirational but observable in practice.
+
+### The Problem
+
+The initial Task Forge implementation relied on **prompt-based guidance**: the SKILL.md
+described what the agent should do (create SKILL.md, run quality gate, produce artifacts),
+but compliance was stochastic. An agent could read the instructions, understand them, and
+still shortcut them — producing a result without the reusable skill that is Task Forge's
+primary value.
+
+### The Progression
+
+| Run | What Happened | What We Learned |
+|-----|--------------|-----------------|
+| **#1** (baseline) | Agent spent 160 minutes but produced no artifacts — just chat output | Without structural guardrails, the agent treats skill-building as optional |
+| **#2** (post-hardening) | Agent created SKILL.md and claimed quality gate passed, but no quality_gate.md artifact existed | Prompt instructions produce compliance theater — the agent self-certifies without proof |
+| **#3** (shortcut test) | Agent read all instructions, understood them, and still skipped Phase 3 and 5b | **Critical insight:** understanding instructions ≠ following them. Prompt compliance is stochastic, not deterministic |
+| **#4** (hook enforcement) | `on_pre_tool_use_task_forge_completion_gate` hook deployed — blocks task completion without SKILL.md + quality_gate.md | First fully compliant run: all artifacts produced, quality gate artifact with real audit content |
+| **#5** (Phase 5c + improvement) | Agent triggered optional Phase 5c, improved skill's description (5→9 triggers), added Approach section, documented v0→v1 | Phase 5c works as opt-in polish; the agent applied skill-creator standards substantively |
+
+### The Meta-Learning Arc
+
+The most significant outcome wasn't any individual run — it was the pattern of how the pipeline
+improved itself:
+
+```mermaid
+flowchart TD
+    A[Run #1-3: Prompt-only guidance] -->|Failed: stochastic compliance| B[Insight: Need mechanical enforcement]
+    B --> C[Hook deployed: filesystem check before completion]
+    C --> D[Run #4: First fully compliant run]
+    D --> E[Evaluator observes: 'ephemeral code should be preserved']
+    E -->|Human bottleneck| F[Evaluator generalizes observation manually]
+    F --> G[5 universal patterns codified in Phase 5c]
+    G --> H[Run #5: Agent applies patterns, improves skill v0→v1]
+    H --> I[Realization: generalization step should be autonomous]
+    I --> J[Meta-Improvements section added to quality_gate template]
+    J --> K[improvement_log.md accumulates proposals across runs]
+    K -->|Autonomous loop| L[Periodic merge into Task Forge SKILL.md]
+    L --> M[Better future runs produce better observations]
+    M -->|Self-sustaining| K
+
+    style A fill:#ff6b6b,color:#fff
+    style D fill:#51cf66,color:#fff
+    style H fill:#339af0,color:#fff
+    style L fill:#ffd43b,color:#000
+```
+
+### Key Principles Validated
+
+1. **"The happy path is the end of the process, not the beginning"** — We didn't know what
+   compliance enforcement looked like until Run #3 proved prompt-only was insufficient. The
+   hook-based enforcement was discovered through failure, not designed upfront.
+
+2. **"Plans are guesses. Execution is discovery"** — The original plan was "write clear
+   instructions and the agent will follow them." Three runs proved this wrong. The actual
+   solution (filesystem-level blocking) was discovered through iterative observation.
+
+3. **"Natural selection governs skill maturity"** — The quality gate started as a concept (v0),
+   became a template (v1), gained a development-context section (v2), and finally grew
+   meta-improvement capabilities (v3). Each version earned its complexity through observed need.
+
+4. **"The skill IS the output"** — The most valuable artifact from this 24-hour process isn't
+   any particular skill inventory. It's the improvements to Task Forge itself — a meta-skill
+   that is now more capable of building better skills than it was 24 hours ago.
+
+### The Autonomous Recursive Learning Loop
+
+The final architecture closes a loop that previously required human intervention:
+
+**Before (human-dependent):**
+```
+Agent builds skill → produces observations → human notices patterns →
+human generalizes → human updates Task Forge → better future runs
+```
+
+**After (self-sustaining):**
+```
+Agent builds skill → quality_gate.md prompts "what would improve the pipeline?" →
+Meta-Improvements section captures proposals → improvement_log.md accumulates →
+periodic merge into Task Forge SKILL.md → better future runs → more observations → ...
+```
+
+The critical mechanism is the **Meta-Improvements section** in the quality_gate.md template.
+By making the meta-question mandatory ("do any of my observations improve the pipeline
+itself?"), every run becomes an opportunity for the pipeline to improve itself — without
+waiting for a human to notice and intervene.
+
+### Implications for Skill Architecture
+
+This case study demonstrates that skills are not just task executors — they are **knowledge
+accumulators**. The quality_gate.md artifact serves four purposes:
+
+1. **Proof of audit** — the gate ran, not just self-certified
+2. **Skill-specific memory** — edge cases, file locations, environment quirks
+3. **Meta-skill learning** — patterns for building skills of this TYPE
+4. **Pipeline evolution** — observations that improve the SYSTEM that builds skills
+
+The fourth purpose is the recursive innovation. It means every Task Forge run is
+simultaneously producing a result, building a skill, and potentially improving the
+factory that builds all future skills.
+
+### Mechanical Enforcement Summary
+
+| Mechanism | What It Enforces | How |
+|-----------|-----------------|-----|
+| `on_pre_tool_use_task_forge_completion_gate` hook | SKILL.md + quality_gate.md must exist | Filesystem check before `task_hub_task_action(complete)` |
+| quality_gate.md template | Structural audit + development context + meta-improvements | Template with mandatory sections |
+| `task-skills/_meta/improvement_log.md` | Cross-run improvement accumulation | Append-only log with status tracking |
+| Phase 5c universal patterns table | Common v0 weaknesses | Checklist: preserve code, reproducible methodology, scope, versioning, domain knowledge |
+
+---
+
 ## 9. Anti-Patterns
 
 | Anti-Pattern | Why It's Wrong | What to Do Instead |
