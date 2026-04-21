@@ -3338,6 +3338,78 @@ def get_skill_awareness_registry() -> SkillAwarenessRegistry:
         SKILL_AWARENESS_REGISTRY = SkillAwarenessRegistry()
     return SKILL_AWARENESS_REGISTRY
 
+# ---------------------------------------------------------------------------
+# Sub-agent routing tables (single source of truth)
+# ---------------------------------------------------------------------------
+# Post-task next-step hints: keyed by exact subagent_type.
+# Bowser agents share a common hint via a set membership check below.
+_SUBAGENT_NEXT_STEP_HINTS = {
+    "research-specialist": (
+        "Research phase complete. Consider what comes NEXT based on the original task:\n"
+        "- Need analysis/computation? → Delegate to `data-analyst`\n"
+        "- Need a report? → Delegate to `report-writer`\n"
+        "- Need media? → Delegate to `image-expert` or `video-creation-expert`\n"
+        "- Need delivery? → Delegate to `action-coordinator` or use Composio tools directly\n"
+        "Do NOT default to report-writer unless a report was specifically requested."
+    ),
+    "report-writer": (
+        "Report generation complete. Consider delivery:\n"
+        "- Email the report? → Use gws Gmail send with local file attachment\n"
+        "- Post summary to Slack? → Use `SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`\n"
+        "- Schedule follow-up? → Use gws Calendar tools\n"
+        "- Or delegate all delivery to `action-coordinator`."
+    ),
+    "data-analyst": (
+        "Analysis complete. Results are in work_products/analysis/. Next steps:\n"
+        "- Need a report incorporating these findings? → Delegate to `report-writer`\n"
+        "- Need visualizations in a video? → Delegate to `video-creation-expert`\n"
+        "- Ready to deliver? → Use Composio tools or delegate to `action-coordinator`."
+    ),
+    "image-expert": (
+        "Image generation complete. Images are in work_products/media/. Next steps:\n"
+        "- Embed in report? → Delegate to `report-writer` (it reads the image manifest)\n"
+        "- Deliver directly? → Use Composio email/Slack tools."
+    ),
+    "__bowser__": (
+        "Browser execution complete. Next steps:\n"
+        "- Need structured findings? → Delegate to `data-analyst` for evidence synthesis\n"
+        "- Need stakeholder delivery? → Use `action-coordinator` or gws Gmail / Composio Slack tools\n"
+        "- Need follow-up validation? → Launch additional Bowser lane tasks in parallel as needed\n"
+        "- Do NOT default to report-writer unless a report was explicitly requested."
+    ),
+}
+_BOWSER_AGENT_TYPES = {"claude-bowser-agent", "playwright-bowser-agent", "bowser-qa-agent"}
+
+# Display-name mapping for chat-panel authorship tags.
+# Keys are lowercase prefixes; first match wins.
+_SUBAGENT_DISPLAY_NAMES = [
+    ("research", "Research Specialist"),
+    ("report", "Report Writer"),
+    ("writ", "Report Writer"),
+]
+
+
+def _get_subagent_display_name(subagent_type: str) -> str:
+    """Resolve a subagent_type string to a human-friendly display name."""
+    if not subagent_type:
+        return "Subagent"
+    lower = subagent_type.lower()
+    for prefix, display_name in _SUBAGENT_DISPLAY_NAMES:
+        if prefix in lower:
+            return display_name
+    return f"Subagent: {subagent_type}"
+
+
+def _get_next_step_hint(subagent_type: str) -> str:
+    """Look up post-task guidance hint for a sub-agent type."""
+    hint = _SUBAGENT_NEXT_STEP_HINTS.get(subagent_type)
+    if hint:
+        return hint
+    if subagent_type in _BOWSER_AGENT_TYPES:
+        return _SUBAGENT_NEXT_STEP_HINTS["__bowser__"]
+    return ""
+
+
 
 # Expected skills mapping for sub-agents
 # This maps subagent_type to the skills they're likely to use
@@ -3512,49 +3584,7 @@ async def on_post_task_guidance(
     if isinstance(tool_input, dict):
         subagent_type = tool_input.get("subagent_type", "")
 
-    next_step_hint = ""
-    if subagent_type == "research-specialist":
-        next_step_hint = (
-            "Research phase complete. Consider what comes NEXT based on the original task:\n"
-            "- Need analysis/computation? → Delegate to `data-analyst`\n"
-            "- Need a report? → Delegate to `report-writer`\n"
-            "- Need media? → Delegate to `image-expert` or `video-creation-expert`\n"
-            "- Need delivery? → Delegate to `action-coordinator` or use Composio tools directly\n"
-            "Do NOT default to report-writer unless a report was specifically requested."
-        )
-    elif subagent_type == "report-writer":
-        next_step_hint = (
-            "Report generation complete. Consider delivery:\n"
-            "- Email the report? → Use gws Gmail send with local file attachment\n"
-            "- Post summary to Slack? → Use `SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`\n"
-            "- Schedule follow-up? → Use gws Calendar tools\n"
-            "- Or delegate all delivery to `action-coordinator`."
-        )
-    elif subagent_type == "data-analyst":
-        next_step_hint = (
-            "Analysis complete. Results are in work_products/analysis/. Next steps:\n"
-            "- Need a report incorporating these findings? → Delegate to `report-writer`\n"
-            "- Need visualizations in a video? → Delegate to `video-creation-expert`\n"
-            "- Ready to deliver? → Use Composio tools or delegate to `action-coordinator`."
-        )
-    elif subagent_type == "image-expert":
-        next_step_hint = (
-            "Image generation complete. Images are in work_products/media/. Next steps:\n"
-            "- Embed in report? → Delegate to `report-writer` (it reads the image manifest)\n"
-            "- Deliver directly? → Use Composio email/Slack tools."
-        )
-    elif subagent_type in {
-        "claude-bowser-agent",
-        "playwright-bowser-agent",
-        "bowser-qa-agent",
-    }:
-        next_step_hint = (
-            "Browser execution complete. Next steps:\n"
-            "- Need structured findings? → Delegate to `data-analyst` for evidence synthesis\n"
-            "- Need stakeholder delivery? → Use `action-coordinator` or gws Gmail / Composio Slack tools\n"
-            "- Need follow-up validation? → Launch additional Bowser lane tasks in parallel as needed\n"
-            "- Do NOT default to report-writer unless a report was explicitly requested."
-        )
+    next_step_hint = _get_next_step_hint(subagent_type)
 
     return {
         "systemMessage": next_step_hint if next_step_hint else None,
@@ -7472,17 +7502,7 @@ async def run_conversation(
                                         subagent_type = (tool_input or {}).get(
                                             "subagent_type", ""
                                         )
-                                        if "research" in subagent_type.lower():
-                                            sa_author = "Research Specialist"
-                                        elif (
-                                            "report" in subagent_type.lower()
-                                            or "writ" in subagent_type.lower()
-                                        ):
-                                            sa_author = "Report Writer"
-                                        elif subagent_type:
-                                            sa_author = f"Subagent: {subagent_type}"
-                                        else:
-                                            sa_author = "Subagent"
+                                        sa_author = _get_subagent_display_name(subagent_type)
 
                                         # block_content is list of content blocks (dicts or SDK objects)
                                         _sa_blocks = (
