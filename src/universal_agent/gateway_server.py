@@ -15543,6 +15543,16 @@ def _resolve_session_workspace(session_id: str) -> Path:
     Raises ``HTTPException(404)`` if no workspace is found.
     """
     # (1) In-memory live session (works for daemon_simone_todo → timestamped dir)
+    # For daemon sessions, prefer the active run workspace (task execution dir)
+    # over the daemon's base workspace, since that's where the actual output
+    # files (work_products/, run.log, etc.) live.
+    live_session = _sessions.get(session_id)
+    if live_session is not None:
+        active_run_ws = _session_active_run_workspace(live_session)
+        if active_run_ws:
+            active_run_path = Path(active_run_ws)
+            if active_run_path.is_dir():
+                return active_run_path
     live_ws = _workspace_dir_for_session(session_id)
     if live_ws is not None and live_ws.is_dir():
         return live_ws
