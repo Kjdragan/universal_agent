@@ -231,6 +231,7 @@ it, you're guessing at quality, not measuring it.
 | **Composable** | References existing skills where relevant, uses context pointers | Reinvents capabilities that exist as skills |
 | **Generalizable** | Could a different agent in a different session follow this and succeed? | Only works because of hardcoded paths or session-specific knowledge |
 | **Progressive disclosure** | SKILL.md is lean (<100 lines); heavy content in references/ | Everything crammed into one massive file |
+| **Functional accuracy** | If the skill has a scanner/script, run it and verify results against known-good data | Scanner passes structural checks but produces false positives/negatives |
 
 #### Step 3: Write the quality gate artifact
 
@@ -399,6 +400,12 @@ Append a `## Phase 5c: Improvement Pass` section to `quality_gate.md`:
 > **When to skip:** If the task is clearly one-off and the user didn't ask for polish,
 > skip this phase entirely. Task Forge's default is "ship the v0, iterate if it matters."
 > This phase exists for when the user explicitly wants to invest in quality upfront.
+
+> [!NOTE]
+> **Hook-denial workaround:** During Phase 5c, edit-protection hooks will block direct writes
+> to `.claude/skills/`. This is intentional — production skills are protected during runs.
+> Write your fixes to `task-skills/<task-name>-tf/` in your workspace instead, then Phase 6
+> (auto-promote) will copy them over the existing promoted skill via `cp -r`.
 
 ### Phase 6: Auto-Promote (MANDATORY)
 

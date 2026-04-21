@@ -365,8 +365,8 @@ Specifically:
 3. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable
 4. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact:
    a. Read `.claude/skills/skill-creator/SKILL.md` — this is the standard you're auditing against
-   b. Evaluate the task-skill against 5 structural checks (structure, not-a-wrapper, composable,
-      generalizable, progressive disclosure)
+   b. Evaluate the task-skill against 6 structural checks (structure, not-a-wrapper, composable,
+      generalizable, progressive disclosure, functional-accuracy)
    c. Write the results to `task-skills/<task-name>-tf/quality_gate.md` using the template in the
       Task Forge skill. This file IS the proof the audit happened — do NOT skip it.
       The template includes a Meta-Improvements section — fill it with any observations that
