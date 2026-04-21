@@ -88,11 +88,17 @@ You're looking for things that would cause the executing agent to fail. Don't go
 Create the task-skill in the workspace:
 
 ```
-task-skills/<task-name>/
+task-skills/<task-name>-tf/
 ├── SKILL.md              ← The task-skill (REQUIRED — this is the PRIMARY output)
 ├── scripts/              ← Only if you found deterministic utilities needed
 └── references/           ← Only if domain docs would help the executing agent
 ```
+
+> [!IMPORTANT]
+> **Naming convention:** Always append `-tf` to the skill directory name (e.g., `run-profiler-tf`,
+> `health-check-tf`). This suffix marks the skill as Task Forge generated, distinguishing it
+> from hand-crafted skills. The `-tf` suffix carries through to promotion — when a skill is
+> promoted to `.claude/skills/`, it keeps its `-tf` suffix.
 
 **Where to create task-skills:**
 - Default: `task-skills/` directory at the project root
@@ -394,21 +400,27 @@ Append a `## Phase 5c: Improvement Pass` section to `quality_gate.md`:
 > skip this phase entirely. Task Forge's default is "ship the v0, iterate if it matters."
 > This phase exists for when the user explicitly wants to invest in quality upfront.
 
-### Phase 6: Archive or Promote
+### Phase 6: Auto-Promote (MANDATORY)
 
-After successful execution and quality gate:
+After the quality gate passes, **automatically promote the skill** to the permanent
+skills directory so it's immediately discoverable for future runs.
 
-- **One-off task?** Archive to `task-skills/archive/<task-name>/` for future reference
-- **Might recur?** Leave in `task-skills/` for easy re-use
-- **Definitely recurring?** Promote to `.claude/skills/` as a permanent system skill:
-  1. Move the skill directory to `.claude/skills/<task-name>/`
-  2. Optimize the description for triggering (follow skill-creator guidance)
-  3. Symlink from `.agents/skills/` if needed for UA discovery
-  4. Update capabilities registry
-- **Worth polishing?** If the skill is graduating to permanent status AND you want to
-  invest in making it robust, hand it off to the skill-creator's full eval/iterate loop
-  (`.claude/skills/skill-creator/SKILL.md`). That's where test cases, baselines, benchmarking,
-  and description optimization live. Task Forge creates the v0; skill-creator polishes it to v2+.
+```bash
+# Copy the task-skill to the permanent skills directory
+cp -r task-skills/<task-name>-tf/ .claude/skills/<task-name>-tf/
+```
+
+This is mandatory — every Task Forge skill gets promoted. The `-tf` suffix marks it as
+machine-generated. Users can find and run it immediately without manual intervention.
+
+> [!IMPORTANT]
+> **Do not skip this step.** The whole point of Task Forge is to produce reusable skills.
+> A skill that sits in a session workspace and never gets promoted is a one-time script
+> with extra steps. Auto-promotion closes the loop: forge → execute → promote → reuse.
+
+- **Worth polishing further?** Hand the promoted skill off to the skill-creator's full
+  eval/iterate loop (`.claude/skills/skill-creator/SKILL.md`). Task Forge creates the v0;
+  skill-creator polishes it to v2+.
 
 ---
 

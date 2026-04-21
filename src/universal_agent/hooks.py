@@ -1969,8 +1969,8 @@ class AgentHookSet:
         """PreToolUse Hook: Enforce Task Forge artifact requirements before task completion.
 
         When a task description starts with 'Task Forge:', the agent MUST produce:
-        1. task-skills/<name>/SKILL.md (Phase 3 scaffold)
-        2. task-skills/<name>/quality_gate.md (Phase 5b audit)
+        1. task-skills/<name>-tf/SKILL.md (Phase 3 scaffold)
+        2. task-skills/<name>-tf/quality_gate.md (Phase 5b audit)
 
         If either is missing when the agent tries to complete the task via
         task_hub_task_action, the completion is BLOCKED and the agent is forced
@@ -2024,14 +2024,14 @@ class AgentHookSet:
         if task_skills_dir.is_dir():
             skill_md_found = any(task_skills_dir.rglob("SKILL.md"))
         if not skill_md_found:
-            missing.append("task-skills/<name>/SKILL.md (Phase 3: scaffold the task-skill)")
+            missing.append("task-skills/<name>-tf/SKILL.md (Phase 3: scaffold the task-skill)")
 
         # Check for quality_gate.md anywhere under task-skills/
         quality_gate_found = False
         if task_skills_dir.is_dir():
             quality_gate_found = any(task_skills_dir.rglob("quality_gate.md"))
         if not quality_gate_found:
-            missing.append("task-skills/<name>/quality_gate.md (Phase 5b: quality gate audit)")
+            missing.append("task-skills/<name>-tf/quality_gate.md (Phase 5b: quality gate audit)")
 
         if not missing:
             return {}  # All artifacts present — allow completion
@@ -2054,11 +2054,12 @@ class AgentHookSet:
                 f"⚠️ BLOCKED: Cannot complete a Task Forge task without required artifacts.\n\n"
                 f"Missing:\n{missing_list}\n\n"
                 f"Task Forge contract: **the skill IS the output.** You must:\n"
-                f"1. Create `task-skills/<task-name>/SKILL.md` with goal, success criteria, context\n"
+                f"1. Create `task-skills/<task-name>-tf/SKILL.md` with goal, success criteria, context\n"
                 f"2. Execute by following the SKILL.md you created\n"
                 f"3. Save results to `work_products/`\n"
                 f"4. Read `.claude/skills/skill-creator/SKILL.md` for quality standards\n"
-                f"5. Write audit results to `task-skills/<task-name>/quality_gate.md`\n\n"
+                f"5. Write audit results to `task-skills/<task-name>-tf/quality_gate.md`\n"
+                f"6. Auto-promote: copy skill directory to `.claude/skills/<task-name>-tf/`\n\n"
                 f"Only THEN can you complete this task. Go create the missing artifacts now."
             ),
             "decision": "block",

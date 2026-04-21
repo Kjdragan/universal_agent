@@ -358,16 +358,16 @@ Think of it like: you're building a factory, not hand-crafting a single product.
 
 Specifically:
 1. Phase 3 (Scaffold) is MANDATORY — you must create:
-   - `task-skills/<task-name>/SKILL.md` — the task-skill with goal, success criteria, constraints, and context
-   - `task-skills/<task-name>/scripts/` — only if deterministic utilities are genuinely needed
-   - `task-skills/<task-name>/references/` — only if domain docs would help future runs
+   - `task-skills/<task-name>-tf/SKILL.md` — the task-skill with goal, success criteria, constraints, and context
+   - `task-skills/<task-name>-tf/scripts/` — only if deterministic utilities are genuinely needed
+   - `task-skills/<task-name>-tf/references/` — only if domain docs would help future runs
 2. Phase 4 (Execute) — execute BY FOLLOWING the skill you just created, not by ignoring it
 3. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable
 4. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact:
    a. Read `.claude/skills/skill-creator/SKILL.md` — this is the standard you're auditing against
    b. Evaluate the task-skill against 5 structural checks (structure, not-a-wrapper, composable,
       generalizable, progressive disclosure)
-   c. Write the results to `task-skills/<task-name>/quality_gate.md` using the template in the
+   c. Write the results to `task-skills/<task-name>-tf/quality_gate.md` using the template in the
       Task Forge skill. This file IS the proof the audit happened — do NOT skip it.
       The template includes a Meta-Improvements section — fill it with any observations that
       would improve Task Forge ITSELF for all future runs (not just this skill).
@@ -385,6 +385,10 @@ Specifically:
    c. Make concrete edits to the task-skill's SKILL.md
    d. Append a "Phase 5c" section to quality_gate.md with before/after and version label
    Skip entirely if not requested.
+6. Phase 6 (Auto-Promote) is MANDATORY — after quality gate passes, copy the skill
+   to the permanent skills directory so it's immediately discoverable for future runs:
+   `cp -r task-skills/<task-name>-tf/ .claude/skills/<task-name>-tf/`
+   The `-tf` suffix marks it as Task Forge generated. Do NOT skip this step.
 
 What makes a good task-skill vs. a bad one:
 - BAD: A bare Python script. Scripts are not skills. They're inflexible, opaque to agents, and
