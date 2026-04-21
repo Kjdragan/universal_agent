@@ -654,6 +654,36 @@
     background-color: #30363d;
     border: 0;
   }
+
+  /* ========================================
+     FILE VIEWER MARKDOWN — scaled down ~10%
+     Keeps rendered markdown compact inside
+     the overlay file viewer panel.
+     ======================================== */
+  .file-viewer-markdown .markdown-preview {
+    font-size: 12.5px;
+  }
+
+  .file-viewer-markdown .markdown-preview h1 { font-size: 1.7em; }
+  .file-viewer-markdown .markdown-preview h2 { font-size: 1.3em; }
+  .file-viewer-markdown .markdown-preview h3 { font-size: 1.1em; }
+  .file-viewer-markdown .markdown-preview h4 { font-size: 0.9em; }
+  .file-viewer-markdown .markdown-preview h5 { font-size: 0.8em; }
+  .file-viewer-markdown .markdown-preview h6 { font-size: 0.75em; }
+
+  .file-viewer-markdown .markdown-preview p,
+  .file-viewer-markdown .markdown-preview li {
+    margin-bottom: 10px;
+  }
+
+  .file-viewer-markdown .markdown-preview pre code {
+    font-size: 11.5px;
+  }
+
+  .file-viewer-markdown .markdown-preview th,
+  .file-viewer-markdown .markdown-preview td {
+    padding: 4px 10px;
+  }
 }
 
 /* ========================================

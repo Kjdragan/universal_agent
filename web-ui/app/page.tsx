@@ -474,6 +474,7 @@ function FileViewer() {
   const isHtml = viewingFile?.name.endsWith(".html") ?? false;
   const isPdf = viewingFile?.name.endsWith(".pdf") ?? false;
   const isImage = viewingFile?.name.match(/\.(png|jpg|jpeg|gif|webp)$/i) ?? false;
+  const isMarkdown = viewingFile?.name.match(/\.md$/i) ?? false;
 
   const fileUrl = viewingFile
     ? viewingFile.type === "artifact"
@@ -564,6 +565,16 @@ function FileViewer() {
             className="w-full h-full border-0 block"
             title={viewingFile.name}
           />
+        ) : isMarkdown && typeof viewingFile.content === "string" ? (
+          <div className="h-full overflow-auto p-4 scrollbar-thin bg-background text-foreground file-viewer-markdown">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+              className="markdown-preview max-w-none"
+            >
+              {viewingFile.content || "[Empty File]"}
+            </ReactMarkdown>
+          </div>
         ) : (
           <div className="h-full overflow-auto p-4 scrollbar-thin bg-background text-foreground">
             <pre className="text-xs font-mono whitespace-pre-wrap text-muted-foreground">
