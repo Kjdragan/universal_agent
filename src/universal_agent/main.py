@@ -4390,36 +4390,16 @@ def _ensure_current_run_attempt(
     # After a gateway restart daemon sessions may carry a run_id that was
     # never persisted to the runs table, causing a FOREIGN KEY error.
     if not run_row:
-        recovered_workspace_dir = (
-            str(getattr(_ctx, "observer_workspace_dir", "") or "").strip()
-            if _ctx is not None
-            else ""
+        # Do NOT create a phantom "running" row for orphaned run IDs.
+        # These recovered rows are never attached to a real runner process,
+        # so they stay "running" forever and accumulate as zombies.
+        # Instead, log the situation and bail out gracefully.
+        logging.getLogger(__name__).info(
+            "Skipping run attempt creation for orphaned run_id=%s — "
+            "parent row missing from runs table (post-restart orphan).",
+            run_id,
         )
-        recovered_run_spec: dict[str, Any] = {}
-        if recovered_workspace_dir:
-            recovered_run_spec["workspace_dir"] = recovered_workspace_dir
-        recovered_entrypoint = (
-            "gateway.recovered_run_attempt"
-            if (_ctx is not None and bool(getattr(_ctx, "gateway_mode_active", False)))
-            else "cli.recovered_run_attempt"
-        )
-        try:
-            upsert_run(
-                runtime_db_conn,
-                run_id,
-                recovered_entrypoint,
-                recovered_run_spec,
-                status=status,
-                workspace_dir=recovered_workspace_dir or None,
-            )
-            run_row = get_run(runtime_db_conn, run_id)
-        except Exception as exc:
-            logging.getLogger(__name__).warning(
-                "Failed to upsert parent run row for %s: %s",
-                run_id,
-                exc,
-            )
-            return None
+        return None
 
     try:
         attempt_id = create_run_attempt(runtime_db_conn, run_id, status=status)

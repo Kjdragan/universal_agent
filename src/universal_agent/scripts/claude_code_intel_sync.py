@@ -6,10 +6,15 @@ import argparse
 import json
 import logging
 import sqlite3
+from pathlib import Path
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig, run_sync
+from universal_agent.services.claude_code_intel_replay import (
+    ClaudeCodeIntelReplayConfig,
+    replay_packet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,11 @@ def _parse_args() -> argparse.Namespace:
         "--profile",
         default="local_workstation",
         help="Infisical/deployment profile for secret bootstrap.",
+    )
+    parser.add_argument(
+        "--no-post-process",
+        action="store_true",
+        help="Skip replay-style post-processing (ledger + external vault population).",
     )
     return parser.parse_args()
 
@@ -64,6 +74,16 @@ def main() -> int:
     with connect_runtime_db(get_activity_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         result = run_sync(config=cfg, conn=conn)
+        post_process = {}
+        if result.ok and not args.no_post_process:
+            post_process = replay_packet(
+                config=ClaudeCodeIntelReplayConfig(
+                    packet_dir=Path(result.packet_dir),
+                    queue_task_hub=False,
+                    write_vault=True,
+                ),
+                conn=conn,
+            )
 
     payload = {
         "ok": result.ok,
@@ -77,6 +97,7 @@ def main() -> int:
         "queued_task_count": result.queued_task_count,
         "artifact_id": result.artifact_id,
         "error": result.error,
+        "post_process": post_process,
     }
     print(json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True))
     return 0 if result.ok else 1
