@@ -46,24 +46,19 @@ _CODIE_EXPLICIT_INTENT_PATTERNS = (
 )
 
 _INTERNAL_SYSTEM_MARKERS = (
-    "simone",
-    "universal agent",
-    "our system",
-    "this system",
-    "mission control",
-    "system configuration",
-    "ops config",
-    "session policy",
-    "heartbeat",
-    "calendar",
-    "continuity",
-    "webhook",
-    "telegram",
-    "gateway",
-    "src/universal_agent",
-    "web-ui/",
-    "agent_run_workspaces",
-    "/home/kjdragan/lrepos/universal_agent",
+    re.compile(r"\bsimone\b", re.IGNORECASE),
+    re.compile(r"\buniversal agent\b", re.IGNORECASE),
+    re.compile(r"\bour system\b", re.IGNORECASE),
+    re.compile(r"\bthis system\b", re.IGNORECASE),
+    re.compile(r"\bmission control\b", re.IGNORECASE),
+    re.compile(r"\bsystem configuration\b", re.IGNORECASE),
+    re.compile(r"\bops config\b", re.IGNORECASE),
+    re.compile(r"\bsession policy\b", re.IGNORECASE),
+    re.compile(r"\bheartbeat\b", re.IGNORECASE),
+    re.compile(r"\bmission continuity\b", re.IGNORECASE),
+    re.compile(r"\bsrc/universal_agent\b", re.IGNORECASE),
+    re.compile(r"\bweb-ui/", re.IGNORECASE),
+    re.compile(r"\bagent_run_workspaces\b", re.IGNORECASE),
 )
 
 _RECOVERY_STATUSES = {"degraded", "recovering"}
@@ -170,8 +165,8 @@ class CoderVPRuntime:
         return self.is_coding_intent(user_input)
 
     def is_internal_system_request(self, user_input: str) -> bool:
-        text = (user_input or "").lower()
-        return any(marker in text for marker in _INTERNAL_SYSTEM_MARKERS)
+        text = (user_input or "")
+        return any(pattern.search(text) for pattern in _INTERNAL_SYSTEM_MARKERS)
 
     def ensure_session(self, lease_owner: str, owner_user_id: Optional[str] = None) -> Optional[sqlite3.Row]:
         vp_identifier = coder_vp_id()

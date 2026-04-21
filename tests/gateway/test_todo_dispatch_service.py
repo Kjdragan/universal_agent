@@ -279,3 +279,132 @@ def test_build_todo_execution_prompt_uses_mode_specific_delivery_contract():
     assert "interactive_email" in prompt
     assert "direct final email aligned to the user's request" in prompt
     assert "executive summary in the body" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Tests for hardened regex-based workflow markers (word-boundary matching)
+# ---------------------------------------------------------------------------
+
+
+class TestInferWorkflowKindWordBoundary:
+    """Verify that infer_workflow_kind uses word-boundary regex patterns
+    and no longer false-positives on substring matches."""
+
+    def test_fix_with_trailing_period(self):
+        manifest = build_execution_manifest(
+            user_input="Please fix this issue.",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "code_change"
+
+    def test_fix_with_newline(self):
+        manifest = build_execution_manifest(
+            user_input="Fix\nthe broken auth flow",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "code_change"
+
+    def test_fixing_is_not_code_change(self):
+        """'fixing' should not match the \\bfix\\b pattern."""
+        manifest = build_execution_manifest(
+            user_input="I am fixing dinner, not code.",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] != "code_change"
+
+    def test_debug_matches(self):
+        manifest = build_execution_manifest(
+            user_input="Debug the failing test suite",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "code_change"
+
+    def test_debugger_is_not_code_change(self):
+        """'debugger' should not match the \\bdebug\\b pattern."""
+        manifest = build_execution_manifest(
+            user_input="Configure the debugger settings in my IDE",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] != "code_change"
+
+    def test_python_matches(self):
+        manifest = build_execution_manifest(
+            user_input="Write a python script to parse CSV files",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "code_change"
+
+    def test_pythonic_is_not_code_change(self):
+        """'pythonic' should not match the \\bpython\\b pattern."""
+        manifest = build_execution_manifest(
+            user_input="Write in a pythonic style with list comprehensions",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] != "code_change"
+
+    def test_report_no_longer_false_positive_code_change(self):
+        """Bare 'report' was removed from code markers, so 'bug report'
+        should not trigger code_change."""
+        manifest = build_execution_manifest(
+            user_input="file a bug report about the login issue",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        # Should not be code_change since 'report' alone is not a code marker
+        assert manifest["workflow_kind"] != "code_change"
+
+    def test_research_marker_triggers_research_report(self):
+        manifest = build_execution_manifest(
+            user_input="Do some research on quantum computing trends",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "research_report_chat"
+
+    def test_analysis_marker_triggers_research_report(self):
+        manifest = build_execution_manifest(
+            user_input="Perform a competitive analysis of SaaS pricing models",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "research_report_chat"
+
+    def test_pdf_word_boundary(self):
+        """'pdf' should match as a word, not substring."""
+        manifest = build_execution_manifest(
+            user_input="generate a pdf summary of the findings",
+            delivery_mode="interactive_chat",
+            final_channel="email",
+        )
+        assert manifest["workflow_kind"] == "research_report_email"
+
+    def test_general_execution_fallback(self):
+        manifest = build_execution_manifest(
+            user_input="Schedule a team sync for Friday afternoon",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "interactive_answer"
+
+    def test_refactor_matches(self):
+        manifest = build_execution_manifest(
+            user_input="Refactor the authentication module",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "code_change"
+
+    def test_implement_matches(self):
+        manifest = build_execution_manifest(
+            user_input="Implement user registration endpoint",
+            delivery_mode="interactive_chat",
+            final_channel="chat",
+        )
+        assert manifest["workflow_kind"] == "code_change"

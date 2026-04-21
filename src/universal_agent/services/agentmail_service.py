@@ -316,8 +316,15 @@ _VP_INBOX_ADDRESS = "vp.agents@agentmail.to"
 _VP_STATUS_PREFIX = "[VP Status]"
 
 # Name tokens used to route emails to the correct VP agent.
-_CODER_NAME_TOKENS = ("cody", "codie", "codie vp")
-_GENERAL_NAME_TOKENS = ("atlas", "atlas vp")
+_CODER_NAME_PATTERNS = (
+    re.compile(r"\bcody\b", re.IGNORECASE),
+    re.compile(r"\bcodie\b", re.IGNORECASE),
+    re.compile(r"\bcodie\s+vp\b", re.IGNORECASE),
+)
+_GENERAL_NAME_PATTERNS = (
+    re.compile(r"\batlas\b", re.IGNORECASE),
+    re.compile(r"\batlas\s+vp\b", re.IGNORECASE),
+)
 
 
 def _detect_target_agent_by_name(subject: str, body_snippet: str) -> str | None:
@@ -326,10 +333,10 @@ def _detect_target_agent_by_name(subject: str, body_snippet: str) -> str | None:
     Scans the subject and first 300 chars of body for VP name keywords.
     Returns the canonical agent ID or None if no VP is mentioned.
     """
-    text = f"{subject} {body_snippet[:300]}".lower()
-    if any(name in text for name in _CODER_NAME_TOKENS):
+    text = f"{subject} {body_snippet[:300]}"
+    if any(pattern.search(text) for pattern in _CODER_NAME_PATTERNS):
         return "vp.coder.primary"
-    if any(name in text for name in _GENERAL_NAME_TOKENS):
+    if any(pattern.search(text) for pattern in _GENERAL_NAME_PATTERNS):
         return "vp.general.primary"
     return None
 
