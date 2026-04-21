@@ -4429,7 +4429,12 @@ def _update_current_run_attempt(**kwargs: Any) -> None:
     )
     if not runtime_db_conn or not run_id:
         return
-    attempt_id = _ensure_current_run_attempt()
+    # Forward the intended status so that recovered run rows are created
+    # with the correct terminal status instead of defaulting to "running".
+    # This prevents the zombie recovered_run_attempt pattern where phantom
+    # rows stay "running" forever because no runner picks them up.
+    ensure_status = str(kwargs.get("status", "running"))
+    attempt_id = _ensure_current_run_attempt(status=ensure_status)
     if not attempt_id:
         return
     update_run_attempt(runtime_db_conn, attempt_id, **kwargs)
