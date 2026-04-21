@@ -23,33 +23,34 @@ def _event_timestamp() -> str:
 
 
 _CODE_WORKFLOW_MARKERS = (
-    "fix ",
-    "debug",
-    "refactor",
-    "implement",
-    "code change",
-    "update the code",
-    "update code",
-    "write code",
-    "repository",
-    "typescript",
-    "javascript",
-    "python",
-    "unit test",
-    "test failure",
-    "api route",
+    re.compile(r"\bfix\b"),
+    re.compile(r"\bdebug\b"),
+    re.compile(r"\brefactor\b"),
+    re.compile(r"\bimplement\b"),
+    re.compile(r"\bcode change\b"),
+    re.compile(r"\bupdate the code\b"),
+    re.compile(r"\bupdate code\b"),
+    re.compile(r"\bwrite code\b"),
+    re.compile(r"\brepository\b"),
+    re.compile(r"\btypescript\b"),
+    re.compile(r"\bjavascript\b"),
+    re.compile(r"\bpython\b"),
+    re.compile(r"\bunit test\b"),
+    re.compile(r"\btest failure\b"),
+    re.compile(r"\bapi route\b"),
 )
 
 _RESEARCH_WORKFLOW_MARKERS = (
-    "search for",
-    "latest information",
-    "latest developments",
-    "research",
-    "report",
-    "analysis",
-    "look up",
-    "what happened",
-    "pdf",
+    re.compile(r"\bsearch for\b"),
+    re.compile(r"\blatest information\b"),
+    re.compile(r"\blatest developments\b"),
+    re.compile(r"\bresearch\b"),
+    re.compile(r"\bresearch report\b"),
+    re.compile(r"\breport generation\b"),
+    re.compile(r"\banalysis\b"),
+    re.compile(r"\blook up\b"),
+    re.compile(r"\bwhat happened\b"),
+    re.compile(r"\bpdf\b"),
 )
 
 
@@ -135,7 +136,7 @@ def _non_coder_workflow_kind(
         return "interactive_answer_email"
     if mode in {"standard_report", "enhanced_report"}:
         return f"research_report_{suffix}"
-    if any(marker in text for marker in _RESEARCH_WORKFLOW_MARKERS):
+    if any(pattern.search(text) for pattern in _RESEARCH_WORKFLOW_MARKERS):
         return f"research_report_{suffix}"
     if mode == "interactive_chat":
         return "interactive_answer"
@@ -230,14 +231,14 @@ def infer_workflow_kind(
     mode = str(delivery_mode or "").strip().lower()
     channel = str(final_channel or "").strip().lower() or "chat"
 
-    if any(marker in text for marker in _CODE_WORKFLOW_MARKERS):
+    if any(pattern.search(text) for pattern in _CODE_WORKFLOW_MARKERS):
         return "code_change"
     if mode == "interactive_email":
         return "interactive_answer_email"
     if mode in {"standard_report", "enhanced_report"}:
         suffix = "chat" if channel == "chat" else "email"
         return f"research_report_{suffix}"
-    if any(marker in text for marker in _RESEARCH_WORKFLOW_MARKERS):
+    if any(pattern.search(text) for pattern in _RESEARCH_WORKFLOW_MARKERS):
         suffix = "chat" if channel == "chat" else "email"
         return f"research_report_{suffix}"
     if mode == "interactive_chat":
@@ -261,7 +262,7 @@ def build_execution_manifest(
     )
     text = str(user_input or "").strip().lower()
     mode = str(delivery_mode or "").strip().lower() or "standard_report"
-    requires_pdf = mode in {"standard_report", "enhanced_report"} or "pdf" in text
+    requires_pdf = mode in {"standard_report", "enhanced_report"} or any(p.search(text) for p in [re.compile(r"\bpdf\b")])
     approved_roots = approved_codebase_roots_from_env()
     resolved_codebase_root = ""
     if workflow_kind == "code_change":
