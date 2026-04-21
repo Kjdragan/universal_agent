@@ -49,6 +49,10 @@ This repository has exactly one supported application deployment path. Productio
 
 - `scripts/vpsctl.sh` is a break-glass diagnostics helper, not the normal deployment path.
 
+**Production URL:**
+
+- `app.clearspringcg.com` is the prodcution url, so use this when you are using a browser to diagnose issues with the application
+
 ## Documentation
 
 All documentation for this project MUST reside exclusively within the `docs/` directory. Creating any other documentation directories (such as `OFFICIAL_PROJECT_DOCUMENTATION/`) is strictly prohibited.

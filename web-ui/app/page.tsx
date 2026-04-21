@@ -595,10 +595,8 @@ function buildDurableFileListUrl(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
   path: string,
 ): string {
-  if (session?.run_id) {
-    const base = `${GATEWAY_API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files`;
-    return path ? `${base}?path=${encodeURIComponent(path)}` : base;
-  }
+  // Always use session-based file listing — the /api/v1/runs/{run_id}/files
+  // endpoint does not exist in the gateway backend.
   const sessionId = String(session?.session_id || "").trim();
   if (!sessionId) return "";
   return `${API_BASE}/api/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
@@ -608,9 +606,6 @@ function buildDurableFileUrl(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
   path: string,
 ): string {
-  if (session?.run_id) {
-    return `${GATEWAY_API_BASE}/api/v1/runs/${encodeURIComponent(session.run_id)}/files/${encodeWorkspacePath(path)}`;
-  }
   const sessionId = String(session?.session_id || "").trim();
   if (!sessionId) return "";
   return `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/${encodeWorkspacePath(path)}`;

@@ -21,6 +21,11 @@
       "sourceType": "github",
       "computedHash": "91db7b17425fffec835f995033993dd449e24eff0da07eaae86e9e8bc9d43be6"
     },
+    "deepwiki": {
+      "source": "seflless/deepwiki",
+      "sourceType": "github",
+      "computedHash": "836ccb7598f0b44a8b1b7414134d5abf4333556a8474d30a8fcae00040491274"
+    },
     "defuddle": {
       "source": "git@github.com:kepano/obsidian-skills.git",
       "sourceType": "git",
