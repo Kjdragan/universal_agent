@@ -6359,6 +6359,47 @@ def _record_todo_chat_final_delivery(
     return recorded_task_ids
 
 
+def _agent_has_pending_todo_items(
+    tool_calls_by_id: dict[str, dict[str, Any]],
+) -> bool:
+    """Check whether the agent's last TodoWrite call has in-progress or pending items.
+
+    This prevents premature auto-completion of multi-phase pipelines (e.g. Task
+    Forge, research cascades) where the agent explicitly tracks its own progress
+    via the Claude Code TodoWrite tool.  If the agent says it still has work to
+    do, we should believe it and let the session continue.
+    """
+    last_todo_input: Any = None
+    for _tc_id, tc in tool_calls_by_id.items():
+        name = str(tc.get("name") or "").strip().lower()
+        if name == "todowrite":
+            last_todo_input = tc.get("input")
+    if last_todo_input is None:
+        return False
+
+    # The input is typically {"todos": [{"content": "...", "status": "pending"}, ...]}
+    if isinstance(last_todo_input, str):
+        try:
+            last_todo_input = json.loads(last_todo_input)
+        except Exception:
+            return False
+    if not isinstance(last_todo_input, dict):
+        return False
+
+    todos = last_todo_input.get("todos")
+    if not isinstance(todos, list):
+        return False
+
+    incomplete_statuses = {"pending", "in_progress", "in-progress"}
+    for item in todos:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status in incomplete_statuses:
+            return True
+    return False
+
+
 def _todo_execution_auto_complete_after_final_delivery(
     *,
     conn: sqlite3.Connection,
@@ -6366,6 +6407,7 @@ def _todo_execution_auto_complete_after_final_delivery(
     goal_satisfaction: dict[str, Any],
     unresolved: list[dict[str, Any]],
     chat_response_delivered: bool = False,
+    tool_calls_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     unresolved_task_ids = [
         str(snapshot.get("task_id") or "").strip()
@@ -6373,6 +6415,17 @@ def _todo_execution_auto_complete_after_final_delivery(
         if str(snapshot.get("task_id") or "").strip()
     ]
     if not unresolved_task_ids:
+        return goal_satisfaction, unresolved
+
+    # ── Multi-phase pipeline guard ─────────────────────────────────────
+    # If the agent's own TodoWrite has in-progress / pending items, it
+    # explicitly declared more work to do.  Respect that declaration and
+    # skip auto-completion so the session can continue its pipeline.
+    if tool_calls_by_id and _agent_has_pending_todo_items(tool_calls_by_id):
+        logger.info(
+            "Skipping auto-complete for session %s: agent TodoWrite has pending items",
+            session.session_id,
+        )
         return goal_satisfaction, unresolved
 
     auto_complete_candidates: list[dict[str, Any]] = []
@@ -6509,6 +6562,7 @@ def _enforce_todo_execution_lifecycle(
                 goal_satisfaction=goal_satisfaction,
                 unresolved=unresolved,
                 chat_response_delivered=bool(request_metadata.get("todo_final_response_delivered")),
+                tool_calls_by_id=request_metadata.get("_tool_calls_by_id"),
             )
             if not unresolved:
                 return goal_satisfaction
@@ -6954,6 +7008,10 @@ async def _run_gateway_session_request(
                     request.metadata["todo_recorded_chat_delivery_task_ids"] = recorded_task_ids
         goal_satisfaction = mission_tracker.evaluate()
         if request_run_kind == "todo_execution":
+            # Thread tool-call state into the lifecycle enforcer so it can
+            # inspect the agent's TodoWrite declarations for pending work.
+            if isinstance(request.metadata, dict):
+                request.metadata["_tool_calls_by_id"] = tool_calls_by_id
             goal_satisfaction = _enforce_todo_execution_lifecycle(
                 session=session,
                 request=request,
