@@ -98,6 +98,7 @@ def make_artifact_id(*, source_kind: str, source_ref: str, artifact_type: str, t
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.row_factory = sqlite3.Row
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS proactive_artifacts (
